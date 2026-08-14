@@ -846,9 +846,9 @@ pub enum CycleResult {
 )]
 pub enum CancellationReason {
   Explicit,
-  ExecutionPlanChanged,
-  CompletionPolicyChanged,
-  FundingPolicyChanged,
+  StepsChanged,
+  CompletionChanged,
+  FundingChanged,
   ScheduleChanged,
   Deactivated,
   Closing(CloseReason),
@@ -912,7 +912,7 @@ pub enum SimulationError {
   ComputationOverflow,
   TypeMismatch,
   MutabilityMismatch,
-  ProgramMismatch,
+  ContractMismatch,
   ModeCycleStateMismatch,
   GlobalCircuitBreaker,
   Paused,
@@ -988,7 +988,7 @@ pub enum ActorClassificationError {
 pub enum ActorEligibilityPhase {
   /// No identity is registered under the id.
   NotRegistered,
-  /// A dormant identity exists without an Active program.
+  /// A dormant identity exists without an Active Actor Contract.
   Dormant,
   /// The actor is temporally and trigger-ready for scheduler admission now.
   Ready,
@@ -1671,9 +1671,20 @@ impl<
 }
 
 #[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  Eq,
+  Ord,
+  PartialEq,
+  PartialOrd,
+  TypeInfo,
+  MaxEncodedLen,
 )]
-pub enum Condition<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> {
+pub enum Predicate<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> {
   BalanceAbove {
     asset: AssetId,
     threshold: Balance,
@@ -1718,79 +1729,157 @@ pub enum Condition<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> 
   },
 }
 
-#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxConditions))]
-pub enum ConditionSet<C, MaxConditions: Get<u32>> {
-  Always,
-  All(BoundedVec<C, MaxConditions>),
-  Any(BoundedVec<C, MaxConditions>),
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  Eq,
+  Ord,
+  PartialEq,
+  PartialOrd,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum ObservationTiming {
+  Opening,
+  Current,
 }
 
-impl<C, MaxConditions: Get<u32>> Default for ConditionSet<C, MaxConditions> {
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum PredicateEvaluation {
+  True,
+  False,
+  Invalid,
+}
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  Eq,
+  Ord,
+  PartialEq,
+  PartialOrd,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct TimedPredicate<P> {
+  pub timing: ObservationTiming,
+  pub predicate: P,
+}
+
+#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxClauses, MaxPerClause))]
+pub enum Preconditions<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> {
+  Unconditional,
+  AnyOf(BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>),
+}
+
+impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Default
+  for Preconditions<P, MaxClauses, MaxPerClause>
+{
   fn default() -> Self {
-    Self::Always
+    Self::Unconditional
   }
 }
 
-impl<C, MaxConditions: Get<u32>> ConditionSet<C, MaxConditions> {
-  pub fn len(&self) -> u32 {
+impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Preconditions<P, MaxClauses, MaxPerClause> {
+  pub fn predicate_count(&self) -> u32 {
     match self {
-      Self::Always => 0,
-      Self::All(conditions) | Self::Any(conditions) => conditions.len() as u32,
+      Self::Unconditional => 0,
+      Self::AnyOf(clauses) => clauses.iter().map(|clause| clause.len() as u32).sum(),
     }
   }
 
-  pub fn is_always(&self) -> bool {
-    matches!(self, Self::Always)
+  pub fn opening_predicate_count(&self) -> u32 {
+    match self {
+      Self::Unconditional => 0,
+      Self::AnyOf(clauses) => clauses
+        .iter()
+        .flat_map(|clause| clause.iter())
+        .filter(|timed| timed.timing == ObservationTiming::Opening)
+        .count() as u32,
+    }
+  }
+
+  pub fn evaluation_units(&self) -> u32 {
+    self
+      .predicate_count()
+      .saturating_add(self.opening_predicate_count())
+  }
+
+  pub fn is_unconditional(&self) -> bool {
+    matches!(self, Self::Unconditional)
   }
 }
 
-impl<C: Clone, MaxConditions: Get<u32>> Clone for ConditionSet<C, MaxConditions> {
+impl<P: Clone, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Clone
+  for Preconditions<P, MaxClauses, MaxPerClause>
+{
   fn clone(&self) -> Self {
     match self {
-      Self::Always => Self::Always,
-      Self::All(conditions) => Self::All(conditions.clone()),
-      Self::Any(conditions) => Self::Any(conditions.clone()),
+      Self::Unconditional => Self::Unconditional,
+      Self::AnyOf(clauses) => Self::AnyOf(clauses.clone()),
     }
   }
 }
 
-impl<C: core::fmt::Debug, MaxConditions: Get<u32>> core::fmt::Debug
-  for ConditionSet<C, MaxConditions>
+impl<P: core::fmt::Debug, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> core::fmt::Debug
+  for Preconditions<P, MaxClauses, MaxPerClause>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Always => f.write_str("Always"),
-      Self::All(conditions) => f.debug_tuple("All").field(conditions).finish(),
-      Self::Any(conditions) => f.debug_tuple("Any").field(conditions).finish(),
+      Self::Unconditional => f.write_str("Unconditional"),
+      Self::AnyOf(clauses) => f.debug_tuple("AnyOf").field(clauses).finish(),
     }
   }
 }
 
-impl<C: PartialEq, MaxConditions: Get<u32>> PartialEq for ConditionSet<C, MaxConditions> {
+impl<P: PartialEq, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> PartialEq
+  for Preconditions<P, MaxClauses, MaxPerClause>
+{
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
-      (Self::Always, Self::Always) => true,
-      (Self::All(left), Self::All(right)) | (Self::Any(left), Self::Any(right)) => left == right,
+      (Self::Unconditional, Self::Unconditional) => true,
+      (Self::AnyOf(left), Self::AnyOf(right)) => left == right,
       _ => false,
     }
   }
 }
 
-impl<C: Eq, MaxConditions: Get<u32>> Eq for ConditionSet<C, MaxConditions> {}
+impl<P: Eq, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Eq
+  for Preconditions<P, MaxClauses, MaxPerClause>
+{
+}
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxConditionsPerStep, MaxSplitTransferLegs))]
+#[scale_info(skip_type_params(
+  MaxPreconditionClauses,
+  MaxPredicatesPerClause,
+  MaxSplitTransferLegs
+))]
 pub struct Step<
   AssetId,
   Balance,
   AccountId,
-  MaxConditionsPerStep: Get<u32>,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
   ObservationFeedId = (),
 > {
-  pub conditions:
-    ConditionSet<Condition<AssetId, Balance, u32, ObservationFeedId>, MaxConditionsPerStep>,
+  pub preconditions: Preconditions<
+    Predicate<AssetId, Balance, u32, ObservationFeedId>,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
+  >,
   pub task: Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
   pub on_error: StepErrorPolicy,
 }
@@ -1799,7 +1888,8 @@ impl<
   AssetId: Clone,
   Balance: Clone,
   AccountId: Clone,
-  MaxConditionsPerStep: Get<u32>,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
   ObservationFeedId: Clone,
 > Clone
@@ -1807,14 +1897,15 @@ impl<
     AssetId,
     Balance,
     AccountId,
-    MaxConditionsPerStep,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
     MaxSplitTransferLegs,
     ObservationFeedId,
   >
 {
   fn clone(&self) -> Self {
     Self {
-      conditions: self.conditions.clone(),
+      preconditions: self.preconditions.clone(),
       task: self.task.clone(),
       on_error: self.on_error,
     }
@@ -1825,7 +1916,8 @@ impl<
   AssetId: core::fmt::Debug,
   Balance: core::fmt::Debug,
   AccountId: core::fmt::Debug,
-  MaxConditionsPerStep: Get<u32>,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
   ObservationFeedId: core::fmt::Debug,
 > core::fmt::Debug
@@ -1833,14 +1925,15 @@ impl<
     AssetId,
     Balance,
     AccountId,
-    MaxConditionsPerStep,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
     MaxSplitTransferLegs,
     ObservationFeedId,
   >
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Step")
-      .field("conditions", &self.conditions)
+      .field("preconditions", &self.preconditions)
       .field("task", &self.task)
       .field("on_error", &self.on_error)
       .finish()
@@ -1851,7 +1944,8 @@ impl<
   AssetId: PartialEq,
   Balance: PartialEq,
   AccountId: PartialEq,
-  MaxConditionsPerStep: Get<u32>,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
   ObservationFeedId: PartialEq,
 > PartialEq
@@ -1859,13 +1953,14 @@ impl<
     AssetId,
     Balance,
     AccountId,
-    MaxConditionsPerStep,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
     MaxSplitTransferLegs,
     ObservationFeedId,
   >
 {
   fn eq(&self, other: &Self) -> bool {
-    self.conditions == other.conditions
+    self.preconditions == other.preconditions
       && self.task == other.task
       && self.on_error == other.on_error
   }
@@ -1875,7 +1970,8 @@ impl<
   AssetId: Eq,
   Balance: Eq,
   AccountId: Eq,
-  MaxConditionsPerStep: Get<u32>,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
   ObservationFeedId: Eq,
 > Eq
@@ -1883,7 +1979,8 @@ impl<
     AssetId,
     Balance,
     AccountId,
-    MaxConditionsPerStep,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
     MaxSplitTransferLegs,
     ObservationFeedId,
   >
@@ -1955,21 +2052,21 @@ impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
+pub struct ActiveContractInput<Schedule, BlockNumber, Steps, FundingPolicy> {
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  pub execution_plan: ExecutionPlan,
-  pub completion_policy: CompletionPolicy,
-  pub funding_source_policy: FundingPolicy,
+  pub steps: Steps,
+  pub funding: FundingPolicy,
+  pub completion: CompletionPolicy,
   pub auto_close_at_cycle_nonce: Option<u64>,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
+pub enum ContractInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
   Dormant,
-  Active(ActiveProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy>),
+  Active(ActiveContractInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy>),
 }
 
 #[derive(
@@ -2034,19 +2131,25 @@ pub struct OutcomeTotals {
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries, MaxFundingTrackedAssets))]
+#[scale_info(skip_type_params(
+  MaxSnapshotEntries,
+  MaxFundingTrackedAssets,
+  MaxOpeningPredicateResults
+))]
 pub struct ContinuationState<
   AssetId,
   Balance,
   BlockNumber,
   MaxSnapshotEntries: Get<u32>,
   MaxFundingTrackedAssets: Get<u32>,
+  MaxOpeningPredicateResults: Get<u32>,
 > {
   pub cursor: u32,
   pub attempt: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
+  pub opening_predicate_results: BoundedVec<PredicateEvaluation, MaxOpeningPredicateResults>,
   pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   pub cumulative_outcomes: OutcomeTotals,
 }
@@ -2082,17 +2185,18 @@ pub struct ActorHotState<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
+pub struct ActorContractState<Schedule, BlockNumber, Steps, FundingPolicy> {
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  pub execution_plan: ExecutionPlan,
-  pub completion_policy: CompletionPolicy,
+  pub steps: Steps,
+  pub funding: FundingPolicy,
+  pub completion: CompletionPolicy,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan> {
+pub struct ActiveActorView<AccountId, BlockNumber, Schedule, Steps> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
@@ -2101,8 +2205,8 @@ pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan> {
   pub cycle_state: CycleState,
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  pub execution_plan: ExecutionPlan,
-  pub completion_policy: CompletionPolicy,
+  pub steps: Steps,
+  pub completion: CompletionPolicy,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
@@ -2116,8 +2220,7 @@ pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorFundingState<FundingPolicy, FundingAccumulated, FundingTrackedAssets> {
-  pub funding_source_policy: FundingPolicy,
+pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets> {
   pub funding_accumulated: FundingAccumulated,
   pub funding_tracked_assets: FundingTrackedAssets,
 }

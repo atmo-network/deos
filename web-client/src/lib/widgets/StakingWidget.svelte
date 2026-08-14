@@ -39,7 +39,8 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 
   let { compactPane, densePane }: Props = $props();
   let rewardEpochInput = $state('');
-  let compoundOperatorInput = $state('');
+  let rewardOperatorInput = $state('');
+  let rewardMinLpOutInput = $state('');
   let lpAmountInput = $state('');
   let lpOperatorInput = $state('');
   let lpTargetOperatorInput = $state('');
@@ -51,8 +52,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     $state<NativeCollatorLpPositionProjection | null>(null);
   let governanceCustodyDetail =
     $state<NativeGovernanceCustodyPositionProjection | null>(null);
-  let nominationRewardClaimable = $state<bigint | null>(null);
-  let nominationRewardClaimableEpoch = $state<number | null>(null);
 
   const nativeStakingProvenance = fromClientBoundedProjection(
     true,
@@ -72,10 +71,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 
   function optionalAssetLabel(assetId: number | null): string {
     return assetId == null ? '—' : `#${assetId}`;
-  }
-
-  function parseRewardEpoch(): number | null {
-    return parseUnsignedDecimalNumber(rewardEpochInput);
   }
 
   const snap = $derived(systemStore.snapshot);
@@ -162,7 +157,10 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       },
     ];
   });
-  const rewardEpoch = $derived(parseRewardEpoch());
+  const rewardEpoch = $derived(
+    parseUnsignedDecimalNumber(rewardEpochInput, { max: 0xffff_ffff }),
+  );
+  const rewardMinLpOut = $derived(parseTokenInputAmount(rewardMinLpOutInput));
   const lpAmount = $derived(parseTokenInputAmount(lpAmountInput));
   const governanceCustodyAmount = $derived(
     parseTokenInputAmount(governanceCustodyAmountInput),
@@ -183,16 +181,28 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     walletStore.state.signerStatus !== 'available',
   );
   const nativeStakingPoolUnavailable = $derived(!snap?.nativeStaking.pool);
-  const stakingWriteDisabled = $derived(
-    stakingActionBusy || stakingSignerUnavailable || rewardEpoch === null,
+  const securityCapabilities = $derived(
+    snap?.nativeStaking.securityCapabilities ?? null,
   );
-  const compoundDisabled = $derived(
-    stakingWriteDisabled || compoundOperatorInput.trim().length === 0,
+  const rewardClaimDisabled = $derived(
+    stakingActionBusy ||
+      stakingSignerUnavailable ||
+      !securityCapabilities?.rewardClaims ||
+      rewardEpoch === null,
+  );
+  const rewardCompoundDisabled = $derived(
+    stakingActionBusy ||
+      stakingSignerUnavailable ||
+      !securityCapabilities?.rewardCompound ||
+      rewardEpoch === null ||
+      rewardMinLpOut === null ||
+      rewardOperatorInput.trim().length === 0,
   );
   const lpAmountActionDisabled = $derived(
     stakingActionBusy ||
       stakingSignerUnavailable ||
       nativeStakingPoolUnavailable ||
+      !securityCapabilities?.newNominations ||
       lpAmount === null ||
       lpOperatorInput.trim().length === 0,
   );
@@ -202,7 +212,12 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       lpOperatorInput.trim().length === 0,
   );
   const lpRedelegateDisabled = $derived(
-    lpAmountActionDisabled || lpTargetOperatorInput.trim().length === 0,
+    stakingActionBusy ||
+      stakingSignerUnavailable ||
+      !securityCapabilities?.redelegation ||
+      lpAmount === null ||
+      lpOperatorInput.trim().length === 0 ||
+      lpTargetOperatorInput.trim().length === 0,
   );
   const governanceCustodyAmountDisabled = $derived(
     stakingActionBusy ||
@@ -278,28 +293,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     }
   }
 
-  async function loadNominationRewardClaimability() {
-    const epoch = rewardEpoch;
-    if (epoch === null) {
-      stakingActionError = 'Enter a closed reward epoch first';
-      return;
-    }
-    stakingActionBusy = true;
-    stakingActionError = null;
-    try {
-      nominationRewardClaimable =
-        await systemStore.getNativeNominationRewardClaimable(epoch);
-      nominationRewardClaimableEpoch = epoch;
-    } catch (error) {
-      stakingActionError =
-        error instanceof Error
-          ? error.message
-          : 'Native nomination reward claimability load failed';
-    } finally {
-      stakingActionBusy = false;
-    }
-  }
-
   function useMaxLpAmount() {
     lpAmountInput = formatTokenInputAmount(nativeWalletBalances.lp);
   }
@@ -312,31 +305,34 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     governanceCustodyAmountInput = formatTokenInputAmount(balance);
   }
 
-  async function claimNominationReward() {
+  async function claimNativeSecurityReward() {
     const epoch = rewardEpoch;
     if (epoch === null) {
-      stakingActionError = 'Enter a closed reward epoch first';
+      stakingActionError = 'Enter a valid finalized security epoch';
       return;
     }
     await runStakingAction(
-      () => systemStore.claimNominationReward(epoch),
-      'Native nomination claim failed',
+      () => systemStore.claimNativeSecurityReward(epoch),
+      'Native security reward claim failed',
     );
   }
 
-  async function compoundNominationReward() {
+  async function claimAndCompoundNativeSecurityReward() {
     const epoch = rewardEpoch;
-    if (epoch === null) {
-      stakingActionError = 'Enter a closed reward epoch first';
+    const minLpOut = rewardMinLpOut;
+    if (epoch === null || minLpOut === null) {
+      stakingActionError =
+        'Enter a valid finalized security epoch and minimum LP output';
       return;
     }
     await runStakingAction(
       () =>
-        systemStore.claimAndCompoundNominationReward(
+        systemStore.claimAndCompoundNativeSecurityReward(
           epoch,
-          compoundOperatorInput,
+          rewardOperatorInput,
+          minLpOut,
         ),
-      'Native nomination compound failed',
+      'Native security reward compound failed',
     );
   }
 
@@ -484,61 +480,79 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   </details>
 {/snippet}
 
-{#snippet nominationRewardsSection()}
+{#snippet rewardSection()}
+  {#if !securityCapabilities?.rewardClaims}
+    <Notice variant="muted"
+      >Reward claims are inactive in the current native-security mode.</Notice
+    >
+  {:else}
+    <Notice variant="muted"
+      >Claims consume one finalized session snapshot. Liquid claim pays NTVE;
+      compound atomically mints and locks canonical LP or rolls back.</Notice
+    >
+  {/if}
   <div
     class={[
       'grid gap-2',
       densePane
         ? 'grid-cols-1'
-        : '@lg:grid-cols-[minmax(0,0.65fr)_minmax(0,1fr)]',
+        : '@lg:grid-cols-[minmax(0,0.6fr)_minmax(0,1fr)_minmax(0,0.8fr)]',
     ]}
   >
     <NumberInput
-      label="Reward epoch"
+      label="Finalized epoch"
       bind:value={rewardEpochInput}
       min="0"
       step="1"
-      placeholder="Closed epoch"
+      placeholder="Session index"
     />
     <TextField
       label="Compound operator"
-      bind:value={compoundOperatorInput}
-      placeholder="Collator address for compound lock"
+      bind:value={rewardOperatorInput}
+      placeholder="Collator address"
+    />
+    <NumberInput
+      label="Minimum LP output"
+      bind:value={rewardMinLpOutInput}
+      min="0"
+      step="any"
+      placeholder="0.0"
     />
   </div>
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-3']}>
-    <Button
-      size="sm"
-      variant="ghost"
-      disabled={stakingActionBusy || rewardEpoch === null}
-      onclick={loadNominationRewardClaimability}>Check claimable</Button
-    >
+  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-2']}>
     <Button
       size="sm"
       variant="secondary"
-      disabled={stakingWriteDisabled}
-      onclick={claimNominationReward}
-      >{stakingActionBusy ? 'Submitting...' : 'Claim liquid NTVE'}</Button
+      disabled={rewardClaimDisabled}
+      onclick={claimNativeSecurityReward}
+      >{stakingActionBusy ? 'Submitting...' : 'Claim NTVE'}</Button
     >
     <Button
       size="sm"
       variant="primary"
-      disabled={compoundDisabled}
-      onclick={compoundNominationReward}
-      >{stakingActionBusy ? 'Submitting...' : 'Claim + compound LP'}</Button
+      disabled={rewardCompoundDisabled}
+      onclick={claimAndCompoundNativeSecurityReward}
+      >{stakingActionBusy ? 'Submitting...' : 'Claim & lock LP'}</Button
     >
   </div>
-  {#if nominationRewardClaimableEpoch !== null}
-    <Notice variant="muted"
-      >Epoch {nominationRewardClaimableEpoch} claimable: {nominationRewardClaimable ===
-      null
-        ? 'not claimable'
-        : `${fmt(toFloat(nominationRewardClaimable))} NTVE`}</Notice
-    >
-  {/if}
+  <div class="text-[10px] text-(--mono-muted)">
+    Current security epoch: {snap?.nativeStaking.securityEpoch ?? '—'}. Only
+    retained finalized epochs inside the runtime claim horizon are admissible.
+  </div>
 {/snippet}
 
 {#snippet collatorLpSection()}
+  {#if snap?.nativeStaking.securityMode === 'TrustedSet'}
+    <Notice variant="muted"
+      >Trusted-set security rejects new LP nominations and redelegation.
+      Existing positions can still request unlock and withdraw after maturity.</Notice
+    >
+  {:else if snap?.nativeStaking.securityReadiness && snap.nativeStaking.securityReadiness !== 'Ready'}
+    <Notice variant="warn"
+      >LP-backed security is not ready: {snap.nativeStaking
+        .securityReadiness}.</Notice
+    >
+  {/if}
   <div
     class={[
       'grid gap-2',
@@ -635,7 +649,11 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     <Button
       size="sm"
       variant="secondary"
-      disabled={lpAmountActionDisabled}
+      disabled={stakingActionBusy ||
+        stakingSignerUnavailable ||
+        !securityCapabilities?.custodyExit ||
+        lpAmount === null ||
+        lpOperatorInput.trim().length === 0}
       onclick={requestUnlockNativeLp}
       >{stakingActionBusy ? 'Submitting...' : 'Request unlock'}</Button
     >
@@ -839,9 +857,9 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
         </div>
       {/if}
       {@render actionSection(
-        'Nomination rewards',
-        'Claim liquid NTVE or compound a closed epoch into fresh NTVE/stNTVE LP locked to a collator.',
-        nominationRewardsSection,
+        'Session rewards',
+        'Claim a finalized session reward as liquid NTVE or atomically compound it into canonical LP locked to an operator.',
+        rewardSection,
       )}
       {@render actionSection(
         'Collator LP nomination',

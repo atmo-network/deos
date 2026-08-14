@@ -9,13 +9,13 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeActorProgram } from '../src/lib/automation/analysis.ts';
+import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   ACTORS_AUTHORING_CONDITION_TYPES,
   createActorArtifactFromAuthoring,
-  validateActorAuthoringProgram,
+  validateActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
-import { inspectActorPlanArtifact } from '../src/lib/automation/plan-artifact.ts';
+import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
@@ -57,9 +57,9 @@ const weightModel = {
   },
 };
 
-function activeProgram({
+function activeContract({
   trigger,
-  conditions,
+  predicates,
   task,
   completionPolicy,
   onError,
@@ -75,10 +75,18 @@ function activeProgram({
     steps: [
       {
         key: 'reaction',
-        conditionSet:
-          conditions.length === 0
-            ? { type: 'Always' }
-            : { type: 'All', conditions },
+        preconditions:
+          predicates.length === 0
+            ? { type: 'Unconditional' }
+            : {
+                type: 'AnyOf',
+                clauses: [
+                  predicates.map((predicate) => ({
+                    timing: 'Current',
+                    predicate,
+                  })),
+                ],
+              },
         task,
         errorPolicy: onError,
       },
@@ -104,12 +112,12 @@ function priceBucket({ direction, threshold }) {
     },
     failure:
       'Non-fresh observation skips; Temporary swap failure retries at one cursor; retry exhaustion closes.',
-    program: activeProgram({
+    contract: activeContract({
       trigger: {
         type: 'Immediate',
         sources: [{ type: 'OnObservationChange', feed }],
       },
-      conditions: [
+      predicates: [
         {
           type: buying ? 'ObservationBelow' : 'ObservationAbove',
           feed,
@@ -157,9 +165,9 @@ const partialScenarios = [
     },
     failure:
       'The core must not run automatically until a typed treasury-ratio producer and feed meaning exist.',
-    program: activeProgram({
+    contract: activeContract({
       trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
-      conditions: [],
+      predicates: [],
       task: {
         type: 'SplitTransfer',
         asset: native,
@@ -190,9 +198,9 @@ const partialScenarios = [
     },
     failure:
       'The core must not run automatically until a typed depth producer and feed meaning exist.',
-    program: activeProgram({
+    contract: activeContract({
       trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
-      conditions: [],
+      predicates: [],
       task: {
         type: 'AddLiquidity',
         assetA: native,
@@ -220,13 +228,13 @@ const nonPriceScalar = {
   },
   failure:
     'Before the authored block the condition skips; transfer failure follows AbortCycle without retry state.',
-  program: activeProgram({
+  contract: activeContract({
     trigger: {
       type: 'Cadenced',
       everyBlocks: 10,
       mode: { type: 'Always' },
     },
-    conditions: [{ type: 'BlockNumberAbove', threshold: 100 }],
+    predicates: [{ type: 'BlockNumberAbove', threshold: 100 }],
     task: {
       type: 'Transfer',
       to: recipient,
@@ -245,42 +253,40 @@ const scenarios = [
   nonPriceScalar,
 ];
 
-function artifact(program) {
-  return createActorArtifactFromAuthoring({ program, metadataBytes, runtime });
+function artifact(contract) {
+  return createActorArtifactFromAuthoring({ contract, metadataBytes, runtime });
 }
 
 test('descending buys and ascending sells lower as independent bounded one-shot actors', () => {
   assert.deepEqual(
     descendingBuyBuckets.map(
       (scenario) =>
-        scenario.program.steps[0].conditionSet.conditions[0].threshold,
+        scenario.contract.steps[0].preconditions.clauses[0][0].predicate
+          .threshold,
     ),
     ['900000000000', '800000000000', '700000000000'],
   );
   assert.deepEqual(
     ascendingSellBuckets.map(
       (scenario) =>
-        scenario.program.steps[0].conditionSet.conditions[0].threshold,
+        scenario.contract.steps[0].preconditions.clauses[0][0].predicate
+          .threshold,
     ),
     ['1100000000000', '1200000000000', '1300000000000'],
   );
   for (const scenario of [...descendingBuyBuckets, ...ascendingSellBuckets]) {
-    const validation = validateActorAuthoringProgram(scenario.program);
+    const validation = validateActorAuthoringContract(scenario.contract);
     assert.equal(validation.valid, true, scenario.name);
-    const inspection = inspectActorPlanArtifact(
-      artifact(scenario.program),
+    const inspection = inspectActorContractArtifact(
+      artifact(scenario.contract),
       metadataBytes,
       runtime,
     );
     assert.equal(inspection.valid, true, scenario.name);
     if (!inspection.valid) continue;
+    assert.equal(inspection.projection.value.steps.length, 1, scenario.name);
     assert.equal(
-      inspection.projection.value.execution_plan.length,
-      1,
-      scenario.name,
-    );
-    assert.equal(
-      inspection.projection.value.completion_policy.type,
+      inspection.projection.value.completion.type,
       'CloseAfterProductiveCycle',
       scenario.name,
     );
@@ -306,17 +312,21 @@ test('partial reaction cores lower without inventing reserve-ratio or depth pred
     assert.equal(scenario.data.truthOwner, 'NoCurrentTypedFeed', scenario.name);
     assert.equal(scenario.data.provenance, 'Unavailable', scenario.name);
     assert.equal(
-      validateActorAuthoringProgram(scenario.program).valid,
+      validateActorAuthoringContract(scenario.contract).valid,
       true,
       scenario.name,
     );
-    const analysis = analyzeActorProgram({
-      artifact: artifact(scenario.program),
+    const analysis = analyzeActorContract({
+      artifact: artifact(scenario.contract),
       metadataBytes,
       runtime: { ...runtime, modelIdentity: 'reactive-scenario-corpus' },
       weightModel,
     });
-    assert.equal(analysis.steps[0].conditionSet.mode, 'Always', scenario.name);
+    assert.equal(
+      analysis.steps[0].preconditions.mode,
+      'Unconditional',
+      scenario.name,
+    );
     assert(BigInt(analysis.steps[0].costs.totalUpper.refTime) > 0n);
   }
 });
@@ -325,18 +335,18 @@ test('non-price scalar strategy uses runtime block truth rather than a mislabele
   assert.equal(nonPriceScalar.data.truthOwner, 'Runtime block number');
   assert.equal(nonPriceScalar.data.provenance, 'CanonicalChainCurrentBlock');
   assert.equal(
-    validateActorAuthoringProgram(nonPriceScalar.program).valid,
+    validateActorAuthoringContract(nonPriceScalar.contract).valid,
     true,
   );
-  const analysis = analyzeActorProgram({
-    artifact: artifact(nonPriceScalar.program),
+  const analysis = analyzeActorContract({
+    artifact: artifact(nonPriceScalar.contract),
     metadataBytes,
     runtime: { ...runtime, modelIdentity: 'reactive-scenario-corpus' },
     weightModel,
   });
   assert.equal(analysis.trigger.admission, 'CadencedAlways');
-  assert.equal(analysis.steps[0].conditions[0].type, 'BlockNumberAbove');
-  assert.equal(analysis.steps[0].conditions[0].observation, 'block-number');
+  assert.equal(analysis.steps[0].predicates[0].type, 'BlockNumberAbove');
+  assert.equal(analysis.steps[0].predicates[0].observation, 'block-number');
   assert.equal(analysis.steps[0].task, 'Transfer');
 });
 
@@ -355,6 +365,6 @@ test('every scenario declares availability, data ownership, provenance, and fail
     assert(scenario.data.provenance.length > 0, scenario.name);
     assert(scenario.data.meaning.length > 0, scenario.name);
     assert(scenario.failure.length > 0, scenario.name);
-    assert.equal(validateActorAuthoringProgram(scenario.program).valid, true);
+    assert.equal(validateActorAuthoringContract(scenario.contract).valid, true);
   }
 });

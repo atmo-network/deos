@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.16`
+- **Release line**: `0.7.17`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System Actor catalog standardization, UI product flows
@@ -50,9 +50,9 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 - `AddressEventIngress`: Typed certified-ingress boundary (`AddressEventIngress::preflight`/`notify`) over the package `AddressEvent` value. Preflight is read-only (lifecycle, funding, trigger, and required placement); notify executes exactly once after movement and rejects through `IngressFailure { error, retry }` with the same closed Temporary/Permanent classification as `TaskFailure`.
 - Governance/system origins, a two-dimensional hook weight meter, runtime-reserved `ActorOnIdleReserve`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxOpeningSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
 - Canonical FIFO configuration: non-zero page size, bounded `MaxQueueLength`, `MaxQueueEntriesScannedPerBlock`, and `MaxExecutionsPerBlock`. One `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Continuation owner govern every actor. Actor class, actor id, execution share, and priority policy never change service order.
-- Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum condition group honestly; repeated keys do not establish worst-case ProofSize.
+- Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum bounded-DNF predicate count honestly; repeated keys do not establish worst-case ProofSize.
 
-The host runtime owns those bindings. Actors core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
+The host runtime owns those bindings. Actors core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no contract or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
 
 Deterministic User and System custody derivation survives host account-provider removal. Reattachment recovers the same address but does not recreate balances removed by external reaping, dust handling, or other host policy.
 

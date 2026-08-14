@@ -89,8 +89,7 @@ run_fast() {
     run_script_step "Rust workspace CI" "ci-local.sh"
 }
 
-run_heavy() {
-    run_fast
+run_heavy_checks() {
     phase_banner "Step 3: Heavy profile"
     run_shell_step "Clean web-client validation" "" "cd '$PROJECT_ROOT/web-client' && npm run validate:all"
     AUDIT_SCOPE=all RUN_SIMULATOR=1 RUN_CARGO_CHECK=1 RUN_RUNTIME_TESTS=1 run_alignment_script_step "Full-scope completion gate" completion-gate.sh --all-rust
@@ -98,13 +97,30 @@ run_heavy() {
     run_script_step "Benchmark compilation" "benchmarks.sh" --check
 }
 
-run_full() {
-    run_heavy
-    phase_banner "Step 4: Full profile"
+run_heavy() {
+    run_fast
+    run_heavy_checks
+}
+
+regenerate_full_artifacts() {
     run_script_step "Deterministic production runtime" "03-build-runtime.sh"
     run_script_step "Runtime metadata and descriptors" "export-papi-metadata.sh"
     run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence && npm run generate:observation-evidence"
     run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
+}
+
+run_full() {
+    run_fast
+    phase_banner "Step 3: Canonical full-profile identity"
+    regenerate_full_artifacts
+    if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
+        log_error "Canonical preflight regeneration changed the exact candidate worktree"
+        git -C "$PROJECT_ROOT" status --short
+        exit 1
+    fi
+    run_heavy_checks
+    phase_banner "Step 4: Full-profile reproducibility"
+    regenerate_full_artifacts
     if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
         log_error "Full regeneration changed the exact candidate worktree"
         git -C "$PROJECT_ROOT" status --short

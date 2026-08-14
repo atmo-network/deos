@@ -1,24 +1,17 @@
 extern crate alloc;
 
 use crate as pallet_staking;
+use polkadot_sdk::frame_support::{
+  PalletId, construct_runtime, derive_impl,
+  traits::{ConstU32, ConstU128, Get, Hooks},
+};
 use polkadot_sdk::frame_system::{self, EnsureRoot};
 use polkadot_sdk::sp_runtime::{
-  BuildStorage, DispatchError, FixedU128,
+  BuildStorage, FixedU128,
   testing::H256,
   traits::{BlakeTwo256, IdentityLookup},
 };
-use polkadot_sdk::{
-  frame_support::{
-    PalletId, construct_runtime, derive_impl,
-    traits::{ConstU32, ConstU128, Get, Hooks},
-    weights::Weight,
-  },
-  pallet_assets::Event as AssetsEvent,
-};
-use std::{
-  cell::RefCell,
-  collections::{BTreeMap, BTreeSet},
-};
+use std::{cell::RefCell, collections::BTreeMap};
 
 pub type AccountId = u64;
 pub type AssetId = u32;
@@ -28,6 +21,52 @@ type Block = frame_system::mocking::MockBlock<Test>;
 thread_local! {
   static BENCHMARK_VALID_OPERATORS: RefCell<alloc::vec::Vec<AccountId>> = const { RefCell::new(alloc::vec![]) };
   static NATIVE_GOVERNANCE_LOCKS: RefCell<BTreeMap<AccountId, u64>> = const { RefCell::new(BTreeMap::new()) };
+  static NATIVE_SECURITY_MODE: RefCell<pallet_staking::NativeSecurityMode> = const {
+    RefCell::new(pallet_staking::NativeSecurityMode::LpBackedSelection)
+  };
+  static SECURITY_EPOCH: RefCell<pallet_staking::SecurityEpoch> = const { RefCell::new(0) };
+  static GOVERNANCE_COEFFICIENTS: RefCell<BTreeMap<AccountId, FixedU128>> = const { RefCell::new(BTreeMap::new()) };
+  static NATIVE_LP_VALUE_MULTIPLIER: RefCell<Balance> = const { RefCell::new(1) };
+  static COMPOUND_FAILURE: RefCell<bool> = const { RefCell::new(false) };
+  static COMPOUND_LP_OUT: RefCell<Balance> = const { RefCell::new(10) };
+}
+
+pub fn set_native_security_mode(mode: pallet_staking::NativeSecurityMode) {
+  NATIVE_SECURITY_MODE.with(|current| *current.borrow_mut() = mode);
+}
+
+pub fn set_security_epoch(epoch: pallet_staking::SecurityEpoch) {
+  SECURITY_EPOCH.with(|current| *current.borrow_mut() = epoch);
+}
+
+pub fn set_governance_coefficient(account: AccountId, coefficient: FixedU128) {
+  GOVERNANCE_COEFFICIENTS.with(|coefficients| {
+    coefficients.borrow_mut().insert(account, coefficient);
+  });
+}
+
+pub fn set_native_lp_value_multiplier(multiplier: Balance) {
+  NATIVE_LP_VALUE_MULTIPLIER.with(|current| *current.borrow_mut() = multiplier);
+}
+
+pub fn set_compound_failure(fail: bool) {
+  COMPOUND_FAILURE.with(|current| *current.borrow_mut() = fail);
+}
+
+pub fn set_compound_lp_out(lp_out: Balance) {
+  COMPOUND_LP_OUT.with(|current| *current.borrow_mut() = lp_out);
+}
+
+pub struct MockNativeSecurityModeProvider;
+impl pallet_staking::NativeSecurityModeProvider for MockNativeSecurityModeProvider {
+  fn mode() -> pallet_staking::NativeSecurityMode {
+    NATIVE_SECURITY_MODE.with(|mode| *mode.borrow())
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
+  fn benchmark_prepare_lp_backed_selection() {
+    set_native_security_mode(pallet_staking::NativeSecurityMode::LpBackedSelection);
+  }
 }
 
 construct_runtime!(
@@ -103,7 +142,7 @@ impl Get<PalletId> for StakingPalletId {
 pub struct MockNativeOperatorValidator;
 impl pallet_staking::NativeOperatorValidator<AccountId> for MockNativeOperatorValidator {
   fn is_valid_operator(account: &AccountId) -> bool {
-    matches!(*account, 99 | 100)
+    matches!(*account, 2 | 99 | 100)
       || BENCHMARK_VALID_OPERATORS.with(|operators| operators.borrow().contains(account))
   }
 
@@ -119,19 +158,62 @@ impl pallet_staking::NativeOperatorValidator<AccountId> for MockNativeOperatorVa
 }
 
 polkadot_sdk::frame_support::parameter_types! {
-  pub const MaxOperatorCommission: polkadot_sdk::sp_runtime::Perbill = polkadot_sdk::sp_runtime::Perbill::from_percent(50);
-  pub const MaxRewardEventScanPerBlock: u32 = 128;
-  pub const MaxRewardRolloverAssetsPerBlock: u32 = 2;
-  pub const MaxRewardAccountsPerAssetEpoch: u32 = 256;
-  pub const MaxRewardAssetsPerGovernanceDomain: u32 = 16;
-  pub const MaxClaimEpochsPerCall: u32 = 16;
+  pub const NativeGovernanceDomainId: u32 = 1;
+  pub const SecurityRewardFundingSource: AccountId = 3;
+  pub const MaxNativeSecurityParticipants: u32 = 3;
+  pub const MaxNativeSecurityOperators: u32 = 3;
+  pub const MaxNominationsPerAccount: u32 = 2;
   pub const NativeLpUnlockDelay: u64 = 3;
+  pub const SecurityRewardClaimHorizon: u32 = 3;
+  pub const MaxSecurityRewardClaimsPerCall: u32 = 3;
 }
 
 pub struct MockNativeStakingLpAssetValidator;
 impl pallet_staking::NativeStakingLpAssetValidator<AssetId> for MockNativeStakingLpAssetValidator {
   fn is_valid_native_staking_lp_asset(asset_id: AssetId) -> bool {
     asset_id == 0x7000_0001
+  }
+}
+
+pub struct MockNativeStakingReadModelProvider;
+impl pallet_staking::NativeStakingReadModelProvider<AssetId, Balance>
+  for MockNativeStakingReadModelProvider
+{
+  fn native_staking_liquidity_pool() -> Option<(AssetId, Balance, Balance, Balance)> {
+    <Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(
+      0x7000_0001,
+    )
+    .then_some((0x7000_0001, 1, 1, 1))
+  }
+
+  fn native_lp_value(locked_lp: Balance) -> Option<Balance> {
+    Some(
+      NATIVE_LP_VALUE_MULTIPLIER.with(|multiplier| locked_lp.saturating_mul(*multiplier.borrow())),
+    )
+  }
+}
+
+pub struct MockNativeSecurityRewardCompound;
+impl pallet_staking::NativeSecurityRewardCompound<AccountId, AssetId, Balance>
+  for MockNativeSecurityRewardCompound
+{
+  fn compound(
+    account: &AccountId,
+    _reward: Balance,
+    _min_lp_out: Balance,
+  ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError> {
+    if COMPOUND_FAILURE.with(|fail| *fail.borrow()) {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "MockCompoundFailure",
+      ));
+    }
+    let lp_out = COMPOUND_LP_OUT.with(|amount| *amount.borrow());
+    <Assets as polkadot_sdk::frame_support::traits::fungibles::Mutate<AccountId>>::mint_into(
+      0x7000_0001,
+      account,
+      lp_out,
+    )?;
+    Ok((0x7000_0001, lp_out))
   }
 }
 
@@ -142,7 +224,7 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance> for MockBenchm
   fn prepare_native_staking_lp(
     account: &AccountId,
     amount: Balance,
-  ) -> Result<AssetId, DispatchError> {
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
     const LP_ASSET: AssetId = 0x7000_0001;
     if !<Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(
       LP_ASSET,
@@ -158,7 +240,7 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance> for MockBenchm
   fn prepare_native_governance_asset(
     account: &AccountId,
     amount: Balance,
-  ) -> Result<AssetId, DispatchError> {
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
     if !<Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(
       1,
     ) {
@@ -168,6 +250,17 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance> for MockBenchm
       1, account, amount,
     )?;
     Ok(1)
+  }
+
+  fn set_security_epoch(epoch: pallet_staking::SecurityEpoch) {
+    set_security_epoch(epoch);
+  }
+
+  fn fund_native_account(account: &AccountId, amount: Balance) {
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        account, amount,
+      );
   }
 }
 
@@ -233,271 +326,27 @@ impl pallet_staking::StakedAssetLifecycle<AccountId, AssetId> for MockStakedAsse
   }
 }
 
-pub struct MockRewardGovernanceDomainResolver;
-impl pallet_staking::RewardGovernanceDomainResolver<AssetId, u32>
-  for MockRewardGovernanceDomainResolver
+pub struct MockSecurityEpochProvider;
+impl pallet_staking::SecurityEpochProvider for MockSecurityEpochProvider {
+  fn current_security_epoch() -> pallet_staking::SecurityEpoch {
+    SECURITY_EPOCH.with(|current| *current.borrow())
+  }
+}
+
+pub struct MockGovernanceParticipationCoefficientProvider;
+impl pallet_staking::GovernanceParticipationCoefficientProvider<AccountId, u32>
+  for MockGovernanceParticipationCoefficientProvider
 {
-  fn reward_governance_domain(asset_id: AssetId) -> Option<u32> {
-    Some(asset_id)
-  }
-}
-
-pub struct MockRewardEpochProvider;
-impl pallet_staking::RewardEpochProvider<u64> for MockRewardEpochProvider {
-  fn current_reward_epoch() -> u64 {
-    System::block_number()
-  }
-}
-
-pub struct MockRewardCoefficientProvider;
-impl pallet_staking::RewardCoefficientProvider<AccountId, u32> for MockRewardCoefficientProvider {
-  fn reward_coefficient(domain: u32, account: &AccountId) -> FixedU128 {
-    FixedU128::from_rational(u128::from(domain) + u128::from(*account), 10u128)
-  }
-}
-
-pub struct MockNativeNominationRewardCompounder;
-impl pallet_staking::NativeNominationRewardCompounder<AccountId, Balance>
-  for MockNativeNominationRewardCompounder
-{
-  fn compound(
-    _account: &AccountId,
-    _operator: &AccountId,
-    amount: Balance,
-  ) -> Result<Balance, DispatchError> {
-    Ok(amount)
-  }
-}
-
-pub struct MockRewardSnapshotEventIngress;
-impl pallet_staking::RewardSnapshotEventIngress<u64> for MockRewardSnapshotEventIngress {
-  fn ingest(epoch: u64, max_scan: usize, remaining_weight: Weight) -> Weight {
-    const EVENT_SCAN_WEIGHT_REF_TIME: u64 = 1_000;
-    const ACCOUNT_TOUCH_WEIGHT_REF_TIME: u64 = 2_000;
-    const REWARD_RECORD_WEIGHT_REF_TIME: u64 = 4_000;
-    fn reward_inflow_asset_id(asset_id: AssetId, recipient: &AccountId) -> Option<AssetId> {
-      if !pallet_staking::Pools::<Test>::contains_key(asset_id) {
-        return None;
-      }
-      if pallet_staking::Pallet::<Test>::reward_account_for(asset_id) != *recipient {
-        return None;
-      }
-      Some(asset_id)
-    }
-    let max_ref_time = remaining_weight.ref_time();
-    let mut scanned = 0u64;
-    let mut touched = 0u64;
-    let mut recorded_reward_inflows = 0u64;
-    let mut truncated = false;
-    let mut pending_reward_touches: BTreeSet<(AssetId, AccountId)> = BTreeSet::new();
-    let mut pending_reward_inflows: BTreeMap<AssetId, Balance> = BTreeMap::new();
-    for record in System::read_events_no_consensus().take(max_scan.saturating_add(1)) {
-      let next_scanned = scanned.saturating_add(1);
-      let scan_only_ref_time = next_scanned
-        .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-        .saturating_add(
-          (pending_reward_touches.len() as u64).saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME),
-        )
-        .saturating_add(
-          (pending_reward_inflows.len() as u64).saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME),
-        );
-      if scan_only_ref_time > max_ref_time {
-        break;
-      }
-      scanned = next_scanned;
-      if scanned > max_scan as u64 {
-        truncated = true;
-        break;
-      }
-      let mut projected_touches = pending_reward_touches.len();
-      let mut projected_inflows = pending_reward_inflows.len();
-      match &record.event {
-        RuntimeEvent::Assets(AssetsEvent::Transferred {
-          asset_id,
-          from,
-          to,
-          amount,
-        }) => {
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
-            projected_inflows = projected_inflows.saturating_add(usize::from(
-              !pending_reward_inflows.contains_key(&reward_asset_id),
-            ));
-          }
-          if let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, *from)),
-            ));
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, *to)),
-            ));
-          }
-          let projected_ref_time = scanned
-            .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-            .saturating_add(
-              (projected_touches as u64).saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME),
-            )
-            .saturating_add(
-              (projected_inflows as u64).saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME),
-            );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
-            pending_reward_inflows
-              .entry(reward_asset_id)
-              .and_modify(|value| *value = value.saturating_add(*amount))
-              .or_insert(*amount);
-          }
-          let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, *from));
-          pending_reward_touches.insert((base_asset_id, *to));
-        }
-        RuntimeEvent::Assets(
-          AssetsEvent::Issued {
-            asset_id,
-            owner,
-            amount,
-          }
-          | AssetsEvent::Deposited {
-            asset_id,
-            who: owner,
-            amount,
-          },
-        ) => {
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
-            projected_inflows = projected_inflows.saturating_add(usize::from(
-              !pending_reward_inflows.contains_key(&reward_asset_id),
-            ));
-          }
-          if let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, *owner)),
-            ));
-          }
-          let projected_ref_time = scanned
-            .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-            .saturating_add(
-              (projected_touches as u64).saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME),
-            )
-            .saturating_add(
-              (projected_inflows as u64).saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME),
-            );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
-            pending_reward_inflows
-              .entry(reward_asset_id)
-              .and_modify(|value| *value = value.saturating_add(*amount))
-              .or_insert(*amount);
-          }
-          let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, *owner));
-        }
-        RuntimeEvent::Assets(
-          AssetsEvent::Burned {
-            asset_id,
-            owner,
-            balance: _,
-          }
-          | AssetsEvent::Withdrawn {
-            asset_id,
-            who: owner,
-            amount: _,
-          },
-        ) => {
-          if let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, *owner)),
-            ));
-          }
-          let projected_ref_time = scanned
-            .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-            .saturating_add(
-              (projected_touches as u64).saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME),
-            )
-            .saturating_add(
-              (projected_inflows as u64).saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME),
-            );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          let Some(base_asset_id) =
-            pallet_staking::Pools::<Test>::iter_keys().find(|base_asset_id| {
-              pallet_staking::Pallet::<Test>::staked_asset_id(*base_asset_id) == Some(*asset_id)
-            })
-          else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, *owner));
-        }
-        _ => {
-          let projected_ref_time = scanned
-            .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-            .saturating_add(
-              (projected_touches as u64).saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME),
-            )
-            .saturating_add(
-              (projected_inflows as u64).saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME),
-            );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-        }
-      }
-    }
-    if truncated {
-      pallet_staking::Pallet::<Test>::note_reward_ingress_truncated(
-        epoch,
-        scanned as u32,
-        max_scan as u32,
-      );
-    }
-    for (asset_id, amount) in pending_reward_inflows {
-      recorded_reward_inflows = recorded_reward_inflows.saturating_add(u64::from(
-        pallet_staking::Pallet::<Test>::note_reward_inflow(asset_id, amount).is_ok(),
-      ));
-    }
-    for (asset_id, account) in pending_reward_touches {
-      touched = touched.saturating_add(u64::from(
-        pallet_staking::Pallet::<Test>::note_reward_touch(asset_id, &account),
-      ));
-    }
-    Weight::from_parts(
-      scanned
-        .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-        .saturating_add(touched.saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME))
-        .saturating_add(recorded_reward_inflows.saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME)),
-      0,
-    )
+  fn governance_participation_coefficient(domain: u32, account: &AccountId) -> FixedU128 {
+    GOVERNANCE_COEFFICIENTS.with(|coefficients| {
+      coefficients
+        .borrow()
+        .get(account)
+        .copied()
+        .unwrap_or_else(|| {
+          FixedU128::from_rational(u128::from(domain) + u128::from(*account), 10u128)
+        })
+    })
   }
 }
 
@@ -505,30 +354,30 @@ impl pallet_staking::Config for Test {
   type AdminOrigin = EnsureRoot<AccountId>;
   type AssetId = AssetId;
   type NativeStakingAssetId = ConstU32<1>;
+  type NativeCurrency = Balances;
+  type SecurityRewardFundingOrigin = EnsureRoot<AccountId>;
+  type SecurityRewardFundingSource = SecurityRewardFundingSource;
   type GovernanceDomainId = u32;
-  type RewardEpoch = u64;
+  type NativeGovernanceDomainId = NativeGovernanceDomainId;
   type NativeOperatorValidator = MockNativeOperatorValidator;
   type NativeStakingLpAssetValidator = MockNativeStakingLpAssetValidator;
   type NativeLpAssetNamespaceInitializer = ();
   type NativeGovernanceLockProvider = MockNativeGovernanceLockProvider;
+  type NativeSecurityModeProvider = MockNativeSecurityModeProvider;
   type StakedAssetIdResolver = MockStakedAssetIdResolver;
   type StakedAssetLifecycle = MockStakedAssetLifecycle;
-  type RewardGovernanceDomainResolver = MockRewardGovernanceDomainResolver;
-  type RewardEpochProvider = MockRewardEpochProvider;
-  type RewardCoefficientProvider = MockRewardCoefficientProvider;
-  type RewardBaseWeightProvider = ();
-  type NativeNominationRewardCompounder = MockNativeNominationRewardCompounder;
-  type NativeStakingReadModelProvider = ();
-  type RewardSnapshotEventIngress = MockRewardSnapshotEventIngress;
+  type SecurityEpochProvider = MockSecurityEpochProvider;
+  type GovernanceParticipationCoefficientProvider = MockGovernanceParticipationCoefficientProvider;
+  type NativeStakingReadModelProvider = MockNativeStakingReadModelProvider;
+  type NativeSecurityRewardCompound = MockNativeSecurityRewardCompound;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = MockBenchmarkHelper;
-  type MaxOperatorCommission = MaxOperatorCommission;
-  type MaxRewardEventScanPerBlock = MaxRewardEventScanPerBlock;
-  type MaxRewardRolloverAssetsPerBlock = MaxRewardRolloverAssetsPerBlock;
-  type MaxRewardAccountsPerAssetEpoch = MaxRewardAccountsPerAssetEpoch;
-  type MaxRewardAssetsPerGovernanceDomain = MaxRewardAssetsPerGovernanceDomain;
-  type MaxClaimEpochsPerCall = MaxClaimEpochsPerCall;
+  type MaxNativeSecurityParticipants = MaxNativeSecurityParticipants;
+  type MaxNativeSecurityOperators = MaxNativeSecurityOperators;
+  type MaxNominationsPerAccount = MaxNominationsPerAccount;
   type NativeLpUnlockDelay = NativeLpUnlockDelay;
+  type SecurityRewardClaimHorizon = SecurityRewardClaimHorizon;
+  type MaxSecurityRewardClaimsPerCall = MaxSecurityRewardClaimsPerCall;
   type Balance = Balance;
   type Assets = Assets;
   type PalletId = StakingPalletId;
@@ -564,6 +413,10 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   .unwrap();
   let mut ext: polkadot_sdk::sp_io::TestExternalities = storage.into();
   ext.execute_with(|| {
+    set_native_security_mode(pallet_staking::NativeSecurityMode::LpBackedSelection);
+    set_security_epoch(0);
+    GOVERNANCE_COEFFICIENTS.with(|coefficients| coefficients.borrow_mut().clear());
+    set_native_lp_value_multiplier(1);
     System::set_block_number(1);
     let _ = Staking::on_initialize(1);
   });

@@ -1,7 +1,16 @@
 use super::common::{
   ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, create_pool, create_test_asset, deos_router_account,
-  mint_tokens, seeded_test_ext,
+  mint_tokens, seeded_test_ext, update_actor_contract_partial,
 };
+macro_rules! update_actor_contract_partial {
+  ($origin:expr, $actor:expr, $value:expr $(,)?) => {
+    update_actor_contract_partial($origin, $actor, $value)
+  };
+  ($origin:expr, $actor:expr, $first:expr, $second:expr $(,)?) => {
+    update_actor_contract_partial($origin, $actor, ($first, $second))
+  };
+}
+
 use crate::{
   AccountId, Actors, Address, Assets, Balance, Balances, Executive, Oracle, Runtime, RuntimeCall,
   RuntimeEvent, RuntimeOrigin, Signature, Staking, System, TxExtension, UncheckedExtrinsic,
@@ -21,10 +30,10 @@ use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
-  ActiveProgramInput, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
-  CloseReason, CompletionPolicy, CycleResult, DexOps, Error, Event, ExecutionContext,
-  ExecutionPlanOf, FeeCollector, FundingSourcePolicy, IdleStarvationPhase, IdleStarvationState,
-  InputLimit, LiquidityOps, Mutability, OutcomeTotals, ProgramInput, RetryClass, Schedule,
+  ActiveContractInput, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
+  CloseReason, CompletionPolicy, ContractInput, CycleResult, DexOps, Error, Event,
+  ExecutionContext, ExecutionPlanOf, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
+  IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass, Schedule,
   ScheduleOf, ScheduleWindow, SimulationMode, SimulationStatus, SimulationStepOutcome,
   SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
   StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
@@ -268,10 +277,46 @@ fn signed_extrinsic(
 
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Runtime> {
-    conditions: pallet_deos_actors::ConditionSet::Always,
+    preconditions: pallet_deos_actors::Preconditions::Unconditional,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
+}
+
+fn all_preconditions(
+  predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
+) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+  let clause = BoundedVec::try_from(
+    predicates
+      .into_iter()
+      .map(|predicate| pallet_deos_actors::TimedPredicate {
+        timing: pallet_deos_actors::ObservationTiming::Current,
+        predicate,
+      })
+      .collect::<Vec<_>>(),
+  )
+  .expect("runtime predicates fit");
+  pallet_deos_actors::Preconditions::AnyOf(
+    BoundedVec::try_from(vec![clause]).expect("runtime clause fits"),
+  )
+}
+
+fn any_preconditions(
+  predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
+) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+  let clauses = predicates
+    .into_iter()
+    .map(|predicate| {
+      BoundedVec::try_from(vec![pallet_deos_actors::TimedPredicate {
+        timing: pallet_deos_actors::ObservationTiming::Current,
+        predicate,
+      }])
+      .expect("runtime predicate fits")
+    })
+    .collect::<Vec<_>>();
+  pallet_deos_actors::Preconditions::AnyOf(
+    BoundedVec::try_from(clauses).expect("runtime clauses fit"),
+  )
 }
 
 fn inert_task() -> RuntimeTask {
@@ -311,35 +356,35 @@ fn transfer_execution_plan(to: crate::AccountId, asset: AssetKind, amount: u128)
     asset,
     amount: AmountResolution::Fixed(amount),
   })])
-  .expect("execution_plan fits")
+  .expect("steps fits")
 }
 
-fn user_active_program(
+fn user_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  execution_plan: ExecutionPlan,
-) -> pallet_deos_actors::ProgramInputOf<Runtime> {
-  pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+  steps: ExecutionPlan,
+) -> pallet_deos_actors::ContractInputOf<Runtime> {
+  pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
     schedule,
     schedule_window,
-    execution_plan,
-    completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-    funding_source_policy: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
+    steps,
+    completion: pallet_deos_actors::CompletionPolicy::Persistent,
+    funding: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   })
 }
 
-fn system_active_program(
+fn system_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  execution_plan: ExecutionPlan,
-) -> pallet_deos_actors::ProgramInputOf<Runtime> {
-  pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+  steps: ExecutionPlan,
+) -> pallet_deos_actors::ContractInputOf<Runtime> {
+  pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
     schedule,
     schedule_window,
-    execution_plan,
-    completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-    funding_source_policy: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
+    steps,
+    completion: pallet_deos_actors::CompletionPolicy::Persistent,
+    funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
   })
 }
@@ -348,14 +393,14 @@ fn create_user(
   who: crate::AccountId,
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  execution_plan: ExecutionPlan,
+  steps: ExecutionPlan,
 ) -> ActorId {
-  prefund_active_user_creation(&who, &execution_plan);
+  prefund_active_user_creation(&who, &steps);
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_user_actor(
     RuntimeOrigin::signed(who),
     Mutability::Mutable,
-    user_active_program(schedule, schedule_window, execution_plan),
+    user_active_contract(schedule, schedule_window, steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -365,14 +410,14 @@ fn create_system(
   owner: crate::AccountId,
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  execution_plan: ExecutionPlan,
+  steps: ExecutionPlan,
 ) -> ActorId {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
     RuntimeOrigin::root(),
     owner,
     Mutability::Mutable,
-    system_active_program(schedule, schedule_window, execution_plan),
+    system_active_contract(schedule, schedule_window, steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -468,11 +513,9 @@ fn deplete_user_sovereign(actor_id: ActorId, amount: u128) {
 }
 
 #[test]
-fn deos_runtime_executes_always_all_and_any_with_fixed_successors() {
+fn deos_runtime_executes_unconditional_and_dnf_with_fixed_successors() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let atom =
-      |condition| BoundedVec::try_from(vec![condition]).expect("one condition fits runtime bound");
     let transfer = |amount| Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
@@ -480,21 +523,21 @@ fn deos_runtime_executes_always_all_and_any_with_fixed_successors() {
     };
     let plan = BoundedVec::try_from(vec![
       pallet_deos_actors::Step {
-        conditions: pallet_deos_actors::ConditionSet::Always,
+        preconditions: pallet_deos_actors::Preconditions::Unconditional,
         task: transfer(7),
         on_error: StepErrorPolicy::AbortCycle,
       },
       pallet_deos_actors::Step {
-        conditions: pallet_deos_actors::ConditionSet::All(atom(
-          pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 },
-        )),
+        preconditions: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
+          threshold: 0,
+        }]),
         task: transfer(11),
         on_error: StepErrorPolicy::AbortCycle,
       },
       pallet_deos_actors::Step {
-        conditions: pallet_deos_actors::ConditionSet::Any(atom(
-          pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 },
-        )),
+        preconditions: any_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
+          threshold: 0,
+        }]),
         task: transfer(13),
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -531,11 +574,10 @@ fn genesis_anchor_buckets_are_custody_only_accounts() {
       assert!(Actors::sovereign_index(sovereign).is_none());
       let plan = transfer_execution_plan(BOB, AssetKind::Native, 1);
       assert_noop!(
-        Actors::update_execution_plan(
+        update_actor_contract_partial!(
           RuntimeOrigin::root(),
           actor_id,
-          plan,
-          CompletionPolicy::Persistent,
+          (plan, CompletionPolicy::Persistent,)
         ),
         Error::<Runtime>::ActorNotFound
       );
@@ -654,7 +696,7 @@ fn starvation_observation_weight() -> Weight {
   <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_on_idle_base()
 }
 
-/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/program probes, and
+/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/contract probes, and
 /// the head consume, but not the actor's full cycle admission. Materializes the only spec 8.6.3
 /// starvation trigger: a live FIFO head blocked by weight with no admitted attempt.
 fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
@@ -663,17 +705,17 @@ fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
   let scan =
     <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
   let hot = Actors::scheduler_actor_hot_probe_weight_upper();
-  let program = Actors::scheduler_actor_program_probe_weight_upper();
+  let contract = Actors::scheduler_actor_contract_probe_weight_upper();
   let consume = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page());
   let instance = Actors::active_actor_view(actor_id).expect("actor exists");
   let cycle =
-    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.execution_plan);
+    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
     .saturating_add(hot)
-    .saturating_add(program)
+    .saturating_add(contract)
     .saturating_add(consume)
     .saturating_add(cycle);
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
@@ -754,19 +796,19 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
     System::set_block_number(1);
     let amount = 5_000_000_000_000u128;
     let actor_id = Actors::next_actor_id();
-    let program = ProgramInput::Active(ActiveProgramInput {
+    let contract = ContractInput::Active(ActiveContractInput {
       schedule: manual_schedule(),
       schedule_window: None,
-      execution_plan: transfer_execution_plan(BOB, AssetKind::Native, amount),
-      completion_policy: CompletionPolicy::CloseAfterProductiveCycle,
-      funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+      steps: transfer_execution_plan(BOB, AssetKind::Native, amount),
+      completion: CompletionPolicy::CloseAfterProductiveCycle,
+      funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     });
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      program.clone(),
+      contract.clone(),
     ));
     let actor = Actors::sovereign_account_id_system(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
@@ -774,14 +816,14 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
     let bob_before = native_balance(&BOB);
 
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
-    let simulation = Actors::simulate_current_program(
+    let simulation = Actors::simulate_current_contract(
       actor_id,
       ActorType::System,
       Mutability::Mutable,
-      program,
+      contract,
       SimulationMode::FreshCurrentPlan,
     )
-    .expect("ready productive program simulates");
+    .expect("ready productive contract simulates");
     assert_eq!(
       simulation.status,
       SimulationStatus::Closed(CloseReason::ProductiveCycleCompleted)
@@ -845,7 +887,7 @@ fn native_staking_liquidity_actor_activation_requires_initialized_pool() {
     )
     .expect("Native Staking Liquidity Actor must exist");
     assert!(matches!(
-      actor.execution_plan.first().map(|step| &step.task),
+      actor.steps.first().map(|step| &step.task),
       Some(Task::DonateLiquidity { .. })
     ));
   });
@@ -1057,9 +1099,8 @@ fn system_actor_executes_native_staking_lp_donation_task() {
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
         pool.lp_token,
       );
-    let execution_plan =
-      TmctolGenesisSystemActors::build_native_staking_liquidity_execution_plan(1);
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    let steps = TmctolGenesisSystemActors::build_native_staking_liquidity_execution_plan(1);
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     assert_ok!(Assets::transfer(
       RuntimeOrigin::signed(BOB),
@@ -1487,14 +1528,14 @@ fn close_actor_emits_owner_initiated_reason() {
 fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
-    assert_ok!(Actors::update_funding_source_policy(
+    .expect("steps fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -1536,13 +1577,13 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
 fn cycle_summary_reports_funding_unavailable_skip() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -1573,14 +1614,14 @@ fn cycle_summary_reports_funding_unavailable_skip() {
 fn percentage_of_last_funding_keeps_user_actor_active_on_exhaustion() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     })])
-    .expect("execution_plan fits");
-    let prefunded = user_prefunding_requirement(&execution_plan);
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let prefunded = user_prefunding_requirement(&steps);
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     deplete_user_sovereign(actor_id, prefunded);
     fund_native_via_call(ALICE, actor_id, 1_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -1696,7 +1737,7 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let execution_plan = BoundedVec::try_from(vec![
+    let steps = BoundedVec::try_from(vec![
       make_step(Task::SwapOut {
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(target_out),
@@ -1709,8 +1750,8 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
         amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
       }),
     ])
-    .expect("execution_plan fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let required_in = crate::DeosRouter::quote_exact_out(
       sovereign.clone(),
@@ -1721,13 +1762,10 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
     .expect("native exact-output route is quotable")
     .amount_in;
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    let fee_reserve = Actors::attempt_fee_envelope(
-      instance.actor_class.actor_type(),
-      &instance.execution_plan,
-      0,
-    )
-    .expect("admitted plan has a checked fee envelope")
-    .total;
+    let fee_reserve =
+      Actors::attempt_fee_envelope(instance.actor_class.actor_type(), &instance.steps, 0)
+        .expect("admitted plan has a checked fee envelope")
+        .total;
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
     fund_native(
       actor_id,
@@ -1767,15 +1805,15 @@ fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
+    let steps = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(target_out),
       asset_in: AssetKind::Native,
       input_limit: InputLimit::Absolute(100_000_000_000_000),
       slippage_tolerance: Perbill::zero(),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
     let out_before = Assets::balance(ASSET_A, sovereign.clone());
@@ -1866,15 +1904,15 @@ fn swap_exact_out_liquidity_boundary_fails_without_partial_execution() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let impossible_out = super::common::LIQUIDITY_AMOUNT;
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
+    let steps = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(impossible_out),
       asset_in: AssetKind::Native,
       input_limit: InputLimit::Absolute(100_000_000_000_000),
       slippage_tolerance: Perbill::zero(),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 100_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -1913,15 +1951,15 @@ fn swap_out_fails_when_required_input_exceeds_actor_balance() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
+    let steps = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(target_out),
       asset_in: AssetKind::Native,
       input_limit: InputLimit::Absolute(100_000_000_000_000),
       slippage_tolerance: Perbill::zero(),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let quote_output = |amount_in: u128| -> Option<u128> {
       if amount_in == 0 {
@@ -2120,7 +2158,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
     ] {
       let plan = alloc::vec![
         pallet_deos_actors::Step {
-          conditions: pallet_deos_actors::ConditionSet::Always,
+          preconditions: pallet_deos_actors::Preconditions::Unconditional,
           task: Task::RemoveLiquidity {
             lp_asset,
             asset_a: pair.0,
@@ -2132,7 +2170,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
           on_error: policy,
         },
         pallet_deos_actors::Step {
-          conditions: pallet_deos_actors::ConditionSet::Always,
+          preconditions: pallet_deos_actors::Preconditions::Unconditional,
           task: Task::StopCycle,
           on_error: StepErrorPolicy::AbortCycle,
         },
@@ -2224,7 +2262,7 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     pallet_deos_router::ExecutionError::<Runtime>::from(pallet_deos_router::AdapterFailure::new(
       DispatchError::Other("PublicationCapacity"),
       pallet_deos_router::RouterFailureClass::PublicationRejected,
-      pallet_deos_router::RetryClass::RetryLater,
+      pallet_deos_router::RetryDisposition::RetryLater,
     ));
   assert_eq!(
     classify_router_execution_failure(temporary_adapter).retry,
@@ -2257,7 +2295,7 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
 #[test]
 fn market_execution_classifier_uses_the_concrete_cause() {
   use pallet_deos_actors::RetryClass as ActorRetryClass;
-  use pallet_deos_router::{RetryClass as RouterRetryClass, RouterFailureClass};
+  use pallet_deos_router::{RetryDisposition as RouterRetryClass, RouterFailureClass};
 
   let recoverable = market_execution_failure(
     polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolEmpty.into(),
@@ -2266,7 +2304,10 @@ fn market_execution_classifier_uses_the_concrete_cause() {
     recoverable.failure_class(),
     RouterFailureClass::LiquidityUnavailable
   );
-  assert_eq!(recoverable.retry_class(), RouterRetryClass::RetryLater);
+  assert_eq!(
+    recoverable.retry_disposition(),
+    RouterRetryClass::RetryLater
+  );
   assert_eq!(
     classify_router_execution_failure(recoverable.into()).retry,
     ActorRetryClass::Temporary
@@ -2279,7 +2320,7 @@ fn market_execution_classifier_uses_the_concrete_cause() {
     permanent.failure_class(),
     RouterFailureClass::InvariantViolation
   );
-  assert_eq!(permanent.retry_class(), RouterRetryClass::Permanent);
+  assert_eq!(permanent.retry_disposition(), RouterRetryClass::Permanent);
   assert_eq!(
     classify_router_execution_failure(permanent.into()).retry,
     ActorRetryClass::Permanent
@@ -2546,7 +2587,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     let amount = 10 * PRECISION;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
     let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      conditions: pallet_deos_actors::ConditionSet::Always,
+      preconditions: pallet_deos_actors::Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(ASSET_A),
@@ -2559,15 +2600,15 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       actor_id,
-      ProgramInput::Active(ActiveProgramInput {
+      ContractInput::Active(ActiveContractInput {
         schedule: Schedule {
           trigger: Trigger::immediate_manual(),
           cooldown_blocks: 0,
         },
         schedule_window: None,
-        execution_plan: plan,
-        completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+        steps: plan,
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       }),
     ));
@@ -2617,7 +2658,7 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      conditions: pallet_deos_actors::ConditionSet::Always,
+      preconditions: pallet_deos_actors::Preconditions::Unconditional,
       task: Task::SwapOut {
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
@@ -2651,13 +2692,18 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
 }
 
 #[test]
-fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
+fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owner() {
   use primitives::ecosystem::params::PRECISION;
 
   for exact_output in [false, true] {
     seeded_test_ext().execute_with(|| {
       System::set_block_number(1);
       assert_ok!(super::common::setup_deos_router_infrastructure());
+      for block in 2..=20 {
+        System::set_block_number(block);
+        Actors::on_initialize(block);
+        run_idle(Weight::MAX);
+      }
       let asset_in = AssetKind::Native;
       let asset_out = AssetKind::Local(ASSET_A);
       let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
@@ -2686,7 +2732,7 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
         }
       };
       let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-        conditions: pallet_deos_actors::ConditionSet::Always,
+        preconditions: pallet_deos_actors::Preconditions::Unconditional,
         task,
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       }])
@@ -2695,13 +2741,22 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
       fund_native(actor_id, 1_000 * PRECISION);
       let actor = actor_account(actor_id);
       let input_before = native_balance(&actor);
-      let router_fee_before = native_balance(&super::common::burn_actor_account());
+      let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
+      let burn_actor = super::common::burn_actor_account();
+      let router_fee_before = native_balance(&burn_actor);
+      let burn_cycle_before = Actors::active_actor_view(burn_actor_id)
+        .expect("Burn Actor exists")
+        .cycle_nonce;
       let output_before = Assets::balance(ASSET_A, &actor);
       let pool_before =
         crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool exists");
+      let reward_liability_before = Staking::native_security_reward_liability();
+      let reward_account = Staking::native_security_reward_account();
+      let reward_custody_before = native_balance(&reward_account);
+      let dirty_capacity = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+        .saturating_mul(<Runtime as pallet_deos_actors::Config>::MaxTriggerSources::get());
       pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| {
-        list.count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
-          .saturating_mul(<Runtime as pallet_deos_actors::Config>::MaxTriggerSources::get());
+        list.count = dirty_capacity;
       });
 
       assert_ok!(Actors::manual_trigger(
@@ -2712,9 +2767,12 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
 
       let input_after_failure = native_balance(&actor);
       assert!(input_after_failure < input_before);
+      assert_eq!(native_balance(&burn_actor), router_fee_before);
       assert_eq!(
-        native_balance(&super::common::burn_actor_account()),
-        router_fee_before
+        Actors::active_actor_view(burn_actor_id)
+          .expect("Burn Actor remains active")
+          .cycle_nonce,
+        burn_cycle_before,
       );
       assert_eq!(Assets::balance(ASSET_A, &actor), output_before);
       assert_eq!(
@@ -2723,6 +2781,12 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
       );
       assert!(Oracle::observations(feed).is_none());
       assert!(Actors::dirty_observation_feeds(feed).is_none());
+      assert_eq!(Actors::dirty_observation_feed_count(), dirty_capacity);
+      assert_eq!(
+        Staking::native_security_reward_liability(),
+        reward_liability_before
+      );
+      assert_eq!(native_balance(&reward_account), reward_custody_before);
       assert_eq!(
         actor_events()
           .iter()
@@ -2732,11 +2796,28 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
           .count(),
         0
       );
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(|event| matches!(
+            event,
+            Event::CycleSuspended {
+              actor_id: id,
+              reason: pallet_deos_actors::SuspensionReason::Temporary,
+              ..
+            } if *id == actor_id
+          ))
+          .count(),
+        1,
+      );
       let continuation = Actors::continuation_state(actor_id).expect("publication retry suspends");
       assert_eq!(continuation.cursor, 0);
+      let hot = Actors::actor_hot(actor_id).expect("suspended Actor stays hot");
+      assert!(hot.queue_ticket.is_some());
+      assert!(hot.wakeup_pointer.is_none());
 
       pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
-      System::set_block_number(2);
+      System::set_block_number(21);
       run_idle(Weight::MAX);
 
       assert!(Actors::continuation_state(actor_id).is_none());
@@ -2762,7 +2843,7 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
         1
       );
 
-      System::set_block_number(3);
+      System::set_block_number(22);
       run_idle(Weight::MAX);
       assert_eq!(
         actor_events()
@@ -2778,13 +2859,18 @@ fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
 }
 
 #[test]
-fn permanent_publication_configuration_never_enters_actor_retry() {
+fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_retry() {
   use primitives::ecosystem::params::PRECISION;
 
   for exact_output in [false, true] {
     seeded_test_ext().execute_with(|| {
       System::set_block_number(1);
       assert_ok!(super::common::setup_deos_router_infrastructure());
+      for block in 2..=20 {
+        System::set_block_number(block);
+        Actors::on_initialize(block);
+        run_idle(Weight::MAX);
+      }
       let asset_in = AssetKind::Native;
       let asset_out = AssetKind::Local(ASSET_A);
       let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
@@ -2808,7 +2894,7 @@ fn permanent_publication_configuration_never_enters_actor_retry() {
         }
       };
       let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-        conditions: pallet_deos_actors::ConditionSet::Always,
+        preconditions: pallet_deos_actors::Preconditions::Unconditional,
         task,
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       }])
@@ -2816,9 +2902,22 @@ fn permanent_publication_configuration_never_enters_actor_retry() {
       let actor_id = create_user(ALICE, manual_schedule(), None, plan);
       fund_native(actor_id, 1_000 * PRECISION);
       let actor = actor_account(actor_id);
+      let actor_input_before = native_balance(&actor);
+      let actor_contract_before = Actors::actor_contract(actor_id).expect("Actor Contract exists");
       let output_before = Assets::balance(ASSET_A, &actor);
       let pool_before =
         crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool exists");
+      let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
+      let burn_actor = super::common::burn_actor_account();
+      let burn_balance_before = native_balance(&burn_actor);
+      let burn_cycle_before = Actors::active_actor_view(burn_actor_id)
+        .expect("Burn Actor exists")
+        .cycle_nonce;
+      let reward_liability_before = Staking::native_security_reward_liability();
+      let reward_account = Staking::native_security_reward_account();
+      let reward_custody_before = native_balance(&reward_account);
+      let staking_participants_before = Staking::native_security_participants();
+      let governance_coefficient_before = Staking::governance_participation_coefficient(0, &actor);
 
       assert_ok!(Actors::manual_trigger(
         RuntimeOrigin::signed(ALICE),
@@ -2826,13 +2925,45 @@ fn permanent_publication_configuration_never_enters_actor_retry() {
       ));
       run_idle(Weight::MAX);
 
+      assert!(
+        native_balance(&actor) < actor_input_before,
+        "the bounded attempt remains paid"
+      );
+      assert_eq!(
+        Actors::actor_contract(actor_id).expect("Actor Contract remains"),
+        actor_contract_before,
+      );
       assert!(Actors::continuation_state(actor_id).is_none());
+      let hot = Actors::actor_hot(actor_id).expect("Actor hot state remains");
+      assert!(hot.queue_ticket.is_none());
+      assert!(hot.wakeup_pointer.is_none());
       assert_eq!(Assets::balance(ASSET_A, &actor), output_before);
       assert_eq!(
         crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
         pool_before
       );
+      assert_eq!(native_balance(&burn_actor), burn_balance_before);
+      assert_eq!(
+        Actors::active_actor_view(burn_actor_id)
+          .expect("Burn Actor remains active")
+          .cycle_nonce,
+        burn_cycle_before,
+      );
       assert!(Oracle::observations(feed).is_none());
+      assert!(Actors::dirty_observation_feeds(feed).is_none());
+      assert_eq!(
+        Staking::native_security_reward_liability(),
+        reward_liability_before
+      );
+      assert_eq!(native_balance(&reward_account), reward_custody_before);
+      assert_eq!(
+        Staking::native_security_participants(),
+        staking_participants_before
+      );
+      assert_eq!(
+        Staking::governance_participation_coefficient(0, &actor),
+        governance_coefficient_before,
+      );
       assert_eq!(
         actor_events()
           .iter()
@@ -2843,7 +2974,7 @@ fn permanent_publication_configuration_never_enters_actor_retry() {
         0
       );
 
-      System::set_block_number(2);
+      System::set_block_number(21);
       run_idle(Weight::MAX);
       assert!(Actors::continuation_state(actor_id).is_none());
       assert_eq!(
@@ -2923,12 +3054,12 @@ fn actor_unstake_percentage_current_resolves_live_staking_shares() {
       ALICE.into(),
       ALICE.into(),
     ));
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Unstake {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Unstake {
       asset: AssetKind::Native,
       shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_user(BOB, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(BOB, manual_schedule(), None, steps);
     let actor = actor_account(actor_id);
     let stake_amount = crate::EXISTENTIAL_DEPOSIT.saturating_mul(10);
     assert_ok!(mint_tokens(
@@ -2978,12 +3109,12 @@ fn actor_native_stake_task_mints_liquid_stntve_without_binding() {
       ALICE.into(),
       ALICE.into(),
     ));
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Stake {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Stake {
       asset: AssetKind::Local(0),
       amount: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_user(BOB, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(BOB, manual_schedule(), None, steps);
     let actor_acc = actor_account(actor_id);
     assert_ok!(mint_tokens(
       0,
@@ -3030,13 +3161,13 @@ fn split_transfer_uses_perbill_and_keeps_remainder_on_actor() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
       asset: AssetKind::Native,
       amount: AmountResolution::Fixed(total),
       legs,
     })])
-    .expect("execution_plan fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    .expect("steps fits");
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 100_000_000_000_000);
     let actor_acc = actor_account(actor_id);
     let actor_before = native_balance(&actor_acc);
@@ -3245,8 +3376,8 @@ fn split_transfer_rejects_ed_ineligible_recipient_then_retries_atomically() {
       legs,
     });
     step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
-    let execution_plan = BoundedVec::try_from(vec![step]).expect("execution_plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    let steps = BoundedVec::try_from(vec![step]).expect("steps fits");
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 100_000_000_000_000);
     let actor = actor_account(actor_id);
     let actor_before = native_balance(&actor);
@@ -3315,17 +3446,17 @@ fn create_rejects_split_transfer_share_sum_above_one() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
       asset: AssetKind::Native,
       amount: AmountResolution::Fixed(100),
       legs,
     })])
-    .expect("execution_plan fits");
+    .expect("steps fits");
     assert_noop!(
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, steps),
       ),
       Error::<Runtime>::InvalidSplitTransfer
     );
@@ -3415,13 +3546,13 @@ fn timer_horizon_validation_includes_runtime_jitter_bound() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(schedule(largest_valid_cadence), None, valid_plan),
+      user_active_contract(schedule(largest_valid_cadence), None, valid_plan),
     ));
     assert_noop!(
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           schedule(largest_valid_cadence.saturating_add(1)),
           None,
           transfer_execution_plan(BOB, AssetKind::Native, 1),
@@ -3526,14 +3657,14 @@ fn on_address_event_without_source_is_ignored_for_filtered_trigger() {
 fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
-    assert_ok!(Actors::update_funding_source_policy(
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -3586,7 +3717,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
     );
     let sender_sovereign = actor_account(sender_id);
     let sender_whitelist = BoundedVec::try_from(vec![sender_sovereign]).expect("fits");
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       receiver_id,
       on_address_event_schedule(SourceFilter::Whitelist(sender_whitelist), AssetFilter::Any),
@@ -3758,7 +3889,7 @@ fn manual_signal_then_same_block_funding_coalesces_to_one_actor_execution() {
 }
 
 #[test]
-fn runtime_rejects_self_transfer_before_program_replacement() {
+fn runtime_rejects_self_transfer_before_contract_replacement() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let actor_id = create_user(
@@ -3769,7 +3900,7 @@ fn runtime_rejects_self_transfer_before_program_replacement() {
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
     assert_noop!(
-      Actors::update_execution_plan(
+      update_actor_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         transfer_execution_plan(before.sovereign_account.clone(), AssetKind::Native, 1_000,),
@@ -3800,7 +3931,7 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
       transfer_execution_plan(actor_a_account, AssetKind::Native, 1_000),
     );
     let actor_b_account = actor_account(actor_b);
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_a,
       transfer_execution_plan(actor_b_account, AssetKind::Native, 1_000),
@@ -3808,7 +3939,7 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
     ));
     System::set_block_number(2);
     for (owner, actor_id) in [(ALICE, actor_a), (CHARLIE, actor_b)] {
-      assert_ok!(Actors::update_funding_source_policy(
+      assert_ok!(update_actor_contract_partial!(
         RuntimeOrigin::signed(owner.clone()),
         actor_id,
         FundingSourcePolicy::AnyVerifiedIngress,
@@ -3906,14 +4037,14 @@ fn router_fee_routing_notifies_burn_actor_via_runtime_ingress_adapter() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       burn_actor_id,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
     ));
     System::set_block_number(2);
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       burn_actor_id,
       transfer_execution_plan(BOB, AssetKind::Native, 777),
@@ -3943,14 +4074,13 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       burn_actor_id,
-      funding_plan,
-      CompletionPolicy::Persistent,
+      (funding_plan, CompletionPolicy::Persistent,)
     ));
     System::set_block_number(2);
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       burn_actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -3975,7 +4105,7 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
       pallet_deos_router::AdapterFailure::new(
         Error::<Runtime>::FundingAccumulatorOverflow.into(),
         pallet_deos_router::RouterFailureClass::IngressRejected,
-        pallet_deos_router::RetryClass::Permanent,
+        pallet_deos_router::RetryDisposition::Permanent,
       )
     );
     assert_eq!(native_balance(&ALICE), alice_before);
@@ -4036,7 +4166,7 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
       fee_sink_id,
       ALICE,
       Mutability::Mutable,
-      system_active_program(
+      system_active_contract(
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, AssetKind::Native, 1),
@@ -4106,14 +4236,14 @@ fn ingress_adapter_without_source_is_ignored_by_owner_only_filter() {
 fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     })])
-    .expect("execution_plan fits");
-    let target_id = create_system(ALICE, manual_schedule(), None, execution_plan);
-    assert_ok!(Actors::update_funding_source_policy(
+    .expect("steps fits");
+    let target_id = create_system(ALICE, manual_schedule(), None, steps);
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       target_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -4206,13 +4336,13 @@ fn xcm_ingress_with_source_triggers_owner_only_on_address_event() {
 fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let recipient = account_location(sovereign.clone());
     let sourced_amount = 10_000_000_000_000;
@@ -4268,14 +4398,14 @@ fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() 
 fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
-    assert_ok!(Actors::update_funding_source_policy(
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -4391,19 +4521,16 @@ fn cycle_does_not_execute_when_budget_is_too_small() {
       min_amount_b: 1,
     };
     let step = make_step(heavy_task);
-    let execution_plan =
-      BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("execution_plan fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    let steps = BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("steps fits");
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    let attempt_weight = Actors::compute_cycle_weight_upper(
-      instance.actor_class.actor_type(),
-      &instance.execution_plan,
-    );
+    let attempt_weight =
+      Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
       true
@@ -4438,17 +4565,16 @@ fn cycle_closes_with_balance_exhausted_before_the_smaller_weight_derived_fee() {
       min_amount_b: 1,
     };
     let step = make_step(heavy_task.clone());
-    let execution_plan =
-      BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("execution_plan fits");
-    let fee_envelope = Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0)
+    let steps = BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("steps fits");
+    let fee_envelope = Actors::attempt_fee_envelope(ActorType::User, &steps, 0)
       .expect("runtime plan has a checked fee envelope");
     let min_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
     assert!(
       fee_envelope.total < min_balance,
       "reference Weight-derived fee should remain below MinUserBalance"
     );
-    let prefunded = user_prefunding_requirement(&execution_plan);
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    let prefunded = user_prefunding_requirement(&steps);
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, min_balance.saturating_sub(1));
     assert_ok!(Actors::manual_trigger(
@@ -4482,13 +4608,12 @@ fn fee_insufficiency_is_terminal_without_deferral_guard() {
       min_amount_b: 1,
     };
     let step = make_step(heavy_task.clone());
-    let execution_plan =
-      BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("execution_plan fits");
-    let attempt_fee = Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0)
+    let steps = BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("steps fits");
+    let attempt_fee = Actors::attempt_fee_envelope(ActorType::User, &steps, 0)
       .expect("runtime plan has a checked fee envelope")
       .total;
-    let prefunded = user_prefunding_requirement(&execution_plan);
-    let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
+    let prefunded = user_prefunding_requirement(&steps);
+    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, attempt_fee.saturating_sub(1));
     assert_ok!(Actors::manual_trigger(
@@ -4511,19 +4636,13 @@ fn scheduler_fifo_order_is_deterministic_across_actor_types() {
           trigger: Trigger::cadenced_always(1),
           cooldown_blocks: 0,
         };
-        let execution_plan =
-          BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution_plan fits");
+        let steps = BoundedVec::try_from(vec![make_step(inert_task())]).expect("steps fits");
         let mut tracked: alloc::vec::Vec<ActorId> = alloc::vec::Vec::new();
         for _ in 0..system_count {
-          tracked.push(create_system(
-            ALICE,
-            schedule.clone(),
-            None,
-            execution_plan.clone(),
-          ));
+          tracked.push(create_system(ALICE, schedule.clone(), None, steps.clone()));
         }
         for _ in 0..user_count {
-          let user_id = create_user(ALICE, schedule.clone(), None, execution_plan.clone());
+          let user_id = create_user(ALICE, schedule.clone(), None, steps.clone());
           fund_native(user_id, 100_000_000_000);
           tracked.push(user_id);
         }
@@ -4791,13 +4910,13 @@ fn scheduler_actor_probe_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
     let hot =
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
-    let program =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_program_probe();
+    let contract =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_contract_probe();
     assert_eq!(Actors::scheduler_actor_hot_probe_weight_upper(), hot);
-    assert_eq!(Actors::scheduler_actor_program_probe_weight_upper(), program);
+    assert_eq!(Actors::scheduler_actor_contract_probe_weight_upper(), contract);
     assert_eq!(
       Actors::scheduler_actor_probe_weight_upper(),
-      hot.saturating_add(program)
+      hot.saturating_add(contract)
     );
   });
 }
@@ -4808,12 +4927,12 @@ fn scheduler_paged_admission_uses_generated_runtime_weights() {
     let scan = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
     let consume = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page();
     let hot = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
-    let program =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_program_probe();
+    let contract =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_contract_probe();
     assert!(scan.ref_time() > 0 && scan.proof_size() > 0);
     assert!(consume.ref_time() > 0 && consume.proof_size() > 0);
     assert_eq!(Actors::scheduler_actor_hot_probe_weight_upper(), hot);
-    assert_eq!(Actors::scheduler_actor_program_probe_weight_upper(), program);
+    assert_eq!(Actors::scheduler_actor_contract_probe_weight_upper(), contract);
   });
 }
 
@@ -5025,13 +5144,13 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
         1_000_000_000_000_000_000,
       );
     }
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(owner.clone(), manual_schedule(), None, execution_plan);
+    let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let donor_amount = 9_000_000_000_000;
@@ -5098,13 +5217,13 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
     assert_ok!(mint_tokens(asset_id, &owner, &owner, 100_000));
     assert_ok!(mint_tokens(asset_id, &owner, &donor, 100_000));
     let tracked_asset = AssetKind::Local(asset_id);
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: tracked_asset,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(owner.clone(), manual_schedule(), None, execution_plan);
+    let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let donor_amount = 9_000;
     let donor_call = RuntimeCall::Assets(polkadot_sdk::pallet_assets::Call::transfer {
@@ -5255,18 +5374,13 @@ fn signed_fixed_transfer_is_rejected_before_dispatch_when_funding_pending_overfl
       &signer_account,
       1_000_000_000_000_000_000_000_000,
     );
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(
-      signer_account.clone(),
-      manual_schedule(),
-      None,
-      execution_plan,
-    );
+    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
       maybe
@@ -5296,18 +5410,13 @@ fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflow
       &signer_account,
       1_000_000_000_000_000,
     );
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(
-      signer_account.clone(),
-      manual_schedule(),
-      None,
-      execution_plan,
-    );
+    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
       maybe
@@ -5337,18 +5446,13 @@ fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
       &signer_account,
       1_000_000_000_000_000_000,
     );
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
+    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(
-      signer_account.clone(),
-      manual_schedule(),
-      None,
-      execution_plan,
-    );
+    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_all {
@@ -5605,7 +5709,7 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_pure_cleanup() {
       let instance = Actors::active_actor_view(actor_id).expect("split active actor exists");
       let required = Actors::execution_plan_admission_weight_upper(
         instance.actor_class.actor_type(),
-        &instance.execution_plan,
+        &instance.steps,
       );
       assert!(
         required.all_lte(reserve),
@@ -5887,8 +5991,8 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     };
     let foreign = AssetKind::Local(ASSET_A);
     let swap_amount = primitives::ecosystem::params::PRECISION;
-    let execution_plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      conditions: pallet_deos_actors::ConditionSet::Always,
+    let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      preconditions: pallet_deos_actors::Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: foreign,
@@ -5898,7 +6002,7 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
       on_error: StepErrorPolicy::AbortCycle,
     }])
     .unwrap();
-    let id = create_user(ALICE, schedule, None, execution_plan.clone());
+    let id = create_user(ALICE, schedule, None, steps.clone());
     assert!(has_actor_event(
       |e| matches!(e, Event::ActorCreated { actor_id, .. } if *actor_id == id)
     ));
@@ -5909,10 +6013,9 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     let sov = Actors::sovereign_account_id(&ALICE, 0);
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
     let inst = Actors::active_actor_view(id).unwrap();
-    let per_cycle_fee =
-      Actors::attempt_fee_envelope(inst.actor_class.actor_type(), &inst.execution_plan, 0)
-        .expect("admitted plan has a checked fee envelope")
-        .total;
+    let per_cycle_fee = Actors::attempt_fee_envelope(inst.actor_class.actor_type(), &inst.steps, 0)
+      .expect("admitted plan has a checked fee envelope")
+      .total;
     let native_funding = min_user_balance + (per_cycle_fee + swap_amount) * 3;
     let _ = <Balances as Currency<crate::AccountId>>::transfer(
       &ALICE,
@@ -5959,16 +6062,16 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
 
 // --- Circular Transfer Chain Stress Tests ---
 
-/// Creates `n` System Actors with explicit StopCycle programs for scheduler stress testing.
-fn inert_timer_program() -> pallet_deos_actors::ProgramInputOf<Runtime> {
-  system_active_program(
+/// Creates `n` System Actors with explicit StopCycle contracts for scheduler stress testing.
+fn inert_timer_contract() -> pallet_deos_actors::ContractInputOf<Runtime> {
+  system_active_contract(
     Schedule {
       trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 0,
     },
     None,
     alloc::vec![pallet_deos_actors::Step {
-      conditions: Default::default(),
+      preconditions: Default::default(),
       task: inert_task(),
       on_error: StepErrorPolicy::AbortCycle,
     }]
@@ -5986,7 +6089,7 @@ fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     let sov = Actors::sovereign_account_id_system(actor_id);
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov, initial_balance);
@@ -5997,7 +6100,7 @@ fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
 fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
   let mut actor_ids = alloc::vec::Vec::new();
   let inert_plan: ExecutionPlan = alloc::vec![pallet_deos_actors::Step {
-    conditions: Default::default(),
+    preconditions: Default::default(),
     task: inert_task(),
     on_error: StepErrorPolicy::AbortCycle,
   }]
@@ -6010,7 +6113,7 @@ fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u6
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        inert_timer_program(),
+        inert_timer_contract(),
       ));
     } else {
       let mut owner_bytes = [0u8; 32];
@@ -6022,7 +6125,7 @@ fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u6
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(owner),
         Mutability::Mutable,
-        inert_timer_program(),
+        inert_timer_contract(),
       ));
     }
     age_fixture_control_clock(actor_id);
@@ -6045,7 +6148,7 @@ fn setup_inert_actors_sparse(n: u64, initial_balance: u128, stride: u64) -> allo
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     age_fixture_control_clock(actor_id);
     let sov = Actors::sovereign_account_id_system(actor_id);
@@ -6072,7 +6175,7 @@ fn setup_circular_chain(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     age_fixture_control_clock(actor_id);
     let sov = Actors::sovereign_account_id_system(actor_id);
@@ -6081,15 +6184,11 @@ fn setup_circular_chain(
   }
   for i in 0..n {
     let next_sov = sovereign_accounts[((i + 1) % n) as usize].clone();
-    let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      conditions: pallet_deos_actors::ConditionSet::All(
-        alloc::vec![pallet_deos_actors::Condition::BalanceAbove {
-          asset: primitives::AssetKind::Native,
-          threshold: crate::EXISTENTIAL_DEPOSIT,
-        }]
-        .try_into()
-        .expect("fits"),
-      ),
+    let steps: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      preconditions: all_preconditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
+        asset: primitives::AssetKind::Native,
+        threshold: crate::EXISTENTIAL_DEPOSIT,
+      },]),
       task: Task::Transfer {
         to: next_sov,
         asset: primitives::AssetKind::Native,
@@ -6099,11 +6198,10 @@ fn setup_circular_chain(
     }]
     .try_into()
     .expect("fits");
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_ids[i as usize],
-      execution_plan,
-      CompletionPolicy::Persistent,
+      (steps, CompletionPolicy::Persistent,)
     ));
   }
   (actor_ids, sovereign_accounts)
@@ -6438,7 +6536,7 @@ fn clear_genesis_system_actors_for_stress_fixture() {
   let actors: alloc::vec::Vec<_> = pallet_deos_actors::ActorHot::<Runtime>::iter().collect();
   for (actor_id, _hot) in actors {
     pallet_deos_actors::ActorHot::<Runtime>::remove(actor_id);
-    pallet_deos_actors::ActorProgram::<Runtime>::remove(actor_id);
+    pallet_deos_actors::ActorContract::<Runtime>::remove(actor_id);
     pallet_deos_actors::ActorFunding::<Runtime>::remove(actor_id);
     let identity = Actors::actor_identities(actor_id).expect("actor identity exists");
     pallet_deos_actors::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
@@ -6666,7 +6764,7 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
         ALICE,
         manual_schedule(),
         Some(ScheduleWindow { start: 1, end: 101 }),
-        BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution_plan fits"),
+        BoundedVec::try_from(vec![make_step(inert_task())]).expect("steps fits"),
       ));
     }
     let asset_id = 90u32;
@@ -6949,7 +7047,7 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
     // so sparse IDs are handled efficiently — no scanning over empty slots.
     //
     // Direct test funding bypasses ingress notification. The three genesis
-    // programs must therefore remain idle while the explicit timer fixture runs.
+    // contracts must therefore remain idle while the explicit timer fixture runs.
     assert_eq!(Actors::active_actor_count(), 3);
     assert_eq!(Actors::actor_identity_count(), 13);
     let genesis_ids_all: alloc::vec::Vec<u64> =
@@ -6958,7 +7056,7 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
       let sov = Actors::sovereign_account_id_system(id);
       let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov, initial_balance);
     }
-    // Dormant and custody identities own no executable program.
+    // Dormant and custody identities own no executable contract.
     for id in [2, 4, 5, 6, 7, 8, 9, 11, 13, 14] {
       assert!(Actors::actor_identities(id).is_some());
       assert!(Actors::active_actor_view(id).is_none());
@@ -6974,7 +7072,7 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     let sov_fresh = Actors::sovereign_account_id_system(fresh_id);
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov_fresh, initial_balance);
@@ -7010,7 +7108,7 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
       assert!(!executed_block_2.contains(&id));
     }
     // The fresh timer actor continues without causing work for ingress-driven
-    // genesis programs. Advance to block 13 to verify sparse-ID stability.
+    // genesis contracts. Advance to block 13 to verify sparse-ID stability.
     let block = 13u32;
     System::set_block_number(block);
     System::reset_events();
@@ -7042,7 +7140,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     age_fixture_control_clock(actor_a_id);
     let sov_a = Actors::sovereign_account_id_system(actor_a_id);
@@ -7054,15 +7152,15 @@ fn execution_order_lower_id_executes_before_higher_id() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      inert_timer_program(),
+      inert_timer_contract(),
     ));
     age_fixture_control_clock(actor_b_id);
     let sov_b = Actors::sovereign_account_id_system(actor_b_id);
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov_b, initial_balance);
-    // Update Actors-A execution_plan: Transfer 10% NTVE → Actors-B sovereign
+    // Update Actors-A steps: Transfer 10% NTVE → Actors-B sovereign
     let pct = Perbill::from_percent(10);
     let execution_plan_a: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      conditions: Default::default(),
+      preconditions: Default::default(),
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
         amount: AmountResolution::PercentageOfCurrent(pct),
@@ -7072,15 +7170,14 @@ fn execution_order_lower_id_executes_before_higher_id() {
     }]
     .try_into()
     .expect("fits");
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_a_id,
-      execution_plan_a,
-      CompletionPolicy::Persistent,
+      (execution_plan_a, CompletionPolicy::Persistent,)
     ));
-    // Update Actors-B execution_plan: Transfer 10% NTVE → CHARLIE
+    // Update Actors-B steps: Transfer 10% NTVE → CHARLIE
     let execution_plan_b: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      conditions: Default::default(),
+      preconditions: Default::default(),
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
         amount: AmountResolution::PercentageOfCurrent(pct),
@@ -7090,11 +7187,10 @@ fn execution_order_lower_id_executes_before_higher_id() {
     }]
     .try_into()
     .expect("fits");
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_b_id,
-      execution_plan_b,
-      CompletionPolicy::Persistent,
+      (execution_plan_b, CompletionPolicy::Persistent,)
     ));
     let charlie_before = Balances::free_balance(CHARLIE);
     // Run one block
@@ -7149,10 +7245,9 @@ fn execution_order_lower_id_executes_before_higher_id() {
 fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let execution_plan =
-      transfer_execution_plan(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
-    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
-    let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    let steps = transfer_execution_plan(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
+    let expected_contract = system_active_contract(manual_schedule(), None, steps.clone());
+    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000 * crate::EXISTENTIAL_DEPOSIT);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
@@ -7160,11 +7255,11 @@ fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
     let bob_before = Balances::free_balance(BOB);
     let events_before = System::event_count();
 
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       pallet_deos_actors::ActorType::System,
       Mutability::Mutable,
-      expected_program,
+      expected_contract,
       SimulationMode::FreshCurrentPlan,
     )
     .expect("ready DEOS actor simulates");
@@ -7344,7 +7439,7 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
     // submission of the same movement.
     let tracking_plan =
       pallet_deos_actors::ExecutionPlanOf::<Runtime>::try_from(vec![pallet_deos_actors::Step {
-        conditions: Default::default(),
+        preconditions: Default::default(),
         task: pallet_deos_actors::Task::Transfer {
           to: BOB,
           asset: AssetKind::Native,
@@ -7356,7 +7451,7 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
       }])
       .expect("tracking plan fits");
     let actor_id = create_system(ALICE, manual_schedule(), None, tracking_plan);
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress,

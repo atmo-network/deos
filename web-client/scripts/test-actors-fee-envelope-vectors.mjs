@@ -23,7 +23,7 @@ import { forecastActorCosts } from '../src/lib/automation/forecast.ts';
 const hash = (byte) => `0x${byte.repeat(64)}`;
 
 const artifact = (actorType) => ({
-  format: 'deos.actor.plan',
+  format: 'deos.actor.contract',
   formatVersion: 1,
   genesisHash: hash('1'),
   specVersion: 1,
@@ -31,8 +31,8 @@ const artifact = (actorType) => ({
   metadataHash: hash('2'),
   actorType,
   mutability: 'Mutable',
-  programScale: '0x00',
-  planId: hash('3'),
+  contractScale: '0x00',
+  contractId: hash('3'),
 });
 
 function forecast(actorType) {

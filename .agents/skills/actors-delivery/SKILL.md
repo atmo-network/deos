@@ -13,7 +13,7 @@ Use this skill when a DEOS Actors change needs validation scope selection, sched
 
 ## Workflow Boundary
 
-- Inspect the DEOS Actors specification, package architecture, `docs/actors.integration.en.md`, backlog slice, changed code, generated weights, and runtime configuration before selecting a gate. 
+- Inspect the DEOS Actors specification, package architecture, `docs/actors.integration.en.md`, backlog slice, changed code, generated weights, and runtime configuration before selecting a gate.
 - For reactive observation work, also inspect `docs/oracle.integration.en.md`; Oracle owns publication truth and Actors owns subscriptions, fanout, admission, and execution.
 - Route benchmark design, evidence classification, production-weight integration, and claim limits through [`benchmarking`](../benchmarking/SKILL.md); this skill owns the Actors-specific stress profile and release consequence.
 - Use `--quick` for bounded implementation slices that still need Actors-specific Clippy and pallet tests.
@@ -23,7 +23,7 @@ Use this skill when a DEOS Actors change needs validation scope selection, sched
 - Keep the embedding runtime as a separate external-consumer Cargo package under the `pallet-deos-actors` ownership boundary; pallet unit mocks do not replace that public-contract proof.
 - For package-readiness changes, validate fixture feature profiles and a local `cargo package` archive while keeping registry publication approval-gated.
 - After a meaningful slice, synchronize `BACKLOG.md` and shipped architecture truth before the repository completion gate.
-- For condition-composition changes, verify one non-nested package-owned aggregate, total configured atomic-condition fee/weight accounting, non-short-circuit evaluation, fixed successor topology, and exact metadata/artifact projection across runtime and client evidence.
+- For precondition-composition changes, verify bounded DNF clause and aggregate predicate limits, explicit Opening/Current timing, opening-result continuation reuse, total evaluation-unit fee/weight accounting, full visitation without short-circuit, fixed successor topology, and exact metadata/artifact projection across runtime and client evidence.
 - For semantic-classification changes, keep `contract.rs` as the owner, regenerate the bounded client manifest, and require complete Rust-manifest-to-TypeScript-analysis equality through the canonical quick and full gates.
 
 ## Checkpoint Batching

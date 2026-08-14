@@ -5,13 +5,16 @@ Excludes: Runtime-Wasm execution, chain queries, scheduler prediction, signing, 
 Zone: Automation domain capability; matching-runtime truth requires a separate Wasm/state-proof adapter.
 */
 import { ACTORS_MAX_RETRY_ATTEMPTS } from './actors-protocol-bounds.ts';
-import type { ActorPlanArtifact, ActorPlanHex } from './plan-artifact';
+import type {
+  ActorContractArtifact,
+  ActorContractHex,
+} from './contract-artifact';
 
 export type ActorLocalSimulationProvenance = {
   truth: 'AdapterLocalProjection';
-  planId: ActorPlanHex;
-  blockHash: ActorPlanHex;
-  metadataHash: ActorPlanHex;
+  contractId: ActorContractHex;
+  blockHash: ActorContractHex;
+  metadataHash: ActorContractHex;
   model: string;
   modelVersion: string;
 };
@@ -21,13 +24,18 @@ export type ActorStepErrorPolicy =
   | { type: 'ContinueNextStep' }
   | { type: 'RetryLater'; maxAttempts: number };
 
-export type ActorLocalConditionSet<Condition> =
-  | { type: 'Always' }
-  | { type: 'All' | 'Any'; conditions: Condition[] };
+export type ActorLocalTimedPredicate<Condition> = {
+  timing: 'Opening' | 'Current';
+  predicate: Condition;
+};
+
+export type ActorLocalPreconditions<Condition> =
+  | { type: 'Unconditional' }
+  | { type: 'AnyOf'; clauses: ActorLocalTimedPredicate<Condition>[][] };
 
 export type ActorLocalStep<Condition> = {
   stepIndex: number;
-  conditionSet: ActorLocalConditionSet<Condition>;
+  preconditions: ActorLocalPreconditions<Condition>;
   taskControl: 'Execute' | 'StopCycle';
   onError: ActorStepErrorPolicy;
 };
@@ -122,8 +130,8 @@ function increment(
 }
 
 export function simulateActorLocally<State, Condition>(input: {
-  artifact: ActorPlanArtifact;
-  blockHash: ActorPlanHex;
+  artifact: ActorContractArtifact;
+  blockHash: ActorContractHex;
   model: string;
   modelVersion: string;
   cycleNonce: bigint;
@@ -135,7 +143,7 @@ export function simulateActorLocally<State, Condition>(input: {
   initialCounts?: ActorLocalSimulationCounts;
   steps: ActorLocalStep<Condition>[];
   evaluateCondition?: (
-    condition: Condition,
+    predicate: ActorLocalTimedPredicate<Condition>,
     state: Readonly<State>,
   ) => ActorLocalConditionOutcome;
   runTask: (
@@ -182,18 +190,17 @@ export function simulateActorLocally<State, Condition>(input: {
       );
     }
     if (
-      step.conditionSet.type !== 'Always' &&
-      step.conditionSet.conditions.length === 0
+      step.preconditions.type === 'AnyOf' &&
+      (step.preconditions.clauses.length === 0 ||
+        step.preconditions.clauses.some((clause) => clause.length === 0))
     ) {
-      throw new Error(
-        `${step.conditionSet.type} condition set must be non-empty`,
-      );
+      throw new Error('AnyOf and every clause must be non-empty');
     }
     if (
-      step.conditionSet.type !== 'Always' &&
+      step.preconditions.type === 'AnyOf' &&
       input.evaluateCondition == null
     ) {
-      throw new Error('Grouped conditions require an evaluator');
+      throw new Error('Timed predicates require an evaluator');
     }
   });
 
@@ -210,17 +217,24 @@ export function simulateActorLocally<State, Condition>(input: {
     const step = input.steps[index];
     const taskLocalState = structuredClone(state);
     const outcome = (() => {
-      if (step.conditionSet.type !== 'Always') {
-        let truth = step.conditionSet.type === 'All';
+      if (step.preconditions.type === 'AnyOf') {
+        let expressionTruth = false;
         let firstError: Extract<
           ActorLocalConditionOutcome,
           { kind: 'Error' }
         > | null = null;
-        for (const condition of step.conditionSet.conditions) {
-          const current = input.evaluateCondition!(condition, state);
-          if (current.kind === 'Error') firstError ??= current;
-          else if (step.conditionSet.type === 'All') truth &&= current.value;
-          else truth ||= current.value;
+        for (const clause of step.preconditions.clauses) {
+          let clauseTruth = true;
+          for (const predicate of clause) {
+            const current = input.evaluateCondition!(predicate, state);
+            if (current.kind === 'Error') {
+              firstError ??= current;
+              clauseTruth = false;
+            } else {
+              clauseTruth &&= current.value;
+            }
+          }
+          expressionTruth ||= clauseTruth;
         }
         if (firstError != null) {
           return {
@@ -229,7 +243,7 @@ export function simulateActorLocally<State, Condition>(input: {
             error: firstError.error,
           } as const;
         }
-        if (!truth) return { kind: 'SkippedCondition' } as const;
+        if (!expressionTruth) return { kind: 'SkippedCondition' } as const;
       }
       if (step.taskControl === 'StopCycle') return { kind: 'Stopped' } as const;
       return input.runTask(step, taskLocalState);
@@ -349,14 +363,14 @@ export function simulateActorLocally<State, Condition>(input: {
 }
 
 function provenance(input: {
-  artifact: ActorPlanArtifact;
-  blockHash: ActorPlanHex;
+  artifact: ActorContractArtifact;
+  blockHash: ActorContractHex;
   model: string;
   modelVersion: string;
 }): ActorLocalSimulationProvenance {
   return {
     truth: 'AdapterLocalProjection',
-    planId: input.artifact.planId,
+    contractId: input.artifact.contractId,
     blockHash: input.blockHash,
     metadataHash: input.artifact.metadataHash,
     model: input.model,

@@ -4,12 +4,15 @@ Owns: State-pinned amount resolution, separated Weight/fee aggregation, and stal
 Excludes: Chain queries, adapter quote execution, state mutation, simulation, signing, and history persistence.
 Zone: Automation domain capability; consumers must supply one coherent runtime/state snapshot.
 */
+import type {
+  ActorContractArtifact,
+  ActorContractHex,
+} from './contract-artifact';
 import {
   type ActorFeeEnvelopeActorType,
   actorFeeNativeProtectedMinimum,
   actorFeeStepCharge,
 } from './fee-envelope-vectors.ts';
-import type { ActorPlanArtifact, ActorPlanHex } from './plan-artifact';
 
 export const PERBILL_DENOMINATOR = 1_000_000_000n;
 
@@ -56,10 +59,10 @@ export type ActorWeight = {
 };
 
 export type ActorForecastPin = {
-  planId: ActorPlanHex;
-  blockHash: ActorPlanHex;
+  contractId: ActorContractHex;
+  blockHash: ActorContractHex;
   blockNumber: number;
-  metadataHash: ActorPlanHex;
+  metadataHash: ActorContractHex;
   model: string;
   modelVersion: string;
 };
@@ -235,8 +238,8 @@ function validateWeight(weight: ActorWeight, field: string) {
 }
 
 export function forecastActorCosts(input: {
-  artifact: ActorPlanArtifact;
-  blockHash: ActorPlanHex;
+  artifact: ActorContractArtifact;
+  blockHash: ActorContractHex;
   blockNumber: number;
   model: string;
   modelVersion: string;
@@ -320,7 +323,7 @@ export function forecastActorCosts(input: {
   });
 
   const pin: ActorForecastPin = {
-    planId: input.artifact.planId,
+    contractId: input.artifact.contractId,
     blockHash: input.blockHash,
     blockNumber: input.blockNumber,
     metadataHash: input.artifact.metadataHash,
@@ -349,8 +352,8 @@ export function forecastActorCosts(input: {
 export function isActorForecastStale(
   forecast: ActorCostForecast,
   current: {
-    blockHash: ActorPlanHex;
-    metadataHash: ActorPlanHex;
+    blockHash: ActorContractHex;
+    metadataHash: ActorContractHex;
     model: string;
     modelVersion: string;
   },

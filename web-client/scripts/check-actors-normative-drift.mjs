@@ -251,11 +251,11 @@ for (const [label, names] of [
   }
 }
 for (const typeName of [
-  'ProgramInput',
+  'ContractInput',
   'Task',
-  'Condition',
+  'Predicate',
   'AmountResolution',
-  'ConditionSet',
+  'Preconditions',
 ]) {
   const repeated = duplicates(specTypeVariants(typeName));
   if (repeated.length > 0) {
@@ -307,7 +307,7 @@ orderedDiff(
   manifest.pallet.errors.map((entry) => entry.name),
 );
 
-for (const structName of ['Schedule', 'ActiveProgramInput']) {
+for (const structName of ['Schedule', 'ActiveContractInput']) {
   const matches = manifest.types.filter(
     (entry) =>
       entry.path?.join('::') === `pallet_deos_actors::types::${structName}`,
@@ -327,26 +327,27 @@ for (const structName of ['Schedule', 'ActiveProgramInput']) {
   );
 }
 
-for (const enumName of [
-  'ProgramInput',
-  'Task',
-  'Condition',
-  'AmountResolution',
+for (const [specEnumName, metadataEnumName] of [
+  ['ContractInput', 'ContractInput'],
+  ['Task', 'Task'],
+  ['Predicate', 'Predicate'],
+  ['AmountResolution', 'AmountResolution'],
 ]) {
-  const expected = specTypeSurface(enumName);
+  const expected = specTypeSurface(specEnumName);
   const matches = manifest.types.filter(
     (entry) =>
-      entry.path?.join('::') === `pallet_deos_actors::types::${enumName}`,
+      entry.path?.join('::') ===
+      `pallet_deos_actors::types::${metadataEnumName}`,
   );
   if (matches.length !== 1) {
     failures.push(
-      `${enumName} metadata path must resolve exactly once, found ${matches.length}`,
+      `${metadataEnumName} metadata path must resolve exactly once, found ${matches.length}`,
     );
     continue;
   }
   const actual = matches[0].def?.tag === 'variant' ? matches[0].def.value : [];
   orderedDiff(
-    `${enumName} variants`,
+    `${specEnumName} variants`,
     expected.map((variant) => variant.name),
     actual.map((variant) => variant.name),
   );
@@ -357,7 +358,7 @@ for (const enumName of [
   ) {
     if (expected[index].name !== actual[index].name) continue;
     orderedDiff(
-      `${enumName}.${expected[index].name} fields`,
+      `${specEnumName}.${expected[index].name} fields`,
       expected[index].fields,
       (actual[index].fields ?? []).map((field) => field.name ?? '<unnamed>'),
     );
@@ -374,8 +375,7 @@ if (staleTypePaths.length > 0) {
   );
 }
 
-// ConditionSet variants live in a spec enum and appear as an ABI variant type.
-const conditionSetExpected = specTypeVariants('ConditionSet');
+const conditionSetExpected = specTypeVariants('Preconditions');
 function variantNamesOfType(typeEntry) {
   const def = typeEntry?.def;
   return def?.tag === 'variant'
@@ -384,15 +384,15 @@ function variantNamesOfType(typeEntry) {
 }
 const conditionSetTypes = manifest.types.filter(
   (entry) =>
-    entry.path?.join('::') === 'pallet_deos_actors::types::ConditionSet',
+    entry.path?.join('::') === 'pallet_deos_actors::types::Preconditions',
 );
 if (conditionSetTypes.length !== 1) {
   failures.push(
-    `ConditionSet metadata path must resolve exactly once, found ${conditionSetTypes.length}`,
+    `Preconditions metadata path must resolve exactly once, found ${conditionSetTypes.length}`,
   );
 }
 const conditionSetActual = variantNamesOfType(conditionSetTypes[0]);
-orderedDiff('ConditionSet variants', conditionSetExpected, conditionSetActual);
+orderedDiff('Preconditions variants', conditionSetExpected, conditionSetActual);
 
 const constantNames = new Set(
   manifest.pallet.constants.map((entry) => entry.name),
@@ -407,6 +407,10 @@ const expectedConstants = new Set([
   'MaxObservationFanoutPagesPerBlock',
   'MaxTriggerSources',
   'MaxOpeningSnapshotEntries',
+  'MaxOpeningPredicateResults',
+  'MaxPreconditionClauses',
+  'MaxPredicatesPerClause',
+  'MaxConditionsPerStep',
   'MinUserBalance',
   'MinWindowLength',
   'MaxExecutionDelayBlocks',

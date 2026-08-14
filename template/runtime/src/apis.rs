@@ -113,21 +113,21 @@ impl_runtime_apis! {
 
     impl pallet_deos_actors::ActorSimulationApi<
         Block,
-        pallet_deos_actors::ProgramInputOf<Runtime>,
+        pallet_deos_actors::ContractInputOf<Runtime>,
         pallet_deos_actors::SimulationResultOf<Runtime>,
     > for Runtime {
-        fn simulate_current_program(
+        fn simulate_current_contract(
             actor_id: pallet_deos_actors::ActorId,
             expected_type: pallet_deos_actors::ActorType,
             expected_mutability: pallet_deos_actors::Mutability,
-            expected_program: pallet_deos_actors::ProgramInputOf<Runtime>,
+            expected_contract: pallet_deos_actors::ContractInputOf<Runtime>,
             mode: pallet_deos_actors::SimulationMode,
         ) -> Result<pallet_deos_actors::SimulationResultOf<Runtime>, pallet_deos_actors::SimulationError> {
-            Actors::simulate_current_program(
+            Actors::simulate_current_contract(
                 actor_id,
                 expected_type,
                 expected_mutability,
-                expected_program,
+                expected_contract,
                 mode,
             )
         }

@@ -33,6 +33,7 @@ fn submit_signed_intent_proposal(
   item_id: u32,
   proposer: u64,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
+  set_payload_preimage_state(H256::default(), true, false);
   Governance::submit_signed_proposal(
     RuntimeOrigin::signed(proposer),
     domain,
@@ -72,7 +73,7 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     assert!(Governance::active_proposal_ids(7).is_empty());
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalResolved {
@@ -94,6 +95,22 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
       reason: ProposalRejectionReason::AdminRejected,
       active_count: 0,
     }));
+  });
+}
+
+#[test]
+fn terminal_cleanup_fails_closed_when_active_count_is_corrupt() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    ActiveProposalCounts::<Test>::insert(7, 0);
+    let ids_before = Governance::active_proposal_ids(7);
+    assert_noop!(
+      Governance::reject_proposal(RuntimeOrigin::root(), 7, 100),
+      Error::<Test>::ActiveProposalCountUnderflow
+    );
+    assert!(ActiveProposals::<Test>::contains_key(7, 100));
+    assert_eq!(Governance::proposal_author(7, 100), Some(DEFAULT_PROPOSER));
+    assert_eq!(Governance::active_proposal_ids(7), ids_before);
   });
 }
 
@@ -247,19 +264,102 @@ fn vote_resolution_without_ballots_rejects_the_proposal() {
 }
 
 #[test]
-fn active_proposal_cap_is_enforced_per_domain() {
+fn general_proposal_cap_preserves_the_strategic_reserve() {
   new_test_ext().execute_with(|| {
-    for item_id in 0..16u32 {
+    for item_id in 0..15u32 {
+      if item_id > 0 && item_id % 4 == 0 {
+        System::set_block_number(System::block_number().saturating_add(1));
+      }
+      assert_ok!(submit_test_proposal(7, item_id, 100 + u64::from(item_id)));
+    }
+    assert_noop!(
+      submit_test_proposal(7, 15, 115),
+      Error::<Test>::ActiveProposalCapReached
+    );
+    assert_eq!(ActiveProposalCounts::<Test>::get(7), 15);
+  });
+}
+
+#[test]
+fn author_cap_prevents_monopoly_and_terminal_release_restores_capacity() {
+  new_test_ext().execute_with(|| {
+    for item_id in 0..8u32 {
       if item_id > 0 && item_id % 4 == 0 {
         System::set_block_number(System::block_number().saturating_add(1));
       }
       assert_ok!(submit_test_proposal(7, item_id, DEFAULT_PROPOSER));
     }
+    let count_before_rejection = ActiveProposalCounts::<Test>::get(7);
+    let ids_before_rejection = Governance::active_proposal_ids(7);
     assert_noop!(
-      submit_test_proposal(7, 16, DEFAULT_PROPOSER),
+      submit_test_proposal(7, 8, DEFAULT_PROPOSER),
+      Error::<Test>::ActiveProposalAuthorCapReached
+    );
+    assert_eq!(ActiveProposalCounts::<Test>::get(7), count_before_rejection);
+    assert_eq!(Governance::active_proposal_ids(7), ids_before_rejection);
+    assert!(!ActiveProposals::<Test>::contains_key(7, 8));
+
+    assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 0));
+    assert_eq!(ActiveProposalCounts::<Test>::get(7), 7);
+    System::set_block_number(System::block_number().saturating_add(1));
+    assert_ok!(submit_test_proposal(7, 8, DEFAULT_PROPOSER));
+    assert_eq!(ActiveProposalCounts::<Test>::get(7), 8);
+  });
+}
+
+#[test]
+fn full_general_capacity_cannot_block_protocol_l1_root_action() {
+  new_test_ext().execute_with(|| {
+    for item_id in 0..15u32 {
+      if item_id > 0 && item_id % 4 == 0 {
+        System::set_block_number(System::block_number().saturating_add(1));
+      }
+      assert_ok!(Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        42,
+        item_id,
+        100 + u64::from(item_id),
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        polkadot_sdk::sp_core::H256::repeat_byte(item_id as u8),
+      ));
+    }
+    assert_noop!(
+      Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        42,
+        15,
+        115,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        polkadot_sdk::sp_core::H256::repeat_byte(15),
+      ),
       Error::<Test>::ActiveProposalCapReached
     );
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 16);
+
+    System::set_block_number(System::block_number().saturating_add(1));
+    assert_ok!(Governance::submit_proposal(
+      RuntimeOrigin::root(),
+      42,
+      100,
+      DEFAULT_PROPOSER,
+      ProposalCadenceMode::Ordinary,
+      ProposalPayloadKind::L1RootAction,
+      polkadot_sdk::sp_core::H256::repeat_byte(100),
+    ));
+    assert_eq!(ActiveProposalCounts::<Test>::get(42), 16);
+    assert_noop!(
+      Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        42,
+        101,
+        DEFAULT_PROPOSER,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        polkadot_sdk::sp_core::H256::repeat_byte(101),
+      ),
+      Error::<Test>::ActiveProposalCapReached
+    );
   });
 }
 
@@ -290,15 +390,15 @@ fn on_initialize_auto_finalizes_matured_proposals() {
     Governance::on_initialize(3);
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 12),
+      Governance::governance_participation_coefficient(7, 12),
       FixedU128::from_inner(0)
     );
   });
@@ -338,11 +438,11 @@ fn auto_finalization_defers_when_current_epoch_winner_cap_is_exhausted() {
     Governance::on_initialize(4);
     assert!(!ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(3u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(3u128, 6u128)
     );
   });
@@ -408,11 +508,11 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
     Governance::on_initialize(5);
     assert!(!ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(3u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(3u128, 6u128)
     );
   });
@@ -1262,6 +1362,17 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
       })
     );
     assert_eq!(
+      Governance::proposal_admission_policy_view(44, ProposalPayloadKind::Intent),
+      crate::ProposalAdmissionPolicyView {
+        authority: crate::ProposalSubmissionAuthority::Signed,
+        capacity_lane: crate::ProposalCapacityLane::General,
+        capacity_limit: 15,
+        author_limit: 8,
+        signed_preimage_required: true,
+        opening_fee: Some(10),
+      }
+    );
+    assert_eq!(
       Governance::proposal_submission_authority(44, ProposalPayloadKind::Intent),
       crate::ProposalSubmissionAuthority::Signed
     );
@@ -1271,7 +1382,22 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
     );
     assert_eq!(Governance::payload_preimage_note_cost(0), Some(2));
     assert_eq!(
+      Governance::proposal_admission_policy_view(42, ProposalPayloadKind::L1RootAction),
+      crate::ProposalAdmissionPolicyView {
+        authority: crate::ProposalSubmissionAuthority::PrimaryEligibleSigned,
+        capacity_lane: crate::ProposalCapacityLane::Strategic,
+        capacity_limit: 16,
+        author_limit: 8,
+        signed_preimage_required: true,
+        opening_fee: Some(10),
+      }
+    );
+    assert_eq!(
       Governance::proposal_submission_authority(42, ProposalPayloadKind::L1RootAction),
+      crate::ProposalSubmissionAuthority::PrimaryEligibleSigned
+    );
+    assert_eq!(
+      Governance::proposal_submission_authority(42, ProposalPayloadKind::Intent),
       crate::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
     assert_eq!(
@@ -1295,6 +1421,101 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
       Governance::proposal_opening_fee(7, ProposalPayloadKind::L2ParameterChange),
       None
     );
+  });
+}
+
+#[test]
+fn full_maturity_bucket_rejects_signed_submission_before_fee_or_state() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    let payload_hash = H256::repeat_byte(89);
+    set_payload_preimage_state(payload_hash, true, false);
+    let maturity_epoch = 3;
+    for item_id in 0..4u32 {
+      assert_ok!(submit_test_proposal(
+        7 + item_id,
+        item_id,
+        100 + u64::from(item_id)
+      ));
+    }
+    assert_eq!(
+      Governance::proposal_maturity_bucket(maturity_epoch).len(),
+      4
+    );
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalMaturityBucketFull
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(ActiveProposalCounts::<Test>::get(44), 0);
+    assert!(!ActiveProposals::<Test>::contains_key(44, 105));
+    assert_eq!(Governance::proposal_author(44, 105), None);
+  });
+}
+
+#[test]
+fn signed_preimage_failures_precede_capacity_fee_events_and_state() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    let payload_hash = H256::repeat_byte(90);
+    ActiveProposalCounts::<Test>::insert(44, 15);
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageMissing
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(ActiveProposalCounts::<Test>::get(44), 15);
+    assert!(!ActiveProposals::<Test>::contains_key(44, 105));
+
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(257));
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageOversized
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(ActiveProposalCounts::<Test>::get(44), 15);
   });
 }
 
@@ -1327,10 +1548,46 @@ fn signed_submission_collects_opening_fee_and_records_proposer() {
 }
 
 #[test]
+fn protocol_intent_requires_primary_eligibility_before_fee_or_state_mutation() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+    assert_noop!(
+      submit_signed_intent_proposal(42, 104, proposer),
+      Error::<Test>::ProposalSubmitterNotPrimaryEligible
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(Governance::active_proposal_count(42), 0);
+    assert_eq!(Governance::proposal_author(42, 104), None);
+
+    set_vote_weight(proposer, 1);
+    assert_ok!(submit_signed_intent_proposal(42, 104, proposer));
+    assert_eq!(Governance::proposal_author(42, 104), Some(proposer));
+    assert_eq!(Governance::active_proposal_count(42), 1);
+    assert_eq!(
+      Balances::free_balance(proposer),
+      balance_before.saturating_sub(10)
+    );
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before.saturating_add(10)
+    );
+  });
+}
+
+#[test]
 fn primary_eligible_signed_submission_preserves_fee_and_bounded_proposal_path() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
     set_vote_weight(proposer, 1);
+    set_payload_preimage_state(H256::default(), true, false);
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     assert_ok!(Governance::submit_signed_proposal(
@@ -1359,6 +1616,7 @@ fn primary_eligible_submission_rolls_back_fee_at_active_capacity() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
     set_vote_weight(proposer, 1);
+    set_payload_preimage_state(H256::default(), true, false);
     ActiveProposalCounts::<Test>::insert(42, 16);
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
@@ -1431,6 +1689,68 @@ fn signed_submission_rejects_admin_only_payload_kind() {
         Default::default(),
       ),
       Error::<Test>::ProposalSubmissionNotAllowedForSignedOrigin
+    );
+  });
+}
+
+#[test]
+fn signed_admission_rejection_precedence_is_authority_then_eligibility_then_duplicate_then_capacity()
+ {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    ActiveProposals::<Test>::insert(7, 106, crate::ActiveProposal { submitted_epoch: 1 });
+    ActiveProposalCounts::<Test>::insert(7, 16);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        7,
+        106,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L2ParameterChange,
+        Default::default(),
+      ),
+      Error::<Test>::ProposalSubmissionNotAllowedForSignedOrigin
+    );
+
+    ActiveProposals::<Test>::insert(42, 106, crate::ActiveProposal { submitted_epoch: 1 });
+    ActiveProposalCounts::<Test>::insert(42, 16);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        42,
+        106,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        Default::default(),
+      ),
+      Error::<Test>::ProposalSubmitterNotPrimaryEligible
+    );
+
+    set_vote_weight(proposer, 1);
+    set_payload_preimage_state(H256::default(), true, false);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        42,
+        106,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        Default::default(),
+      ),
+      Error::<Test>::ProposalAlreadyActive
+    );
+
+    ActiveProposals::<Test>::remove(42, 106);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        42,
+        106,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        Default::default(),
+      ),
+      Error::<Test>::ActiveProposalCapReached
     );
   });
 }
@@ -1771,15 +2091,15 @@ fn vote_weight_provider_changes_winner_selection() {
       100,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_inner(0)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 12),
+      Governance::governance_participation_coefficient(7, 12),
       FixedU128::from_inner(0)
     );
   });
@@ -1892,15 +2212,15 @@ fn force_resolve_from_votes_bypasses_voting_window() {
       100,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 12),
+      Governance::governance_participation_coefficient(7, 12),
       FixedU128::from_inner(0)
     );
   });
@@ -1942,15 +2262,15 @@ fn vote_cast_and_resolution_from_votes_credit_the_winning_side() {
       100,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 12),
+      Governance::governance_participation_coefficient(7, 12),
       FixedU128::from_inner(0)
     );
   });
@@ -1984,11 +2304,11 @@ fn vote_cast_rejects_duplicates_and_tied_resolution_rejects_without_rewards() {
     ));
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_inner(0)
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalRejected {
@@ -2018,7 +2338,7 @@ fn vote_resolution_rejects_when_turnout_is_below_runtime_minimum() {
       100,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
@@ -2060,7 +2380,7 @@ fn vote_resolution_rejects_when_no_side_meets_approval_threshold() {
     ));
     for account in [10u64, 11u64, 12u64, 13u64, 14u64, 15u64, 16u64] {
       assert_eq!(
-        Governance::reward_coefficient(7, account),
+        Governance::governance_participation_coefficient(7, account),
         FixedU128::from_inner(0)
       );
     }
@@ -2075,7 +2395,7 @@ fn vote_resolution_rejects_when_no_side_meets_approval_threshold() {
 }
 
 #[test]
-fn winning_vote_recording_increases_reward_coefficient_and_enforces_epoch_cap() {
+fn winning_vote_recording_increases_governance_participation_coefficient_and_enforces_epoch_cap() {
   new_test_ext().execute_with(|| {
     assert_ok!(Governance::record_winning_vote(
       RuntimeOrigin::root(),
@@ -2090,7 +2410,7 @@ fn winning_vote_recording_increases_reward_coefficient_and_enforces_epoch_cap() 
       10,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(2u128, 6u128)
     );
     assert_eq!(
@@ -2162,11 +2482,11 @@ fn batch_records_multiple_accounts_for_same_item() {
       accounts,
     ));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 11),
+      Governance::governance_participation_coefficient(7, 11),
       FixedU128::from_rational(1u128, 6u128)
     );
     assert_eq!(Governance::expiry_bucket(4).len(), 2);
@@ -2231,7 +2551,7 @@ fn batch_rolls_back_when_a_later_account_fails() {
     );
     assert!(Governance::winning_vote_window(7, 11).is_none());
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(2u128, 6u128)
     );
   });
@@ -2308,7 +2628,7 @@ fn expired_zero_sum_window_is_evicted_from_storage() {
     Governance::on_initialize(4);
     assert!(Governance::winning_vote_window(7, 10).is_none());
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::WinningVoteWindowEvicted {
@@ -2340,7 +2660,7 @@ fn newer_winning_vote_survives_after_older_one_expires() {
     Governance::on_initialize(4);
     assert!(Governance::winning_vote_window(7, 10).is_some());
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
   });
@@ -2573,7 +2893,7 @@ fn veto_cancellation_counts_veto_side_in_cumulative_winning_participation_only()
       }
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
   });
@@ -2713,7 +3033,7 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
       })
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalVetoCancelled {
@@ -2764,7 +3084,7 @@ fn sub_percent_veto_does_not_activate_final_veto_gate() {
       })
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
   });
@@ -2904,7 +3224,7 @@ fn veto_track_blocks_at_maturity_without_immediate_threshold() {
       active_count: 0,
     }));
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_inner(0)
     );
   });
@@ -2998,7 +3318,7 @@ fn pass_outweighing_veto_allows_main_track_resolution() {
       })
     );
     assert_eq!(
-      Governance::reward_coefficient(7, 10),
+      Governance::governance_participation_coefficient(7, 10),
       FixedU128::from_rational(1u128, 6u128)
     );
   });

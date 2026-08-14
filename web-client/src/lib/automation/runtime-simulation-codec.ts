@@ -13,10 +13,10 @@ import {
   unifyMetadata,
 } from '@polkadot-api/substrate-bindings';
 
-import type { ActorPlanHex } from './plan-artifact.ts';
+import type { ActorContractHex } from './contract-artifact.ts';
 
 export const ACTORS_SIMULATION_RUNTIME_API =
-  'ActorSimulationApi_simulate_current_program' as const;
+  'ActorSimulationApi_simulate_current_contract' as const;
 export const ACTORS_SIMULATION_RUNTIME_API_VERSION = 1 as const;
 
 export type ActorRuntimeStepOutcome =
@@ -49,9 +49,9 @@ export type ActorDecodedRuntimeSimulationResult =
   | {
       success: true;
       outcome: ActorDecodedRuntimeSimulationOutcome;
-      resultScale: ActorPlanHex;
+      resultScale: ActorContractHex;
     }
-  | { success: false; error: string; resultScale: ActorPlanHex };
+  | { success: false; error: string; resultScale: ActorContractHex };
 
 const BYTES_PATTERN = /^0x(?:[0-9a-f]{2})*$/;
 const MAX_RESULT_BYTES = 64 * 1024;
@@ -59,15 +59,15 @@ const INPUT_NAMES = [
   'actor_id',
   'expected_type',
   'expected_mutability',
-  'expected_program',
+  'expected_contract',
   'mode',
 ];
 
-function bytesToHex(bytes: Uint8Array): ActorPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorContractHex {
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function hexToBytes(value: ActorPlanHex): Uint8Array {
+function hexToBytes(value: ActorContractHex): Uint8Array {
   if (!BYTES_PATTERN.test(value)) {
     throw new Error(
       'Runtime simulation result must be canonical lowercase hex',
@@ -95,7 +95,7 @@ function metadataMethod(metadataBytes: Uint8Array) {
     );
   }
   const methods = apis[0].methods.filter(
-    (candidate) => candidate.name === 'simulate_current_program',
+    (candidate) => candidate.name === 'simulate_current_contract',
   );
   if (
     methods.length !== 1 ||
@@ -105,7 +105,7 @@ function metadataMethod(metadataBytes: Uint8Array) {
     )
   ) {
     throw new Error(
-      'Metadata must expose the canonical simulate_current_program signature',
+      'Metadata must expose the canonical simulate_current_contract signature',
     );
   }
   return { metadata, method: methods[0] };
@@ -229,7 +229,7 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
 export function encodeActorRuntimeSimulationResult(
   metadataBytes: Uint8Array,
   runtimeValue: unknown,
-): ActorPlanHex {
+): ActorContractHex {
   const { metadata, method } = metadataMethod(metadataBytes);
   const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(
     method.output,
@@ -239,7 +239,7 @@ export function encodeActorRuntimeSimulationResult(
 
 export function decodeActorRuntimeSimulationResult(
   metadataBytes: Uint8Array,
-  resultScale: ActorPlanHex,
+  resultScale: ActorContractHex,
 ): ActorDecodedRuntimeSimulationResult {
   const { metadata, method } = metadataMethod(metadataBytes);
   const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(

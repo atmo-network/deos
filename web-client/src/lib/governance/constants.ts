@@ -32,7 +32,7 @@ export const GOVERNANCE_QUERY_SURFACE_AVAILABILITY: GovernanceQuerySurfaceAvaila
     proposalTally: 'onchain',
     accountGovernancePower: 'onchain',
     votePowerProfiles: 'onchain',
-    rewardCoefficient: 'onchain',
+    governanceParticipationCoefficient: 'onchain',
     govxpCounters: 'onchain',
     proposalExecutionDetail: 'onchain',
     ballotTimelines: 'materialized',

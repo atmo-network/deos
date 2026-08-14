@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeActorProgram } from '../src/lib/automation/analysis.ts';
+import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
-  createActorPlanArtifact,
-  encodeActorProgramValue,
-} from '../src/lib/automation/plan-artifact.ts';
+  createActorContractArtifact,
+  encodeActorContractValue,
+} from '../src/lib/automation/contract-artifact.ts';
 import {
   ACTORS_COMPOSITION_WARNING_KINDS,
   projectActorCompositionWarnings,
@@ -99,7 +99,7 @@ function step({
   onError = 'AbortCycle',
 } = {}) {
   return {
-    conditions: { type: 'Always', value: undefined },
+    preconditions: { type: 'Unconditional', value: undefined },
     task: { type: task, value: taskValue(task, amount) },
     on_error:
       onError === 'RetryLater'
@@ -108,7 +108,7 @@ function step({
   };
 }
 
-function activeProgram(steps) {
+function activeContract(steps) {
   return {
     type: 'Active',
     value: {
@@ -122,29 +122,29 @@ function activeProgram(steps) {
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
-      execution_plan: steps,
-      completion_policy: variant('Persistent'),
-      funding_source_policy: variant('OwnerOnly'),
+      steps: steps,
+      completion: variant('Persistent'),
+      funding: variant('OwnerOnly'),
     },
   };
 }
 
 function artifactFor({ steps, mutability = 'Mutable' } = {}) {
-  const programScale = encodeActorProgramValue(
+  const contractScale = encodeActorContractValue(
     metadataBytes,
-    activeProgram(steps),
+    activeContract(steps),
   );
-  return createActorPlanArtifact({
+  return createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType: 'User',
     mutability,
-    programScale,
+    contractScale,
   });
 }
 
 function analyze(artifact) {
-  return analyzeActorProgram({
+  return analyzeActorContract({
     artifact,
     metadataBytes,
     runtime,

@@ -252,7 +252,7 @@ These non-normative traces project the package event-order fixtures; Section 8 o
 | --- | --- | --- |
 | Fresh transfer cycle | `CycleStarted -> TransferExecuted -> CycleSummary(Completed)` | Fresh simulation and package cycle-order tests |
 | Temporary retry attempt | `CycleContinued -> StepFailed(Temporary) -> CycleSuspended(Temporary)` | `continuation_*` and retry-bound package tests |
-| Cancel on semantic update | `CycleCancelled -> CycleSummary(Cancelled) -> ExecutionPlanUpdated` | Semantic replacement cancellation tests |
+| Cancel on semantic update | `CycleCancelled -> CycleSummary(Cancelled) -> ContractUpdated` | Semantic replacement cancellation tests |
 | Close with Continuation | `CycleCancelled(Closing) -> CycleSummary(Cancelled) -> ActorClosed` | Continuation close-order tests |
 | Expiry during suspension | `CycleCancelled(Closing(WindowExpired)) -> CycleSummary(Cancelled) -> ActorClosed(WindowExpired)` | Window-expiry Continuation tests |
 
@@ -260,7 +260,7 @@ The corpus intentionally omits block numbers, balances, and exhaustive step fiel
 
 ## Control Plane and Read Surfaces
 
-Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorProgram` at one finalized block; funding details require the separately bounded `ActorFunding` value. Dormant identity, queue/wakeup membership, active-dirty topology, and bounded simulation results remain canonical-chain truth.
+Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorContract` at one finalized block; funding details require the separately bounded `ActorFunding` value. Dormant identity, queue/wakeup membership, active-dirty topology, and bounded simulation results remain canonical-chain truth.
 
 The read-only `ActorEligibilityApi::actor_eligibility` projection reports the scheduler-owned readiness phase, a typed `CloseDue(CloseReason)` terminal projection, and `next_eligible_block` at one finalized block, reusing the exact scheduler arithmetic so the browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 

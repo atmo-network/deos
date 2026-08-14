@@ -129,6 +129,26 @@ should_run_strategic_governance_ingress_audit() {
         has_changed_path '^\.agents/skills/alignment/scripts/audit-strategic-governance-ingress\.sh$'
 }
 
+should_run_governance_structural_liveness_audit() {
+    has_changed_path '^template/pallets/governance/' || \
+        has_changed_path '^\.agents/skills/alignment/scripts/audit-governance-structural-liveness\.sh$'
+}
+
+should_run_runtime_composition_dag_audit() {
+    has_changed_path '^template/pallets/(governance|staking|router|oracle|actors)/Cargo\.toml$' || \
+        has_changed_path '^template/runtime/src/configs/' || \
+        has_changed_path '^docs/core\.architecture\.en\.md$' || \
+        has_changed_path '^\.agents/skills/alignment/scripts/audit-runtime-composition-dag\.sh$'
+}
+
+should_run_protocol_coherence_regression_audit() {
+    has_changed_path '^template/pallets/(governance|staking|actors|router|oracle)/' || \
+        has_changed_path '^template/runtime/src/configs/(actor|deos_router|governance|oracle|staking)_config\.rs$' || \
+        has_changed_path '^web-client/src/' || \
+        has_changed_path '^scripts/' || \
+        has_changed_path '^\.agents/skills/alignment/(rules/actors-identity-rules\.json|scripts/audit-(actors-identity|protocol-coherence-regressions)\.sh)$'
+}
+
 should_run_cargo_check() {
     if [[ "$RUN_CARGO_CHECK" == "1" ]]; then
         return 0
@@ -201,7 +221,7 @@ plan() {
     log_info "Layer 5: Wiki trust"
     log_info "Layer 6: Economic claim integrity"
     log_info "Layer 7: Strategic governance ingress"
-    log_info "Layer 8: Security boundary ownership"
+    log_info "Layer 8: Protocol coherence regressions"
     log_info "Layer 9: Release-line consistency"
     log_info "Layer 10: Backlog open-work shape"
     log_info "Layer 11: Knowledge sync"
@@ -354,6 +374,42 @@ run_strategic_governance_ingress_validation() {
     fi
 }
 
+run_governance_structural_liveness_validation() {
+    phase_banner "Step 9: Governance structural liveness"
+    if ! should_run_governance_structural_liveness_audit; then
+        log_warning "Skipping governance structural liveness audit because its surfaces did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-governance-structural-liveness.sh"; then
+        log_error "Governance structural liveness validation failed"
+        exit 1
+    fi
+}
+
+run_runtime_composition_dag_validation() {
+    phase_banner "Step 9: Runtime composition DAG"
+    if ! should_run_runtime_composition_dag_audit; then
+        log_warning "Skipping runtime composition DAG audit because its ownership surfaces did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-runtime-composition-dag.sh"; then
+        log_error "Runtime composition DAG validation failed"
+        exit 1
+    fi
+}
+
+run_protocol_coherence_regression_validation() {
+    phase_banner "Step 9: Protocol coherence regressions"
+    if ! should_run_protocol_coherence_regression_audit; then
+        log_warning "Skipping protocol coherence regression audit because its semantic-owner surfaces did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-protocol-coherence-regressions.sh"; then
+        log_error "Protocol coherence regression validation failed"
+        exit 1
+    fi
+}
+
 run_release_line_validation() {
     phase_banner "Step 9: Release-line consistency"
     if ! should_run_release_line_audit; then
@@ -409,6 +465,9 @@ main() {
     run_economic_claim_validation
     run_router_identity_validation
     run_strategic_governance_ingress_validation
+    run_governance_structural_liveness_validation
+    run_runtime_composition_dag_validation
+    run_protocol_coherence_regression_validation
     run_release_line_validation
     run_backlog_validation
     run_knowledge_sync

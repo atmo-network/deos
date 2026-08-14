@@ -22,6 +22,111 @@ use polkadot_sdk::{
 };
 use primitives::assets::TYPE_FOREIGN;
 
+pub fn update_actor_contract_partial(
+  origin: RuntimeOrigin,
+  actor_id: pallet_deos_actors::ActorId,
+  replacement: impl ActorContractReplacement,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  let contract = pallet_deos_actors::ActorContract::<Runtime>::get(actor_id)
+    .ok_or(pallet_deos_actors::Error::<Runtime>::ActorNotFound)?;
+  let (schedule, schedule_window, steps, funding, completion) = replacement.apply(contract);
+  crate::Actors::update_contract(
+    origin,
+    actor_id,
+    schedule,
+    schedule_window,
+    steps,
+    funding,
+    completion,
+  )
+}
+
+pub trait ActorContractReplacement {
+  fn apply(
+    self,
+    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
+  ) -> (
+    pallet_deos_actors::ScheduleOf<Runtime>,
+    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
+    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
+    pallet_deos_actors::CompletionPolicy,
+  );
+}
+
+impl ActorContractReplacement
+  for (
+    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::CompletionPolicy,
+  )
+{
+  fn apply(
+    self,
+    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
+  ) -> (
+    pallet_deos_actors::ScheduleOf<Runtime>,
+    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
+    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
+    pallet_deos_actors::CompletionPolicy,
+  ) {
+    (
+      contract.schedule,
+      contract.schedule_window,
+      self.0,
+      contract.funding,
+      self.1,
+    )
+  }
+}
+
+impl ActorContractReplacement for pallet_deos_actors::FundingSourcePolicyOf<Runtime> {
+  fn apply(
+    self,
+    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
+  ) -> (
+    pallet_deos_actors::ScheduleOf<Runtime>,
+    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
+    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
+    pallet_deos_actors::CompletionPolicy,
+  ) {
+    (
+      contract.schedule,
+      contract.schedule_window,
+      contract.steps,
+      self,
+      contract.completion,
+    )
+  }
+}
+
+impl ActorContractReplacement
+  for (
+    pallet_deos_actors::ScheduleOf<Runtime>,
+    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
+  )
+{
+  fn apply(
+    self,
+    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
+  ) -> (
+    pallet_deos_actors::ScheduleOf<Runtime>,
+    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
+    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
+    pallet_deos_actors::CompletionPolicy,
+  ) {
+    (
+      self.0,
+      self.1,
+      contract.steps,
+      contract.funding,
+      contract.completion,
+    )
+  }
+}
+
 // Standard test accounts
 pub const ALICE: AccountId = AccountId::new([1u8; 32]);
 pub const BOB: AccountId = AccountId::new([2u8; 32]);

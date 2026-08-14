@@ -1,5 +1,5 @@
 use crate::{
-  AdapterFailure, Error, Event, ExecutionError, RetryClass, RouteFamily, RouteWeightClass,
+  AdapterFailure, Error, Event, ExecutionError, RetryDisposition, RouteFamily, RouteWeightClass,
   RouterFailureClass, RouterOutcome, mock::*, types::*,
 };
 use polkadot_sdk::frame_support::{
@@ -44,7 +44,7 @@ fn adversarial_corpus_is_complete_unique_and_anchor_bound() {
   assert_eq!(corpus["format"], "deos.router.adversarial-corpus");
   assert_eq!(corpus["formatVersion"], 1);
   let cases = corpus["cases"].as_array().unwrap();
-  assert_eq!(cases.len(), 17);
+  assert_eq!(cases.len(), 19);
   let mut names = std::collections::BTreeSet::new();
   for case in cases {
     let name = case["name"].as_str().unwrap();
@@ -170,7 +170,7 @@ fn asset_conversion_exact_output_boundary_quotes_and_executes_without_search() {
       Err(AdapterFailure::new(
         polkadot_sdk::sp_runtime::DispatchError::Other("SlippageExceeded"),
         RouterFailureClass::ProtectionRejected,
-        RetryClass::RetryLater,
+        RetryDisposition::RetryLater,
       ))
     );
     let native_before = Balances::free_balance(user);
@@ -460,7 +460,7 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
       AdapterFailure::new(
         polkadot_sdk::sp_runtime::DispatchError::Other("Forced oracle publication failure"),
         RouterFailureClass::PublicationRejected,
-        RetryClass::RetryLater,
+        RetryDisposition::RetryLater,
       )
     );
     assert_eq!(
@@ -673,92 +673,92 @@ fn every_router_error_has_stable_failure_and_retry_classes() {
     (
       Error::<Test>::NoRouteFound,
       RouterFailureClass::NoViableRoute,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::IdenticalAssets,
       RouterFailureClass::InvalidRequest,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::ZeroAmount,
       RouterFailureClass::InvalidRequest,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::AmountTooLow,
       RouterFailureClass::InvalidRequest,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::InsufficientLiquidity,
       RouterFailureClass::LiquidityUnavailable,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::SlippageExceeded,
       RouterFailureClass::ProtectionRejected,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::DeadlinePassed,
       RouterFailureClass::InvalidRequest,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::FeeRoutingFailed,
       RouterFailureClass::FeeRejected,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::InsufficientInputBalance,
       RouterFailureClass::FeeRejected,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::PriceDeviationExceeded,
       RouterFailureClass::ProtectionRejected,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::InvalidOracleData,
       RouterFailureClass::PublicationRejected,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::NoMultiHopRoute,
       RouterFailureClass::NoViableRoute,
-      RetryClass::RetryLater,
+      RetryDisposition::RetryLater,
     ),
     (
       Error::<Test>::RouterFeeTooHigh,
       RouterFailureClass::InvalidRequest,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::LpTokenPairCollision,
       RouterFailureClass::InvariantViolation,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::LpPairCapacityExceeded,
       RouterFailureClass::InvariantViolation,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::InvalidPoolPair,
       RouterFailureClass::InvariantViolation,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
     (
       Error::<Test>::PreparedRouteMismatch,
       RouterFailureClass::InvariantViolation,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     ),
   ];
-  for (error, failure_class, retry_class) in cases {
+  for (error, failure_class, retry_disposition) in cases {
     assert_eq!(error.failure_class(), failure_class);
-    assert_eq!(error.retry_class(), retry_class);
+    assert_eq!(error.retry_disposition(), retry_disposition);
   }
 }
 
@@ -769,14 +769,14 @@ fn adapter_failure_keeps_boundary_and_retry_independent() {
     RouterFailureClass::IngressRejected,
     RouterFailureClass::FeeRejected,
   ] {
-    for retry_class in [RetryClass::Permanent, RetryClass::RetryLater] {
+    for retry_disposition in [RetryDisposition::Permanent, RetryDisposition::RetryLater] {
       let error = ExecutionError::<Test>::from(AdapterFailure::new(
         DispatchError::Other("TypedAdapterFailure"),
         failure_class,
-        retry_class,
+        retry_disposition,
       ));
       assert_eq!(error.failure_class(), failure_class);
-      assert_eq!(error.retry_class(), retry_class);
+      assert_eq!(error.retry_disposition(), retry_disposition);
     }
   }
 
@@ -787,7 +787,7 @@ fn adapter_failure_keeps_boundary_and_retry_independent() {
     unknown.failure_class(),
     RouterFailureClass::InvariantViolation
   );
-  assert_eq!(unknown.retry_class(), RetryClass::Permanent);
+  assert_eq!(unknown.retry_disposition(), RetryDisposition::Permanent);
 }
 
 #[test]

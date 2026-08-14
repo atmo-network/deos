@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeActorProgram } from '../src/lib/automation/analysis.ts';
+import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
-  createActorPlanArtifact,
-  encodeActorProgramValue,
-} from '../src/lib/automation/plan-artifact.ts';
+  createActorContractArtifact,
+  encodeActorContractValue,
+} from '../src/lib/automation/contract-artifact.ts';
 import {
   ACTORS_SEMANTIC_MANIFEST,
   parseActorSemanticManifest,
@@ -182,18 +182,26 @@ function taskValue(name, amount = fixed()) {
   }
 }
 
+function timed(predicate, timing = 'Current') {
+  return { timing: variant(timing), predicate };
+}
+
 function step({
   task = 'Transfer',
   amount = fixed(),
-  conditions = [],
-  conditionMode = conditions.length === 0 ? 'Always' : 'All',
+  predicates = [],
+  preconditionMode = predicates.length === 0 ? 'Unconditional' : 'All',
   onError = 'AbortCycle',
 } = {}) {
+  const clauses =
+    preconditionMode === 'Any'
+      ? predicates.map((predicate) => [timed(predicate)])
+      : [predicates.map((predicate) => timed(predicate))];
   return {
-    conditions: {
-      type: conditionMode,
-      value: conditionMode === 'Always' ? undefined : conditions,
-    },
+    preconditions:
+      predicates.length === 0
+        ? variant('Unconditional')
+        : { type: 'AnyOf', value: clauses },
     task: { type: task, value: taskValue(task, amount) },
     on_error:
       onError === 'RetryLater'
@@ -215,7 +223,7 @@ function condition(name) {
   return { type: name, value: { threshold: 1 } };
 }
 
-function activeProgram(steps) {
+function activeContract(steps) {
   return {
     type: 'Active',
     value: {
@@ -229,31 +237,31 @@ function activeProgram(steps) {
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
-      execution_plan: steps,
-      completion_policy: variant('Persistent'),
-      funding_source_policy: variant('OwnerOnly'),
+      steps: steps,
+      completion: variant('Persistent'),
+      funding: variant('OwnerOnly'),
     },
   };
 }
 
 function artifactFor({
   steps,
-  program = activeProgram(steps),
+  contract = activeContract(steps),
   actorType = 'User',
   mutability = 'Mutable',
 } = {}) {
-  const programScale = encodeActorProgramValue(metadataBytes, program);
-  return createActorPlanArtifact({
+  const contractScale = encodeActorContractValue(metadataBytes, contract);
+  return createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType,
     mutability,
-    programScale,
+    contractScale,
   });
 }
 
 function analyze(artifact, overrides = {}) {
-  return analyzeActorProgram({
+  return analyzeActorContract({
     artifact,
     metadataBytes,
     runtime,
@@ -292,7 +300,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
       step({
         task: 'Transfer',
         amount: { type: 'AllAvailable', value: undefined },
-        conditions: [condition('BalanceAbove')],
+        predicates: [condition('BalanceAbove')],
         onError: 'RetryLater',
       }),
       step({ task: 'Burn' }),
@@ -304,7 +312,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
   assert.deepEqual(first, second);
   assert.equal(JSON.stringify(first), JSON.stringify(second));
   assert.equal(first.provenance, 'StaticStructuralProjection');
-  assert.equal(first.identity.planId, artifact.planId);
+  assert.equal(first.identity.contractId, artifact.contractId);
   assert.equal(first.identity.genesisHash, artifact.genesisHash);
   assert.equal(first.identity.metadataHash, artifact.metadataHash);
   assert.equal(first.suffixEnvelopes.length, first.steps.length + 1);
@@ -483,11 +491,11 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
     () => parseActorSemanticManifest(unknownTask),
     /Task variants are unknown/,
   );
-  const reorderedCondition = structuredClone(ACTORS_SEMANTIC_MANIFEST);
-  reorderedCondition.conditions[0].scaleIndex = 1;
+  const reorderedPredicate = structuredClone(ACTORS_SEMANTIC_MANIFEST);
+  reorderedPredicate.predicates[0].scaleIndex = 1;
   assert.throws(
-    () => parseActorSemanticManifest(reorderedCondition),
-    /Condition SCALE indices are unknown/,
+    () => parseActorSemanticManifest(reorderedPredicate),
+    /Predicate SCALE indices are unknown/,
   );
 });
 
@@ -682,28 +690,32 @@ test('authoring copy separates skips, funding, and task failure classes', () => 
   }
 });
 
-test('condition aggregate mode and atomic count remain explicit without graph control', () => {
+test('bounded DNF clause and predicate counts remain explicit without graph control', () => {
   const atoms = [condition('BalanceAbove'), condition('BlockNumberBelow')];
-  for (const mode of ['All', 'Any']) {
+  for (const [legacyShape, clauseCount] of [
+    ['All', 1],
+    ['Any', 2],
+  ]) {
     const result = analyze(
       artifactFor({
-        steps: [step({ conditions: atoms, conditionMode: mode })],
+        steps: [step({ predicates: atoms, preconditionMode: legacyShape })],
       }),
     );
-    assert.deepEqual(result.steps[0].conditionSet, {
-      mode,
+    assert.deepEqual(result.steps[0].preconditions, {
+      mode: 'AnyOf',
+      clauseCount,
       atomicCount: 2,
-      evaluation: 'all-atoms-no-short-circuit',
-      admission: mode === 'All' ? 'all-true' : 'at-least-one-true',
+      evaluation: 'bounded-dnf-full-visit',
+      admission: 'any-clause-all-true',
       falseControl: 'advance-fixed-successor',
-      atomicError: 'fail-whole-group',
+      atomicError: 'fail-whole-expression',
     });
     assert.equal(result.steps[0].successfulControl, 'advance');
     assert.deepEqual(result.steps[0].failureControls, ['advance', 'terminate']);
   }
-  const always = analyze(artifactFor({ steps: [step()] })).steps[0];
-  assert.equal(always.conditionSet.mode, 'Always');
-  assert.equal(always.conditionSet.atomicCount, 0);
+  const unconditional = analyze(artifactFor({ steps: [step()] })).steps[0];
+  assert.equal(unconditional.preconditions.mode, 'Unconditional');
+  assert.equal(unconditional.preconditions.atomicCount, 0);
 });
 
 test('StopCycle separates successful cycle completion from failure fall-through', () => {
@@ -727,12 +739,12 @@ test('StopCycle separates successful cycle completion from failure fall-through'
   );
 });
 
-test('every current Condition is pure, bounded, and attempt-observed', () => {
+test('every current Predicate is pure, bounded, and explicitly timed', () => {
   for (const name of conditionNames) {
     const artifact = artifactFor({
-      steps: [step({ conditions: [condition(name)] })],
+      steps: [step({ predicates: [condition(name)] })],
     });
-    const projected = analyze(artifact).steps[0].conditions[0];
+    const projected = analyze(artifact).steps[0].predicates[0];
     assert.equal(projected.type, name);
     assert.equal(projected.pure, true);
     assert.equal(projected.boundedReadCount, 1);
@@ -847,16 +859,16 @@ test('every error policy, actor type, and mutability has only linear controls', 
   }
 });
 
-test('Dormant and active programs both produce complete bounded analysis', () => {
+test('Dormant and active Actor Contracts both produce complete bounded analysis', () => {
   for (const actorType of ['User', 'System']) {
     for (const mutability of ['Mutable', 'Immutable']) {
       const dormant = artifactFor({
-        program: { type: 'Dormant', value: undefined },
+        contract: { type: 'Dormant', value: undefined },
         actorType,
         mutability,
       });
       const dormantResult = analyze(dormant);
-      assert.equal(dormantResult.program, 'Dormant');
+      assert.equal(dormantResult.contract, 'Dormant');
       assert.equal(dormantResult.completionPolicy, null);
       assert.equal(dormantResult.cooldownBlocks, null);
       assert.equal(dormantResult.trigger, null);
@@ -864,7 +876,7 @@ test('Dormant and active programs both produce complete bounded analysis', () =>
       assert.equal(dormantResult.suffixEnvelopes.length, 1);
       const active = artifactFor({ steps: [step()], actorType, mutability });
       const activeResult = analyze(active);
-      assert.equal(activeResult.program, 'Active');
+      assert.equal(activeResult.contract, 'Active');
       assert.equal(activeResult.cooldownBlocks, 5);
     }
   }
@@ -882,14 +894,14 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     type: 'OnObservationChange',
     value: { feed: observationFeed },
   };
-  const programWithTrigger = (trigger) => {
-    const program = activeProgram([step()]);
-    program.value.schedule.trigger = trigger;
-    return program;
+  const contractWithTrigger = (trigger) => {
+    const contract = activeContract([step()]);
+    contract.value.schedule.trigger = trigger;
+    return contract;
   };
   const immediate = analyze(
     artifactFor({
-      program: programWithTrigger({
+      contract: contractWithTrigger({
         type: 'Immediate',
         value: {
           sources: [variant('Manual'), addressEvent, observationChange],
@@ -928,17 +940,17 @@ test('trigger analysis separates readiness sources from admission and runtime pr
         finding.gate === 'Immediate',
     ),
   );
-  const triggerAmountProgram = programWithTrigger({
+  const triggerAmountContract = contractWithTrigger({
     type: 'Immediate',
     value: { sources: [observationChange] },
   });
-  triggerAmountProgram.value.execution_plan = [
+  triggerAmountContract.value.steps = [
     step({
       amount: { type: 'PercentageAtOpening', value: 500_000_000 },
     }),
   ];
   const triggerAmountAnalysis = analyze(
-    artifactFor({ program: triggerAmountProgram }),
+    artifactFor({ contract: triggerAmountContract }),
   );
   assert(
     triggerAmountAnalysis.findings.some(
@@ -952,7 +964,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
 
   const periodic = analyze(
     artifactFor({
-      program: programWithTrigger({
+      contract: contractWithTrigger({
         type: 'Cadenced',
         value: {
           every_blocks: 10,
@@ -977,7 +989,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
 
   const signalled = analyze(
     artifactFor({
-      program: programWithTrigger({
+      contract: contractWithTrigger({
         type: 'Cadenced',
         value: {
           every_blocks: 20,
@@ -1003,7 +1015,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
         finding.gate === 'Cadenced',
     ),
   );
-  assert(!('conditions' in signalled.trigger));
+  assert(!('predicates' in signalled.trigger));
   assert(!('steps' in signalled.trigger));
   assert(!JSON.stringify(signalled.trigger).includes('runtime execution'));
 });

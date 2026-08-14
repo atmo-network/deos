@@ -1,4 +1,6 @@
-use crate::types::{AmountResolution, Condition, ConditionSet, Mutability, StepErrorPolicy, Task};
+use crate::types::{AmountResolution, Mutability, Preconditions, Predicate, StepErrorPolicy, Task};
+#[cfg(test)]
+use crate::types::{ObservationTiming, TimedPredicate};
 use crate::{RetryClass, WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
@@ -385,14 +387,14 @@ where
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub enum ConditionObservation {
+pub enum PredicateObservation {
   BalanceComparison,
   BlockNumberComparison,
   ScalarObservationComparison,
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub enum ConditionReadSurface<AssetId, ObservationFeedId = ()> {
+pub enum PredicateReadSurface<AssetId, ObservationFeedId = ()> {
   SpendableAssetBalance(AssetId),
   CurrentBlockNumber,
   TypedObservation {
@@ -409,24 +411,23 @@ pub enum ObservationWindow {
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct ConditionInstructionContract<AssetId, ObservationFeedId = ()> {
-  pub observation: ConditionObservation,
-  pub read_surface: ConditionReadSurface<AssetId, ObservationFeedId>,
+pub struct PredicateInstructionContract<AssetId, ObservationFeedId = ()> {
+  pub observation: PredicateObservation,
+  pub read_surface: PredicateReadSurface<AssetId, ObservationFeedId>,
   pub pure: bool,
   pub observation_window: ObservationWindow,
   pub bounded_read_count: u32,
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub enum ConditionAggregateMode {
-  Always,
-  All,
-  Any,
+pub enum PreconditionsMode {
+  Unconditional,
+  AnyOf,
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct ConditionSetInstructionContract {
-  pub mode: ConditionAggregateMode,
+pub struct PreconditionsInstructionContract {
+  pub mode: PreconditionsMode,
   pub atomic_count: u32,
   pub canonical_non_empty: bool,
   pub evaluates_all_atoms: bool,
@@ -436,23 +437,18 @@ pub struct ConditionSetInstructionContract {
   pub nested_groups: bool,
 }
 
-pub fn describe_condition_set<C, MaxConditions: Get<u32>>(
-  condition_set: &ConditionSet<C, MaxConditions>,
-) -> ConditionSetInstructionContract {
-  let (mode, atomic_count, canonical_non_empty) = match condition_set {
-    ConditionSet::Always => (ConditionAggregateMode::Always, 0, true),
-    ConditionSet::All(conditions) => (
-      ConditionAggregateMode::All,
-      conditions.len() as u32,
-      !conditions.is_empty(),
-    ),
-    ConditionSet::Any(conditions) => (
-      ConditionAggregateMode::Any,
-      conditions.len() as u32,
-      !conditions.is_empty(),
+pub fn describe_preconditions<C, MaxClauses: Get<u32>, MaxPerClause: Get<u32>>(
+  preconditions: &Preconditions<C, MaxClauses, MaxPerClause>,
+) -> PreconditionsInstructionContract {
+  let (mode, atomic_count, canonical_non_empty) = match preconditions {
+    Preconditions::Unconditional => (PreconditionsMode::Unconditional, 0, true),
+    Preconditions::AnyOf(clauses) => (
+      PreconditionsMode::AnyOf,
+      clauses.iter().map(|clause| clause.len() as u32).sum(),
+      !clauses.is_empty() && clauses.iter().all(|clause| !clause.is_empty()),
     ),
   };
-  ConditionSetInstructionContract {
+  PreconditionsInstructionContract {
     mode,
     atomic_count,
     canonical_non_empty,
@@ -460,53 +456,53 @@ pub fn describe_condition_set<C, MaxConditions: Get<u32>>(
     atomic_error_fails_group: true,
     false_control: ClassifiedStepControl::Advance,
     admitted_task_count: 1,
-    nested_groups: false,
+    nested_groups: true,
   }
 }
 
-pub fn describe_condition<AssetId: Clone, Balance, BlockNumber, ObservationFeedId: Clone>(
-  condition: &Condition<AssetId, Balance, BlockNumber, ObservationFeedId>,
-) -> ConditionInstructionContract<AssetId, ObservationFeedId> {
-  let (observation, read_surface) = match condition {
-    Condition::BalanceAbove { asset, .. }
-    | Condition::BalanceBelow { asset, .. }
-    | Condition::BalanceEquals { asset, .. }
-    | Condition::BalanceNotEquals { asset, .. } => (
-      ConditionObservation::BalanceComparison,
-      ConditionReadSurface::SpendableAssetBalance(asset.clone()),
+pub fn describe_predicate<AssetId: Clone, Balance, BlockNumber, ObservationFeedId: Clone>(
+  predicate: &Predicate<AssetId, Balance, BlockNumber, ObservationFeedId>,
+) -> PredicateInstructionContract<AssetId, ObservationFeedId> {
+  let (observation, read_surface) = match predicate {
+    Predicate::BalanceAbove { asset, .. }
+    | Predicate::BalanceBelow { asset, .. }
+    | Predicate::BalanceEquals { asset, .. }
+    | Predicate::BalanceNotEquals { asset, .. } => (
+      PredicateObservation::BalanceComparison,
+      PredicateReadSurface::SpendableAssetBalance(asset.clone()),
     ),
-    Condition::BlockNumberAbove { .. } | Condition::BlockNumberBelow { .. } => (
-      ConditionObservation::BlockNumberComparison,
-      ConditionReadSurface::CurrentBlockNumber,
+    Predicate::BlockNumberAbove { .. } | Predicate::BlockNumberBelow { .. } => (
+      PredicateObservation::BlockNumberComparison,
+      PredicateReadSurface::CurrentBlockNumber,
     ),
-    Condition::ObservationAbove {
+    Predicate::ObservationAbove {
       feed,
       max_age_blocks,
       ..
     }
-    | Condition::ObservationBelow {
+    | Predicate::ObservationBelow {
       feed,
       max_age_blocks,
       ..
     }
-    | Condition::ObservationEquals {
+    | Predicate::ObservationEquals {
       feed,
       max_age_blocks,
       ..
     }
-    | Condition::ObservationNotEquals {
+    | Predicate::ObservationNotEquals {
       feed,
       max_age_blocks,
       ..
     } => (
-      ConditionObservation::ScalarObservationComparison,
-      ConditionReadSurface::TypedObservation {
+      PredicateObservation::ScalarObservationComparison,
+      PredicateReadSurface::TypedObservation {
         feed: feed.clone(),
         max_age_blocks: *max_age_blocks,
       },
     ),
   };
-  ConditionInstructionContract {
+  PredicateInstructionContract {
     observation,
     read_surface,
     pure: true,
@@ -802,81 +798,82 @@ mod tests {
   }
 
   #[test]
-  fn condition_set_contract_forbids_nested_or_dynamic_control() {
-    type TestCondition = Condition<u32, u128, u32>;
-    type TestConditionSet = ConditionSet<TestCondition, ConstU32<4>>;
-    let atom = Condition::BlockNumberAbove { threshold: 1 };
-    let grouped = BoundedVec::try_from(alloc::vec![atom]).expect("one atom fits");
-    let cases: alloc::vec::Vec<TestConditionSet> = alloc::vec![
-      ConditionSet::Always,
-      ConditionSet::All(grouped.clone()),
-      ConditionSet::Any(grouped),
+  fn preconditions_contract_exposes_bounded_dnf_without_dynamic_control() {
+    type TestPredicate = Predicate<u32, u128, u32>;
+    type TestPreconditions = Preconditions<TestPredicate, ConstU32<4>, ConstU32<4>>;
+    let atom: TimedPredicate<TestPredicate> = TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate: Predicate::BlockNumberAbove { threshold: 1 },
+    };
+    let clause: BoundedVec<_, ConstU32<4>> =
+      BoundedVec::try_from(alloc::vec![atom]).expect("one predicate fits");
+    let clauses: BoundedVec<_, ConstU32<4>> =
+      BoundedVec::try_from(alloc::vec![clause]).expect("one clause fits");
+    let cases: [(PreconditionsMode, TestPreconditions); 2] = [
+      (
+        PreconditionsMode::Unconditional,
+        Preconditions::Unconditional,
+      ),
+      (PreconditionsMode::AnyOf, Preconditions::AnyOf(clauses)),
     ];
-    for (expected_mode, condition_set) in [
-      ConditionAggregateMode::Always,
-      ConditionAggregateMode::All,
-      ConditionAggregateMode::Any,
-    ]
-    .into_iter()
-    .zip(cases)
-    {
-      let contract = describe_condition_set(&condition_set);
+    for (expected_mode, preconditions) in cases {
+      let contract: PreconditionsInstructionContract = describe_preconditions(&preconditions);
       assert_eq!(contract.mode, expected_mode);
       assert!(contract.canonical_non_empty);
       assert!(contract.evaluates_all_atoms);
       assert!(contract.atomic_error_fails_group);
       assert_eq!(contract.false_control, ClassifiedStepControl::Advance);
       assert_eq!(contract.admitted_task_count, 1);
-      assert!(!contract.nested_groups);
+      assert!(contract.nested_groups);
     }
-    let empty = TestConditionSet::Any(BoundedVec::default());
-    assert!(!describe_condition_set(&empty).canonical_non_empty);
+    let empty = TestPreconditions::AnyOf(BoundedVec::default());
+    assert!(!describe_preconditions(&empty).canonical_non_empty);
   }
 
   #[test]
   fn every_condition_is_pure_and_bounded() {
-    let conditions: [Condition<u32, u128, u32, u32>; 10] = [
-      Condition::BalanceAbove {
+    let preconditions: [Predicate<u32, u128, u32, u32>; 10] = [
+      Predicate::BalanceAbove {
         asset: 1u32,
         threshold: 1u128,
       },
-      Condition::BalanceBelow {
+      Predicate::BalanceBelow {
         asset: 1,
         threshold: 1,
       },
-      Condition::BalanceEquals {
+      Predicate::BalanceEquals {
         asset: 1,
         threshold: 1,
       },
-      Condition::BalanceNotEquals {
+      Predicate::BalanceNotEquals {
         asset: 1,
         threshold: 1,
       },
-      Condition::BlockNumberAbove { threshold: 1u32 },
-      Condition::BlockNumberBelow { threshold: 1u32 },
-      Condition::ObservationAbove {
+      Predicate::BlockNumberAbove { threshold: 1u32 },
+      Predicate::BlockNumberBelow { threshold: 1u32 },
+      Predicate::ObservationAbove {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
       },
-      Condition::ObservationBelow {
+      Predicate::ObservationBelow {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
       },
-      Condition::ObservationEquals {
+      Predicate::ObservationEquals {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
       },
-      Condition::ObservationNotEquals {
+      Predicate::ObservationNotEquals {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
       },
     ];
-    for condition in conditions {
-      let contract = describe_condition(&condition);
+    for condition in preconditions {
+      let contract = describe_predicate(&condition);
       assert!(contract.pure);
       assert_eq!(
         contract.observation_window,

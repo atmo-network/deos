@@ -16,7 +16,7 @@ const hash = (byte) => `0x${byte.repeat(64)}`;
 
 function artifact(mutability = 'Mutable') {
   return {
-    format: 'deos.actor.plan',
+    format: 'deos.actor.contract',
     formatVersion: 1,
     genesisHash: hash('1'),
     specVersion: 1,
@@ -24,15 +24,15 @@ function artifact(mutability = 'Mutable') {
     metadataHash: hash('2'),
     actorType: 'User',
     mutability,
-    programScale: '0x00',
-    planId: hash('3'),
+    contractScale: '0x00',
+    contractId: hash('3'),
   };
 }
 
 const blockHash = hash('4');
 const localStep = (stepIndex, onError = 'AbortCycle', overrides = {}) => ({
   stepIndex,
-  conditionSet: { type: 'Always' },
+  preconditions: { type: 'Unconditional' },
   taskControl: 'Execute',
   onError:
     onError === 'RetryLater'
@@ -94,7 +94,10 @@ test('productive completion closes only after one committed effectful task', () 
     initialState: { balance: 100n },
     steps: [
       localStep(0, 'AbortCycle', {
-        conditionSet: { type: 'All', conditions: ['latest-observation'] },
+        preconditions: {
+          type: 'AnyOf',
+          clauses: [[{ timing: 'Current', predicate: 'latest-observation' }]],
+        },
       }),
     ],
     evaluateCondition() {
@@ -244,7 +247,7 @@ test('cursor advancement resets the local unsuccessful-attempt count', () => {
   assert.equal(result.unsuccessfulAttemptsAtCursor, 1);
 });
 
-test('permanent RetryLater aborts, and Immutable plans reject retry policy', () => {
+test('permanent RetryLater aborts, and Immutable Actor Contracts reject retry policy', () => {
   const aborted = simulateActorLocally({
     ...provenance,
     initialState: { balance: 1n },
@@ -273,25 +276,29 @@ test('permanent RetryLater aborts, and Immutable plans reject retry policy', () 
   );
 });
 
-test('condition groups evaluate every atom and any atomic error fails the whole group', () => {
+test('bounded DNF visits every predicate and any error fails the expression', () => {
   const observations = [];
   const result = simulateActorLocally({
     ...provenance,
     initialState: { balance: 10n },
     steps: [
       localStep(0, 'ContinueNextStep', {
-        conditionSet: {
-          type: 'Any',
-          conditions: ['true', 'error', 'false'],
+        preconditions: {
+          type: 'AnyOf',
+          clauses: [
+            [{ timing: 'Current', predicate: 'true' }],
+            [{ timing: 'Opening', predicate: 'error' }],
+            [{ timing: 'Current', predicate: 'false' }],
+          ],
         },
       }),
       localStep(1),
     ],
-    evaluateCondition(condition) {
-      observations.push(condition);
-      return condition === 'error'
+    evaluateCondition(timed) {
+      observations.push(timed.predicate);
+      return timed.predicate === 'error'
         ? { kind: 'Error', retry: 'Permanent', error: 'observation-failed' }
-        : { kind: 'Value', value: condition === 'true' };
+        : { kind: 'Value', value: timed.predicate === 'true' };
     },
     runTask(step, state) {
       state.balance += BigInt(step.stepIndex + 1);
@@ -311,7 +318,15 @@ test('condition groups evaluate every atom and any atomic error fails the whole 
     initialState: {},
     steps: [
       localStep(0, 'AbortCycle', {
-        conditionSet: { type: 'All', conditions: [true, false, true] },
+        preconditions: {
+          type: 'AnyOf',
+          clauses: [
+            [true, false, true].map((predicate) => ({
+              timing: 'Current',
+              predicate,
+            })),
+          ],
+        },
       }),
     ],
     evaluateCondition(_condition) {

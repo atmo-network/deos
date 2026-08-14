@@ -20,7 +20,7 @@ export type ActorTaskName =
   | 'Unstake'
   | 'StopCycle';
 
-export type ActorConditionName =
+export type ActorPredicateName =
   | 'BalanceAbove'
   | 'BalanceBelow'
   | 'BalanceEquals'
@@ -54,7 +54,7 @@ const TASK_NAMES = [
   'StopCycle',
 ] as const satisfies readonly ActorTaskName[];
 
-const CONDITION_NAMES = [
+const PREDICATE_NAMES = [
   'BalanceAbove',
   'BalanceBelow',
   'BalanceEquals',
@@ -65,7 +65,7 @@ const CONDITION_NAMES = [
   'ObservationBelow',
   'ObservationEquals',
   'ObservationNotEquals',
-] as const satisfies readonly ActorConditionName[];
+] as const satisfies readonly ActorPredicateName[];
 
 const AMOUNT_NAMES = [
   'Fixed',
@@ -111,8 +111,8 @@ export type ActorSemanticTask = {
   amountSurfaces: Array<{ role: string; path: string }>;
 };
 
-export type ActorSemanticCondition = {
-  condition: ActorConditionName;
+export type ActorSemanticPredicate = {
+  predicate: ActorPredicateName;
   scaleIndex: number;
   observation:
     | 'BalanceComparison'
@@ -149,7 +149,7 @@ export type ActorSemanticManifest = {
   format: 'deos.actor.semantic-manifest';
   formatVersion: 2;
   tasks: ActorSemanticTask[];
-  conditions: ActorSemanticCondition[];
+  predicates: ActorSemanticPredicate[];
   amountResolutions: ActorSemanticAmountResolution[];
 };
 
@@ -165,7 +165,7 @@ function names(value: unknown, label: string) {
   return value.map((entry, index) => {
     const projected = record(entry, `${label}[${index}]`);
     if (typeof projected.task === 'string') return projected.task;
-    if (typeof projected.condition === 'string') return projected.condition;
+    if (typeof projected.predicate === 'string') return projected.predicate;
     if (typeof projected.resolution === 'string') return projected.resolution;
     throw new Error(`${label}[${index}] has no semantic identity`);
   });
@@ -198,15 +198,15 @@ export function parseActorSemanticManifest(
   }
   requireExactNames(names(projected.tasks, 'tasks'), TASK_NAMES, 'Task');
   requireExactNames(
-    names(projected.conditions, 'conditions'),
-    CONDITION_NAMES,
-    'Condition',
+    names(projected.predicates, 'predicates'),
+    PREDICATE_NAMES,
+    'Predicate',
   );
-  const conditions = projected.conditions as Array<Record<string, unknown>>;
-  conditions.forEach((condition, index) => {
-    if (condition.scaleIndex !== index) {
+  const predicates = projected.predicates as Array<Record<string, unknown>>;
+  predicates.forEach((predicate, index) => {
+    if (predicate.scaleIndex !== index) {
       throw new Error(
-        'Condition SCALE indices are unknown, missing, or reordered',
+        'Predicate SCALE indices are unknown, missing, or reordered',
       );
     }
   });
@@ -224,10 +224,10 @@ export const ACTORS_SEMANTIC_MANIFEST =
 const TASKS = new Map(
   ACTORS_SEMANTIC_MANIFEST.tasks.map((task) => [task.task, task]),
 );
-const CONDITIONS = new Map(
-  ACTORS_SEMANTIC_MANIFEST.conditions.map((condition) => [
-    condition.condition,
-    condition,
+const PREDICATES = new Map(
+  ACTORS_SEMANTIC_MANIFEST.predicates.map((predicate) => [
+    predicate.predicate,
+    predicate,
   ]),
 );
 const AMOUNTS = new Map(
@@ -243,12 +243,12 @@ export function actorTaskSemantics(task: string): ActorSemanticTask {
   return semantics;
 }
 
-export function actorConditionSemantics(
-  condition: string,
-): ActorSemanticCondition {
-  const semantics = CONDITIONS.get(condition as ActorConditionName);
+export function actorPredicateSemantics(
+  predicate: string,
+): ActorSemanticPredicate {
+  const semantics = PREDICATES.get(predicate as ActorPredicateName);
   if (semantics == null) {
-    throw new Error(`Unsupported Condition variant: ${condition}`);
+    throw new Error(`Unsupported Predicate variant: ${predicate}`);
   }
   return semantics;
 }

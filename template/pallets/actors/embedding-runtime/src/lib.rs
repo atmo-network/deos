@@ -574,6 +574,9 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
   type MaxOpeningSnapshotEntries = ConstU32<16>;
+  type MaxOpeningPredicateResults = ConstU32<16>;
+  type MaxPreconditionClauses = ConstU32<2>;
+  type MaxPredicatesPerClause = ConstU32<2>;
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
@@ -674,11 +677,45 @@ mod tests {
     task: pallet_deos_actors::TaskOf<Runtime>,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
     BoundedVec::try_from(alloc::vec![pallet_deos_actors::StepOf::<Runtime> {
-      conditions: pallet_deos_actors::ConditionSet::Always,
+      preconditions: pallet_deos_actors::Preconditions::Unconditional,
       task,
       on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
     }])
     .expect("one-step plan fits")
+  }
+
+  fn all_preconditions(
+    predicates: alloc::vec::Vec<pallet_deos_actors::Predicate<u32, Balance, u32, u32>>,
+  ) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+    let clause = BoundedVec::try_from(
+      predicates
+        .into_iter()
+        .map(|predicate| pallet_deos_actors::TimedPredicate {
+          timing: pallet_deos_actors::ObservationTiming::Current,
+          predicate,
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("predicates fit");
+    pallet_deos_actors::Preconditions::AnyOf(
+      BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"),
+    )
+  }
+
+  fn any_preconditions(
+    predicates: alloc::vec::Vec<pallet_deos_actors::Predicate<u32, Balance, u32, u32>>,
+  ) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+    let clauses = predicates
+      .into_iter()
+      .map(|predicate| {
+        BoundedVec::try_from(alloc::vec![pallet_deos_actors::TimedPredicate {
+          timing: pallet_deos_actors::ObservationTiming::Current,
+          predicate,
+        }])
+        .expect("predicate fits")
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    pallet_deos_actors::Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
   }
 
   /// Spec 7.1 prefunding requirement: `MinUserBalance + attempt fee envelope`.
@@ -735,38 +772,38 @@ mod tests {
     prefund_user_sovereign(owner, slot, plan);
   }
 
-  fn prefund_active_program(
+  fn prefund_active_contract(
     owner: AccountId,
-    program: &pallet_deos_actors::ProgramInputOf<Runtime>,
+    contract: &pallet_deos_actors::ContractInputOf<Runtime>,
   ) {
-    if let pallet_deos_actors::ProgramInput::Active(input) = program {
-      prefund_active_user_creation(owner, &input.execution_plan);
+    if let pallet_deos_actors::ContractInput::Active(input) = contract {
+      prefund_active_user_creation(owner, &input.steps);
     }
   }
 
-  fn program_with_task(
+  fn contract_with_task(
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     task: pallet_deos_actors::TaskOf<Runtime>,
-  ) -> pallet_deos_actors::ProgramInputOf<Runtime> {
+  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
     let plan = execution_plan(task);
-    pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+    pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
       schedule: pallet_deos_actors::Schedule {
         trigger,
         cooldown_blocks: 0,
       },
       schedule_window: None,
-      execution_plan: plan,
-      completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-      funding_source_policy: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+      steps: plan,
+      completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     })
   }
 
-  fn transfer_program(
+  fn transfer_contract(
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     amount: Balance,
-  ) -> pallet_deos_actors::ProgramInputOf<Runtime> {
-    program_with_task(
+  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
+    contract_with_task(
       trigger,
       pallet_deos_actors::Task::Transfer {
         to: BOB,
@@ -781,26 +818,26 @@ mod tests {
     on_error: pallet_deos_actors::StepErrorPolicy,
   ) -> pallet_deos_actors::StepOf<Runtime> {
     pallet_deos_actors::Step {
-      conditions: pallet_deos_actors::ConditionSet::Always,
+      preconditions: pallet_deos_actors::Preconditions::Unconditional,
       task,
       on_error,
     }
   }
 
-  fn active_program(
+  fn active_contract(
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     cooldown_blocks: u32,
     steps: Vec<pallet_deos_actors::StepOf<Runtime>>,
-  ) -> pallet_deos_actors::ProgramInputOf<Runtime> {
-    pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
+    pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
       schedule: pallet_deos_actors::Schedule {
         trigger,
         cooldown_blocks,
       },
       schedule_window: None,
-      execution_plan: BoundedVec::try_from(steps).expect("fixture plan fits"),
-      completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-      funding_source_policy: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+      steps: BoundedVec::try_from(steps).expect("fixture plan fits"),
+      completion: pallet_deos_actors::CompletionPolicy::Persistent,
+      funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     })
   }
@@ -824,17 +861,17 @@ mod tests {
     for expected in [
       b"Actors".as_slice(),
       b"ActorHot".as_slice(),
-      b"ActorProgram".as_slice(),
+      b"ActorContract".as_slice(),
       b"ActorFunding".as_slice(),
       b"ContinuationState".as_slice(),
       b"QueuePages".as_slice(),
       b"WakeupPages".as_slice(),
-      b"ConditionSet".as_slice(),
+      b"Preconditions".as_slice(),
       b"Always".as_slice(),
       b"All".as_slice(),
       b"Any".as_slice(),
       b"StopCycle".as_slice(),
-      b"EmptyConditionSet".as_slice(),
+      b"EmptyPreconditions".as_slice(),
     ] {
       assert!(
         encoded
@@ -847,19 +884,17 @@ mod tests {
   }
 
   #[test]
-  fn condition_set_scale_round_trip_preserves_canonical_mode() {
-    let atom = pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 };
-    let grouped = BoundedVec::try_from(alloc::vec![atom]).expect("one condition fits");
-    let values: alloc::vec::Vec<pallet_deos_actors::ConditionSetOf<Runtime>> = alloc::vec![
-      pallet_deos_actors::ConditionSet::Always,
-      pallet_deos_actors::ConditionSet::All(grouped.clone()),
-      pallet_deos_actors::ConditionSet::Any(grouped),
+  fn preconditions_scale_round_trip_preserves_canonical_dnf() {
+    let atom = pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 };
+    let values: alloc::vec::Vec<pallet_deos_actors::PreconditionsOf<Runtime>> = alloc::vec![
+      pallet_deos_actors::Preconditions::Unconditional,
+      all_preconditions(alloc::vec![atom]),
     ];
-    let encoded = alloc::vec![values[0].encode(), values[1].encode(), values[2].encode()];
-    assert_eq!([encoded[0][0], encoded[1][0], encoded[2][0]], [0, 1, 2]);
+    let encoded = alloc::vec![values[0].encode(), values[1].encode()];
+    assert_eq!([encoded[0][0], encoded[1][0]], [0, 1]);
     for (expected, bytes) in values.into_iter().zip(encoded) {
-      let decoded = pallet_deos_actors::ConditionSetOf::<Runtime>::decode(&mut &bytes[..])
-        .expect("ConditionSet decodes");
+      let decoded = pallet_deos_actors::PreconditionsOf::<Runtime>::decode(&mut &bytes[..])
+        .expect("Preconditions decodes");
       assert_eq!(decoded, expected);
     }
   }
@@ -869,24 +904,23 @@ mod tests {
   fn independent_runtime_try_state_accepts_condition_aggregate_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let conditions = BoundedVec::try_from(alloc::vec![
-        pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 },
-      ])
-      .expect("one condition fits");
-      let program = active_program(
+      let preconditions = any_preconditions(alloc::vec![
+        pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
+      ]);
+      let contract = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         0,
         alloc::vec![pallet_deos_actors::Step {
-          conditions: pallet_deos_actors::ConditionSet::Any(conditions),
+          preconditions,
           task: pallet_deos_actors::Task::StopCycle,
           on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
         }],
       );
-      prefund_active_program(ALICE, &program);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       assert!(Actors::try_state(1).is_ok());
     });
@@ -914,7 +948,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ProgramInput::Dormant,
+        pallet_deos_actors::ContractInput::Dormant,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let identity = Actors::actor_identities(actor_id).expect("identity exists");
@@ -922,7 +956,7 @@ mod tests {
       assert_eq!(Actors::active_actor_count(), 0);
       assert!(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).is_none());
       // Spec 7.1: the existing dormant sovereign must cover the activation
-      // prefunding requirement before the Active program commits.
+      // prefunding requirement before the Active Actor Contract commits.
       let activate_plan = execution_plan(pallet_deos_actors::Task::Transfer {
         to: BOB,
         asset: NATIVE_ASSET,
@@ -936,7 +970,7 @@ mod tests {
       assert_ok!(Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        transfer_program(pallet_deos_actors::Trigger::immediate_manual(), 5),
+        transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 5),
       ));
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
         &ALICE,
@@ -964,12 +998,12 @@ mod tests {
   fn independent_runtime_executes_a_native_transfer_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let program = transfer_program(pallet_deos_actors::Trigger::immediate_manual(), 50);
-      prefund_active_program(ALICE, &program);
+      let contract = transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 50);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let actor = Actors::active_actor_view(actor_id)
@@ -999,7 +1033,7 @@ mod tests {
   }
 
   #[test]
-  fn executive_executes_always_all_and_any_as_one_linear_plan() {
+  fn executive_executes_unconditional_and_dnf_as_one_linear_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let transfer = |amount| pallet_deos_actors::Task::Transfer {
@@ -1007,44 +1041,42 @@ mod tests {
         asset: NATIVE_ASSET,
         amount: pallet_deos_actors::AmountResolution::Fixed(amount),
       };
-      let all = BoundedVec::try_from(alloc::vec![
-        pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 },
-        pallet_deos_actors::Condition::BalanceAbove {
+      let all = alloc::vec![
+        pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
+        pallet_deos_actors::Predicate::BalanceAbove {
           asset: NATIVE_ASSET,
           threshold: 0,
         },
-      ])
-      .expect("maximum All group fits");
-      let any = BoundedVec::try_from(alloc::vec![
-        pallet_deos_actors::Condition::BlockNumberBelow { threshold: 0 },
-        pallet_deos_actors::Condition::BlockNumberAbove { threshold: 0 },
-      ])
-      .expect("maximum Any group fits");
-      let program = active_program(
+      ];
+      let any = alloc::vec![
+        pallet_deos_actors::Predicate::BlockNumberBelow { threshold: 0 },
+        pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
+      ];
+      let contract = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         0,
         alloc::vec![
           pallet_deos_actors::Step {
-            conditions: pallet_deos_actors::ConditionSet::Always,
+            preconditions: pallet_deos_actors::Preconditions::Unconditional,
             task: transfer(7),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
           pallet_deos_actors::Step {
-            conditions: pallet_deos_actors::ConditionSet::All(all),
+            preconditions: all_preconditions(all),
             task: transfer(11),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
           pallet_deos_actors::Step {
-            conditions: pallet_deos_actors::ConditionSet::Any(any),
+            preconditions: any_preconditions(any),
             task: transfer(13),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
         ],
       );
-      prefund_active_program(ALICE, &program);
+      prefund_active_contract(ALICE, &contract);
       let create = RuntimeCall::Actors(pallet_deos_actors::Call::create_user_actor {
         mutability: pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       });
       assert!(matches!(
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, create)),
@@ -1079,12 +1111,12 @@ mod tests {
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
-      let program = transfer_program(trigger, 50);
-      prefund_active_program(ALICE, &program);
+      let contract = transfer_contract(trigger, 50);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_view(actor_id)
@@ -1114,12 +1146,12 @@ mod tests {
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
-      let program = transfer_program(trigger, 50);
-      prefund_active_program(ALICE, &program);
+      let contract = transfer_contract(trigger, 50);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_view(actor_id)
@@ -1142,7 +1174,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let step = || pallet_deos_actors::StepOf::<Runtime> {
-        conditions: pallet_deos_actors::ConditionSet::Always,
+        preconditions: pallet_deos_actors::Preconditions::Unconditional,
         task: pallet_deos_actors::Task::Transfer {
           to: BOB,
           asset: NATIVE_ASSET,
@@ -1183,23 +1215,23 @@ mod tests {
         &admitted,
       );
       assert!(admission.all_lte(ActorOnIdleReserve::get()));
-      let admitted_program =
-        pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+      let admitted_contract =
+        pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
           schedule: pallet_deos_actors::Schedule {
             trigger: pallet_deos_actors::Trigger::immediate_manual(),
             cooldown_blocks: 0,
           },
           schedule_window: None,
-          execution_plan: admitted.clone(),
-          completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-          funding_source_policy: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+          steps: admitted.clone(),
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
           auto_close_at_cycle_nonce: None,
         });
-      prefund_active_program(ALICE, &admitted_program);
+      prefund_active_contract(ALICE, &admitted_contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        admitted_program,
+        admitted_contract,
       ));
       assert!(
         Actors::active_actor_view(
@@ -1218,12 +1250,12 @@ mod tests {
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
-      let program = transfer_program(trigger, 50);
-      prefund_active_program(ALICE, &program);
+      let contract = transfer_contract(trigger, 50);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let bob_before = Balances::free_balance(BOB);
@@ -1257,7 +1289,7 @@ mod tests {
           RuntimeOrigin::root(),
           ALICE,
           pallet_deos_actors::Mutability::Mutable,
-          transfer_program(pallet_deos_actors::Trigger::cadenced_always(20), 1),
+          transfer_contract(pallet_deos_actors::Trigger::cadenced_always(20), 1),
         ));
         let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
         assert_ok!(transfer_and_notify_actor(
@@ -1305,7 +1337,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        transfer_program(pallet_deos_actors::Trigger::immediate_manual(), 5),
+        transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 5),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_view(actor_id)
@@ -1320,7 +1352,7 @@ mod tests {
         actor_id,
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ProgramInput::Dormant,
+        pallet_deos_actors::ContractInput::Dormant,
       ));
       let identity = Actors::actor_identities(fresh_id).expect("fresh system identity reattaches");
       assert_eq!(identity.sovereign_account, sovereign);
@@ -1340,14 +1372,14 @@ mod tests {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           pallet_deos_actors::Mutability::Mutable,
-          program_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+          contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
         ),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
       );
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ProgramInput::Dormant,
+        pallet_deos_actors::ContractInput::Dormant,
       ));
       let dormant_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       System::set_block_number(2);
@@ -1355,12 +1387,12 @@ mod tests {
         Actors::activate_actor(
           RuntimeOrigin::signed(ALICE),
           dormant_id,
-          program_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+          contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
         ),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
       );
-      let plan = transfer_program(pallet_deos_actors::Trigger::immediate_manual(), 1);
-      prefund_active_program(ALICE, &plan);
+      let plan = transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 1);
+      prefund_active_contract(ALICE, &plan);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
@@ -1368,11 +1400,16 @@ mod tests {
       ));
       let active_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       System::set_block_number(3);
+      let contract = pallet_deos_actors::ActorContract::<Runtime>::get(active_id)
+        .expect("Actor Contract exists");
       assert_noop!(
-        Actors::update_execution_plan(
+        Actors::update_contract(
           RuntimeOrigin::signed(ALICE),
           active_id,
+          contract.schedule,
+          contract.schedule_window,
           execution_plan(mint_task()),
+          contract.funding,
           pallet_deos_actors::CompletionPolicy::Persistent,
         ),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
@@ -1382,7 +1419,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        program_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+        contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
       ));
       let system_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_view(system_id)
@@ -1408,7 +1445,7 @@ mod tests {
   fn mutable_user_continuation_preserves_prefix_and_residual_admission() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let plan = active_program(
+      let plan = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         2,
         alloc::vec![
@@ -1431,7 +1468,7 @@ mod tests {
           ),
         ],
       );
-      prefund_active_program(ALICE, &plan);
+      prefund_active_contract(ALICE, &plan);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
@@ -1486,7 +1523,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_program(
+        active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
@@ -1532,12 +1569,12 @@ mod tests {
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
-      let program = active_program(trigger, 2, alloc::vec![temporary_swap_step()]);
-      prefund_active_program(ALICE, &program);
+      let contract = active_contract(trigger, 2, alloc::vec![temporary_swap_step()]);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1609,16 +1646,16 @@ mod tests {
   fn continuation_cancel_then_pure_close_preserves_sovereign_balance() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let program = active_program(
+      let contract = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         1,
         alloc::vec![temporary_swap_step()],
       );
-      prefund_active_program(ALICE, &program);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_view(actor_id)
@@ -1656,7 +1693,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_program(
+        active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           0,
           alloc::vec![step(
@@ -1691,7 +1728,7 @@ mod tests {
   fn immutable_and_unsupported_paths_never_create_continuation() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let unsupported_retry = active_program(
+      let unsupported_retry = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         1,
         alloc::vec![step(
@@ -1711,7 +1748,7 @@ mod tests {
         ),
         pallet_deos_actors::Error::<Runtime>::RetryLaterNotAllowedForImmutableActor
       );
-      prefund_active_program(ALICE, &unsupported_retry);
+      prefund_active_contract(ALICE, &unsupported_retry);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
@@ -1759,7 +1796,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_program(
+        active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
@@ -1789,7 +1826,7 @@ mod tests {
       System::set_block_number(1);
       let plan = BoundedVec::try_from(alloc::vec![
         pallet_deos_actors::StepOf::<Runtime> {
-          conditions: pallet_deos_actors::ConditionSet::Always,
+          preconditions: pallet_deos_actors::Preconditions::Unconditional,
           task: pallet_deos_actors::Task::Stake {
             asset: NATIVE_ASSET,
             amount: pallet_deos_actors::AmountResolution::Fixed(10),
@@ -1797,7 +1834,7 @@ mod tests {
           on_error: pallet_deos_actors::StepErrorPolicy::ContinueNextStep,
         },
         pallet_deos_actors::StepOf::<Runtime> {
-          conditions: pallet_deos_actors::ConditionSet::Always,
+          preconditions: pallet_deos_actors::Preconditions::Unconditional,
           task: pallet_deos_actors::Task::Transfer {
             to: BOB,
             asset: NATIVE_ASSET,
@@ -1807,23 +1844,23 @@ mod tests {
         },
       ])
       .expect("two-step plan fits");
-      let program =
-        pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+      let contract =
+        pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
           schedule: pallet_deos_actors::Schedule {
             trigger: pallet_deos_actors::Trigger::immediate_manual(),
             cooldown_blocks: 0,
           },
           schedule_window: None,
-          execution_plan: plan,
-          completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-          funding_source_policy: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+          steps: plan,
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
           auto_close_at_cycle_nonce: None,
         });
-      prefund_active_program(ALICE, &program);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1860,12 +1897,12 @@ mod tests {
         input_limit: pallet_deos_actors::InputLimit::Absolute(100),
         slippage_tolerance: Perbill::zero(),
       };
-      let program = program_with_task(pallet_deos_actors::Trigger::immediate_manual(), task);
-      prefund_active_program(ALICE, &program);
+      let contract = contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), task);
+      prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        program,
+        contract,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(

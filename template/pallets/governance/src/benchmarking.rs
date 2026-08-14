@@ -316,7 +316,9 @@ mod benches {
     let domain = benchmark_domain_id::<T>();
     let item_id = benchmark_item_id::<T>(1);
     let proposer: T::AccountId = whitelisted_caller();
-    let occupancy = T::MaxActiveProposalsPerDomain::get().saturating_sub(1);
+    let occupancy = T::MaxActiveProposalsPerDomain::get()
+      .saturating_sub(T::StrategicProposalReserve::get())
+      .saturating_sub(1);
     seed_active_proposals::<T>(domain, occupancy);
     #[extrinsic_call]
     submit_proposal(
@@ -338,8 +340,8 @@ mod benches {
   #[benchmark]
   fn submit_signed_proposal() {
     let proposer: T::AccountId = whitelisted_caller();
-    let domain = T::BenchmarkHelper::prepare_primary_eligible_submitter(&proposer)
-      .expect("benchmark helper must prepare a primary-eligible submitter");
+    let (domain, payload_hash) = T::BenchmarkHelper::prepare_primary_eligible_submitter(&proposer)
+      .expect("benchmark helper must prepare a primary-eligible submitter and signed preimage");
     let item_id = benchmark_item_id::<T>(1);
     let occupancy = T::MaxActiveProposalsPerDomain::get().saturating_sub(1);
     seed_active_proposals::<T>(domain, occupancy);
@@ -350,7 +352,7 @@ mod benches {
       item_id,
       ProposalCadenceMode::Ordinary,
       ProposalPayloadKind::L1RootAction,
-      T::Hash::default(),
+      payload_hash,
     );
     assert!(ActiveProposals::<T>::contains_key(domain, item_id));
     assert_eq!(
@@ -362,7 +364,7 @@ mod benches {
   #[benchmark]
   fn cast_vote() {
     let voter: T::AccountId = whitelisted_caller();
-    let domain = T::BenchmarkHelper::prepare_primary_eligible_submitter(&voter)
+    let (domain, _) = T::BenchmarkHelper::prepare_primary_eligible_submitter(&voter)
       .expect("benchmark helper must prepare a primary-eligible voter");
     let item_id = benchmark_item_id::<T>(1);
     let submitted_epoch: T::Epoch = 1u32.into();

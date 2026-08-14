@@ -7,25 +7,25 @@ Zone: Automation domain trust gate; providers execute while this module rejects 
 import { blake2AsHex } from '@polkadot/util-crypto';
 
 import {
-  type ActorPlanArtifact,
-  type ActorPlanHex,
-  type ActorPlanRuntimeIdentity,
-  inspectActorPlanArtifact,
-} from './plan-artifact.ts';
+  type ActorContractArtifact,
+  type ActorContractHex,
+  type ActorContractRuntimeIdentity,
+  inspectActorContractArtifact,
+} from './contract-artifact.ts';
 import {
   type ActorDecodedRuntimeSimulationOutcome,
   decodeActorRuntimeSimulationResult,
 } from './runtime-simulation-codec.ts';
 
 export type ActorMatchingWasmPin = {
-  planId: ActorPlanHex;
-  genesisHash: ActorPlanHex;
-  blockHash: ActorPlanHex;
+  contractId: ActorContractHex;
+  genesisHash: ActorContractHex;
+  blockHash: ActorContractHex;
   blockNumber: number;
-  stateRoot: ActorPlanHex;
+  stateRoot: ActorContractHex;
   stateSource: 'FinalizedBlock' | 'VerifiedStateProof';
-  runtimeCodeHash: ActorPlanHex;
-  metadataHash: ActorPlanHex;
+  runtimeCodeHash: ActorContractHex;
+  metadataHash: ActorContractHex;
   specVersion: number;
   transactionVersion: number;
   runtimeApi: string;
@@ -34,7 +34,7 @@ export type ActorMatchingWasmPin = {
 
 export type ActorRuntimeSimulationOutcome =
   ActorDecodedRuntimeSimulationOutcome & {
-    resultScale: ActorPlanHex;
+    resultScale: ActorContractHex;
   };
 
 export type ActorMatchingWasmResponse = {
@@ -48,9 +48,9 @@ export type ActorMatchingWasmProvider = {
     pin: ActorMatchingWasmPin;
     actorId: bigint;
     mode: 'FreshCurrentPlan' | 'CurrentContinuation';
-    programScale: ActorPlanHex;
-    actorType: ActorPlanArtifact['actorType'];
-    mutability: ActorPlanArtifact['mutability'];
+    contractScale: ActorContractHex;
+    actorType: ActorContractArtifact['actorType'];
+    mutability: ActorContractArtifact['mutability'];
   }): Promise<ActorMatchingWasmResponse>;
 };
 
@@ -76,30 +76,30 @@ function samePin(left: ActorMatchingWasmPin, right: ActorMatchingWasmPin) {
 }
 
 export async function runActorMatchingWasmSimulation(input: {
-  artifact: ActorPlanArtifact;
+  artifact: ActorContractArtifact;
   actorId: bigint;
   mode: 'FreshCurrentPlan' | 'CurrentContinuation';
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity;
+  runtime: ActorContractRuntimeIdentity;
   runtimeCodeBytes: Uint8Array;
   snapshot: {
-    blockHash: ActorPlanHex;
+    blockHash: ActorContractHex;
     blockNumber: number;
-    stateRoot: ActorPlanHex;
+    stateRoot: ActorContractHex;
     stateSource: ActorMatchingWasmPin['stateSource'];
   };
   runtimeApi: string;
   runtimeApiVersion: number;
   provider: ActorMatchingWasmProvider;
 }): Promise<ActorMatchingWasmResponse> {
-  const inspection = inspectActorPlanArtifact(
+  const inspection = inspectActorContractArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
   );
   if (!inspection.valid) {
     throw new Error(
-      `Invalid Actors plan artifact: ${inspection.errors.join('; ')}`,
+      `Invalid Actors Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
   const maxSteps = activeExecutionPlanLength(inspection.runtimeValue);
@@ -132,13 +132,16 @@ export async function runActorMatchingWasmSimulation(input: {
   }
 
   const pin: ActorMatchingWasmPin = {
-    planId: input.artifact.planId,
+    contractId: input.artifact.contractId,
     genesisHash: input.artifact.genesisHash,
     blockHash: input.snapshot.blockHash,
     blockNumber: input.snapshot.blockNumber,
     stateRoot: input.snapshot.stateRoot,
     stateSource: input.snapshot.stateSource,
-    runtimeCodeHash: blake2AsHex(input.runtimeCodeBytes, 256) as ActorPlanHex,
+    runtimeCodeHash: blake2AsHex(
+      input.runtimeCodeBytes,
+      256,
+    ) as ActorContractHex,
     metadataHash: input.artifact.metadataHash,
     specVersion: input.artifact.specVersion,
     transactionVersion: input.artifact.transactionVersion,
@@ -149,7 +152,7 @@ export async function runActorMatchingWasmSimulation(input: {
     pin,
     actorId: input.actorId,
     mode: input.mode,
-    programScale: input.artifact.programScale,
+    contractScale: input.artifact.contractScale,
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
   });
@@ -179,20 +182,17 @@ export async function runActorMatchingWasmSimulation(input: {
 
 function activeExecutionPlanLength(runtimeValue: unknown) {
   if (runtimeValue == null || typeof runtimeValue !== 'object') {
-    throw new Error('Runtime simulation requires an Active ProgramInput');
+    throw new Error('Runtime simulation requires an Active ContractInput');
   }
-  const program = runtimeValue as Record<string, unknown>;
-  if (program.type !== 'Active' || program.value == null) {
-    throw new Error('Runtime simulation requires an Active ProgramInput');
+  const contract = runtimeValue as Record<string, unknown>;
+  if (contract.type !== 'Active' || contract.value == null) {
+    throw new Error('Runtime simulation requires an Active ContractInput');
   }
-  const value = program.value as Record<string, unknown>;
-  if (
-    !Array.isArray(value.execution_plan) ||
-    value.execution_plan.length === 0
-  ) {
+  const value = contract.value as Record<string, unknown>;
+  if (!Array.isArray(value.steps) || value.steps.length === 0) {
     throw new Error('Runtime simulation requires a non-empty execution plan');
   }
-  return value.execution_plan.length;
+  return value.steps.length;
 }
 
 function sameOutcome(

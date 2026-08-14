@@ -47,7 +47,7 @@
 - `Skill Ownership`: Repo-local skills own specialized workflows and audits; do not duplicate their internal procedures here.
 - `README Ownership`: Root and subtree READMEs own human orientation, setup, navigation, and current workspace purpose.
 - `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `web-client/docs/architecture.en.md` owns browser realization.
-- `Actors Control-Plane Ownership`: `docs/actors-control-plane.contract.en.md` owns off-chain plan artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized Actor history boundaries.
+- `Actors Control-Plane Ownership`: `docs/actors-control-plane.contract.en.md` owns off-chain Actor Contract artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized Actor history boundaries.
 - `Framework Boundary Ownership`: `docs/framework-instance.contract.en.md` owns the reusable mechanism versus downstream policy contract.
 
 ## 3. Repository Topology

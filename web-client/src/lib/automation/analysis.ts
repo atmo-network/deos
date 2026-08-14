@@ -1,10 +1,17 @@
 /*
-Domain: Actors static program analysis
+Domain: Actors static contract analysis
 Owns: Identity-bound structural composition, semantic surfaces, forward dependencies, failure controls, and per-cursor suffix envelopes.
 Excludes: Runtime state claims, adapter execution, SCALE implementation, independent weight calculation, signing, submission, and graph authoring.
-Zone: Automation domain capability; consumes canonical plan inspection and forecast contracts.
+Zone: Automation domain capability; consumes canonical Actor Contract inspection and forecast contracts.
 */
 import { ACTORS_MAX_RETRY_ATTEMPTS } from './actors-protocol-bounds.ts';
+import {
+  type ActorContractArtifact,
+  type ActorContractHex,
+  type ActorContractProjection,
+  type ActorContractRuntimeIdentity,
+  inspectActorContractArtifact,
+} from './contract-artifact.ts';
 import {
   type ActorCostSegment,
   type ActorStepCostInput,
@@ -12,25 +19,18 @@ import {
   forecastActorCosts,
 } from './forecast.ts';
 import {
-  type ActorPlanArtifact,
-  type ActorPlanHex,
-  type ActorPlanProjection,
-  type ActorPlanRuntimeIdentity,
-  inspectActorPlanArtifact,
-} from './plan-artifact.ts';
-import {
   type ActorAmountName,
-  type ActorConditionName,
+  type ActorPredicateName,
   type ActorSemanticTask,
   type ActorTaskName,
   actorAmountSemantics,
-  actorConditionSemantics,
+  actorPredicateSemantics,
   actorTaskSemantics,
 } from './semantic-manifest.ts';
 
 export type {
   ActorAmountName,
-  ActorConditionName,
+  ActorPredicateName,
   ActorTaskName,
 } from './semantic-manifest.ts';
 
@@ -73,7 +73,7 @@ export type ActorStaticWeightModel = {
   evaluationFeeUpper: (conditionCount: number) => bigint;
   taskUpper: (input: {
     task: ActorTaskName;
-    parameters: ActorPlanProjection;
+    parameters: ActorContractProjection;
     splitLegs: number;
   }) => { weight: ActorWeight; executionFeeUpper: bigint };
   lifecycleOverhead: ActorCostSegment;
@@ -84,12 +84,12 @@ export type ActorStaticWeightModel = {
 export type ActorMinimumBalanceEvidence = {
   provenance: 'FinalizedStateProjection';
   identity: string;
-  blockHash: ActorPlanHex;
+  blockHash: ActorContractHex;
   entries: Array<{
-    asset: ActorPlanProjection;
+    asset: ActorContractProjection;
     minimumBalance: string;
     recipientBalances: Array<{
-      recipient: ActorPlanProjection;
+      recipient: ActorContractProjection;
       balance: string;
     }>;
   }>;
@@ -129,38 +129,40 @@ export type ActorStaticCost = {
 
 export type ActorStaticRecipient =
   | { kind: 'ActorSovereign' }
-  | { kind: 'Explicit'; value: ActorPlanProjection }
+  | { kind: 'Explicit'; value: ActorContractProjection }
   | { kind: 'AdapterDerived' };
 
 export type ActorStaticStepAnalysis = {
   index: number;
-  conditionSet: {
-    mode: 'Always' | 'All' | 'Any';
+  preconditions: {
+    mode: 'Unconditional' | 'AnyOf';
+    clauseCount: number;
     atomicCount: number;
-    evaluation: 'all-atoms-no-short-circuit';
-    admission: 'always' | 'all-true' | 'at-least-one-true';
+    evaluation: 'bounded-dnf-full-visit';
+    admission: 'unconditional' | 'any-clause-all-true';
     falseControl: 'advance-fixed-successor';
-    atomicError: 'fail-whole-group';
+    atomicError: 'fail-whole-expression';
   };
-  conditions: Array<{
-    type: ActorConditionName;
-    value: ActorPlanProjection;
+  predicates: Array<{
+    type: ActorPredicateName;
+    value: ActorContractProjection;
+    timing: 'Opening' | 'Current';
     observation: 'balance' | 'block-number' | 'scalar-observation';
     readSurface:
-      | ActorPlanProjection
+      | ActorContractProjection
       | 'current-block'
       | {
-          feed: ActorPlanProjection;
+          feed: ActorContractProjection;
           maxAgeBlocks: number;
           freshness: 'fresh-only';
           nonFreshResult: 'false';
         };
     pure: true;
-    observationWindow: 'step-attempt-time';
+    observationWindow: 'step-attempt-time' | 'cycle-opening-frozen';
     boundedReadCount: 1;
   }>;
   task: ActorTaskName;
-  parameters: ActorPlanProjection;
+  parameters: ActorContractProjection;
   amounts: ActorAmountSemantics[];
   errorPolicy: 'AbortCycle' | 'ContinueNextStep' | 'RetryLater';
   retryMaxAttempts: number | null;
@@ -179,8 +181,8 @@ export type ActorStaticStepAnalysis = {
     totalUpper: ActorStaticCost;
   };
   economicSurface: {
-    assetsRead: ActorPlanProjection[];
-    assetsWritten: ActorPlanProjection[];
+    assetsRead: ActorContractProjection[];
+    assetsWritten: ActorContractProjection[];
     adapterDerivedAssetsRead: boolean;
     adapterDerivedAssetsWritten: boolean;
     recipients: ActorStaticRecipient[];
@@ -204,7 +206,7 @@ export type ActorStaticStepAnalysis = {
 export type ActorForwardDataDependency = {
   fromStep: number;
   toStep: number;
-  asset: ActorPlanProjection;
+  asset: ActorContractProjection;
   readBy: 'condition' | 'task-or-amount';
   observationWindows: ActorStaticObservationWindow[];
 };
@@ -219,8 +221,8 @@ export type ActorStaticSuffixEnvelope = {
   lifecycleOverhead: ActorStaticCost;
   fundingPromotionOverhead: ActorStaticCost;
   requiredAdapters: ActorRequiredAdapter[];
-  assetsRead: ActorPlanProjection[];
-  assetsWritten: ActorPlanProjection[];
+  assetsRead: ActorContractProjection[];
+  assetsWritten: ActorContractProjection[];
   committedEffectClasses: Array<
     'transfer' | 'mint' | 'burn' | 'liquidity' | 'staking'
   >;
@@ -232,7 +234,7 @@ export type ActorStaticTriggerAnalysis = {
   everyBlocks: number | null;
   sourceCount: number;
   sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
-  observationFeeds: ActorPlanProjection[];
+  observationFeeds: ActorContractProjection[];
 };
 
 export type ActorStaticFinding =
@@ -258,7 +260,7 @@ export type ActorStaticFinding =
       kind: 'PreExistingBalanceMixedWithCurrentRunOutput';
       writer: number;
       reader: number;
-      asset: ActorPlanProjection;
+      asset: ActorContractProjection;
     }
   | {
       kind: 'AdapterCapability';
@@ -285,12 +287,12 @@ export type ActorStaticFinding =
       kind: 'SplitTransferLegBelowKnownMinimum';
       step: number;
       leg: number;
-      asset: ActorPlanProjection;
-      recipient: ActorPlanProjection;
+      asset: ActorContractProjection;
+      recipient: ActorContractProjection;
       amount: string;
       minimumBalance: string;
       evidenceIdentity: string;
-      evidenceBlockHash: ActorPlanHex;
+      evidenceBlockHash: ActorContractHex;
     }
   | {
       kind: 'StopCycleFailureMayFallThrough';
@@ -317,24 +319,24 @@ export type ActorStaticFinding =
       >;
     };
 
-export type ProgramStaticAnalysis = {
+export type ActorContractStaticAnalysis = {
   provenance: 'StaticStructuralProjection';
   identity: {
-    planId: ActorPlanHex;
-    genesisHash: ActorPlanHex;
-    metadataHash: ActorPlanHex;
+    contractId: ActorContractHex;
+    genesisHash: ActorContractHex;
+    metadataHash: ActorContractHex;
     specVersion: number;
     transactionVersion: number;
     runtimeModelIdentity: string;
     weightModelIdentity: string;
     adapterCapabilityIdentity: string | null;
     minimumBalanceEvidenceIdentity: string | null;
-    minimumBalanceEvidenceBlockHash: ActorPlanHex | null;
+    minimumBalanceEvidenceBlockHash: ActorContractHex | null;
     analyzerVersion: typeof ACTORS_STATIC_ANALYZER_VERSION;
   };
-  program: 'Dormant' | 'Active';
-  actorType: ActorPlanArtifact['actorType'];
-  mutability: ActorPlanArtifact['mutability'];
+  contract: 'Dormant' | 'Active';
+  actorType: ActorContractArtifact['actorType'];
+  mutability: ActorContractArtifact['mutability'];
   completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
   cooldownBlocks: number | null;
   trigger: ActorStaticTriggerAnalysis | null;
@@ -345,13 +347,13 @@ export type ProgramStaticAnalysis = {
   findings: ActorStaticFinding[];
 };
 
-type ParsedVariant = { type: string; value: ActorPlanProjection };
+type ParsedVariant = { type: string; value: ActorContractProjection };
 
 type TaskSemantics = {
   task: ActorTaskName;
   adapter: ActorRequiredAdapter | null;
-  assetsRead: ActorPlanProjection[];
-  assetsWritten: ActorPlanProjection[];
+  assetsRead: ActorContractProjection[];
+  assetsWritten: ActorContractProjection[];
   adapterDerivedAssetsRead: boolean;
   adapterDerivedAssetsWritten: boolean;
   recipients: ActorStaticRecipient[];
@@ -364,19 +366,19 @@ type TaskSemantics = {
   amountSurfaces: ActorSemanticTask['amountSurfaces'];
 };
 
-function record(value: ActorPlanProjection, label: string) {
+function record(value: ActorContractProjection, label: string) {
   if (value == null || Array.isArray(value) || typeof value !== 'object') {
     throw new Error(`${label} must be an object projection`);
   }
-  return value as Record<string, ActorPlanProjection>;
+  return value as Record<string, ActorContractProjection>;
 }
 
-function array(value: ActorPlanProjection, label: string) {
+function array(value: ActorContractProjection, label: string) {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
   return value;
 }
 
-function variant(value: ActorPlanProjection, label: string): ParsedVariant {
+function variant(value: ActorContractProjection, label: string): ParsedVariant {
   const projected = record(value, label);
   if (typeof projected.type !== 'string' || !('value' in projected)) {
     throw new Error(`${label} must be a projected runtime variant`);
@@ -385,16 +387,16 @@ function variant(value: ActorPlanProjection, label: string): ParsedVariant {
 }
 
 function member(
-  value: ActorPlanProjection,
+  value: ActorContractProjection,
   key: string,
   label: string,
-): ActorPlanProjection {
+): ActorContractProjection {
   const projected = record(value, label);
   if (!(key in projected)) throw new Error(`${label}.${key} is required`);
   return projected[key];
 }
 
-function safeInteger(value: ActorPlanProjection, label: string): number {
+function safeInteger(value: ActorContractProjection, label: string): number {
   const projected = record(value, label);
   const integer = projected.$integer;
   if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
@@ -407,11 +409,11 @@ function safeInteger(value: ActorPlanProjection, label: string): number {
   return parsed;
 }
 
-function fingerprint(value: ActorPlanProjection) {
+function fingerprint(value: ActorContractProjection) {
   return JSON.stringify(value);
 }
 
-function unsignedBigInt(value: ActorPlanProjection, label: string): bigint {
+function unsignedBigInt(value: ActorContractProjection, label: string): bigint {
   const projected = record(value, label);
   const integer = projected.$integer;
   if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
@@ -467,7 +469,7 @@ function validateMinimumBalanceEvidence(evidence: ActorMinimumBalanceEvidence) {
   });
 }
 
-function uniqueProjection(values: ActorPlanProjection[]) {
+function uniqueProjection(values: ActorContractProjection[]) {
   const seen = new Set<string>();
   return values.filter((value) => {
     const key = fingerprint(value);
@@ -528,7 +530,7 @@ function validateModel(model: ActorStaticWeightModel) {
   }
 }
 
-function errorPolicy(value: ActorPlanProjection) {
+function errorPolicy(value: ActorContractProjection) {
   const parsed = variant(value, 'StepErrorPolicy');
   switch (parsed.type) {
     case 'AbortCycle':
@@ -552,10 +554,10 @@ function errorPolicy(value: ActorPlanProjection) {
 }
 
 function semanticPathValues(
-  value: ActorPlanProjection,
+  value: ActorContractProjection,
   path: string,
   label: string,
-): ActorPlanProjection[] {
+): ActorContractProjection[] {
   if (!path.startsWith('/')) throw new Error(`${label} path must be absolute`);
   let values = [value];
   for (const segment of path.slice(1).split('/')) {
@@ -579,10 +581,10 @@ function semanticPathValues(
 }
 
 function semanticValue(
-  value: ActorPlanProjection,
+  value: ActorContractProjection,
   path: string,
   label: string,
-): ActorPlanProjection {
+): ActorContractProjection {
   const values = semanticPathValues(value, path, label);
   if (values.length !== 1) throw new Error(`${label} must resolve once`);
   return values[0];
@@ -590,7 +592,7 @@ function semanticValue(
 
 function taskAmounts(
   semantics: TaskSemantics,
-  parameters: ActorPlanProjection,
+  parameters: ActorContractProjection,
 ): ActorAmountSemantics[] {
   return semantics.amountSurfaces.map((surface) => {
     const projected = variant(
@@ -641,7 +643,7 @@ function taskAmounts(
 
 function taskSemantics(
   task: string,
-  parameters: ActorPlanProjection,
+  parameters: ActorContractProjection,
 ): TaskSemantics {
   const contract = actorTaskSemantics(task);
   const effects = contract.effects.map((effect) => {
@@ -704,10 +706,16 @@ function taskSemantics(
   };
 }
 
-function conditionAnalysis(condition: ActorPlanProjection) {
-  const parsed = variant(condition, 'Condition');
-  const semantics = actorConditionSemantics(parsed.type);
-  const label = `Condition.${semantics.condition}`;
+function predicateAnalysis(timedPredicate: ActorContractProjection) {
+  const timed = record(timedPredicate, 'TimedPredicate');
+  const timing = variant(timed.timing, 'TimedPredicate.timing');
+  if (timing.type !== 'Opening' && timing.type !== 'Current') {
+    throw new Error(`Unsupported ObservationTiming variant: ${timing.type}`);
+  }
+  const observationTiming = timing.type as 'Opening' | 'Current';
+  const parsed = variant(timed.predicate, 'TimedPredicate.predicate');
+  const semantics = actorPredicateSemantics(parsed.type);
+  const label = `Predicate.${semantics.predicate}`;
   const readSurface = (() => {
     switch (semantics.readSurface.kind) {
       case 'SpendableAssetBalance':
@@ -750,19 +758,23 @@ function conditionAnalysis(condition: ActorPlanProjection) {
     }
   })();
   return {
-    type: semantics.condition,
+    type: semantics.predicate,
     value: parsed.value,
+    timing: observationTiming,
     observation,
     readSurface,
     pure: semantics.pure,
-    observationWindow: 'step-attempt-time' as const,
+    observationWindow:
+      observationTiming === 'Opening'
+        ? ('cycle-opening-frozen' as const)
+        : ('step-attempt-time' as const),
     boundedReadCount: semantics.boundedReadCount,
   };
 }
 
 function failureControlsFor(
   policy: ActorStaticStepAnalysis['errorPolicy'],
-  mutability: ActorPlanArtifact['mutability'],
+  mutability: ActorContractArtifact['mutability'],
 ): ActorStaticFailureControl[] {
   switch (policy) {
     case 'ContinueNextStep':
@@ -791,12 +803,12 @@ function temporaryReachability(
 }
 
 function stepCost(
-  artifact: ActorPlanArtifact,
+  artifact: ActorContractArtifact,
   model: ActorStaticWeightModel,
   index: number,
   conditionCount: number,
   task: ActorTaskName,
-  parameters: ActorPlanProjection,
+  parameters: ActorContractProjection,
 ) {
   const splitLegs =
     task === 'SplitTransfer'
@@ -854,34 +866,44 @@ function stepCost(
 }
 
 function parseSteps(
-  artifact: ActorPlanArtifact,
-  executionPlan: ActorPlanProjection,
+  artifact: ActorContractArtifact,
+  executionPlan: ActorContractProjection,
   model: ActorStaticWeightModel,
   capabilities?: ActorAdapterCapabilityProfile,
 ) {
   const forecastInputs: ActorStepCostInput[] = [];
-  const steps = array(executionPlan, 'ProgramInput.execution_plan').map(
+  const steps = array(executionPlan, 'ContractInput.steps').map(
     (projectedStep, index): ActorStaticStepAnalysis => {
-      const parsedConditionSet = variant(
-        member(projectedStep, 'conditions', `Step ${index}`),
-        `Step ${index}.conditions`,
+      const parsedPreconditions = variant(
+        member(projectedStep, 'preconditions', `Step ${index}`),
+        `Step ${index}.predicates`,
       );
-      if (!['Always', 'All', 'Any'].includes(parsedConditionSet.type)) {
+      if (!['Unconditional', 'AnyOf'].includes(parsedPreconditions.type)) {
         throw new Error(
-          `Unsupported ConditionSet variant: ${parsedConditionSet.type}`,
+          `Unsupported Preconditions variant: ${parsedPreconditions.type}`,
         );
       }
-      const mode = parsedConditionSet.type as 'Always' | 'All' | 'Any';
-      const conditions =
-        mode === 'Always'
+      const mode = parsedPreconditions.type as 'Unconditional' | 'AnyOf';
+      const clauses =
+        mode === 'Unconditional'
           ? []
           : array(
-              parsedConditionSet.value,
-              `Step ${index}.conditions.${mode}`,
-            ).map(conditionAnalysis);
-      if (mode !== 'Always' && conditions.length === 0) {
-        throw new Error(`${mode} condition set must remain non-empty`);
+              parsedPreconditions.value,
+              `Step ${index}.preconditions.AnyOf`,
+            ).map((clause, clauseIndex) => {
+              const predicates = array(
+                clause,
+                `Step ${index}.preconditions.AnyOf[${clauseIndex}]`,
+              );
+              if (predicates.length === 0) {
+                throw new Error('AnyOf clauses must remain non-empty');
+              }
+              return predicates.map(predicateAnalysis);
+            });
+      if (mode === 'AnyOf' && clauses.length === 0) {
+        throw new Error('AnyOf must remain non-empty');
       }
+      const conditions = clauses.flat();
       const parsedTask = variant(
         member(projectedStep, 'task', `Step ${index}`),
         `Step ${index}.task`,
@@ -909,20 +931,17 @@ function parseSteps(
         policy === 'RetryLater';
       return {
         index,
-        conditionSet: {
+        preconditions: {
           mode,
+          clauseCount: clauses.length,
           atomicCount: conditions.length,
-          evaluation: 'all-atoms-no-short-circuit',
+          evaluation: 'bounded-dnf-full-visit',
           admission:
-            mode === 'Always'
-              ? 'always'
-              : mode === 'All'
-                ? 'all-true'
-                : 'at-least-one-true',
+            mode === 'Unconditional' ? 'unconditional' : 'any-clause-all-true',
           falseControl: 'advance-fixed-successor',
-          atomicError: 'fail-whole-group',
+          atomicError: 'fail-whole-expression',
         },
-        conditions,
+        predicates: conditions,
         task,
         parameters,
         amounts: taskAmounts(semantics, parameters),
@@ -968,7 +987,7 @@ function parseSteps(
 
 function dependencyWindows(step: ActorStaticStepAnalysis) {
   return unique([
-    ...step.conditions.map(() => 'step-attempt-time' as const),
+    ...step.predicates.map(() => 'step-attempt-time' as const),
     ...step.amounts.flatMap((amount) => {
       const windows = [amount.valueObservation];
       if (amount.retryObservation === 'reobserve-live')
@@ -983,10 +1002,10 @@ function forwardDependencies(steps: ActorStaticStepAnalysis[]) {
   for (let from = 0; from < steps.length; from += 1) {
     for (let to = from + 1; to < steps.length; to += 1) {
       for (const written of steps[from].economicSurface.assetsWritten) {
-        const conditionMatch = steps[to].conditions.some(
+        const conditionMatch = steps[to].predicates.some(
           (condition) =>
             condition.observation === 'balance' &&
-            fingerprint(condition.readSurface as ActorPlanProjection) ===
+            fingerprint(condition.readSurface as ActorContractProjection) ===
               fingerprint(written),
         );
         const taskMatch = steps[to].economicSurface.assetsRead.some(
@@ -1007,7 +1026,7 @@ function forwardDependencies(steps: ActorStaticStepAnalysis[]) {
 }
 
 function suffixEnvelopes(
-  artifact: ActorPlanArtifact,
+  artifact: ActorContractArtifact,
   steps: ActorStaticStepAnalysis[],
   forecastInputs: ActorStepCostInput[],
   model: ActorStaticWeightModel,
@@ -1112,15 +1131,17 @@ function aggregateEconomicSurface(steps: ActorStaticStepAnalysis[]) {
   };
 }
 
-function parseTrigger(value: ActorPlanProjection): ActorStaticTriggerAnalysis {
-  const schedule = member(value, 'schedule', 'ProgramInput.Active');
+function parseTrigger(
+  value: ActorContractProjection,
+): ActorStaticTriggerAnalysis {
+  const schedule = member(value, 'schedule', 'ContractInput.Active');
   const trigger = variant(
     member(schedule, 'trigger', 'Schedule'),
     'Schedule.trigger',
   );
-  const parseSources = (projected: ActorPlanProjection, label: string) => {
+  const parseSources = (projected: ActorContractProjection, label: string) => {
     const sourceKinds: ActorStaticTriggerAnalysis['sourceKinds'] = [];
-    const observationFeeds: ActorPlanProjection[] = [];
+    const observationFeeds: ActorContractProjection[] = [];
     array(projected, label).forEach((source, index) => {
       const parsed = variant(source, `${label}[${index}]`);
       if (parsed.type === 'Manual') {
@@ -1200,7 +1221,7 @@ function findings(
   dependencies: ActorForwardDataDependency[],
   envelopes: ActorStaticSuffixEnvelope[],
   model: ActorStaticWeightModel,
-  actorType: ActorPlanArtifact['actorType'],
+  actorType: ActorContractArtifact['actorType'],
   capabilities?: ActorAdapterCapabilityProfile,
   minimumBalanceEvidence?: ActorMinimumBalanceEvidence,
 ): ActorStaticFinding[] {
@@ -1433,14 +1454,14 @@ function findings(
   return results;
 }
 
-export function analyzeActorProgram(input: {
-  artifact: ActorPlanArtifact;
+export function analyzeActorContract(input: {
+  artifact: ActorContractArtifact;
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity & { modelIdentity: string };
+  runtime: ActorContractRuntimeIdentity & { modelIdentity: string };
   weightModel: ActorStaticWeightModel;
   adapterCapabilities?: ActorAdapterCapabilityProfile;
   minimumBalanceEvidence?: ActorMinimumBalanceEvidence;
-}): ProgramStaticAnalysis {
+}): ActorContractStaticAnalysis {
   validateModel(input.weightModel);
   if (input.minimumBalanceEvidence != null) {
     validateMinimumBalanceEvidence(input.minimumBalanceEvidence);
@@ -1448,33 +1469,33 @@ export function analyzeActorProgram(input: {
   if (input.runtime.modelIdentity.length === 0) {
     throw new Error('Runtime model identity is required');
   }
-  const inspection = inspectActorPlanArtifact(
+  const inspection = inspectActorContractArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
   );
   if (!inspection.valid) {
     throw new Error(
-      `Invalid canonical plan artifact: ${inspection.errors.join('; ')}`,
+      `Invalid canonical Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
-  const program = variant(inspection.projection, 'ProgramInput');
+  const contract = variant(inspection.projection, 'ContractInput');
   let trigger: ActorStaticTriggerAnalysis | null = null;
   let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null =
     null;
   let cooldownBlocks: number | null = null;
   let steps: ActorStaticStepAnalysis[] = [];
   let forecastInputs: ActorStepCostInput[] = [];
-  if (program.type === 'Active') {
-    trigger = parseTrigger(program.value);
-    const schedule = member(program.value, 'schedule', 'ProgramInput.Active');
+  if (contract.type === 'Active') {
+    trigger = parseTrigger(contract.value);
+    const schedule = member(contract.value, 'schedule', 'ContractInput.Active');
     cooldownBlocks = safeInteger(
-      member(schedule, 'cooldown_blocks', 'ProgramInput.Active.schedule'),
-      'ProgramInput.Active.schedule.cooldown_blocks',
+      member(schedule, 'cooldown_blocks', 'ContractInput.Active.schedule'),
+      'ContractInput.Active.schedule.cooldown_blocks',
     );
     const projectedPolicy = variant(
-      member(program.value, 'completion_policy', 'ProgramInput.Active'),
-      'ProgramInput.Active.completion_policy',
+      member(contract.value, 'completion', 'ContractInput.Active'),
+      'ContractInput.Active.completion',
     );
     if (
       projectedPolicy.type !== 'Persistent' &&
@@ -1485,12 +1506,12 @@ export function analyzeActorProgram(input: {
     completionPolicy = projectedPolicy.type;
     ({ steps, forecastInputs } = parseSteps(
       input.artifact,
-      member(program.value, 'execution_plan', 'ProgramInput.Active'),
+      member(contract.value, 'steps', 'ContractInput.Active'),
       input.weightModel,
       input.adapterCapabilities,
     ));
-  } else if (program.type !== 'Dormant') {
-    throw new Error(`Unsupported ProgramInput variant: ${program.type}`);
+  } else if (contract.type !== 'Dormant') {
+    throw new Error(`Unsupported ContractInput variant: ${contract.type}`);
   }
   const dependencies = forwardDependencies(steps);
   const envelopes = suffixEnvelopes(
@@ -1502,7 +1523,7 @@ export function analyzeActorProgram(input: {
   return {
     provenance: 'StaticStructuralProjection',
     identity: {
-      planId: input.artifact.planId,
+      contractId: input.artifact.contractId,
       genesisHash: input.artifact.genesisHash,
       metadataHash: input.artifact.metadataHash,
       specVersion: input.artifact.specVersion,
@@ -1516,7 +1537,7 @@ export function analyzeActorProgram(input: {
         input.minimumBalanceEvidence?.blockHash ?? null,
       analyzerVersion: ACTORS_STATIC_ANALYZER_VERSION,
     },
-    program: program.type,
+    contract: contract.type,
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
     completionPolicy,

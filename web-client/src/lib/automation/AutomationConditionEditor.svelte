@@ -9,15 +9,15 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
 
   import {
     ACTORS_AUTHORING_CONDITION_TYPES,
-    type ActorAuthoringCondition,
-    createActorAuthoringCondition,
+    type ActorAuthoringPredicate,
+    createActorAuthoringPredicate,
   } from '$lib/automation/authoring';
   import { IconButton, NumberInput, SelectField, TextField } from '$lib/ui';
 
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
 
   type Props = {
-    condition: ActorAuthoringCondition;
+    condition: ActorAuthoringPredicate;
     compact?: boolean;
     onRemove: () => void;
   };
@@ -25,20 +25,20 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
   let { condition = $bindable(), compact = false, onRemove }: Props = $props();
 
   function selectConditionType(event: Event) {
-    condition = createActorAuthoringCondition(
+    condition = createActorAuthoringPredicate(
       (event.currentTarget as HTMLSelectElement)
-        .value as ActorAuthoringCondition['type'],
+        .value as ActorAuthoringPredicate['type'],
     );
   }
 
-  function conditionLabel(type: ActorAuthoringCondition['type']) {
+  function conditionLabel(type: ActorAuthoringPredicate['type']) {
     return type.replace(/([a-z])([A-Z])/g, '$1 $2');
   }
 
   function selectAggregation(event: Event) {
     if (!condition.type.startsWith('Observation')) return;
     const observation = condition as Extract<
-      ActorAuthoringCondition,
+      ActorAuthoringPredicate,
       { feed: object }
     >;
     const type = (event.currentTarget as HTMLSelectElement).value;
@@ -93,7 +93,7 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
     />
   {:else}
     {@const observationCondition = condition as Extract<
-      ActorAuthoringCondition,
+      ActorAuthoringPredicate,
       { feed: object }
     >}
     <p

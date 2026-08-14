@@ -361,12 +361,43 @@ export class BlockchainSnapshotBuilder {
     const unavailable = {
       isAvailable: false,
       accountAddress,
+      securityMode: null,
+      securityCapabilities: null,
+      securityReadiness: null,
+      securityEpoch: null,
+      boundaryDiagnostic: null,
       exchangeRate: null,
       pool: null,
       accountPosition: null,
     } satisfies NativeStakingProjection;
     try {
-      const [exchangeRate, pool, accountPosition] = await Promise.all([
+      const [
+        securityMode,
+        securityCapabilities,
+        securityReadiness,
+        securityEpoch,
+        boundaryDiagnostic,
+        exchangeRate,
+        pool,
+        accountPosition,
+      ] = await Promise.all([
+        snapshot.typedApi.view.Staking.native_security_mode({
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.view.Staking.native_security_capabilities({
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.view.Staking.native_security_readiness({
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.view.Staking.current_security_epoch({
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.query.Staking.LastNativeSecurityBoundaryDiagnostic.getValue(
+          {
+            at: snapshot.at,
+          },
+        ),
         snapshot.typedApi.view.Staking.native_staking_exchange_rate({
           at: snapshot.at,
         }),
@@ -383,6 +414,24 @@ export class BlockchainSnapshotBuilder {
       return {
         isAvailable: pool !== null,
         accountAddress,
+        securityMode: securityMode.type,
+        securityCapabilities: {
+          newNominations: securityCapabilities.new_nominations,
+          redelegation: securityCapabilities.redelegation,
+          candidateSelection: securityCapabilities.candidate_selection,
+          rewardFunding: securityCapabilities.reward_funding,
+          rewardClaims: securityCapabilities.reward_claims,
+          rewardCompound: securityCapabilities.reward_compound,
+          custodyExit: securityCapabilities.custody_exit,
+        },
+        securityReadiness: securityReadiness.type,
+        securityEpoch,
+        boundaryDiagnostic: boundaryDiagnostic
+          ? {
+              plannedEpoch: boundaryDiagnostic.planned_epoch,
+              readiness: boundaryDiagnostic.readiness.type,
+            }
+          : null,
         exchangeRate: exchangeRate ?? null,
         pool: pool
           ? {

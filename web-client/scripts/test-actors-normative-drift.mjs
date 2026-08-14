@@ -19,19 +19,25 @@ test('drift gate script exists and parses the canonical spec markers', () => {
   assert.match(scriptSource, /## 8\. Events and Ordering/);
   assert.match(scriptSource, /## 9\. ABI, Errors, Storage, and Upgrades/);
   assert.match(scriptSource, /### 9\.2 Errors/);
-  assert.match(scriptSource, /'ProgramInput'/);
+  assert.match(scriptSource, /'ContractInput'/);
   assert.match(scriptSource, /'Task'/);
-  assert.match(scriptSource, /'Condition'/);
+  assert.match(scriptSource, /'Predicate'/);
   assert.match(scriptSource, /'AmountResolution'/);
   assert.match(scriptSource, /specCalls\(\)/);
-  assert.match(scriptSource, /\['Schedule', 'ActiveProgramInput'\]/);
-  assert.match(scriptSource, /pallet_deos_actors::types::\$\{enumName\}/);
-  assert.match(scriptSource, /specTypeVariants\('ConditionSet'\)/);
+  assert.match(scriptSource, /\['Schedule', 'ActiveContractInput'\]/);
+  assert.match(
+    scriptSource,
+    /pallet_deos_actors::types::\$\{metadataEnumName\}/,
+  );
+  assert.match(
+    scriptSource,
+    /const conditionSetExpected = specTypeVariants\('Preconditions'\)/,
+  );
   assert.match(scriptSource, /duplicate specification variants/);
   assert.match(scriptSource, /duplicate metadata variants/);
   assert.match(scriptSource, /section reference: missing Section/);
   assert.match(scriptSource, /terminology: stale term/);
-  assert.match(scriptSource, /pallet_deos_actors::types::ConditionSet/);
+  assert.match(scriptSource, /pallet_deos_actors::types::Preconditions/);
   assert.doesNotMatch(scriptSource, /entry\.id === 238/);
   assert.doesNotMatch(scriptSource, /specCleanupExclusions/);
 });
@@ -288,13 +294,13 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     assert.equal(orderDrift.code, 1);
     assert.match(orderDrift.output, /events: ordered drift/);
 
-    const renumberedConditionSet = JSON.parse(manifestSource);
-    const conditionSetType = renumberedConditionSet.types.find(
+    const renumberedPreconditions = JSON.parse(manifestSource);
+    const preconditionsType = renumberedPreconditions.types.find(
       (entry) =>
-        entry.path?.join('::') === 'pallet_deos_actors::types::ConditionSet',
+        entry.path?.join('::') === 'pallet_deos_actors::types::Preconditions',
     );
-    conditionSetType.id = 999999;
-    await writeFile(manifestPath, JSON.stringify(renumberedConditionSet));
+    preconditionsType.id = 999999;
+    await writeFile(manifestPath, JSON.stringify(renumberedPreconditions));
     await writeFile(sandboxSpecPath, specSource);
     const renumbered = await run(
       ['scripts/check-actors-normative-drift.mjs'],
@@ -303,7 +309,7 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     assert.equal(
       renumbered.code,
       0,
-      `ConditionSet numeric id must not own identity: ${renumbered.output}`,
+      `Preconditions numeric id must not own identity: ${renumbered.output}`,
     );
   } finally {
     await rm(sandbox, { recursive: true, force: true });

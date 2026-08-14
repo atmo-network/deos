@@ -8,7 +8,7 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::{
-  ConditionSet, FundingSourcePolicy, Mutability, ProgramInput, Schedule, StepErrorPolicy, Task,
+  ContractInput, FundingSourcePolicy, Mutability, Preconditions, Schedule, StepErrorPolicy, Task,
   Trigger, TriggerSource,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
@@ -25,6 +25,63 @@ use primitives::{AssetKind, OracleAggregationId, OracleFeedId, OracleMeaning, Or
 
 fn directional_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out)
+}
+
+#[test]
+fn equal_refresh_and_rejected_producers_preserve_reactive_state() {
+  new_test_ext().execute_with(|| {
+    let producer = deos_router_account();
+    let feed = directional_feed(AssetKind::Native, AssetKind::Local(7));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      Aggregation::LastValue,
+      ZeroPolicy::Reject,
+      false,
+    ));
+    let events_before_rejection = System::events();
+    assert_noop!(
+      Oracle::publish(RuntimeOrigin::signed(ALICE), feed, 1_000),
+      pallet_oracle::Error::<Runtime>::UnauthorizedProducer
+    );
+    assert_eq!(Oracle::observations(feed), None);
+    assert_eq!(System::events(), events_before_rejection);
+
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000,
+    ));
+    let first = Oracle::observations(feed).expect("first observation");
+    let events_after_first = System::events();
+    System::set_block_number(2);
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000,
+    ));
+    let refreshed = Oracle::observations(feed).expect("refreshed observation");
+    assert_eq!(refreshed.value, first.value);
+    assert_eq!(refreshed.revision, first.revision);
+    assert_eq!(refreshed.updated_at, 2);
+    assert_eq!(Actors::dirty_observation_feed_count(), 0);
+    assert!(System::events().len() > events_after_first.len());
+
+    assert_ok!(Oracle::pause_feed(RuntimeOrigin::root(), feed));
+    let paused_observation = Oracle::observations(feed);
+    let events_before_paused = System::events();
+    assert_noop!(
+      Oracle::publish(RuntimeOrigin::signed(producer), feed, 2_000),
+      pallet_oracle::Error::<Runtime>::FeedPaused
+    );
+    assert_eq!(Oracle::observations(feed), paused_observation);
+    assert_eq!(Actors::dirty_observation_feed_count(), 0);
+    assert_eq!(System::events(), events_before_paused);
+  });
 }
 
 #[test]
@@ -187,7 +244,7 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         cooldown_blocks: 0,
       };
       let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       }])
@@ -196,12 +253,12 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+        ContractInput::Active(pallet_deos_actors::ActiveContractInput {
           schedule,
           schedule_window: None,
-          execution_plan,
-          completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+          steps: execution_plan,
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          funding: FundingSourcePolicy::RuntimePolicy,
           auto_close_at_cycle_nonce: None,
         }),
       ));
@@ -458,7 +515,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       cooldown_blocks: 0,
     };
     let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
@@ -467,12 +524,12 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+      ContractInput::Active(pallet_deos_actors::ActiveContractInput {
         schedule,
         schedule_window: None,
-        execution_plan,
-        completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+        steps: execution_plan,
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       }),
     ));
@@ -494,7 +551,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
         pallet_deos_router::AdapterFailure::new(
           pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into(),
           pallet_deos_router::RouterFailureClass::IngressRejected,
-          pallet_deos_router::RetryClass::Permanent,
+          pallet_deos_router::RetryDisposition::Permanent,
         )
         .into()
       )

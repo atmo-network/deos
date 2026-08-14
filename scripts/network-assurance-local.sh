@@ -8,7 +8,7 @@ SESSION_TRANSITION="${SESSION_TRANSITION:-0}"
 COMPOSED_PATH="${COMPOSED_PATH:-0}"
 RPC_READY_TIMEOUT_SEC="${RPC_READY_TIMEOUT_SEC:-300}"
 ZOMBIENET_LOG="${ZOMBIENET_LOG:-/tmp/deos-zombienet.log}"
-DEOS_BINARY_DIR="${DEOS_BINARY_DIR:-${TMPDIR:-/tmp}/deos-assurance-bin}"
+DEOS_BINARY_DIR="${DEOS_BINARY_DIR:-$PROJECT_ROOT/bin}"
 export DEOS_BINARY_DIR
 BIN_DIR="$DEOS_BINARY_DIR"
 ZOMBIENET_PID=""
@@ -29,7 +29,7 @@ Environment:
   KEEP_NETWORK=0|1
   RPC_READY_TIMEOUT_SEC=300
   ZOMBIENET_LOG=/tmp/deos-zombienet.log
-  DEOS_BINARY_DIR=/tmp/deos-assurance-bin
+  DEOS_BINARY_DIR=/path/to/polkadot-binaries (default: PROJECT_ROOT/bin)
   SESSION_TRANSITION=0|1 (set 1 for the multi-hour session proof)
   COMPOSED_PATH=0|1 (set 1 for the mutating Router/Oracle/Burn Actor proof)
   BLOCK_TARGET=100 and other 06-network-smoke.sh environment controls
@@ -44,8 +44,8 @@ Outputs:
   optional finalized composed-path evidence when COMPOSED_PATH=1.
 
 Side effects:
-  Downloads pinned tools/dependencies/binaries, builds artifacts, generates the local
-  chain spec, starts local node processes, and submits one Alice-to-Bob transfer.
+  Prepares pinned tools/dependencies, builds artifacts, generates the local chain spec,
+  starts local node processes, and submits one Alice-to-Bob transfer.
 EOF
 }
 

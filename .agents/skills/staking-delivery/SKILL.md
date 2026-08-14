@@ -4,6 +4,8 @@ description: Coordinates guarded DEOS native-staking bootstrap readiness, call p
 fss: true
 ---
 
+Canonical open work: ../../../BACKLOG.md
+
 # Staking Delivery
 
 Use this skill when checking or preparing the canonical `$NTVE/stNTVE` staking-pool bootstrap and its dependent Liquidity Actor activation.

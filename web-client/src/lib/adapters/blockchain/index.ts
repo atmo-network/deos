@@ -276,23 +276,6 @@ export class BlockchainAdapter implements Adapter {
     };
   }
 
-  async getNativeNominationRewardClaimable(
-    epoch: number,
-  ): Promise<bigint | null> {
-    const accountAddress = this.selectedAddress() || null;
-    if (!accountAddress || !Number.isInteger(epoch) || epoch < 0) {
-      return null;
-    }
-    const snapshot = await (await this.ensurePapi()).snapshot();
-    return (
-      (await snapshot.typedApi.view.Staking.native_nomination_reward_claimable(
-        epoch,
-        accountAddress,
-        { at: snapshot.at },
-      )) ?? null
-    );
-  }
-
   private endpoint(): string {
     if (!this.context) {
       throw new Error('Adapter not initialized');
@@ -379,6 +362,11 @@ export class BlockchainAdapter implements Adapter {
         nativeStaking: {
           isAvailable: false,
           accountAddress: this.selectedAddress() || null,
+          securityMode: null,
+          securityCapabilities: null,
+          securityReadiness: null,
+          securityEpoch: null,
+          boundaryDiagnostic: null,
           exchangeRate: null,
           pool: null,
           accountPosition: null,
@@ -492,7 +480,7 @@ export class BlockchainAdapter implements Adapter {
                   at: snapshot.at,
                 },
               ),
-              snapshot.typedApi.query.Actors.ActorProgram.getValue(
+              snapshot.typedApi.query.Actors.ActorContract.getValue(
                 BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
@@ -534,7 +522,7 @@ export class BlockchainAdapter implements Adapter {
             cycleNonce: identity?.cycle_nonce ?? 0n,
             continuation: automationContinuationSnapshot(continuation),
             lastCycleBlock: hot?.last_cycle_block ?? null,
-            completionPolicy: program?.completion_policy.type ?? null,
+            completionPolicy: program?.completion.type ?? null,
             triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
             queueTicket: automationQueueTicket(hot),
@@ -708,17 +696,19 @@ export class BlockchainAdapter implements Adapter {
     () => this.missingSignerMessage(),
   );
 
-  async claimNominationReward(epoch: number): Promise<void> {
-    return await this.stakingActions.claimNominationReward(epoch);
+  async claimNativeSecurityReward(epoch: number): Promise<void> {
+    return await this.stakingActions.claimNativeSecurityReward(epoch);
   }
 
-  async claimAndCompoundNominationReward(
+  async claimAndCompoundNativeSecurityReward(
     epoch: number,
     operator: string,
+    minLpOut: bigint,
   ): Promise<void> {
-    return await this.stakingActions.claimAndCompoundNominationReward(
+    return await this.stakingActions.claimAndCompoundNativeSecurityReward(
       epoch,
       operator,
+      minLpOut,
     );
   }
 

@@ -25,7 +25,7 @@ pub trait WeightInfo {
   fn observation_fanout_page() -> Weight;
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
-  fn condition_set_evaluation(conditions: u32) -> Weight;
+  fn predicate_set_evaluation(preconditions: u32) -> Weight;
   fn cycle_orchestration() -> Weight;
   fn step_orchestration(steps: u32) -> Weight;
   fn task_transfer() -> Weight;
@@ -65,7 +65,7 @@ pub trait WeightInfo {
   fn scheduler_paged_execute_cheap(executions: u32) -> Weight;
   fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
   fn scheduler_actor_hot_probe() -> Weight;
-  fn scheduler_actor_program_probe() -> Weight;
+  fn scheduler_actor_contract_probe() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn funding_snapshot_open(assets: u32) -> Weight;
@@ -74,9 +74,7 @@ pub trait WeightInfo {
   fn continuation_complete() -> Weight;
   fn continuation_cancel() -> Weight;
   fn continuation_suffix_admission(steps: u32) -> Weight;
-  fn update_funding_source_policy() -> Weight;
-  fn update_schedule() -> Weight;
-  fn update_execution_plan() -> Weight;
+  fn update_contract() -> Weight;
   fn set_global_circuit_breaker() -> Weight;
   fn set_active_actor_limit() -> Weight;
   fn permissionless_sweep() -> Weight;
@@ -163,11 +161,11 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
-  fn condition_set_evaluation(conditions: u32) -> Weight {
-    if conditions == 0 {
+  fn predicate_set_evaluation(preconditions: u32) -> Weight {
+    if preconditions == 0 {
       return Weight::zero();
     }
-    let bounded = u64::from(conditions.min(4));
+    let bounded = u64::from(preconditions.min(4));
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
@@ -366,7 +364,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads(1))
   }
 
-  fn scheduler_actor_program_probe() -> Weight {
+  fn scheduler_actor_contract_probe() -> Weight {
     Weight::from_parts(18_648_000, 9_928)
       .saturating_add(T::DbWeight::get().reads(2))
   }
@@ -406,22 +404,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
   }
 
-  fn update_funding_source_policy() -> Weight {
-    Weight::from_parts(93_239_000, 8_120)
-      .saturating_add(T::DbWeight::get().reads(7))
-      .saturating_add(T::DbWeight::get().writes(7))
-  }
-
-  fn update_schedule() -> Weight {
-    Weight::from_parts(84_020_000, 8_120)
-      .saturating_add(T::DbWeight::get().reads(6))
-      .saturating_add(T::DbWeight::get().writes(7))
-  }
-
-  fn update_execution_plan() -> Weight {
-    Weight::from_parts(97_290_000, 8_120)
-      .saturating_add(T::DbWeight::get().reads(7))
-      .saturating_add(T::DbWeight::get().writes(8))
+  fn update_contract() -> Weight {
+    Weight::from_parts(162_733_000, 10_181)
+      .saturating_add(T::DbWeight::get().reads(11))
+      .saturating_add(T::DbWeight::get().writes(9))
   }
 
   fn set_global_circuit_breaker() -> Weight {
@@ -472,11 +458,11 @@ impl WeightInfo for TestWeightInfo {
   fn observation_fanout_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
   fn close_actor() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
-  fn condition_set_evaluation(conditions: u32) -> Weight {
-    if conditions == 0 {
+  fn predicate_set_evaluation(preconditions: u32) -> Weight {
+    if preconditions == 0 {
       return Weight::zero();
     }
-    let bounded = u64::from(conditions.min(4));
+    let bounded = u64::from(preconditions.min(4));
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
 
@@ -538,7 +524,7 @@ impl WeightInfo for TestWeightInfo {
       .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
   }
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
-  fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
+  fn scheduler_actor_contract_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_snapshot_open(assets: u32) -> Weight {
@@ -556,9 +542,7 @@ impl WeightInfo for TestWeightInfo {
     Weight::from_parts(1_438_574, 0)
       .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
   }
-  fn update_funding_source_policy() -> Weight { Weight::from_parts(93_239_000, 8_120) }
-  fn update_schedule() -> Weight { Weight::from_parts(84_020_000, 8_120) }
-  fn update_execution_plan() -> Weight { Weight::from_parts(97_290_000, 8_120) }
+  fn update_contract() -> Weight { Weight::from_parts(162_733_000, 10_181) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }

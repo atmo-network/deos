@@ -4,6 +4,16 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.17: Protocol Coherence and Native Security
+
+- `Staking / Native Security`: Completed one SessionIndex identity across planning, funding, claims, and client views; added immutable pots, compound settlement, production weights, single-owner adapters, and ballots frozen against yield, custody, and later participation changes.
+- `Actors / Contract Identity`: Replaced Actor Program identity with canonical Actor Contract storage, input, read, metadata, ABI, artifact, digest, client, documentation, and generated-evidence surfaces without compatibility aliases.
+- `Actors / Preconditions`: Implemented canonical bounded DNF with explicit Opening/Current timing, frozen Continuation results, current-state prior-step visibility, duplicate-clause rejection, exact canonical no-op updates, and full-visit evaluation.
+- `Validation / Coherence`: Added completion-gated audits rejecting retired semantic owners, unreserved strategic capacity, inferred rewards, secondary security flags, raw-error retry policy, and placeholder public variants.
+- `Artifacts`: Regenerated production Wasm, metadata, descriptors, Actor ABI/runtime evidence, and client projections; package vectors and wiki gates pass, and a second full generation reaches zero tracked drift.
+- `Documentation / Ownership`: Reconciled five package specifications and implementation maps with one cross-system closure map binding each public family to its constructor, invariant, executable evidence, and single owner.
+- `Validation`: Passed canonical full validation, reproducible production Wasm, Actors assurance, benchmark compilation, finalized two-collator progress/failover/restart, signed transfers, and the composed Router/Oracle/Burn Actor path.
+
 ## 0.7.16: Stable2606 Assurance and Pre-Genesis Closure
 
 - `Platform / Identity`: Pinned `polkadot-stable2606-1`, Rust `1.93.1`, Node `22.22.0`, npm `11.7.0`, and workspace `0.7.16`.

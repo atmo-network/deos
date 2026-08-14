@@ -9,15 +9,15 @@ import type { HexString } from 'polkadot-api';
 import type { DeosClient, DeosPapiConnection, DeosTypedApi } from './deos.ts';
 
 import {
+  type ActorContractArtifact,
+  type ActorContractHex,
+  type ActorContractRuntimeIdentity,
+  inspectActorContractArtifact,
+} from '../../automation/contract-artifact.ts';
+import {
   type ActorMatchingWasmResponse,
   runActorMatchingWasmSimulation,
 } from '../../automation/matching-wasm.ts';
-import {
-  type ActorPlanArtifact,
-  type ActorPlanHex,
-  type ActorPlanRuntimeIdentity,
-  inspectActorPlanArtifact,
-} from '../../automation/plan-artifact.ts';
 import {
   ACTORS_SIMULATION_RUNTIME_API,
   ACTORS_SIMULATION_RUNTIME_API_VERSION,
@@ -36,10 +36,10 @@ export type ActorFinalizedSimulationMode =
   | 'CurrentContinuation';
 
 export type ActorFinalizedSimulationInput = {
-  artifact: ActorPlanArtifact;
+  artifact: ActorContractArtifact;
   actorId: bigint;
   mode: ActorFinalizedSimulationMode;
-  finalizedBlock?: { hash: ActorPlanHex; number: number };
+  finalizedBlock?: { hash: ActorContractHex; number: number };
 };
 
 type DeosSimulationConnection = Pick<DeosPapiConnection, 'ensureConnected'>;
@@ -47,14 +47,14 @@ type RuntimeVersion = Awaited<
   ReturnType<DeosTypedApi['apis']['Core']['version']>
 >;
 type RuntimeSimulationProgram = Parameters<
-  DeosTypedApi['apis']['ActorSimulationApi']['simulate_current_program']
+  DeosTypedApi['apis']['ActorSimulationApi']['simulate_current_contract']
 >[3];
 
-function asPlanHex(value: string, field: string): ActorPlanHex {
+function asPlanHex(value: string, field: string): ActorContractHex {
   if (!PLAN_HEX_PATTERN.test(value)) {
     throw new Error(`${field} must contain canonical lowercase hex bytes`);
   }
-  return value as ActorPlanHex;
+  return value as ActorContractHex;
 }
 
 function hexToBytes(value: string, field: string): Uint8Array {
@@ -71,7 +71,7 @@ function hexToBytes(value: string, field: string): Uint8Array {
 function runtimeIdentity(
   genesisHash: string,
   version: RuntimeVersion,
-): ActorPlanRuntimeIdentity {
+): ActorContractRuntimeIdentity {
   if (!Number.isSafeInteger(version.spec_version)) {
     throw new Error('Finalized runtime spec_version is not a safe integer');
   }
@@ -170,13 +170,13 @@ async function executeSimulation(
   at: HexString,
   request: {
     actorId: bigint;
-    actorType: ActorPlanArtifact['actorType'];
-    mutability: ActorPlanArtifact['mutability'];
+    actorType: ActorContractArtifact['actorType'];
+    mutability: ActorContractArtifact['mutability'];
     runtimeProgram: RuntimeSimulationProgram;
     mode: ActorFinalizedSimulationMode;
   },
 ) {
-  return typedApi.apis.ActorSimulationApi.simulate_current_program(
+  return typedApi.apis.ActorSimulationApi.simulate_current_contract(
     request.actorId,
     { type: request.actorType, value: undefined },
     { type: request.mutability, value: undefined },
@@ -214,7 +214,7 @@ export async function runDeosActorFinalizedSimulation(
     runtimeApiVersion: ACTORS_SIMULATION_RUNTIME_API_VERSION,
     provider: {
       async simulate(request) {
-        const inspection = inspectActorPlanArtifact(
+        const inspection = inspectActorContractArtifact(
           input.artifact,
           context.metadataBytes,
           context.runtime,

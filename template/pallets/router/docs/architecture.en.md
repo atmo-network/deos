@@ -384,7 +384,7 @@ The runtime (`deos_router_config.rs`) provides 4 concrete adapter implementation
 
 ## Adversarial Corpus
 
-`tests/fixtures/router-adversarial-corpus.v1.json` binds 17 deterministic failure and stale-state scenarios to executable package/runtime anchors. Each case declares pre-state, request, injected fault, expected class, events, publications, balances, storage, Weight class, and anchor. Package validation rejects missing fields, duplicate names, or corpus cardinality drift.
+`tests/fixtures/router-adversarial-corpus.v1.json` binds 19 deterministic failure and stale-state scenarios to executable package/runtime anchors. The corpus includes runtime-classified temporary pool loss and direct Burn Actor ingress rejection in addition to route, publication, protection, and rollback cases. Each case declares pre-state, request, injected fault, expected class, events, publications, balances, storage, Weight class, and anchor. Package validation rejects missing fields, duplicate names, or corpus cardinality drift.
 
 ## Portability Evidence
 

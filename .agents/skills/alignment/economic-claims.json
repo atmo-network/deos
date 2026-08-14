@@ -153,19 +153,20 @@
       ]
     },
     {
-      "id": "staking-reward-rollover-bounded",
+      "id": "staking-security-snapshot-atomic",
       "doc": "template/pallets/staking/docs/architecture.en.md",
-      "claim": "Staking reward epoch rollover uses a persisted cursor and per-block caps so epoch close remains resumable and bounded.",
+      "claim": "A ready LP-backed session boundary constructs the complete bounded security snapshot before one final storage replacement; failure preserves the prior snapshot.",
       "status": "shipped invariant",
       "proof_kind": "invariant",
       "tautology_risk": "low",
-      "falsification_note": "Removing the pending rollover cursor or processing all buckets in one pass breaks the cross-block rollover resume assertions.",
+      "falsification_note": "Writing participant rows incrementally or replacing the active snapshot before validation breaks the prior-snapshot preservation regressions.",
       "code_anchors": [
-        "template/pallets/staking/src/lib.rs::PendingRewardEpochRollover",
-        "template/pallets/staking/src/lib.rs::roll_reward_epoch_if_needed"
+        "template/pallets/staking/src/lib.rs::ActiveNativeSecurityEpochSnapshot",
+        "template/pallets/staking/src/lib.rs::open_native_security_epoch"
       ],
       "falsification_tests": [
-        "template/pallets/staking/src/tests.rs::reward_epoch_rollover_resumes_across_blocks"
+        "template/pallets/staking/src/tests.rs::native_security_epoch_snapshot_is_atomic_and_filters_ineligible_operators",
+        "template/pallets/staking/src/tests.rs::failed_native_security_epoch_open_preserves_prior_snapshot"
       ]
     },
     {

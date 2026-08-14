@@ -151,7 +151,7 @@ Use the smallest meaningful validation first. For full client validation, run:
 npm run validate
 ```
 
-That command runs Prettier, deterministic Actors plan-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. For architecture-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
+That command runs Prettier, deterministic Actors contract-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. For architecture-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
 
 ```sh
 ../scripts/validate-local.sh fast

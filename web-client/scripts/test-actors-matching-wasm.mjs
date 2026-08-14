@@ -12,11 +12,11 @@ import {
   getDeosActorFinalizedAuthoringContext,
   runDeosActorFinalizedSimulation,
 } from '../src/lib/adapters/blockchain/actor-simulation.ts';
-import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
 import {
-  createActorPlanArtifact,
-  encodeActorProgramValue,
-} from '../src/lib/automation/plan-artifact.ts';
+  createActorContractArtifact,
+  encodeActorContractValue,
+} from '../src/lib/automation/contract-artifact.ts';
+import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
 import {
   decodeActorRuntimeSimulationResult,
   encodeActorRuntimeSimulationResult,
@@ -31,26 +31,31 @@ const runtime = {
   transactionVersion: 1,
 };
 const step = {
-  conditions: {
-    type: 'All',
+  preconditions: {
+    type: 'AnyOf',
     value: [
-      {
-        type: 'ObservationBelow',
-        value: {
-          feed: {
-            asset_in: { type: 'Native', value: undefined },
-            asset_out: { type: 'Local', value: 7 },
-            method: { type: 'PreExecutionSpot', value: undefined },
-            aggregation: {
-              type: 'Ema',
-              value: { half_life_blocks: 100 },
+      [
+        {
+          timing: { type: 'Opening', value: undefined },
+          predicate: {
+            type: 'ObservationBelow',
+            value: {
+              feed: {
+                asset_in: { type: 'Native', value: undefined },
+                asset_out: { type: 'Local', value: 7 },
+                method: { type: 'PreExecutionSpot', value: undefined },
+                aggregation: {
+                  type: 'Ema',
+                  value: { half_life_blocks: 100 },
+                },
+                scale: 12,
+              },
+              threshold: 1n,
+              max_age_blocks: 12,
             },
-            scale: 12,
           },
-          threshold: 1n,
-          max_age_blocks: 12,
         },
-      },
+      ],
     ],
   },
   task: {
@@ -62,7 +67,7 @@ const step = {
   },
   on_error: { type: 'AbortCycle', value: undefined },
 };
-const programScale = encodeActorProgramValue(metadataBytes, {
+const contractScale = encodeActorContractValue(metadataBytes, {
   type: 'Active',
   value: {
     schedule: {
@@ -75,17 +80,17 @@ const programScale = encodeActorProgramValue(metadataBytes, {
       cooldown_blocks: 0,
     },
     schedule_window: undefined,
-    execution_plan: [step, step],
-    completion_policy: { type: 'Persistent', value: undefined },
-    funding_source_policy: { type: 'RuntimePolicy', value: undefined },
+    steps: [step, step],
+    completion: { type: 'Persistent', value: undefined },
+    funding: { type: 'RuntimePolicy', value: undefined },
   },
 });
-const artifact = createActorPlanArtifact({
+const artifact = createActorContractArtifact({
   metadataBytes,
   runtime,
   actorType: 'System',
   mutability: 'Mutable',
-  programScale,
+  contractScale,
 });
 const base = {
   artifact,
@@ -100,7 +105,7 @@ const base = {
     stateRoot: `0x${'33'.repeat(32)}`,
     stateSource: 'FinalizedBlock',
   },
-  runtimeApi: 'ActorSimulationApi_simulate_current_program',
+  runtimeApi: 'ActorSimulationApi_simulate_current_contract',
   runtimeApiVersion: 1,
 };
 
@@ -231,11 +236,11 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   }
   const rejectedScale = encodeActorRuntimeSimulationResult(metadataBytes, {
     success: false,
-    value: { type: 'ProgramMismatch', value: undefined },
+    value: { type: 'ContractMismatch', value: undefined },
   });
   assert.deepEqual(
     decodeActorRuntimeSimulationResult(metadataBytes, rejectedScale),
-    { success: false, error: 'ProgramMismatch', resultScale: rejectedScale },
+    { success: false, error: 'ContractMismatch', resultScale: rejectedScale },
   );
 });
 
@@ -323,7 +328,7 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
               },
             },
             ActorSimulationApi: {
-              async simulate_current_program(...args) {
+              async simulate_current_contract(...args) {
                 observedArguments = args;
                 return suspendedRuntimeValue;
               },
@@ -359,7 +364,7 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
   assert.deepEqual(observedArguments[5], { at });
 });
 
-test('matching-Wasm gate binds runtime code, metadata, state, API, and plan identity', async () => {
+test('matching-Wasm gate binds runtime code, metadata, state, API, and Actor Contract identity', async () => {
   let observedRequest;
   const result = await runActorMatchingWasmSimulation({
     ...base,
@@ -375,7 +380,7 @@ test('matching-Wasm gate binds runtime code, metadata, state, API, and plan iden
     },
   });
 
-  assert.equal(result.pin.planId, artifact.planId);
+  assert.equal(result.pin.contractId, artifact.contractId);
   assert.equal(
     result.pin.runtimeCodeHash,
     '0x11c0e79b71c3976ccd0c02d1310e2516c08edc9d8b6f57ccd680d63a4d8e72da',
@@ -384,7 +389,7 @@ test('matching-Wasm gate binds runtime code, metadata, state, API, and plan iden
   assert.equal(result.pin.stateRoot, base.snapshot.stateRoot);
   assert.equal(observedRequest.actorId, 14n);
   assert.equal(observedRequest.mode, 'CurrentContinuation');
-  assert.equal(observedRequest.programScale, artifact.programScale);
+  assert.equal(observedRequest.contractScale, artifact.contractScale);
   assert.equal(result.outcome.continuationCursor, 1);
 });
 

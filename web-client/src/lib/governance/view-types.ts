@@ -76,7 +76,7 @@ export type GovernanceViewerState = {
   recentFinalizedProposalsView: ReadModelValue<
     GovernanceRetainedFinalizedProposal[]
   > | null;
-  rewardCoefficient: string | null;
+  governanceParticipationCoefficient: string | null;
   govxpCounters: GovernanceGovXpCounters;
   loading: boolean;
   error: string | null;

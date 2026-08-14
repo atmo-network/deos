@@ -9,21 +9,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeActorProgram } from '../src/lib/automation/analysis.ts';
+import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   ACTORS_AUTHORING_CONDITION_TYPES,
   ACTORS_AUTHORING_TASK_TYPES,
   appendActorStep,
   createActorArtifactFromAuthoring,
-  createActorAuthoringCondition,
+  createActorAuthoringPredicate,
   createActorAuthoringTask,
-  lowerActorAuthoringProgram,
+  lowerActorAuthoringContract,
   moveActorStep,
   removeActorStep,
   replaceActorStep,
-  validateActorAuthoringProgram,
+  validateActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
-import { inspectActorPlanArtifact } from '../src/lib/automation/plan-artifact.ts';
+import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
@@ -115,14 +115,14 @@ function transferTask(amount = fixed()) {
 function authoringStep(key, task = transferTask(), overrides = {}) {
   return {
     key,
-    conditionSet: { type: 'Always' },
+    preconditions: { type: 'Unconditional' },
     task,
     errorPolicy: { type: 'AbortCycle' },
     ...overrides,
   };
 }
 
-function program(steps = [authoringStep('step-0')], overrides = {}) {
+function contract(steps = [authoringStep('step-0')], overrides = {}) {
   return {
     actorType: 'User',
     mutability: 'Mutable',
@@ -138,13 +138,13 @@ function program(steps = [authoringStep('step-0')], overrides = {}) {
 
 function artifact(value) {
   return createActorArtifactFromAuthoring({
-    program: value,
+    contract: value,
     metadataBytes,
     runtime,
   });
 }
 
-test('authoring controls cover every current task and condition variant', () => {
+test('authoring controls cover every current task and predicate variant', () => {
   assert.deepEqual(
     ACTORS_AUTHORING_TASK_TYPES.map(
       (type) => createActorAuthoringTask(type).type,
@@ -153,7 +153,7 @@ test('authoring controls cover every current task and condition variant', () => 
   );
   assert.deepEqual(
     ACTORS_AUTHORING_CONDITION_TYPES.map(
-      (type) => createActorAuthoringCondition(type).type,
+      (type) => createActorAuthoringPredicate(type).type,
     ),
     ACTORS_AUTHORING_CONDITION_TYPES,
   );
@@ -167,12 +167,12 @@ test('one metadata-aligned eight-step baseline applies to both actor classes', (
   );
   for (const actorType of ['User', 'System']) {
     assert.equal(
-      validateActorAuthoringProgram(program(steps.slice(0, 8), { actorType }))
+      validateActorAuthoringContract(contract(steps.slice(0, 8), { actorType }))
         .valid,
       true,
     );
-    const tooLong = validateActorAuthoringProgram(
-      program(steps, { actorType }),
+    const tooLong = validateActorAuthoringContract(
+      contract(steps, { actorType }),
     );
     assert.equal(tooLong.valid, false);
     if (!tooLong.valid) {
@@ -187,21 +187,21 @@ test('one metadata-aligned eight-step baseline applies to both actor classes', (
 });
 
 test('completion policy lowers exactly and rejects unknown lifecycle values', () => {
-  const persistent = lowerActorAuthoringProgram(program());
-  assert.deepEqual(persistent.value.completion_policy, {
+  const persistent = lowerActorAuthoringContract(contract());
+  assert.deepEqual(persistent.value.completion, {
     type: 'Persistent',
     value: undefined,
   });
-  const oneShot = lowerActorAuthoringProgram(
-    program(undefined, { completionPolicy: 'CloseAfterProductiveCycle' }),
+  const oneShot = lowerActorAuthoringContract(
+    contract(undefined, { completionPolicy: 'CloseAfterProductiveCycle' }),
   );
-  assert.deepEqual(oneShot.value.completion_policy, {
+  assert.deepEqual(oneShot.value.completion, {
     type: 'CloseAfterProductiveCycle',
     value: undefined,
   });
   assert.equal(
-    validateActorAuthoringProgram(
-      program(undefined, { completionPolicy: 'UnknownLifecycle' }),
+    validateActorAuthoringContract(
+      contract(undefined, { completionPolicy: 'UnknownLifecycle' }),
     ).valid,
     false,
   );
@@ -210,15 +210,15 @@ test('completion policy lowers exactly and rejects unknown lifecycle values', ()
 });
 
 test('optional auto-close target lowers exactly and rejects invalid u64 values', () => {
-  const target = lowerActorAuthoringProgram(
-    program(undefined, { autoCloseAtCycleNonce: 7n }),
+  const target = lowerActorAuthoringContract(
+    contract(undefined, { autoCloseAtCycleNonce: 7n }),
   );
   assert.equal(target.value.auto_close_at_cycle_nonce, 7n);
   assert.match(automationWidgetSource, /Auto-close cycle \(optional\)/);
   assert.match(automationWidgetSource, /logical-cycle nonce completes/);
   for (const autoCloseAtCycleNonce of [0n, -1n, 1n << 64n]) {
-    const result = validateActorAuthoringProgram(
-      program(undefined, { autoCloseAtCycleNonce }),
+    const result = validateActorAuthoringContract(
+      contract(undefined, { autoCloseAtCycleNonce }),
     );
     assert.equal(result.valid, false);
     assert(
@@ -238,12 +238,15 @@ test('observation authoring exposes freshness and validates bounded identity', (
       `${disclosure} is missing`,
     );
   }
-  const invalid = createActorAuthoringCondition('ObservationBelow');
+  const invalid = createActorAuthoringPredicate('ObservationBelow');
   invalid.maxAgeBlocks = 0;
-  const result = validateActorAuthoringProgram(
-    program([
+  const result = validateActorAuthoringContract(
+    contract([
       authoringStep('observation', transferTask(), {
-        conditionSet: { type: 'All', conditions: [invalid] },
+        preconditions: {
+          type: 'AnyOf',
+          clauses: [[{ timing: 'Current', predicate: invalid }]],
+        },
       }),
     ]),
   );
@@ -301,11 +304,11 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
     'opening-amount',
     transferTask({ type: 'PercentageAtOpening', parts: 500_000_000 }),
   );
-  const observationOnly = program([openingAmountStep], {
+  const observationOnly = contract([openingAmountStep], {
     trigger: observationTrigger,
   });
-  assert.equal(validateActorAuthoringProgram(observationOnly).valid, true);
-  const lowered = lowerActorAuthoringProgram(observationOnly);
+  assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
+  const lowered = lowerActorAuthoringContract(observationOnly);
   assert.deepEqual(lowered.value.schedule.trigger.value.sources[0], {
     type: 'OnObservationChange',
     value: {
@@ -318,17 +321,17 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
       },
     },
   });
-  const mixed = program([openingAmountStep], {
+  const mixed = contract([openingAmountStep], {
     trigger: {
       type: 'Immediate',
       sources: [addressTrigger.sources[0], observationTrigger.sources[0]],
     },
   });
-  assert.equal(validateActorAuthoringProgram(mixed).valid, true);
+  assert.equal(validateActorAuthoringContract(mixed).valid, true);
 });
 
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
-  const draft = program(
+  const draft = contract(
     [
       authoringStep('swap', {
         type: 'SwapOut',
@@ -339,14 +342,19 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         slippageParts: 10_000_000,
       }),
       authoringStep('transfer', transferTask({ type: 'AllAvailable' }), {
-        conditionSet: {
-          type: 'All',
-          conditions: [
-            {
-              type: 'BalanceAbove',
-              asset: local,
-              threshold: '0',
-            },
+        preconditions: {
+          type: 'AnyOf',
+          clauses: [
+            [
+              {
+                timing: 'Opening',
+                predicate: {
+                  type: 'BalanceAbove',
+                  asset: local,
+                  threshold: '0',
+                },
+              },
+            ],
           ],
         },
         errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
@@ -357,38 +365,41 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   const first = artifact(draft);
   const second = artifact(structuredClone(draft));
   assert.deepEqual(first, second);
-  const inspection = inspectActorPlanArtifact(first, metadataBytes, runtime);
+  const inspection = inspectActorContractArtifact(
+    first,
+    metadataBytes,
+    runtime,
+  );
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
-    assert.equal(inspection.projection.value.execution_plan.length, 2);
+    assert.equal(inspection.projection.value.steps.length, 2);
     assert.equal(
-      inspection.projection.value.completion_policy.type,
+      inspection.projection.value.completion.type,
       'CloseAfterProductiveCycle',
     );
     assert.deepEqual(
-      inspection.projection.value.execution_plan[0].task.value.input_limit,
+      inspection.projection.value.steps[0].task.value.input_limit,
       {
         type: 'Absolute',
         value: { $runtimeType: 'bigint', $integer: '100' },
       },
     );
     assert.equal(
-      inspection.projection.value.execution_plan[1].on_error.type,
+      inspection.projection.value.steps[1].on_error.type,
       'RetryLater',
     );
     assert.equal(
-      inspection.projection.value.execution_plan[1].on_error.value.max_attempts
-        .$integer,
+      inspection.projection.value.steps[1].on_error.value.max_attempts.$integer,
       '3',
     );
   }
-  const analysis = analyzeActorProgram({
+  const analysis = analyzeActorContract({
     artifact: first,
     metadataBytes,
     runtime: { ...runtime, modelIdentity: 'authoring-test-runtime' },
     weightModel,
   });
-  assert.equal(analysis.identity.planId, first.planId);
+  assert.equal(analysis.identity.contractId, first.contractId);
   assert.equal(analysis.completionPolicy, 'CloseAfterProductiveCycle');
   assert.deepEqual(analysis.steps[0].parameters.input_limit, {
     type: 'Absolute',
@@ -401,7 +412,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
 });
 
 test('ordered builder operations change only explicit Step order or content', () => {
-  const initial = program([
+  const initial = contract([
     authoringStep('a', transferTask(fixed('1'))),
     authoringStep('b', { type: 'Burn', asset: native, amount: fixed('2') }),
   ]);
@@ -433,7 +444,7 @@ test('ordered builder operations change only explicit Step order or content', ()
     removed.steps.map((current) => current.key),
     ['c', 'a'],
   );
-  assert.notEqual(artifact(initial).planId, artifact(removed).planId);
+  assert.notEqual(artifact(initial).contractId, artifact(removed).contractId);
 });
 
 test('every current Task lowers through metadata and remains analyzer-visible', () => {
@@ -494,14 +505,14 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
     { type: 'StopCycle' },
   ];
   for (const task of tasks) {
-    const draft = program([authoringStep('only', task)], {
+    const draft = contract([authoringStep('only', task)], {
       actorType: task.type === 'Mint' ? 'System' : 'User',
       fundingPolicy:
         task.type === 'Mint'
           ? { type: 'RuntimePolicy' }
           : { type: 'OwnerOnly' },
     });
-    const result = analyzeActorProgram({
+    const result = analyzeActorContract({
       artifact: artifact(draft),
       metadataBytes,
       runtime: { ...runtime, modelIdentity: 'authoring-test-runtime' },
@@ -512,35 +523,36 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
   assert.equal(tasks.length, 12);
 });
 
-test('Always, All, and Any lower exactly and empty groups fail before encoding', () => {
+test('Unconditional and bounded DNF lower exactly and empty forms fail before encoding', () => {
   const atom = { type: 'BlockNumberAbove', threshold: 1 };
-  const modes = [
-    { type: 'Always' },
-    { type: 'All', conditions: [atom] },
-    { type: 'Any', conditions: [atom] },
-  ];
-  for (const conditionSet of modes) {
-    const lowered = lowerActorAuthoringProgram(
-      program([authoringStep('only', transferTask(), { conditionSet })]),
+  for (const preconditions of [
+    { type: 'Unconditional' },
+    {
+      type: 'AnyOf',
+      clauses: [[{ timing: 'Opening', predicate: atom }]],
+    },
+  ]) {
+    const lowered = lowerActorAuthoringContract(
+      contract([authoringStep('only', transferTask(), { preconditions })]),
     );
-    assert.equal(
-      lowered.value.execution_plan[0].conditions.type,
-      conditionSet.type,
-    );
+    assert.equal(lowered.value.steps[0].preconditions.type, preconditions.type);
   }
-  for (const type of ['All', 'Any']) {
-    const invalid = program([
+  for (const clauses of [[], [[]]]) {
+    const invalid = contract([
       authoringStep('only', transferTask(), {
-        conditionSet: { type, conditions: [] },
+        preconditions: { type: 'AnyOf', clauses },
       }),
     ]);
-    assert.equal(validateActorAuthoringProgram(invalid).valid, false);
-    assert.throws(() => lowerActorAuthoringProgram(invalid), /at least one/);
+    assert.equal(validateActorAuthoringContract(invalid).valid, false);
+    assert.throws(
+      () => lowerActorAuthoringContract(invalid),
+      /must not be empty|at least one/,
+    );
   }
 });
 
-test('every Condition and AmountResolution lowers without changing step topology', () => {
-  const conditions = [
+test('every Predicate and AmountResolution lowers without changing step topology', () => {
+  const predicates = [
     { type: 'BalanceAbove', asset: native, threshold: '1' },
     { type: 'BalanceBelow', asset: native, threshold: '1' },
     { type: 'BalanceEquals', asset: native, threshold: '1' },
@@ -572,38 +584,37 @@ test('every Condition and AmountResolution lowers without changing step topology
       maxAgeBlocks: 12,
     },
   ];
-  for (const current of conditions) {
-    const lowered = lowerActorAuthoringProgram(
-      program([
+  for (const current of predicates) {
+    const lowered = lowerActorAuthoringContract(
+      contract([
         authoringStep('only', transferTask(), {
-          conditionSet: { type: 'Any', conditions: [current] },
+          preconditions: {
+            type: 'AnyOf',
+            clauses: [[{ timing: 'Current', predicate: current }]],
+          },
         }),
       ]),
     );
-    assert.equal(lowered.value.execution_plan.length, 1);
-    assert.equal(lowered.value.execution_plan[0].conditions.type, 'Any');
-    assert.equal(
-      lowered.value.execution_plan[0].conditions.value[0].type,
-      current.type,
-    );
+    assert.equal(lowered.value.steps.length, 1);
+    assert.equal(lowered.value.steps[0].preconditions.type, 'AnyOf');
+    const loweredPredicate = lowered.value.steps[0].preconditions.value[0][0];
+    assert.equal(loweredPredicate.timing.type, 'Current');
+    assert.equal(loweredPredicate.predicate.type, current.type);
     if (current.type.startsWith('Observation')) {
-      assert.deepEqual(
-        lowered.value.execution_plan[0].conditions.value[0].value,
-        {
-          feed: {
-            asset_in: { type: 'Native', value: undefined },
-            asset_out: { type: 'Local', value: 7 },
-            method: { type: 'PreExecutionSpot', value: undefined },
-            aggregation: {
-              type: 'Ema',
-              value: { half_life_blocks: 100 },
-            },
-            scale: 12,
+      assert.deepEqual(loweredPredicate.predicate.value, {
+        feed: {
+          asset_in: { type: 'Native', value: undefined },
+          asset_out: { type: 'Local', value: 7 },
+          method: { type: 'PreExecutionSpot', value: undefined },
+          aggregation: {
+            type: 'Ema',
+            value: { half_life_blocks: 100 },
           },
-          threshold: 1n,
-          max_age_blocks: 12,
+          scale: 12,
         },
-      );
+        threshold: 1n,
+        max_age_blocks: 12,
+      });
     }
   }
   const amounts = [
@@ -614,18 +625,15 @@ test('every Condition and AmountResolution lowers without changing step topology
     { type: 'AllAvailable' },
   ];
   for (const amount of amounts) {
-    const lowered = lowerActorAuthoringProgram(
-      program([authoringStep('only', transferTask(amount))]),
+    const lowered = lowerActorAuthoringContract(
+      contract([authoringStep('only', transferTask(amount))]),
     );
-    assert.equal(
-      lowered.value.execution_plan[0].task.value.amount.type,
-      amount.type,
-    );
+    assert.equal(lowered.value.steps[0].task.value.amount.type, amount.type);
   }
 });
 
 test('typed validation rejects control-flow-adjacent and runtime-invalid drafts', () => {
-  const immutableRetry = program(
+  const immutableRetry = contract(
     [
       authoringStep('only', transferTask(), {
         errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
@@ -633,18 +641,21 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     ],
     { mutability: 'Immutable' },
   );
-  assert.equal(validateActorAuthoringProgram(immutableRetry).valid, false);
+  assert.equal(validateActorAuthoringContract(immutableRetry).valid, false);
   for (const maxAttempts of [0, 11, 4_294_967_296, 1.5]) {
-    const invalidRetryLimit = program([
+    const invalidRetryLimit = contract([
       authoringStep('only', transferTask(), {
         errorPolicy: { type: 'RetryLater', maxAttempts },
       }),
     ]);
-    assert.equal(validateActorAuthoringProgram(invalidRetryLimit).valid, false);
+    assert.equal(
+      validateActorAuthoringContract(invalidRetryLimit).valid,
+      false,
+    );
   }
   assert.equal(
-    validateActorAuthoringProgram(
-      program([
+    validateActorAuthoringContract(
+      contract([
         authoringStep('retry-ten', transferTask(), {
           errorPolicy: { type: 'RetryLater', maxAttempts: 10 },
         }),
@@ -652,10 +663,10 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     ).valid,
     true,
   );
-  const userMint = program([
+  const userMint = contract([
     authoringStep('only', { type: 'Mint', asset: native, amount: fixed() }),
   ]);
-  assert.equal(validateActorAuthoringProgram(userMint).valid, false);
+  assert.equal(validateActorAuthoringContract(userMint).valid, false);
   for (const amount of [
     { type: 'Fixed', value: '0' },
     { type: 'PercentageOfCurrent', parts: 0 },
@@ -663,8 +674,8 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     { type: 'PercentageOfLastFunding', parts: 0 },
   ]) {
     assert.equal(
-      validateActorAuthoringProgram(
-        program([authoringStep('zero', transferTask(amount))]),
+      validateActorAuthoringContract(
+        contract([authoringStep('zero', transferTask(amount))]),
       ).valid,
       false,
     );
@@ -692,13 +703,13 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     },
   ]) {
     assert.equal(
-      validateActorAuthoringProgram(
-        program([authoringStep('identical-assets', task)]),
+      validateActorAuthoringContract(
+        contract([authoringStep('identical-assets', task)]),
       ).valid,
       false,
     );
   }
-  const zeroAbsoluteInputLimit = program([
+  const zeroAbsoluteInputLimit = contract([
     authoringStep('only', {
       type: 'SwapOut',
       assetOut: local,
@@ -709,10 +720,10 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     }),
   ]);
   assert.equal(
-    validateActorAuthoringProgram(zeroAbsoluteInputLimit).valid,
+    validateActorAuthoringContract(zeroAbsoluteInputLimit).valid,
     false,
   );
-  const duplicateSplit = program([
+  const duplicateSplit = contract([
     authoringStep('only', {
       type: 'SplitTransfer',
       asset: native,
@@ -723,7 +734,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
       ],
     }),
   ]);
-  const splitValidation = validateActorAuthoringProgram(duplicateSplit);
+  const splitValidation = validateActorAuthoringContract(duplicateSplit);
   assert.equal(splitValidation.valid, false);
   if (!splitValidation.valid) {
     assert(
@@ -733,10 +744,10 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
       splitValidation.issues.some((issue) => /exceed/.test(issue.message)),
     );
   }
-  assert.equal(validateActorAuthoringProgram(program([])).valid, false);
+  assert.equal(validateActorAuthoringContract(contract([])).valid, false);
   assert.equal(
-    validateActorAuthoringProgram(
-      program(undefined, {
+    validateActorAuthoringContract(
+      contract(undefined, {
         trigger: {
           type: 'Immediate',
           sources: [{ type: 'Manual' }, { type: 'Manual' }],
@@ -746,8 +757,8 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     false,
   );
   assert.equal(
-    validateActorAuthoringProgram(
-      program(undefined, {
+    validateActorAuthoringContract(
+      contract(undefined, {
         trigger: { type: 'Immediate', sources: [] },
       }),
     ).valid,
@@ -758,8 +769,8 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     { ...createActorAuthoringTask('RemoveLiquidity'), minAmountA: '0' },
     { ...createActorAuthoringTask('RemoveLiquidity'), minAmountB: '0' },
   ]) {
-    const validation = validateActorAuthoringProgram(
-      program([authoringStep('bounded-liquidity', task)]),
+    const validation = validateActorAuthoringContract(
+      contract([authoringStep('bounded-liquidity', task)]),
     );
     assert.equal(validation.valid, false);
     if (!validation.valid) {
@@ -770,11 +781,19 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
       );
     }
   }
-  assert.throws(() => lowerActorAuthoringProgram(immutableRetry), /RetryLater/);
+  assert.throws(
+    () => lowerActorAuthoringContract(immutableRetry),
+    /RetryLater/,
+  );
 });
 
 test('scenario corpus lowers every expressible or partial execution core without inventing missing predicates', () => {
-  const all = (...conditions) => ({ type: 'All', conditions });
+  const all = (...predicates) => ({
+    type: 'AnyOf',
+    clauses: [
+      predicates.map((predicate) => ({ timing: 'Current', predicate })),
+    ],
+  });
   const balanceAbove = (asset = native) => ({
     type: 'BalanceAbove',
     asset,
@@ -799,10 +818,10 @@ test('scenario corpus lowers every expressible or partial execution core without
   const scenarios = [
     {
       name: 'DEOS Burn Actor',
-      program: program(
+      contract: contract(
         [
           authoringStep('swap', swap, {
-            conditionSet: all(balanceAbove(local)),
+            preconditions: all(balanceAbove(local)),
           }),
           authoringStep('burn', {
             type: 'Burn',
@@ -816,21 +835,21 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'DEOS Fee Sink',
-      program: program([authoringStep('split', split())]),
+      contract: contract([authoringStep('split', split())]),
       tasks: ['SplitTransfer'],
     },
     {
       name: 'DEOS BLDR splitter',
-      program: program([
+      contract: contract([
         authoringStep('split', split(local), {
-          conditionSet: all(balanceAbove(local)),
+          preconditions: all(balanceAbove(local)),
         }),
       ]),
       tasks: ['SplitTransfer'],
     },
     {
       name: 'DEOS Liquidity Actor core',
-      program: program([
+      contract: contract([
         authoringStep('liquidity', {
           type: 'AddLiquidity',
           assetA: native,
@@ -844,7 +863,7 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'Periodic DCA',
-      program: program([authoringStep('dca', swap)], {
+      contract: contract([authoringStep('dca', swap)], {
         trigger: {
           type: 'Cadenced',
           everyBlocks: 10,
@@ -855,9 +874,9 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'Threshold payroll',
-      program: program([
+      contract: contract([
         authoringStep('payroll', split(), {
-          conditionSet: all(balanceAbove(), {
+          preconditions: all(balanceAbove(), {
             type: 'BlockNumberAbove',
             threshold: 1,
           }),
@@ -867,7 +886,7 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'Resilient swap-to-liquidity pipeline',
-      program: program([
+      contract: contract([
         authoringStep('swap', swap),
         authoringStep(
           'liquidity',
@@ -887,7 +906,7 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
     {
       name: 'Stake and unstake execution core',
-      program: program([
+      contract: contract([
         authoringStep('stake', {
           type: 'Stake',
           asset: native,
@@ -903,8 +922,8 @@ test('scenario corpus lowers every expressible or partial execution core without
     },
   ];
   for (const scenario of scenarios) {
-    const analysis = analyzeActorProgram({
-      artifact: artifact(scenario.program),
+    const analysis = analyzeActorContract({
+      artifact: artifact(scenario.contract),
       metadataBytes,
       runtime: { ...runtime, modelIdentity: 'scenario-corpus-runtime' },
       weightModel,
@@ -930,13 +949,13 @@ test('scenario corpus lowers every expressible or partial execution core without
   assert.equal(ACTORS_AUTHORING_TASK_TYPES.includes('Rebalance'), false);
 });
 
-test('trigger, completion, and funding policy variants lower as typed ProgramInput fields', () => {
+test('trigger, completion, and funding policy variants lower as typed ContractInput fields', () => {
   const drafts = [
-    program(undefined, {
+    contract(undefined, {
       trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
       fundingPolicy: { type: 'OwnerOnly' },
     }),
-    program(undefined, {
+    contract(undefined, {
       trigger: {
         type: 'Cadenced',
         everyBlocks: 10,
@@ -945,7 +964,7 @@ test('trigger, completion, and funding policy variants lower as typed ProgramInp
       fundingPolicy: { type: 'RuntimePolicy' },
       actorType: 'System',
     }),
-    program(undefined, {
+    contract(undefined, {
       trigger: {
         type: 'Immediate',
         sources: [
@@ -959,7 +978,7 @@ test('trigger, completion, and funding policy variants lower as typed ProgramInp
       },
       fundingPolicy: { type: 'SignedAllowlist', accounts: [accountA] },
     }),
-    program(undefined, {
+    contract(undefined, {
       trigger: {
         type: 'Cadenced',
         everyBlocks: 10,
@@ -980,11 +999,11 @@ test('trigger, completion, and funding policy variants lower as typed ProgramInp
   for (const draft of drafts) {
     const canonical = artifact(draft);
     assert.equal(
-      inspectActorPlanArtifact(canonical, metadataBytes, runtime).valid,
+      inspectActorContractArtifact(canonical, metadataBytes, runtime).valid,
       true,
     );
   }
-  const lowered = lowerActorAuthoringProgram(drafts[2]);
+  const lowered = lowerActorAuthoringContract(drafts[2]);
   const sources = lowered.value.schedule.trigger.value.sources;
   assert.deepEqual(
     sources.map((source) => source.type),

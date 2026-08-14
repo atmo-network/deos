@@ -12,7 +12,7 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
     type ActorAuthoringTask,
     createActorAuthoringTask,
   } from '$lib/automation/authoring';
-  import type { ActorPlanType } from '$lib/automation/plan-artifact';
+  import type { ActorContractType } from '$lib/automation/contract-artifact';
   import {
     Button,
     IconButton,
@@ -26,7 +26,7 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
 
   type Props = {
     task: ActorAuthoringTask;
-    actorType: ActorPlanType;
+    actorType: ActorContractType;
     compact?: boolean;
   };
 

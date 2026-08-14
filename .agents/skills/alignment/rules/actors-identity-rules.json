@@ -6,7 +6,7 @@
       "id": "actors-public-stale-terms",
       "scope": "canonical specification",
       "kind": "regex-any",
-      "patterns": ["\\bMaxSweepPerBlock\\b", "\\bNativeAssetId\\b", "\\bschedule_policy\\b", "\\btrigger_policy\\b"],
+      "patterns": ["\\bActorProgram\\b", "\\bProgramInput\\b", "\\bActiveProgramInput\\b", "\\bActorPlanArtifact\\b", "\\bActorPlanStaticAnalysis\\b", "\\bplanId\\b", "\\bprogramScale\\b", "deos\\.actor\\.plan", "deos:actor-plan", "scheduler_actor_program_probe", "\\bMaxSweepPerBlock\\b", "\\bNativeAssetId\\b", "\\bschedule_policy\\b", "\\btrigger_policy\\b"],
       "rationale": "Reject superseded public names after the pre-launch ABI epoch.",
       "expiry": "Remove only when the canonical specification and metadata no longer expose a compatibility-drift gate."
     },
@@ -29,7 +29,8 @@
         "finalized_through",
         "funding_tracked_count",
         "PauseReason",
-        "NotPaused"
+        "NotPaused",
+        "ActorProgram"
       ],
       "rationale": "Reject retired Actors ABI, cache, fee, funding, scheduler, lifecycle, and terminology surfaces outside the normative specification's explicit prohibition clauses.",
       "expiry": "Never before a separately accepted compatibility contract reintroduces one of these names."
@@ -38,8 +39,20 @@
       "id": "actors-bounded-iteration-allowlist",
       "scope": "alignment auditor O(N) iteration rule",
       "kind": "path-regex-any",
-      "patterns": ["template/pallets/actors/examples/fee_envelope_vectors\\.rs"],
-      "rationale": "The off-chain fee-vector example renders fixed protocol-bounded inputs and owns no consensus iteration.",
+      "patterns": [
+        "template/pallets/actors/examples/fee_envelope_vectors\\.rs",
+        "template/pallets/actors/src/contract\\.rs",
+        "template/pallets/actors/src/execution\\.rs",
+        "template/pallets/actors/src/lib\\.rs",
+        "template/pallets/actors/src/types\\.rs",
+        "template/runtime/src/tmctol_read_model\\.rs:.*program\\.steps\\.iter",
+        "template/pallets/staking/src/lib\\.rs:.*OperatorNativeLpLocked",
+        "template/pallets/staking/src/lib\\.rs:.*AccountNativeLpLocked",
+        "template/pallets/staking/src/lib\\.rs:.*NativeGovernanceLpLocks",
+        "template/pallets/staking/src/lib\\.rs:.*PendingNativeLpUnlocks",
+        "template/pallets/staking/src/lib\\.rs:.*PendingNativeGovernanceLpUnlocks"
+      ],
+      "rationale": "The fee-vector example, runtime read model, and bounded DNF evaluator iterate only type-bounded Actor Contract steps, clauses, and predicates, never unbounded storage collections.",
       "expiry": "Remove if the example accepts unbounded input or moves into consensus execution."
     },
     {

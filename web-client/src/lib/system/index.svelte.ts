@@ -78,26 +78,31 @@ class SystemStore {
     }
   }
 
-  async claimNominationReward(epoch: number): Promise<void> {
-    if (!this.adapter.claimNominationReward) {
+  async claimNativeSecurityReward(epoch: number): Promise<void> {
+    if (!this.adapter.claimNativeSecurityReward) {
       throw new Error(
-        'Native nomination reward claim is unavailable for this adapter',
+        'Native security reward claim is unavailable for this adapter',
       );
     }
-    await this.adapter.claimNominationReward(epoch);
+    await this.adapter.claimNativeSecurityReward(epoch);
     await this.refresh();
   }
 
-  async claimAndCompoundNominationReward(
+  async claimAndCompoundNativeSecurityReward(
     epoch: number,
     operator: string,
+    minLpOut: bigint,
   ): Promise<void> {
-    if (!this.adapter.claimAndCompoundNominationReward) {
+    if (!this.adapter.claimAndCompoundNativeSecurityReward) {
       throw new Error(
-        'Native nomination reward compound is unavailable for this adapter',
+        'Native security reward compound is unavailable for this adapter',
       );
     }
-    await this.adapter.claimAndCompoundNominationReward(epoch, operator);
+    await this.adapter.claimAndCompoundNativeSecurityReward(
+      epoch,
+      operator,
+      minLpOut,
+    );
     await this.refresh();
   }
 
@@ -228,15 +233,6 @@ class SystemStore {
       );
     }
     return await this.adapter.getNativeGovernanceCustodyPosition(assetId);
-  }
-
-  async getNativeNominationRewardClaimable(epoch: number) {
-    if (!this.adapter.getNativeNominationRewardClaimable) {
-      throw new Error(
-        'Native nomination reward claimability is unavailable for this adapter',
-      );
-    }
-    return await this.adapter.getNativeNominationRewardClaimable(epoch);
   }
 }
 

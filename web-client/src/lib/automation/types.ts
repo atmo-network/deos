@@ -4,11 +4,11 @@ Owns: System Actor snapshots plus portable plan-authoring policy shapes.
 Excludes: Runtime actor scheduling, adapter transport, transaction composition, and widget rendering.
 Zone: Automation public contract; safe for adapters, stores, and widgets to import.
 */
-import type { ActorEligibilityProjection } from './eligibility.ts';
 import type {
-  ActorPlanHex,
-  ActorPlanRuntimeIdentity,
-} from './plan-artifact.ts';
+  ActorContractHex,
+  ActorContractRuntimeIdentity,
+} from './contract-artifact.ts';
+import type { ActorEligibilityProjection } from './eligibility.ts';
 
 export const AUTOMATION_STEP_ERROR_POLICIES = [
   'AbortCycle',
@@ -39,9 +39,9 @@ export function automationPolicyAllowed(
 
 export type AutomationAuthoringContext = {
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity;
+  runtime: ActorContractRuntimeIdentity;
   finalizedBlock: {
-    hash: ActorPlanHex;
+    hash: ActorContractHex;
     number: number;
   };
 };
