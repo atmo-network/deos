@@ -5,12 +5,12 @@ Excludes: Runtime metadata decoding, SCALE semantics, signing, submission, comme
 Zone: Automation domain capability; lowers only through the canonical authoring contract.
 */
 import {
+  type ActorAuthoringContract,
   type ActorAuthoringLimits,
-  type ActorAuthoringProgram,
   type ActorAuthoringStep,
   DEOS_ACTORS_AUTHORING_LIMITS,
-  lowerActorAuthoringProgram,
-  validateActorAuthoringProgram,
+  lowerActorAuthoringContract,
+  validateActorAuthoringContract,
 } from './authoring.ts';
 
 export const ACTORS_CONFIGURATION_IR_FORMAT =
@@ -20,7 +20,7 @@ export const ACTORS_CONFIGURATION_IR_VERSION = 1 as const;
 export type ActorConfigurationIrStep = Omit<ActorAuthoringStep, 'key'>;
 
 export type ActorConfigurationIr = Omit<
-  ActorAuthoringProgram,
+  ActorAuthoringContract,
   'steps' | 'autoCloseAtCycleNonce'
 > & {
   format: typeof ACTORS_CONFIGURATION_IR_FORMAT;
@@ -119,31 +119,31 @@ export function normalizeActorConfigurationIr(
   ) as ActorConfigurationIr;
 }
 
-export function authoringProgramToConfigurationIr(
-  program: ActorAuthoringProgram,
+export function authoringContractToConfigurationIr(
+  contract: ActorAuthoringContract,
 ): ActorConfigurationIr {
   return normalizeActorConfigurationIr({
     format: ACTORS_CONFIGURATION_IR_FORMAT,
     formatVersion: ACTORS_CONFIGURATION_IR_VERSION,
-    actorType: program.actorType,
-    mutability: program.mutability,
-    completionPolicy: program.completionPolicy,
-    autoCloseAtCycleNonce: program.autoCloseAtCycleNonce?.toString() ?? null,
-    trigger: program.trigger,
-    cooldownBlocks: program.cooldownBlocks,
-    scheduleWindow: program.scheduleWindow,
-    fundingPolicy: program.fundingPolicy,
-    steps: program.steps.map(({ conditionSet, task, errorPolicy }) => ({
-      conditionSet,
+    actorType: contract.actorType,
+    mutability: contract.mutability,
+    completionPolicy: contract.completionPolicy,
+    autoCloseAtCycleNonce: contract.autoCloseAtCycleNonce?.toString() ?? null,
+    trigger: contract.trigger,
+    cooldownBlocks: contract.cooldownBlocks,
+    scheduleWindow: contract.scheduleWindow,
+    fundingPolicy: contract.fundingPolicy,
+    steps: contract.steps.map(({ preconditions, task, errorPolicy }) => ({
+      preconditions,
       task,
       errorPolicy,
     })),
   });
 }
 
-export function configurationIrToAuthoringProgram(
+export function configurationIrToAuthoringContract(
   value: unknown,
-): ActorAuthoringProgram {
+): ActorAuthoringContract {
   const ir = normalizeActorConfigurationIr(value);
   return {
     actorType: ir.actorType,
@@ -159,7 +159,7 @@ export function configurationIrToAuthoringProgram(
     fundingPolicy: ir.fundingPolicy,
     steps: ir.steps.map((step, index) => ({
       key: `genome-step-${String(index).padStart(3, '0')}`,
-      conditionSet: step.conditionSet,
+      preconditions: step.preconditions,
       task: step.task,
       errorPolicy: step.errorPolicy,
     })),
@@ -171,8 +171,8 @@ export function diagnoseActorConfigurationIr(
   limits: ActorAuthoringLimits = DEOS_ACTORS_AUTHORING_LIMITS,
 ): ActorConfigurationIrDiagnostic[] {
   try {
-    const validation = validateActorAuthoringProgram(
-      configurationIrToAuthoringProgram(value),
+    const validation = validateActorAuthoringContract(
+      configurationIrToAuthoringContract(value),
       limits,
     );
     return validation.valid
@@ -197,8 +197,8 @@ export function lowerActorConfigurationIr(
   value: unknown,
   limits: ActorAuthoringLimits = DEOS_ACTORS_AUTHORING_LIMITS,
 ) {
-  return lowerActorAuthoringProgram(
-    configurationIrToAuthoringProgram(value),
+  return lowerActorAuthoringContract(
+    configurationIrToAuthoringContract(value),
     limits,
   );
 }

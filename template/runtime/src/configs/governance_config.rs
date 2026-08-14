@@ -9,6 +9,8 @@ use polkadot_sdk::frame_support::{
   traits::{PreimageProvider, QueryPreimage},
 };
 use polkadot_sdk::frame_system::{EnsureRoot, RawOrigin};
+#[allow(unused_imports)]
+use polkadot_sdk::sp_runtime::traits::Hash as _;
 use scale_info::TypeInfo;
 
 parameter_types! {
@@ -18,6 +20,8 @@ parameter_types! {
   pub const MaxWinningVoteResolutionItemsPerEpoch: u32 = 64;
   pub const MaxWinningVoteAccountsPerCall: u32 = 256;
   pub const MaxActiveProposalsPerDomain: u32 = 128;
+  pub const StrategicProposalReserve: u32 = 1;
+  pub const MaxActiveProposalsPerAuthor: u32 = 16;
   pub const MaxMaturingProposalsPerEpoch: u32 = 4;
   pub const MaxPendingEnactmentsPerEpoch: u32 = 4;
   pub const ProposalVotingPeriod: BlockNumber = 7 * 24 * HOURS;
@@ -355,7 +359,11 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
     payload_kind: pallet_governance::ProposalPayloadKind,
   ) -> pallet_governance::ProposalSubmissionAuthority {
     if domain == protocol_governance_domain()
-      && payload_kind == pallet_governance::ProposalPayloadKind::L1RootAction
+      && matches!(
+        payload_kind,
+        pallet_governance::ProposalPayloadKind::L1RootAction
+          | pallet_governance::ProposalPayloadKind::Intent
+      )
     {
       return pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned;
     }
@@ -388,10 +396,12 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, AssetId
 pub struct RuntimeGovernanceBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_governance::BenchmarkHelper<AccountId, AssetId> for RuntimeGovernanceBenchmarkHelper {
+impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash>
+  for RuntimeGovernanceBenchmarkHelper
+{
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(AssetId, Hash), polkadot_sdk::sp_runtime::DispatchError> {
     use polkadot_sdk::frame_support::traits::{Currency, fungibles::Mutate};
     let domain = protocol_governance_domain();
     if !<crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(domain) {
@@ -410,24 +420,14 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId> for RuntimeGovernanc
     <crate::Assets as Mutate<AccountId>>::mint_into(domain, account, amount)?;
     let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(account, amount);
     crate::Staking::stake_native(RuntimeOrigin::signed(account.clone()), amount / 2)?;
-    Ok(domain)
-  }
-}
-
-pub struct RuntimeWinningVoteRewardTouchHandler;
-impl pallet_governance::WinningVoteRewardTouchHandler<AccountId, AssetId>
-  for RuntimeWinningVoteRewardTouchHandler
-{
-  fn note_winning_vote_recorded(domain: AssetId, account: &AccountId) {
-    if domain == native_staking_asset_id() {
-      let _ = crate::Staking::note_reward_touch(native_staking_asset_id(), account);
+    let payload = StrategicRuntimeUpgradePayload {
+      code_hash: Hash::default(),
     }
-  }
-
-  fn note_winning_vote_evicted(domain: AssetId, account: &AccountId) {
-    if domain == native_staking_asset_id() {
-      let _ = crate::Staking::note_reward_touch(native_staking_asset_id(), account);
-    }
+    .encode();
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash_of(&payload);
+    crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload)
+      .map_err(|error| error.error)?;
+    Ok((domain, payload_hash))
   }
 }
 
@@ -500,8 +500,27 @@ impl pallet_governance::VetoVotePowerProvider<AccountId, AssetId, u32, BlockNumb
   }
 }
 
+fn validate_advisory_payload(
+  bytes: &[u8],
+) -> Result<(), pallet_governance::ProposalPreimageAdmissionError> {
+  use pallet_governance::ProposalPreimageAdmissionError as Error;
+  let mut input = bytes;
+  let _referenced_payload_hash = Option::<Hash>::decode(&mut input).map_err(|_| Error::Invalid)?;
+  let summary = Vec::<u8>::decode(&mut input).map_err(|_| Error::Invalid)?;
+  let doc_cid = Option::<Vec<u8>>::decode(&mut input).map_err(|_| Error::Invalid)?;
+  if !input.is_empty()
+    || summary.is_empty()
+    || summary.len() > 128
+    || core::str::from_utf8(&summary).is_err()
+    || doc_cid.as_ref().is_some_and(|cid| cid.len() > 96)
+  {
+    return Err(Error::Invalid);
+  }
+  Ok(())
+}
+
 pub struct RuntimeProposalPayloadPreimageProvider;
-impl pallet_governance::ProposalPayloadPreimageProvider<Hash>
+impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
   for RuntimeProposalPayloadPreimageProvider
 {
   fn have_preimage(hash: &Hash) -> bool {
@@ -514,6 +533,55 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash>
 
   fn preimage_len(hash: &Hash) -> Option<u32> {
     <crate::Preimage as QueryPreimage>::len(hash)
+  }
+
+  fn validate_for_submission(
+    domain: AssetId,
+    payload_kind: pallet_governance::ProposalPayloadKind,
+    hash: &Hash,
+  ) -> Result<(), pallet_governance::ProposalPreimageAdmissionError> {
+    use pallet_governance::ProposalPreimageAdmissionError as Error;
+    let bytes =
+      <crate::Preimage as PreimageProvider<Hash>>::get_preimage(hash).ok_or(Error::Missing)?;
+    if bytes.len() > 256 {
+      return Err(Error::Oversized);
+    }
+    let mut input = &bytes[..];
+    match payload_kind {
+      pallet_governance::ProposalPayloadKind::L1RootAction => {
+        if domain != protocol_governance_domain() {
+          return Err(Error::Incompatible);
+        }
+        let _payload =
+          StrategicRuntimeUpgradePayload::decode(&mut input).map_err(|_| Error::Invalid)?;
+      }
+      pallet_governance::ProposalPayloadKind::L2ParameterChange => {
+        let call = RuntimeCall::decode(&mut input).map_err(|_| Error::Invalid)?;
+        if !matches!(
+          call,
+          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { .. })
+        ) || domain != protocol_governance_domain()
+        {
+          return Err(Error::Incompatible);
+        }
+      }
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend => {
+        if domain != tactical_governance_domain() {
+          return Err(Error::Incompatible);
+        }
+        let _payload =
+          TacticalTreasuryInvoicePayload::decode(&mut input).map_err(|_| Error::Invalid)?;
+      }
+      pallet_governance::ProposalPayloadKind::Intent
+      | pallet_governance::ProposalPayloadKind::L2SignalToL1 => {
+        validate_advisory_payload(&bytes)?;
+        input = &[];
+      }
+    }
+    if !input.is_empty() {
+      return Err(Error::Invalid);
+    }
+    Ok(())
   }
 }
 
@@ -705,6 +773,8 @@ impl pallet_governance::Config for Runtime {
   type MaxWinningVoteResolutionItemsPerEpoch = MaxWinningVoteResolutionItemsPerEpoch;
   type MaxWinningVoteAccountsPerCall = MaxWinningVoteAccountsPerCall;
   type MaxActiveProposalsPerDomain = MaxActiveProposalsPerDomain;
+  type StrategicProposalReserve = StrategicProposalReserve;
+  type MaxActiveProposalsPerAuthor = MaxActiveProposalsPerAuthor;
   type MaxMaturingProposalsPerEpoch = MaxMaturingProposalsPerEpoch;
   type MaxPendingEnactmentsPerEpoch = MaxPendingEnactmentsPerEpoch;
   type ProposalVotingPeriod = ProposalVotingPeriod;
@@ -714,11 +784,9 @@ impl pallet_governance::Config for Runtime {
   type ProposalEnactmentDelay = ProposalEnactmentDelay;
   type ProposalFastTrackPassThreshold = ProposalFastTrackPassThreshold;
   type ProposalApprovalThreshold = ProposalApprovalThreshold;
-  type ProposalApprovalCeiling = ProposalApprovalThreshold;
   type ProposalVetoThreshold = ProposalVetoThreshold;
   type ProposalVetoMinimumVetoTurnout = ProposalVetoMinimumVetoTurnout;
   type ProposalMinimumTurnout = ProposalMinimumTurnout;
-  type ProposalTurnoutCeiling = ProposalMinimumTurnout;
   type ProposalConfirmPeriod = ConstU32<0>;
   type FinalizedProposalOutcomeRetentionEpochs = FinalizedProposalOutcomeRetentionEpochs;
   type MaxFinalizedProposalOutcomesPerEpoch = MaxFinalizedProposalOutcomesPerEpoch;
@@ -737,7 +805,6 @@ impl pallet_governance::Config for Runtime {
   type VetoVotePowerProvider = RuntimeVetoVotePowerProvider;
   type ProposalPayloadPreimageProvider = RuntimeProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = RuntimeProposalPayloadExecutor;
-  type WinningVoteRewardTouchHandler = RuntimeWinningVoteRewardTouchHandler;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = RuntimeGovernanceBenchmarkHelper;
   type WeightInfo = crate::weights::pallet_governance::SubstrateWeight<Runtime>;

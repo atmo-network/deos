@@ -63,13 +63,16 @@ impl<T: Config> Pallet<T> {
   }
 
   /// Shared storage cleanup for terminal proposal states.
-  /// Returns the proposer account if one existed.
+  /// Returns the proposer account and decremented domain occupancy.
   fn remove_active_proposal_storage(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     remove_pending_enactment: bool,
     remove_winning_option: bool,
-  ) -> Option<T::AccountId> {
+  ) -> Result<(Option<T::AccountId>, u32), DispatchError> {
+    let active_count = ActiveProposalCounts::<T>::get(domain)
+      .checked_sub(1)
+      .ok_or(Error::<T>::ActiveProposalCountUnderflow)?;
     ActiveProposals::<T>::remove(domain, item_id);
     ProposalConfirmStartedAt::<T>::remove(domain, item_id);
     ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
@@ -82,7 +85,8 @@ impl<T: Config> Pallet<T> {
     let proposer = ProposalAuthorsByItem::<T>::take(domain, item_id);
     Self::remove_active_proposal_id(domain, item_id);
     ProposalVotesByItem::<T>::remove(domain, item_id);
-    proposer
+    ActiveProposalCounts::<T>::insert(domain, active_count);
+    Ok((proposer, active_count))
   }
 
   /// Attempts to schedule pending enactment, or executes immediately if no delay is needed.
@@ -109,56 +113,6 @@ impl<T: Config> Pallet<T> {
       )?;
     }
     Ok(())
-  }
-
-  pub(crate) fn voting_progress(
-    current_epoch: T::Epoch,
-    submitted_epoch: T::Epoch,
-    maturity_epoch: T::Epoch,
-  ) -> Perbill {
-    let current = current_epoch.saturated_into::<u32>();
-    let start = submitted_epoch.saturated_into::<u32>();
-    let end = maturity_epoch.saturated_into::<u32>();
-    let window = end.saturating_sub(start);
-    if window == 0 {
-      return Perbill::one();
-    }
-    let elapsed = current.saturating_sub(start).min(window);
-    Perbill::from_rational(elapsed, window)
-  }
-
-  /// Adaptive approval threshold: decays linearly from ceiling to floor over the voting window.
-  pub(crate) fn approval_threshold_at(
-    current_epoch: T::Epoch,
-    submitted_epoch: T::Epoch,
-    maturity_epoch: T::Epoch,
-  ) -> Perbill {
-    let floor = T::ProposalApprovalThreshold::get();
-    let ceiling = T::ProposalApprovalCeiling::get();
-    if ceiling <= floor {
-      return floor;
-    }
-    let progress = Self::voting_progress(current_epoch, submitted_epoch, maturity_epoch);
-    let spread = ceiling.saturating_sub(floor);
-    let decay = progress.mul_floor(spread.deconstruct());
-    Perbill::from_parts(ceiling.deconstruct().saturating_sub(decay))
-  }
-
-  /// Adaptive turnout threshold: decays linearly from ceiling to floor over the voting window.
-  pub(crate) fn turnout_threshold_at(
-    current_epoch: T::Epoch,
-    submitted_epoch: T::Epoch,
-    maturity_epoch: T::Epoch,
-  ) -> u64 {
-    let floor = T::ProposalMinimumTurnout::get();
-    let ceiling = T::ProposalTurnoutCeiling::get();
-    if ceiling <= floor {
-      return floor;
-    }
-    let progress = Self::voting_progress(current_epoch, submitted_epoch, maturity_epoch);
-    let spread = ceiling.saturating_sub(floor);
-    let decay = progress.mul_floor(spread);
-    ceiling.saturating_sub(decay)
   }
 
   pub fn cast_active_proposal_vote(
@@ -1029,15 +983,11 @@ impl<T: Config> Pallet<T> {
         protection_close_epoch,
       ),
     );
-    let turnout_threshold =
-      Self::turnout_threshold_at(current_epoch, primary_open_epoch, primary_close_epoch);
-    let approval_threshold =
-      Self::approval_threshold_at(current_epoch, primary_open_epoch, primary_close_epoch);
     match Self::evaluate_core_resolution_policy(
       family,
       &tally,
-      turnout_threshold,
-      approval_threshold,
+      T::ProposalMinimumTurnout::get(),
+      T::ProposalApprovalThreshold::get(),
     ) {
       CoreResolutionOutcome::Rejected(reason) => {
         Self::reject_active_proposal(domain, item_id, reason)
@@ -1069,7 +1019,8 @@ impl<T: Config> Pallet<T> {
     );
     let winner_count = 0;
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
-    let proposer = Self::remove_active_proposal_storage(domain, item_id, false, true);
+    let (proposer, active_count) =
+      Self::remove_active_proposal_storage(domain, item_id, false, true)?;
     let current_epoch = T::EpochProvider::current_epoch();
     if let Some(ref proposer) = proposer {
       Self::note_successful_authored_proposal(domain, proposer);
@@ -1090,10 +1041,6 @@ impl<T: Config> Pallet<T> {
       winner_count,
       urgent_authorized,
     )?;
-    let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
-      *active_count = active_count.saturating_sub(1);
-      *active_count
-    });
     Self::deposit_event(Event::ProposalResolved {
       domain,
       item_id,
@@ -1130,7 +1077,8 @@ impl<T: Config> Pallet<T> {
       count_total_participation,
     )?;
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
-    let proposer = Self::remove_active_proposal_storage(domain, item_id, false, false);
+    let (proposer, active_count) =
+      Self::remove_active_proposal_storage(domain, item_id, false, false)?;
     if let Some(winning_primary_option) = winning_primary_option {
       ProposalWinningPrimaryOptionByItem::<T>::insert(domain, item_id, winning_primary_option);
     } else {
@@ -1156,10 +1104,6 @@ impl<T: Config> Pallet<T> {
       winner_count,
       urgent_authorized,
     )?;
-    let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
-      *active_count = active_count.saturating_sub(1);
-      *active_count
-    });
     Self::deposit_event(Event::ProposalResolved {
       domain,
       item_id,
@@ -1231,7 +1175,7 @@ impl<T: Config> Pallet<T> {
       ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalNotActive
     );
-    Self::remove_active_proposal_storage(domain, item_id, true, true);
+    let (_, active_count) = Self::remove_active_proposal_storage(domain, item_id, true, true)?;
     let current_epoch = T::EpochProvider::current_epoch();
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1242,10 +1186,6 @@ impl<T: Config> Pallet<T> {
       },
       current_epoch,
     )?;
-    let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
-      *active_count = active_count.saturating_sub(1);
-      *active_count
-    });
     Self::deposit_event(Event::ProposalRejected {
       domain,
       item_id,
@@ -1276,7 +1216,7 @@ impl<T: Config> Pallet<T> {
           .map(|ballot| ballot.account.clone()),
       );
     }
-    Self::remove_active_proposal_storage(domain, item_id, true, true);
+    let (_, active_count) = Self::remove_active_proposal_storage(domain, item_id, true, true)?;
     let current_epoch = T::EpochProvider::current_epoch();
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1287,10 +1227,6 @@ impl<T: Config> Pallet<T> {
       },
       current_epoch,
     )?;
-    let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
-      *active_count = active_count.saturating_sub(1);
-      *active_count
-    });
     Self::deposit_event(Event::ProposalVetoCancelled {
       domain,
       item_id,
@@ -1654,19 +1590,12 @@ impl<T: Config> Pallet<T> {
         mode: cancellation.mode,
       });
     }
-    let primary_open_epoch =
-      Self::proposal_effective_primary_open_epoch(domain, item_id, proposal.submitted_epoch)
-        .ok()?;
-    let turnout_threshold =
-      Self::turnout_threshold_at(current_epoch, primary_open_epoch, maturity_epoch);
-    let approval_threshold =
-      Self::approval_threshold_at(current_epoch, primary_open_epoch, maturity_epoch);
     let family = Self::do_proposal_primary_track_family(domain, item_id)?;
     match Self::evaluate_core_resolution_policy(
       family,
       &tally,
-      turnout_threshold,
-      approval_threshold,
+      T::ProposalMinimumTurnout::get(),
+      T::ProposalApprovalThreshold::get(),
     ) {
       CoreResolutionOutcome::Rejected(reason) => Some(ProposalResolutionState::Rejected { reason }),
       CoreResolutionOutcome::Passing(option) => {

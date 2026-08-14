@@ -168,17 +168,16 @@ A rejected publication is transaction feedback, not canonical feed or delivery s
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
 - Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events
-- Metadata-bound plan artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `actors-control-plane.contract.en.md`
+- Metadata-bound Actor Contract artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `actors-control-plane.contract.en.md`
 
 ### DEOS Staking
 
 #### On-Chain Canonical Projection
 
 - Pool state, shares, receipts, and live ownership surface
-- Native binding / operator linkage
-- Reward epoch accruals, liability state, and claim state
-- Current reward snapshot state needed for settlement
-- Any bounded client-facing helper that determines live claimability or position state
+- Native LP custody, operator linkage, mode, readiness, session identity, and boundary diagnostic
+- Current Open security snapshot plus retained Planned/Finalized snapshots containing bounded eligible operators, account LP values, governance coefficients, reward weights, and total denominator
+- Retained certified reward pots and exact outstanding liability; account claimability remains absent until bounded settlement ships
 
 #### Indexed / Materialized View
 

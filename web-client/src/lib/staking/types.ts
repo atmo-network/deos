@@ -4,6 +4,34 @@ Owns: Native staking pool/account projection and operation-result shapes.
 Excludes: Runtime staking logic, adapter transport implementation, and widget rendering.
 Zone: Staking public contract; safe for adapters, stores, and widgets to import.
 */
+export type NativeSecurityMode = 'TrustedSet' | 'LpBackedSelection';
+
+export type NativeSecurityReadiness =
+  | 'Inactive'
+  | 'NativePoolMissing'
+  | 'StakedAssetMissing'
+  | 'LiquidityPoolMissing'
+  | 'CanonicalLpMismatch'
+  | 'EmptyNativeReserve'
+  | 'EmptyStakedReserve'
+  | 'EmptyLpIssuance'
+  | 'ValuationUnavailable'
+  | 'ParticipantIndexInconsistent'
+  | 'SnapshotOpenFailed'
+  | 'EligibleOperatorSetEmpty'
+  | 'CandidateSetInconsistent'
+  | 'Ready';
+
+export type NativeSecurityCapabilitiesProjection = {
+  newNominations: boolean;
+  redelegation: boolean;
+  candidateSelection: boolean;
+  rewardFunding: boolean;
+  rewardClaims: boolean;
+  rewardCompound: boolean;
+  custodyExit: boolean;
+};
+
 export type NativeStakingPoolProjection = {
   nativeAssetId: number;
   stakedAssetId: number;
@@ -39,9 +67,19 @@ export type NativeGovernanceCustodyPositionProjection = {
   pendingAssetUnlockBlock: number | null;
 };
 
+export type NativeSecurityBoundaryDiagnosticProjection = {
+  plannedEpoch: number;
+  readiness: NativeSecurityReadiness;
+};
+
 export type NativeStakingProjection = {
   isAvailable: boolean;
   accountAddress: string | null;
+  securityMode: NativeSecurityMode | null;
+  securityCapabilities: NativeSecurityCapabilitiesProjection | null;
+  securityReadiness: NativeSecurityReadiness | null;
+  securityEpoch: number | null;
+  boundaryDiagnostic: NativeSecurityBoundaryDiagnosticProjection | null;
   exchangeRate: bigint | null;
   pool: NativeStakingPoolProjection | null;
   accountPosition: NativeLockedLpPositionProjection | null;

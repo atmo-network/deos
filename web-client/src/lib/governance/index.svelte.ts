@@ -197,7 +197,7 @@ class GovernanceStore {
     authorizedRuntimeUpgrade: null,
     recentFinalizedProposals: [],
     recentFinalizedProposalsView: null,
-    rewardCoefficient: null,
+    governanceParticipationCoefficient: null,
     govxpCounters: emptyGovXpCounters(),
     loading: false,
     error: null,
@@ -221,7 +221,7 @@ class GovernanceStore {
     this.state.authorizedRuntimeUpgrade = null;
     this.state.recentFinalizedProposals = [];
     this.state.recentFinalizedProposalsView = null;
-    this.state.rewardCoefficient = null;
+    this.state.governanceParticipationCoefficient = null;
     this.state.govxpCounters = emptyGovXpCounters();
   }
 
@@ -308,14 +308,14 @@ class GovernanceStore {
         submissionOptions,
         authorizedRuntimeUpgrade,
         recentFinalizedProposals,
-        rewardCoefficient,
+        governanceParticipationCoefficient,
         govxpCounters,
       ] = await Promise.all([
         this.adapter.getActiveProposalIds(this.state.domainId),
         loadPublicSubmissionOptions(this.adapter, this.state.domainId),
         this.adapter.getAuthorizedRuntimeUpgrade(),
         this.adapter.getRecentFinalizedProposals(this.state.domainId),
-        this.adapter.getRewardCoefficient(
+        this.adapter.getGovernanceParticipationCoefficient(
           this.state.domainId,
           this.state.accountId,
         ),
@@ -411,7 +411,8 @@ class GovernanceStore {
         'governanceStore.recentFinalizedProposals <- Governance.recent_finalized_proposals + Governance.proposal_metadata + Governance.proposal_execution_authority + Governance.proposal_payload_availability + Governance.proposal_execution_detail + Governance.retained_proposal_winning_primary_option',
         'bounded-recent',
       );
-      this.state.rewardCoefficient = rewardCoefficient;
+      this.state.governanceParticipationCoefficient =
+        governanceParticipationCoefficient;
       this.state.govxpCounters = govxpCounters;
     } catch (error) {
       this.clearReadState();

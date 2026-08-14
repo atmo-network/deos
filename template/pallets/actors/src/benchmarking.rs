@@ -48,9 +48,8 @@ mod benches {
   fn deplete_user_sovereign<T: Config>(actor_id: ActorId) {
     let instance =
       Pallet::<T>::active_actor_view(actor_id).expect("benchmark actor must exist for depletion");
-    let requirement =
-      Pallet::<T>::attempt_fee_envelope(ActorType::User, &instance.execution_plan, 0)
-        .expect("benchmark execution plan has a checked fee envelope");
+    let requirement = Pallet::<T>::attempt_fee_envelope(ActorType::User, &instance.steps, 0)
+      .expect("benchmark execution plan has a checked fee envelope");
     let required = T::MinUserBalance::get().saturating_add(requirement.total);
     T::AssetOps::burn(
       &instance.sovereign_account,
@@ -60,30 +59,30 @@ mod benches {
     .expect("benchmark depletion must not overdraw the sovereign");
   }
 
-  fn user_program<T: Config>(
+  fn user_contract<T: Config>(
     schedule: ScheduleOf<T>,
     execution_plan: ExecutionPlanOf<T>,
-  ) -> ProgramInputOf<T> {
-    ProgramInput::Active(ActiveProgramInput {
+  ) -> ContractInputOf<T> {
+    ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window: None,
-      execution_plan,
-      completion_policy: CompletionPolicy::Persistent,
-      funding_source_policy: FundingSourcePolicy::OwnerOnly,
+      steps: execution_plan,
+      completion: CompletionPolicy::Persistent,
+      funding: FundingSourcePolicy::OwnerOnly,
       auto_close_at_cycle_nonce: None,
     })
   }
 
-  fn system_program<T: Config>(
+  fn system_contract<T: Config>(
     schedule: ScheduleOf<T>,
     execution_plan: ExecutionPlanOf<T>,
-  ) -> ProgramInputOf<T> {
-    ProgramInput::Active(ActiveProgramInput {
+  ) -> ContractInputOf<T> {
+    ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window: None,
-      execution_plan,
-      completion_policy: CompletionPolicy::Persistent,
-      funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+      steps: execution_plan,
+      completion: CompletionPolicy::Persistent,
+      funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     })
   }
@@ -94,9 +93,41 @@ mod benches {
       .total
   }
 
+  fn current_all<T: Config>(
+    predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
+  ) -> PreconditionsOf<T> {
+    let clause = BoundedVec::try_from(
+      predicates
+        .into_iter()
+        .map(|predicate| TimedPredicate {
+          timing: ObservationTiming::Current,
+          predicate,
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("benchmark predicates fit");
+    Preconditions::AnyOf(BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"))
+  }
+
+  fn current_any<T: Config>(
+    predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
+  ) -> PreconditionsOf<T> {
+    let clauses = predicates
+      .into_iter()
+      .map(|predicate| {
+        BoundedVec::try_from(alloc::vec![TimedPredicate {
+          timing: ObservationTiming::Current,
+          predicate,
+        }])
+        .expect("benchmark predicate fits")
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
+  }
+
   fn make_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
@@ -109,7 +140,7 @@ mod benches {
 
   fn make_tracked_funding_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
     BoundedVec::try_from(vec![Step {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
@@ -127,7 +158,7 @@ mod benches {
     amount: T::Balance,
   ) -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: ActorTask::RemoveLiquidity {
         lp_asset,
         asset_a,
@@ -157,7 +188,7 @@ mod benches {
     let Some(instance) = Pallet::<T>::active_actor_view(actor_id) else {
       return;
     };
-    let reserve = full_attempt_fee::<T>(&instance.execution_plan)
+    let reserve = full_attempt_fee::<T>(&instance.steps)
       .saturating_add(T::MinUserBalance::get())
       .saturating_add(One::one());
     let _ = T::AssetOps::mint(
@@ -181,7 +212,7 @@ mod benches {
     Pallet::<T>::create_user_actor(
       RawOrigin::Signed(caller).into(),
       Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, execution_plan),
     )
     .expect("create_user_actor must succeed in benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -207,7 +238,7 @@ mod benches {
     create_user_actor(
       RawOrigin::Signed(caller),
       Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, execution_plan),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst =
@@ -234,7 +265,7 @@ mod benches {
       RawOrigin::Signed(caller),
       requested_slot,
       Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, execution_plan),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst = Pallet::<T>::active_actor_view(actor_id)
@@ -258,7 +289,7 @@ mod benches {
       RawOrigin::Root,
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, execution_plan),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst = Pallet::<T>::active_actor_view(actor_id)
@@ -286,7 +317,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_program::<T>(schedule.clone(), execution_plan.clone()),
+      system_contract::<T>(schedule.clone(), execution_plan.clone()),
     )
     .expect("create_system_actor must succeed in benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -299,7 +330,7 @@ mod benches {
       actor_id,
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, execution_plan),
     );
     assert!(Pallet::<T>::active_actor_exists(fresh_id));
   }
@@ -313,7 +344,7 @@ mod benches {
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        ProgramInput::Dormant,
+        ContractInput::Dormant,
       )
       .expect("dormant System identity creation must succeed");
     }
@@ -329,12 +360,12 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     )
     .expect("dormant System identity creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient: T::AccountId = account("activate-recipient", 0, 0);
-    let program = system_program::<T>(
+    let contract = system_contract::<T>(
       Schedule {
         trigger: Trigger::immediate_manual(),
         cooldown_blocks: 100,
@@ -342,7 +373,7 @@ mod benches {
       make_execution_plan::<T>(recipient),
     );
     #[extrinsic_call]
-    activate_actor(RawOrigin::Signed(owner), actor_id, program);
+    activate_actor(RawOrigin::Signed(owner), actor_id, contract);
     assert!(Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
   }
@@ -356,7 +387,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_program::<T>(
+      system_contract::<T>(
         Schedule {
           trigger: Trigger::immediate_manual(),
           cooldown_blocks: 100,
@@ -426,7 +457,7 @@ mod benches {
       RawOrigin::Signed(owner.clone()).into(),
       owner_slot,
       Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, execution_plan),
     )
     .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -449,7 +480,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, make_execution_plan::<T>(recipient)),
+      system_contract::<T>(schedule, make_execution_plan::<T>(recipient)),
     )
     .expect("create_system_actor must succeed in System close benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -462,57 +493,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn update_schedule() {
-    let caller: T::AccountId = whitelisted_caller();
-    let actor_id = bench_create_user::<T>(caller.clone());
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
-    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("benchmark actor hot state exists")
-        .pending_signal = true;
-    });
-    let new_schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
-      cooldown_blocks: 20,
-    };
-    #[extrinsic_call]
-    update_schedule(RawOrigin::Signed(caller), actor_id, new_schedule, None);
-    let inst =
-      Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after update_schedule");
-    assert_eq!(inst.schedule.cooldown_blocks, 20);
-  }
-
-  #[benchmark]
-  fn update_funding_source_policy() {
-    let caller: T::AccountId = whitelisted_caller();
-    let actor_id = bench_create_user::<T>(caller.clone());
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
-    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("benchmark actor hot state exists")
-        .pending_signal = true;
-    });
-    let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
-      BoundedBTreeSet::default();
-    for index in 0..T::MaxWhitelistSize::get() {
-      allowed
-        .try_insert(account("funding-source", index, 0))
-        .expect("funding source must fit benchmark bound");
-    }
-    let policy = FundingSourcePolicy::SignedAllowlist(allowed);
-    #[extrinsic_call]
-    update_funding_source_policy(RawOrigin::Signed(caller), actor_id, policy);
-    let funding = ActorFunding::<T>::get(actor_id).expect("actor funding must exist after update");
-    assert!(matches!(
-      funding.funding_source_policy,
-      FundingSourcePolicy::SignedAllowlist(_)
-    ));
-  }
-
-  #[benchmark]
-  fn update_execution_plan() {
+  fn update_contract() {
     let caller: T::AccountId = whitelisted_caller();
     let actor_id = bench_create_user::<T>(caller.clone());
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
@@ -534,16 +515,32 @@ mod benches {
     });
     let recipient = account("recipient", 0, 0);
     let replacement = make_execution_plan::<T>(recipient);
+    let new_schedule = Schedule {
+      trigger: Trigger::immediate_manual(),
+      cooldown_blocks: 20,
+    };
+    let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
+      BoundedBTreeSet::default();
+    for index in 0..T::MaxWhitelistSize::get() {
+      allowed
+        .try_insert(account("funding-source", index, 0))
+        .expect("funding source must fit benchmark bound");
+    }
+    let funding = FundingSourcePolicy::SignedAllowlist(allowed);
     #[extrinsic_call]
-    update_execution_plan(
+    update_contract(
       RawOrigin::Signed(caller),
       actor_id,
+      new_schedule,
+      None,
       replacement.clone(),
+      funding,
       CompletionPolicy::Persistent,
     );
-    let inst = Pallet::<T>::active_actor_view(actor_id)
-      .expect("Actors must exist after update_execution_plan");
-    assert_eq!(inst.execution_plan, replacement);
+    let inst =
+      Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after update_contract");
+    assert_eq!(inst.steps, replacement);
+    assert_eq!(inst.schedule.cooldown_blocks, 20);
     assert!(
       ActorFunding::<T>::get(actor_id)
         .expect("actor funding exists")
@@ -594,7 +591,7 @@ mod benches {
       Pallet::<T>::create_user_actor(
         RawOrigin::Signed(owner).into(),
         Mutability::Mutable,
-        user_program::<T>(schedule.clone(), execution_plan),
+        user_contract::<T>(schedule.clone(), execution_plan),
       )
       .expect("create_user_actor must succeed in permissionless_sweep_many setup");
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -626,7 +623,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
     )
     .expect("fee-collection benchmark sink must be created");
     let fee_sink_id = NextActorId::<T>::get().saturating_sub(1);
@@ -692,90 +689,81 @@ mod benches {
   }
 
   #[benchmark]
-  fn condition_set_all_max() {
+  fn preconditions_all_max() {
     let actor: T::AccountId = account("condition-all", 0, 0);
     let max_conditions = T::MaxConditionsPerStep::get();
     let assets = T::BenchmarkHelper::setup_condition_assets(&actor, max_conditions)
       .expect("condition benchmark assets must be available");
     assert!(assets.len() >= max_conditions as usize);
-    let conditions = BoundedVec::try_from(
-      assets
-        .into_iter()
-        .take(max_conditions as usize)
-        .map(|asset| {
-          T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
-            .expect("condition benchmark asset must be funded");
-          Condition::BalanceAbove {
-            asset,
-            threshold: T::Balance::zero(),
-          }
-        })
-        .collect::<alloc::vec::Vec<_>>(),
-    )
-    .expect("maximum condition group fits");
-    let condition_set = ConditionSet::All(conditions);
+    let predicates = assets
+      .into_iter()
+      .take(max_conditions as usize)
+      .map(|asset| {
+        T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
+          .expect("condition benchmark asset must be funded");
+        Predicate::BalanceAbove {
+          asset,
+          threshold: T::Balance::zero(),
+        }
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let preconditions = current_all::<T>(predicates);
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero()),
+        Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero()),
         Ok(true)
       );
     }
   }
 
   #[benchmark]
-  fn condition_set_observation(c: Linear<1, 4>) {
+  fn preconditions_observation(c: Linear<1, 4>) {
     let actor: T::AccountId = account("condition-observation", 0, 0);
     let bounded = c.min(T::MaxConditionsPerStep::get());
     let feeds = T::BenchmarkHelper::setup_observation_feeds(bounded)
       .expect("observation benchmark feeds must be available");
     assert!(feeds.len() >= bounded as usize);
-    let conditions = BoundedVec::try_from(
-      feeds
-        .into_iter()
-        .take(bounded as usize)
-        .map(|feed| Condition::ObservationAbove {
-          feed,
-          threshold: 0,
-          max_age_blocks: 100,
-        })
-        .collect::<alloc::vec::Vec<_>>(),
-    )
-    .expect("maximum observation condition group fits");
-    let condition_set = ConditionSet::All(conditions);
+    let predicates = feeds
+      .into_iter()
+      .take(bounded as usize)
+      .map(|feed| Predicate::ObservationAbove {
+        feed,
+        threshold: 0,
+        max_age_blocks: 100,
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let preconditions = current_all::<T>(predicates);
     #[block]
     {
-      let _ = Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero());
+      let _ = Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero());
     }
   }
 
   #[benchmark]
-  fn condition_set_evaluation(c: Linear<1, 4>) {
+  fn predicate_set_evaluation(c: Linear<1, 4>) {
     let actor: T::AccountId = account("condition-any", 0, 0);
     let bounded = c.min(T::MaxConditionsPerStep::get());
     let assets = T::BenchmarkHelper::setup_condition_assets(&actor, bounded)
       .expect("condition benchmark assets must be available");
     assert!(assets.len() >= bounded as usize);
-    let conditions = BoundedVec::try_from(
-      assets
-        .into_iter()
-        .take(bounded as usize)
-        .map(|asset| {
-          T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
-            .expect("condition benchmark asset must be funded");
-          Condition::BalanceAbove {
-            asset,
-            threshold: T::Balance::zero(),
-          }
-        })
-        .collect::<alloc::vec::Vec<_>>(),
-    )
-    .expect("maximum condition group fits");
-    let condition_set = ConditionSet::Any(conditions);
+    let predicates = assets
+      .into_iter()
+      .take(bounded as usize)
+      .map(|asset| {
+        T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
+          .expect("condition benchmark asset must be funded");
+        Predicate::BalanceAbove {
+          asset,
+          threshold: T::Balance::zero(),
+        }
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let preconditions = current_any::<T>(predicates);
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero()),
+        Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero()),
         Ok(true)
       );
     }
@@ -959,7 +947,7 @@ mod benches {
     Pallet::<T>::create_user_actor(
       RawOrigin::Signed(caller.clone()).into(),
       Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, execution_plan),
     )
     .expect("create_user_actor must succeed in setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -984,7 +972,7 @@ mod benches {
 
   fn make_inert_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: ActorTask::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -996,7 +984,7 @@ mod benches {
     let mut plan = alloc::vec::Vec::new();
     for _ in 0..bounded {
       plan.push(Step {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: ActorTask::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -1017,7 +1005,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, execution_plan),
     )
     .expect("create_system_actor must succeed in cycle benchmark setup");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1038,7 +1026,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
     )
     .expect("observation benchmark actor creation must succeed");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1055,7 +1043,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, execution_plan),
     )
     .expect("create_system_actor must succeed in wakeup benchmark setup");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1081,11 +1069,11 @@ mod benches {
         .expect("benchmark snapshot staking entry fits");
     }
     assert_eq!(opening_snapshot.len() as u32, bounded);
-    ActorProgram::<T>::mutate(actor_id, |maybe_program| {
-      maybe_program
+    ActorContract::<T>::mutate(actor_id, |maybe_contract| {
+      maybe_contract
         .as_mut()
-        .expect("benchmark actor program exists")
-        .execution_plan[0]
+        .expect("benchmark actor contract exists")
+        .steps[0]
         .on_error = StepErrorPolicy::RetryLater {
         max_attempts: T::MaxRetryAttempts::get(),
       };
@@ -1113,6 +1101,7 @@ mod benches {
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1u32.into(),
         opening_snapshot,
+        opening_predicate_results: Default::default(),
         funding_snapshot: Default::default(),
         cumulative_outcomes: OutcomeTotals::default(),
       },
@@ -1250,15 +1239,20 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_program::<T>(schedule, make_tracked_funding_execution_plan::<T>(owner)),
+      system_contract::<T>(schedule, make_tracked_funding_execution_plan::<T>(owner)),
     )
     .expect("create_system_actor must succeed in ingress benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient = Pallet::<T>::sovereign_account_id_system(actor_id);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
+    ActorContract::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("benchmark Actor Contract exists")
+        .funding = FundingSourcePolicy::AnyVerifiedIngress;
+    });
     ActorFunding::<T>::mutate(actor_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
-      funding.funding_source_policy = FundingSourcePolicy::AnyVerifiedIngress;
       funding
         .funding_accumulated
         .try_insert(T::FeeNativeAssetId::get(), One::one())
@@ -1280,7 +1274,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
     )
     .expect("System timer creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -1361,7 +1355,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn scheduler_actor_program_probe() {
+  fn scheduler_actor_contract_probe() {
     let actor_id = bench_create_system_manual::<T>(3_001);
     assert!(
       ContinuationStateStore::<T>::get(actor_id).is_none(),
@@ -1377,7 +1371,7 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     #[block]
     {
-      Pallet::<T>::benchmark_scheduler_actor_program_probe(actor_id, hot);
+      Pallet::<T>::benchmark_scheduler_actor_contract_probe(actor_id, hot);
     }
   }
   /// One complete minimal cycle execution over one inert StopCycle step (fixed cycle
@@ -1996,11 +1990,12 @@ mod benches {
     let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
     let identity_template =
       ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
-    let program_template = ActorProgram::<T>::get(template_id).expect("benchmark program template");
+    let contract_template =
+      ActorContract::<T>::get(template_id).expect("benchmark contract template");
     let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
     ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
-    ActorProgram::<T>::remove(template_id);
+    ActorContract::<T>::remove(template_id);
     ActorFunding::<T>::remove(template_id);
 
     let first_id = 41_000_000u64;
@@ -2014,7 +2009,7 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorProgram::<T>::insert(actor_id, program_template.clone());
+      ActorContract::<T>::insert(actor_id, contract_template.clone());
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2060,8 +2055,8 @@ mod benches {
     let system_identity =
       ActorIdentities::<T>::take(system_template_id).expect("System identity template");
     let system_hot = ActorHot::<T>::take(system_template_id).expect("System hot template");
-    let program_template =
-      ActorProgram::<T>::take(system_template_id).expect("System program template");
+    let contract_template =
+      ActorContract::<T>::take(system_template_id).expect("System contract template");
     let funding_template =
       ActorFunding::<T>::take(system_template_id).expect("System funding template");
     let first_id = 43_000_000u64;
@@ -2073,7 +2068,7 @@ mod benches {
         let template_id = bench_create_user::<T>(owner);
         let identity = ActorIdentities::<T>::take(template_id).expect("User identity template");
         ActorHot::<T>::remove(template_id);
-        ActorProgram::<T>::remove(template_id);
+        ActorContract::<T>::remove(template_id);
         ActorFunding::<T>::remove(template_id);
         identity
       } else {
@@ -2086,7 +2081,7 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorProgram::<T>::insert(actor_id, program_template.clone());
+      ActorContract::<T>::insert(actor_id, contract_template.clone());
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2197,7 +2192,7 @@ mod benches {
     for _ in 0..bounded {
       plan
         .try_push(Step {
-          conditions: ConditionSet::Always,
+          preconditions: Preconditions::Unconditional,
           task: ActorTask::Transfer {
             to: recipient.clone(),
             asset: T::FeeNativeAssetId::get(),
@@ -2214,7 +2209,10 @@ mod benches {
         let step = &plan[step_index];
         total = total
           .saturating_add(Pallet::<T>::weight_upper_bound(&step.task))
-          .saturating_add(Weight::from_parts(step.conditions.len() as u64, 0));
+          .saturating_add(Weight::from_parts(
+            step.preconditions.predicate_count() as u64,
+            0,
+          ));
       }
       core::hint::black_box(total);
     }
@@ -2423,7 +2421,7 @@ mod benches {
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        system_program::<T>(schedule.clone(), temp_execution_plan),
+        system_contract::<T>(schedule.clone(), temp_execution_plan),
       )
       .expect("create_system_actor must succeed");
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -2435,7 +2433,7 @@ mod benches {
     for (i, actor_id) in actor_ids.iter().enumerate() {
       let next_sov = sovereigns[(i + 1) % sovereigns.len()].clone();
       let transfer_execution_plan: ExecutionPlanOf<T> = BoundedVec::try_from(alloc::vec![Step {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: ActorTask::Transfer {
           to: next_sov,
           asset: native,
@@ -2444,13 +2442,17 @@ mod benches {
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("transfer execution_plan fits");
-      Pallet::<T>::update_execution_plan(
+      let contract = ActorContract::<T>::get(*actor_id).expect("Actor Contract exists");
+      Pallet::<T>::update_contract(
         RawOrigin::Root.into(),
         *actor_id,
+        contract.schedule,
+        contract.schedule_window,
         transfer_execution_plan,
+        contract.funding,
         CompletionPolicy::Persistent,
       )
-      .expect("update_execution_plan must succeed");
+      .expect("update_contract must succeed");
     }
     let total_before: T::Balance = sovereigns
       .iter()

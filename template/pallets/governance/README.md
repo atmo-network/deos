@@ -1,6 +1,6 @@
 # pallet-governance
 
-`pallet-governance` is the DEOS bounded governance reward-memory kernel for the current TMCTOL standard.
+`pallet-governance` is the DEOS bounded governance participation and proposal-lifecycle kernel for the current TMCTOL standard.
 
 The pallet source is now split into responsibility-scoped internal modules while keeping `lib.rs` as the FRAME macro surface:
 
@@ -31,7 +31,7 @@ The current kernel slice provides:
 - Bounded automatic proposal finalization through epoch-keyed maturity buckets, with stale entries ignored and retry deferral on failed automatic settlement
 - Sparse memory with zero-sum eviction once a window fully decays
 - Epoch expiry buckets that touch only accounts whose old winning votes are due to expire
-- Runtime-queryable reward coefficient derived from the live winning-vote window
+- Runtime-queryable governance participation coefficient derived from the live winning-vote window
 - Runtime-queryable GovXP input counters derived from rolling winning memory plus cumulative total / winning participation totals and cumulative authored / successful-authored proposal totals
 - Admin-only `record_winning_vote(domain, item_id, account)` plus bounded `record_winning_vote_batch(domain, item_id, accounts)` for low-level ingress, backed by non-origin `ingest_winning_vote_resolution*` helpers and a higher-level proposal-resolution lifecycle
 - Transactional winner-ingress helpers so late cap / expiry-bucket failures do not leave partial reward memory behind
@@ -42,7 +42,7 @@ The current kernel slice provides:
 
 ## Key rule
 
-The exported staking reward coefficient still tracks **winning votes**, not raw vote extrinsic count and not mere participation.
+The exported governance participation coefficient tracks **winning votes**, not raw vote extrinsic count and not mere participation.
 One governance item should contribute at most one winning-vote point per account inside the bounded live tail, the same resolved `(domain, item_id)` should not be ingested twice while it remains inside the live reward window, and ballot strength should flow through the runtime-configured vote-weight provider surface rather than being hardcoded inside the pallet.
 
 Separately, the pallet now also keeps cumulative GovXP input totals for:
@@ -57,7 +57,7 @@ Those monotonic totals do not replace the sparse winning-vote tail; they complem
 ## Memory discipline rule
 
 If an account's winning-vote rolling sum reaches zero after expiry processing, its storage entry is deleted.
-The pallet should keep active governance reward memory sparse rather than retaining inert zero-state accounts forever.
+The pallet should keep active governance participation memory sparse rather than retaining inert zero-state accounts forever.
 
 ## Runtime-as-Config rule
 

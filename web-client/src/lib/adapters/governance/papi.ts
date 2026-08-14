@@ -14,6 +14,7 @@ import type {
   GovernanceFinalizedProposalOutcome,
   GovernanceGovXpCounters,
   GovernanceItemId,
+  GovernanceParticipationCoefficient,
   GovernancePayloadHashPreimageStatus,
   GovernancePayloadPreimageNoteCost,
   GovernancePrimaryTrackOption,
@@ -40,7 +41,6 @@ import type {
   GovernanceProviderState,
   GovernanceQuerySurfaceAvailability,
   GovernanceRecentFinalizedProposal,
-  GovernanceRewardCoefficient,
   GovernanceVetoCancellationMode,
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
@@ -83,7 +83,7 @@ function unavailableWriteSurface(
   });
 }
 
-function fixedU128String(value: bigint): GovernanceRewardCoefficient {
+function fixedU128String(value: bigint): GovernanceParticipationCoefficient {
   if (value <= 0n) {
     return '0.000000000000000000';
   }
@@ -1094,7 +1094,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     return {
       ...state,
       message:
-        'PAPI connected; live governance runtime views now provide canonical recent-finalized discovery, retained execution detail, proposal status/tally/profile, submission-authority, reward coefficient, and GovXP counter reads, cast_vote is available when the selected account matches either an injected wallet or a built-in local dev signer, materialized history stays external, and admin signing is not implemented yet',
+        'PAPI connected; live governance runtime views now provide canonical recent-finalized discovery, retained execution detail, proposal status/tally/profile, submission-authority, governance participation coefficient, and GovXP counter reads, cast_vote is available when the selected account matches either an injected wallet or a built-in local dev signer, materialized history stays external, and admin signing is not implemented yet',
     };
   }
 
@@ -1484,13 +1484,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     );
   }
 
-  async getRewardCoefficient(
+  async getGovernanceParticipationCoefficient(
     domainId: GovernanceDomainId,
     accountId: GovernanceAccountId,
-  ): Promise<GovernanceRewardCoefficient | null> {
+  ): Promise<GovernanceParticipationCoefficient | null> {
     const snapshot = await this.snapshot();
     return fixedU128String(
-      await snapshot.typedApi.view.Governance.reward_coefficient(
+      await snapshot.typedApi.view.Governance.governance_participation_coefficient(
         domainId,
         accountId,
         {

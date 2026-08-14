@@ -205,6 +205,11 @@ const generatedBounds = await format(
   `/* Generated from Actors runtime metadata ${manifest.metadata.sha256}; do not edit. */\n` +
     `export const ACTORS_MAX_EXECUTION_PLAN_STEPS = ${decodeUnsignedConstant(manifest, 'MaxExecutionPlanSteps', 4)};\n` +
     `export const ACTORS_MAX_RETRY_ATTEMPTS = ${decodeUnsignedConstant(manifest, 'MaxRetryAttempts', 4)};\n` +
+    `export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = ${decodeUnsignedConstant(manifest, 'MaxOpeningSnapshotEntries', 4)};\n` +
+    `export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = ${decodeUnsignedConstant(manifest, 'MaxOpeningPredicateResults', 4)};\n` +
+    `export const ACTORS_MAX_PRECONDITION_CLAUSES = ${decodeUnsignedConstant(manifest, 'MaxPreconditionClauses', 4)};\n` +
+    `export const ACTORS_MAX_PREDICATES_PER_CLAUSE = ${decodeUnsignedConstant(manifest, 'MaxPredicatesPerClause', 4)};\n` +
+    `export const ACTORS_MAX_PREDICATES_PER_STEP = ${decodeUnsignedConstant(manifest, 'MaxConditionsPerStep', 4)};\n` +
     `export const ACTORS_MAX_OWNER_SLOTS = ${decodeUnsignedConstant(manifest, 'MaxOwnerSlots', 1)};\n`,
   { parser: 'typescript' },
 );

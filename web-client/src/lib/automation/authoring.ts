@@ -1,22 +1,25 @@
 /*
 Domain: Actors linear plan authoring
-Owns: Typed step drafts, immutable ordered-step operations, structural validation, exact ProgramInput lowering, and canonical artifact production.
+Owns: Typed step drafts, immutable ordered-step operations, structural validation, exact ContractInput lowering, and canonical artifact production.
 Excludes: Runtime submission, governance authority, adapter execution, simulation, weight modeling, recipes, and widget state.
-Zone: Automation domain capability; composes the canonical plan-artifact codec without defining another runtime language.
+Zone: Automation domain capability; composes the canonical contract-artifact codec without defining another runtime language.
 */
 import { decodeAddress } from '@polkadot/util-crypto';
 
 import {
   ACTORS_MAX_EXECUTION_PLAN_STEPS,
+  ACTORS_MAX_PRECONDITION_CLAUSES,
+  ACTORS_MAX_PREDICATES_PER_CLAUSE,
+  ACTORS_MAX_PREDICATES_PER_STEP,
   ACTORS_MAX_RETRY_ATTEMPTS,
 } from './actors-protocol-bounds.ts';
 import {
-  type ActorPlanArtifact,
-  type ActorPlanRuntimeIdentity,
-  type ActorPlanType,
-  createActorPlanArtifact,
-  encodeActorProgramValue,
-} from './plan-artifact.ts';
+  type ActorContractArtifact,
+  type ActorContractRuntimeIdentity,
+  type ActorContractType,
+  createActorContractArtifact,
+  encodeActorContractValue,
+} from './contract-artifact.ts';
 import type {
   AutomationMutability,
   AutomationStepErrorPolicy,
@@ -45,7 +48,7 @@ export type ActorAuthoringObservationFeed = {
   scale: number;
 };
 
-export type ActorAuthoringCondition =
+export type ActorAuthoringPredicate =
   | {
       type:
         | 'BalanceAbove'
@@ -164,15 +167,20 @@ export const ACTORS_AUTHORING_CONDITION_TYPES = [
   'ObservationBelow',
   'ObservationEquals',
   'ObservationNotEquals',
-] as const satisfies readonly ActorAuthoringCondition['type'][];
+] as const satisfies readonly ActorAuthoringPredicate['type'][];
 
-export type ActorAuthoringConditionSet =
-  | { type: 'Always' }
-  | { type: 'All' | 'Any'; conditions: ActorAuthoringCondition[] };
+export type ActorAuthoringTimedPredicate = {
+  timing: 'Opening' | 'Current';
+  predicate: ActorAuthoringPredicate;
+};
+
+export type ActorAuthoringPreconditions =
+  | { type: 'Unconditional' }
+  | { type: 'AnyOf'; clauses: ActorAuthoringTimedPredicate[][] };
 
 export type ActorAuthoringStep = {
   key: string;
-  conditionSet: ActorAuthoringConditionSet;
+  preconditions: ActorAuthoringPreconditions;
   task: ActorAuthoringTask;
   errorPolicy: AutomationStepErrorPolicy;
 };
@@ -211,8 +219,8 @@ export type ActorAuthoringCompletionPolicy =
   | 'Persistent'
   | 'CloseAfterProductiveCycle';
 
-export type ActorAuthoringProgram = {
-  actorType: ActorPlanType;
+export type ActorAuthoringContract = {
+  actorType: ActorContractType;
   mutability: AutomationMutability;
   completionPolicy: ActorAuthoringCompletionPolicy;
   autoCloseAtCycleNonce: bigint | null;
@@ -226,6 +234,8 @@ export type ActorAuthoringProgram = {
 export type ActorAuthoringLimits = {
   maxExecutionPlanSteps: number;
   maxRetryAttempts: number;
+  maxPreconditionClauses: number;
+  maxPredicatesPerClause: number;
   maxConditionsPerStep: number;
   maxSplitTransferLegs: number;
   maxWhitelistSize: number;
@@ -235,7 +245,9 @@ export type ActorAuthoringLimits = {
 export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
   maxExecutionPlanSteps: ACTORS_MAX_EXECUTION_PLAN_STEPS,
   maxRetryAttempts: ACTORS_MAX_RETRY_ATTEMPTS,
-  maxConditionsPerStep: 4,
+  maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
+  maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
+  maxConditionsPerStep: ACTORS_MAX_PREDICATES_PER_STEP,
   maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
   maxTriggerSources: 4,
@@ -324,9 +336,9 @@ export function createActorAuthoringTask(
   }
 }
 
-export function createActorAuthoringCondition(
-  type: ActorAuthoringCondition['type'],
-): ActorAuthoringCondition {
+export function createActorAuthoringPredicate(
+  type: ActorAuthoringPredicate['type'],
+): ActorAuthoringPredicate {
   switch (type) {
     case 'BalanceAbove':
     case 'BalanceBelow':
@@ -361,13 +373,13 @@ export function createActorAuthoringStep(
 ): ActorAuthoringStep {
   return {
     key,
-    conditionSet: { type: 'Always' },
+    preconditions: { type: 'Unconditional' },
     task,
     errorPolicy: { type: 'AbortCycle' },
   };
 }
 
-export function createActorAuthoringProgram(): ActorAuthoringProgram {
+export function createActorAuthoringContract(): ActorAuthoringContract {
   return {
     actorType: 'User',
     mutability: 'Mutable',
@@ -526,8 +538,8 @@ function validateObservationFeed(
   }
 }
 
-function validateCondition(
-  condition: ActorAuthoringCondition,
+function validatePredicate(
+  condition: ActorAuthoringPredicate,
   path: string,
   issues: ActorAuthoringIssue[],
 ) {
@@ -592,7 +604,7 @@ function validateTask(
   path: string,
   issues: ActorAuthoringIssue[],
   limits: ActorAuthoringLimits,
-  actorType: ActorPlanType,
+  actorType: ActorContractType,
 ) {
   switch (task.type) {
     case 'Transfer':
@@ -862,15 +874,15 @@ function validateTrigger(
   }
 }
 
-export function validateActorAuthoringProgram(
-  program: ActorAuthoringProgram,
+export function validateActorAuthoringContract(
+  contract: ActorAuthoringContract,
   limits = DEOS_ACTORS_AUTHORING_LIMITS,
 ): ActorAuthoringValidation {
   const issues: ActorAuthoringIssue[] = [];
   const maxSteps = limits.maxExecutionPlanSteps;
   if (
-    program.completionPolicy !== 'Persistent' &&
-    program.completionPolicy !== 'CloseAfterProductiveCycle'
+    contract.completionPolicy !== 'Persistent' &&
+    contract.completionPolicy !== 'CloseAfterProductiveCycle'
   ) {
     issues.push({
       path: 'completionPolicy',
@@ -879,32 +891,32 @@ export function validateActorAuthoringProgram(
     });
   }
   if (
-    program.autoCloseAtCycleNonce != null &&
-    (program.autoCloseAtCycleNonce <= 0n ||
-      program.autoCloseAtCycleNonce > U64_MAX)
+    contract.autoCloseAtCycleNonce != null &&
+    (contract.autoCloseAtCycleNonce <= 0n ||
+      contract.autoCloseAtCycleNonce > U64_MAX)
   ) {
     issues.push({
       path: 'autoCloseAtCycleNonce',
       message: 'Auto-close target must be a nonzero u64 logical-cycle nonce',
     });
   }
-  if (program.steps.length === 0 || program.steps.length > maxSteps) {
+  if (contract.steps.length === 0 || contract.steps.length > maxSteps) {
     issues.push({
       path: 'steps',
-      message: `Active ${program.actorType} program requires 1..${maxSteps} steps`,
+      message: `Active ${contract.actorType} Actor Contract requires 1..${maxSteps} steps`,
     });
   }
-  if (!isU32(program.cooldownBlocks)) {
+  if (!isU32(contract.cooldownBlocks)) {
     issues.push({
       path: 'cooldownBlocks',
       message: 'Cooldown must be a u32',
     });
   }
   if (
-    program.scheduleWindow != null &&
-    (!isU32(program.scheduleWindow.start) ||
-      !isU32(program.scheduleWindow.end) ||
-      program.scheduleWindow.end <= program.scheduleWindow.start)
+    contract.scheduleWindow != null &&
+    (!isU32(contract.scheduleWindow.start) ||
+      !isU32(contract.scheduleWindow.end) ||
+      contract.scheduleWindow.end <= contract.scheduleWindow.start)
   ) {
     issues.push({
       path: 'scheduleWindow',
@@ -912,17 +924,17 @@ export function validateActorAuthoringProgram(
         'Schedule window requires u32 bounds with end greater than start',
     });
   }
-  validateTrigger(program.trigger, issues, limits);
-  if (program.fundingPolicy.type === 'SignedAllowlist') {
+  validateTrigger(contract.trigger, issues, limits);
+  if (contract.fundingPolicy.type === 'SignedAllowlist') {
     validateUniqueAddresses(
-      program.fundingPolicy.accounts,
+      contract.fundingPolicy.accounts,
       'fundingPolicy.accounts',
       issues,
       limits.maxWhitelistSize,
     );
   }
   const keys = new Set<string>();
-  program.steps.forEach((step, index) => {
+  contract.steps.forEach((step, index) => {
     const path = `steps[${index}]`;
     if (step.key.length === 0 || keys.has(step.key)) {
       issues.push({
@@ -931,29 +943,61 @@ export function validateActorAuthoringProgram(
       });
     }
     keys.add(step.key);
-    const conditions =
-      step.conditionSet.type === 'Always' ? [] : step.conditionSet.conditions;
-    if (step.conditionSet.type !== 'Always' && conditions.length === 0) {
+    const clauses =
+      step.preconditions.type === 'Unconditional'
+        ? []
+        : step.preconditions.clauses;
+    if (step.preconditions.type === 'AnyOf' && clauses.length === 0) {
       issues.push({
-        path: `${path}.conditionSet.conditions`,
-        message: `${step.conditionSet.type} requires at least one condition`,
+        path: `${path}.preconditions.clauses`,
+        message: 'AnyOf requires at least one clause',
       });
     }
-    if (conditions.length > limits.maxConditionsPerStep) {
+    if (clauses.length > limits.maxPreconditionClauses) {
       issues.push({
-        path: `${path}.conditionSet.conditions`,
-        message: `A step supports at most ${limits.maxConditionsPerStep} conditions`,
+        path: `${path}.preconditions.clauses`,
+        message: `A step supports at most ${limits.maxPreconditionClauses} precondition clauses`,
       });
     }
-    conditions.forEach((condition, conditionIndex) =>
-      validateCondition(
-        condition,
-        `${path}.conditionSet.conditions[${conditionIndex}]`,
-        issues,
-      ),
+    const predicateCount = clauses.reduce(
+      (total, clause) => total + clause.length,
+      0,
     );
+    if (predicateCount > limits.maxConditionsPerStep) {
+      issues.push({
+        path: `${path}.preconditions.clauses`,
+        message: `A step supports at most ${limits.maxConditionsPerStep} predicates`,
+      });
+    }
+    clauses.forEach((clause, clauseIndex) => {
+      if (clause.length === 0) {
+        issues.push({
+          path: `${path}.preconditions.clauses[${clauseIndex}]`,
+          message: 'A precondition clause must not be empty',
+        });
+      }
+      if (clause.length > limits.maxPredicatesPerClause) {
+        issues.push({
+          path: `${path}.preconditions.clauses[${clauseIndex}]`,
+          message: `A precondition clause supports at most ${limits.maxPredicatesPerClause} predicates`,
+        });
+      }
+      clause.forEach((timed, predicateIndex) => {
+        if (timed.timing !== 'Opening' && timed.timing !== 'Current') {
+          issues.push({
+            path: `${path}.preconditions.clauses[${clauseIndex}][${predicateIndex}].timing`,
+            message: 'Predicate timing must be Opening or Current',
+          });
+        }
+        validatePredicate(
+          timed.predicate,
+          `${path}.preconditions.clauses[${clauseIndex}][${predicateIndex}].predicate`,
+          issues,
+        );
+      });
+    });
     if (
-      program.mutability === 'Immutable' &&
+      contract.mutability === 'Immutable' &&
       step.errorPolicy.type === 'RetryLater'
     ) {
       issues.push({
@@ -972,7 +1016,7 @@ export function validateActorAuthoringProgram(
         message: `RetryLater max attempts must be within 2..${limits.maxRetryAttempts}`,
       });
     }
-    validateTask(step.task, `${path}.task`, issues, limits, program.actorType);
+    validateTask(step.task, `${path}.task`, issues, limits, contract.actorType);
   });
   return issues.length === 0
     ? { valid: true, issues: [] }
@@ -980,61 +1024,61 @@ export function validateActorAuthoringProgram(
 }
 
 export function appendActorStep(
-  program: ActorAuthoringProgram,
+  contract: ActorAuthoringContract,
   step: ActorAuthoringStep,
-): ActorAuthoringProgram {
-  return { ...program, steps: [...program.steps, structuredClone(step)] };
+): ActorAuthoringContract {
+  return { ...contract, steps: [...contract.steps, structuredClone(step)] };
 }
 
 export function replaceActorStep(
-  program: ActorAuthoringProgram,
+  contract: ActorAuthoringContract,
   key: string,
   step: ActorAuthoringStep,
-): ActorAuthoringProgram {
-  const index = program.steps.findIndex((candidate) => candidate.key === key);
+): ActorAuthoringContract {
+  const index = contract.steps.findIndex((candidate) => candidate.key === key);
   if (index < 0) throw new Error(`Unknown authoring step key: ${key}`);
-  const steps = program.steps.map((candidate, candidateIndex) =>
+  const steps = contract.steps.map((candidate, candidateIndex) =>
     candidateIndex === index ? structuredClone(step) : candidate,
   );
-  return { ...program, steps };
+  return { ...contract, steps };
 }
 
 export function removeActorStep(
-  program: ActorAuthoringProgram,
+  contract: ActorAuthoringContract,
   key: string,
-): ActorAuthoringProgram {
-  const index = program.steps.findIndex((candidate) => candidate.key === key);
+): ActorAuthoringContract {
+  const index = contract.steps.findIndex((candidate) => candidate.key === key);
   if (index < 0) throw new Error(`Unknown authoring step key: ${key}`);
   return {
-    ...program,
-    steps: program.steps.filter(
+    ...contract,
+    steps: contract.steps.filter(
       (_, candidateIndex) => candidateIndex !== index,
     ),
   };
 }
 
 export function moveActorStep(
-  program: ActorAuthoringProgram,
+  contract: ActorAuthoringContract,
   fromIndex: number,
   toIndex: number,
-): ActorAuthoringProgram {
+): ActorAuthoringContract {
   if (
     !Number.isSafeInteger(fromIndex) ||
     !Number.isSafeInteger(toIndex) ||
     fromIndex < 0 ||
     toIndex < 0 ||
-    fromIndex >= program.steps.length ||
-    toIndex >= program.steps.length
+    fromIndex >= contract.steps.length ||
+    toIndex >= contract.steps.length
   ) {
     throw new Error(
-      'Step move indexes must address the current ordered program',
+      'Step move indexes must address the current ordered contract',
     );
   }
-  if (fromIndex === toIndex) return program;
-  const steps = [...program.steps];
+  if (fromIndex === toIndex) return contract;
+  const steps = [...contract.steps];
   const [moved] = steps.splice(fromIndex, 1);
   steps.splice(toIndex, 0, moved);
-  return { ...program, steps };
+  return { ...contract, steps };
 }
 
 function runtimeVariant(type: string, value: unknown = undefined) {
@@ -1079,7 +1123,7 @@ function lowerObservationFeed(feed: ActorAuthoringObservationFeed) {
   };
 }
 
-function lowerCondition(condition: ActorAuthoringCondition) {
+function lowerPredicate(condition: ActorAuthoringPredicate) {
   switch (condition.type) {
     case 'BalanceAbove':
     case 'BalanceBelow':
@@ -1390,37 +1434,42 @@ function lowerFundingPolicy(policy: ActorAuthoringFundingPolicy) {
   }
 }
 
-export function lowerActorAuthoringProgram(
-  program: ActorAuthoringProgram,
+export function lowerActorAuthoringContract(
+  contract: ActorAuthoringContract,
   limits = DEOS_ACTORS_AUTHORING_LIMITS,
 ) {
-  const validation = validateActorAuthoringProgram(program, limits);
+  const validation = validateActorAuthoringContract(contract, limits);
   if (!validation.valid) {
     throw new Error(
-      `Invalid Actors authoring program: ${validation.issues
+      `Invalid Actors authoring contract: ${validation.issues
         .map((issue) => `${issue.path}: ${issue.message}`)
         .join('; ')}`,
     );
   }
   return runtimeVariant('Active', {
     schedule: {
-      trigger: lowerTrigger(program.trigger),
-      cooldown_blocks: program.cooldownBlocks,
+      trigger: lowerTrigger(contract.trigger),
+      cooldown_blocks: contract.cooldownBlocks,
     },
     schedule_window:
-      program.scheduleWindow == null
+      contract.scheduleWindow == null
         ? undefined
         : {
-            start: program.scheduleWindow.start,
-            end: program.scheduleWindow.end,
+            start: contract.scheduleWindow.start,
+            end: contract.scheduleWindow.end,
           },
-    execution_plan: program.steps.map((step) => ({
-      conditions:
-        step.conditionSet.type === 'Always'
-          ? runtimeVariant('Always')
+    steps: contract.steps.map((step) => ({
+      preconditions:
+        step.preconditions.type === 'Unconditional'
+          ? runtimeVariant('Unconditional')
           : runtimeVariant(
-              step.conditionSet.type,
-              step.conditionSet.conditions.map(lowerCondition),
+              'AnyOf',
+              step.preconditions.clauses.map((clause) =>
+                clause.map((timed) => ({
+                  timing: runtimeVariant(timed.timing),
+                  predicate: lowerPredicate(timed.predicate),
+                })),
+              ),
             ),
       task: lowerTask(step.task),
       on_error:
@@ -1430,31 +1479,31 @@ export function lowerActorAuthoringProgram(
             })
           : runtimeVariant(step.errorPolicy.type),
     })),
-    completion_policy: runtimeVariant(program.completionPolicy),
-    funding_source_policy: lowerFundingPolicy(program.fundingPolicy),
-    auto_close_at_cycle_nonce: program.autoCloseAtCycleNonce ?? undefined,
+    completion: runtimeVariant(contract.completionPolicy),
+    funding: lowerFundingPolicy(contract.fundingPolicy),
+    auto_close_at_cycle_nonce: contract.autoCloseAtCycleNonce ?? undefined,
   });
 }
 
 export function createActorArtifactFromAuthoring(input: {
-  program: ActorAuthoringProgram;
+  contract: ActorAuthoringContract;
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity;
+  runtime: ActorContractRuntimeIdentity;
   limits?: ActorAuthoringLimits;
-}): ActorPlanArtifact {
-  const runtimeValue = lowerActorAuthoringProgram(
-    input.program,
+}): ActorContractArtifact {
+  const runtimeValue = lowerActorAuthoringContract(
+    input.contract,
     input.limits ?? DEOS_ACTORS_AUTHORING_LIMITS,
   );
-  const programScale = encodeActorProgramValue(
+  const contractScale = encodeActorContractValue(
     input.metadataBytes,
     runtimeValue,
   );
-  return createActorPlanArtifact({
+  return createActorContractArtifact({
     metadataBytes: input.metadataBytes,
     runtime: input.runtime,
-    actorType: input.program.actorType,
-    mutability: input.program.mutability,
-    programScale,
+    actorType: input.contract.actorType,
+    mutability: input.contract.mutability,
+    contractScale,
   });
 }

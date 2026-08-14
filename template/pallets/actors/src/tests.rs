@@ -1,24 +1,129 @@
 use crate::{
-  ActiveLifecycle, ActiveProgramInput, ActorClass, ActorEligibilityError, ActorEligibilityPhase,
-  ActorEligibilityProjection, ActorExecutionPhase, ActorFunding, ActorHot, ActorId,
-  ActorIdentities, ActorProgram, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
-  CadenceMode, CancellationReason, CloseReason, CompletionPolicy, Condition, ConditionSet,
-  ContinuationStateStore, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
-  FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
-  IdleStarvationState, InitialLifecycle, InputLimit, Mutability, NextActorId,
-  ObservationSubscriberPageList, OpeningSurface, OutcomeTotals, OwnerSlotBitmaps, ProgramInput,
-  QueueEntry, QueueHead, QueueOccupancy, QueuePages, QueueTail, RetryClass, Schedule, ScheduleOf,
-  ScheduleWindow, SimulationError, SimulationMode, SimulationStatus, SimulationStepOutcome,
-  SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason,
-  SystemSovereignState, Task, TaskFailure, TaskOf, Trigger, TriggerPolicy, TriggerSource,
-  WakeupBucketState, WakeupBuckets, WakeupEntry, WakeupPage, WakeupPages, WakeupPointer,
-  adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*,
-  settle_attempt_fee_step,
+  ActiveContractInput, ActiveLifecycle, ActorClass, ActorContract, ActorEligibilityError,
+  ActorEligibilityPhase, ActorEligibilityProjection, ActorExecutionPhase, ActorFunding, ActorHot,
+  ActorId, ActorIdentities, ActorType, AmountResolution, AssetFilter, AssetFilterOf, CadenceMode,
+  CancellationReason, CloseReason, ContinuationStateStore, ContractInput, CycleResult, CycleState,
+  Error, Event, FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy,
+  GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit,
+  Mutability, NextActorId, ObservationSubscriberPageList, ObservationTiming, OpeningSurface,
+  OutcomeTotals, OwnerSlotBitmaps, Preconditions, Predicate, QueueEntry, QueueHead, QueueOccupancy,
+  QueuePages, QueueTail, RetryClass, Schedule, ScheduleWindow, SimulationError, SimulationMode,
+  SimulationStatus, SimulationStepOutcome, SimulationStepRecord, SourceFilter, SourceFilterOf,
+  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason,
+  SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf, TimedPredicate, Trigger,
+  TriggerPolicy, TriggerSource, WakeupBucketState, WakeupBuckets, WakeupEntry, WakeupPage,
+  WakeupPages, WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope,
+  fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
 const RETRY_LATER: StepErrorPolicy = StepErrorPolicy::RetryLater { max_attempts: 10 };
+
+fn update_contract_parts(
+  actor_id: ActorId,
+) -> (
+  crate::ScheduleOf<crate::mock::Test>,
+  Option<crate::ScheduleWindow<u64>>,
+  crate::ExecutionPlanOf<crate::mock::Test>,
+  crate::FundingSourcePolicyOf<Test>,
+  crate::CompletionPolicy,
+) {
+  let contract = ActorContract::<Test>::get(actor_id).expect("Actor Contract exists");
+  (
+    contract.schedule,
+    contract.schedule_window,
+    contract.steps,
+    contract.funding,
+    contract.completion,
+  )
+}
+
+macro_rules! update_contract_partial {
+  ($origin:expr, $actor_id:expr, $funding:expr $(,)?) => {{
+    let (schedule, schedule_window, steps, _, completion) =
+      crate::tests::update_contract_parts($actor_id);
+    crate::mock::Actors::update_contract(
+      $origin,
+      $actor_id,
+      schedule,
+      schedule_window,
+      steps,
+      $funding,
+      completion,
+    )
+  }};
+  ($origin:expr, $actor_id:expr, $first:expr, $second:expr $(,)?) => {{
+    let (schedule, schedule_window, steps, funding, completion) =
+      crate::tests::update_contract_parts($actor_id);
+    trait PartialContractUpdate {
+      fn apply(
+        self,
+        schedule: crate::ScheduleOf<crate::mock::Test>,
+        schedule_window: Option<crate::ScheduleWindow<u64>>,
+        steps: crate::ExecutionPlanOf<crate::mock::Test>,
+        completion: crate::CompletionPolicy,
+      ) -> (
+        crate::ScheduleOf<crate::mock::Test>,
+        Option<crate::ScheduleWindow<u64>>,
+        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::CompletionPolicy,
+      );
+    }
+    impl PartialContractUpdate
+      for (
+        crate::ScheduleOf<crate::mock::Test>,
+        Option<crate::ScheduleWindow<u64>>,
+      )
+    {
+      fn apply(
+        self,
+        _: crate::ScheduleOf<crate::mock::Test>,
+        _: Option<crate::ScheduleWindow<u64>>,
+        steps: crate::ExecutionPlanOf<crate::mock::Test>,
+        completion: crate::CompletionPolicy,
+      ) -> (
+        crate::ScheduleOf<crate::mock::Test>,
+        Option<crate::ScheduleWindow<u64>>,
+        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::CompletionPolicy,
+      ) {
+        (self.0, self.1, steps, completion)
+      }
+    }
+    impl PartialContractUpdate
+      for (
+        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::CompletionPolicy,
+      )
+    {
+      fn apply(
+        self,
+        schedule: crate::ScheduleOf<crate::mock::Test>,
+        schedule_window: Option<crate::ScheduleWindow<u64>>,
+        _: crate::ExecutionPlanOf<crate::mock::Test>,
+        _: crate::CompletionPolicy,
+      ) -> (
+        crate::ScheduleOf<crate::mock::Test>,
+        Option<crate::ScheduleWindow<u64>>,
+        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::CompletionPolicy,
+      ) {
+        (schedule, schedule_window, self.0, self.1)
+      }
+    }
+    let (schedule, schedule_window, steps, completion) =
+      ($first, $second).apply(schedule, schedule_window, steps, completion);
+    crate::mock::Actors::update_contract(
+      $origin,
+      $actor_id,
+      schedule,
+      schedule_window,
+      steps,
+      funding,
+      completion,
+    )
+  }};
+}
 use codec::{Decode, Encode, MaxEncodedLen};
 use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
@@ -35,7 +140,7 @@ use polkadot_sdk::{
 };
 use scale_info::{TypeDef, TypeInfo};
 
-type RuntimeSchedule = ScheduleOf<Test>;
+type RuntimeSchedule = crate::ScheduleOf<crate::mock::Test>;
 type RuntimeSourceFilter = SourceFilterOf<Test>;
 type RuntimeAssetFilter = AssetFilterOf<Test>;
 type RuntimeTriggerSource = TriggerSource<
@@ -60,7 +165,7 @@ type RuntimeTriggerPolicy = TriggerPolicy<
 >;
 type RuntimeTask = TaskOf<Test>;
 type RuntimeStep = StepOf<Test>;
-type RuntimeProgramInput = crate::ProgramInputOf<Test>;
+type RuntimeContractInput = crate::ContractInputOf<Test>;
 type RuntimeContinuationState = crate::ContinuationStateOf<Test>;
 type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>;
 type TestWeightInfo = crate::weights::TestWeightInfo;
@@ -224,12 +329,12 @@ fn percentage_at_opening_is_independent_from_trigger_kind_and_payload() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(schedule, None, plan.clone()),
+        system_active_contract(schedule, None, plan.clone()),
       ));
     }
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       percentage_trigger_schedule(),
@@ -249,7 +354,7 @@ fn observation_only_sources_admit_non_trigger_amount_resolutions() {
     }));
     let actor_id = create_system_with(ALICE, observation_schedule(vec![4]), None, plan);
     assert_eq!(Actors::observation_subscriber_count(4), 1);
-    assert!(Actors::actor_program(actor_id).is_some());
+    assert!(Actors::actor_contract(actor_id).is_some());
   });
 }
 
@@ -283,7 +388,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
       Actors::observation_subscriber_pages(1, page_id).expect("subscriber page")[offset],
       Some(actor_id)
     );
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       observation_schedule(vec![2, 3]),
@@ -297,11 +402,11 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     assert_eq!(Actors::observation_subscriber_count(2), 1);
     assert_eq!(Actors::observation_subscriber_count(3), 1);
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       transfer_execution_plan(BOB, 1),
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     assert_eq!(
       Actors::actor_observation_feeds(actor_id),
@@ -320,12 +425,12 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ProgramInput::Active(ActiveProgramInput {
+      ContractInput::Active(ActiveContractInput {
         schedule: observation_schedule(vec![4]),
         schedule_window: None,
-        execution_plan: inert_execution_plan(),
-        completion_policy: CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::OwnerOnly,
+        steps: inert_execution_plan(),
+        completion: crate::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::OwnerOnly,
         auto_close_at_cycle_nonce: None,
       }),
     ));
@@ -422,7 +527,7 @@ fn duplicate_observation_subscriptions_fail_before_actor_mutation() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, inert_execution_plan()),
+        user_active_contract(schedule, None, inert_execution_plan()),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -456,6 +561,36 @@ fn observation_provider_mutation_without_certified_ingress_has_no_actor_effect()
     assert_eq!(Actors::observation_ingress_revision(feed), None);
     assert!(Actors::dirty_observation_feeds(feed).is_none());
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
+  });
+}
+
+#[test]
+fn stale_observation_subscriber_page_fails_closed_without_losing_dirty_state() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      observation_schedule(vec![19]),
+      None,
+      inert_execution_plan(),
+    );
+    let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
+    let page_size: u32 = <Test as crate::Config>::ObservationPageSize::get();
+    let page_id = slot / page_size;
+    assert_ok!(Actors::note_observation_changed(19, 1));
+    crate::ObservationSubscriberPages::<Test>::remove(19, page_id);
+    let dirty_before = Actors::dirty_observation_feeds(19).expect("dirty feed");
+    let list_before = Actors::dirty_observation_list();
+    let events_before = System::events();
+
+    assert_eq!(
+      crate::Pallet::<Test>::do_fanout_dirty_observation_page(),
+      Err(Error::<Test>::DirtyObservationInvariant.into())
+    );
+    assert_eq!(Actors::dirty_observation_feeds(19), Some(dirty_before));
+    assert_eq!(Actors::dirty_observation_list(), list_before);
+    assert!(!Actors::pending_signal(actor_id));
+    assert_eq!(System::events(), events_before);
   });
 }
 
@@ -1198,7 +1333,7 @@ fn subscriber_mutation_during_fanout_reconciles_without_invariant_errors() {
     );
 
     // Remove the only second-page subscriber mid-fanout via a schedule change away from the feed.
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actors[page_size as usize],
       manual_schedule(),
@@ -1363,14 +1498,14 @@ fn actor_step_metadata_is_a_closed_linear_control_surface() {
     panic!("Step must remain a SCALE composite");
   };
   assert_eq!(definition.fields.len(), 3);
-  assert_eq!(definition.fields[0].name, Some("conditions"));
+  assert_eq!(definition.fields[0].name, Some("preconditions"));
   assert_eq!(definition.fields[1].name, Some("task"));
   assert_eq!(definition.fields[2].name, Some("on_error"));
   assert!(
     definition.fields[0]
       .type_name
       .unwrap_or_default()
-      .contains("ConditionSet")
+      .contains("Preconditions")
   );
   assert!(
     definition.fields[1]
@@ -1468,7 +1603,7 @@ fn actor_scale_variant_names_are_stable() {
     "AllAvailable",
   ]);
   assert_variant_names::<InputLimit<u128>>(&["LiveQuote", "Absolute"]);
-  assert_variant_names::<Condition<TestAsset, u128, u32, u32>>(&[
+  assert_variant_names::<Predicate<TestAsset, u128, u32, u32>>(&[
     "BalanceAbove",
     "BalanceBelow",
     "BalanceEquals",
@@ -1480,7 +1615,9 @@ fn actor_scale_variant_names_are_stable() {
     "ObservationEquals",
     "ObservationNotEquals",
   ]);
-  assert_variant_names::<crate::ConditionSetOf<Test>>(&["Always", "All", "Any"]);
+  assert_variant_names::<crate::PreconditionsOf<Test>>(&["Unconditional", "AnyOf"]);
+  assert_variant_names::<ObservationTiming>(&["Opening", "Current"]);
+  assert_variant_names::<crate::PredicateEvaluation>(&["True", "False", "Invalid"]);
   assert_variant_names::<RuntimeSourceFilter>(&["Any", "OwnerOnly", "Whitelist"]);
   assert_variant_names::<RuntimeAssetFilter>(&["Any", "Whitelist"]);
   assert_variant_names::<RuntimeTriggerSource>(&[
@@ -1501,8 +1638,8 @@ fn actor_scale_variant_names_are_stable() {
   assert_variant_names::<ActorType>(&["User", "System"]);
   assert_variant_names::<ActorClass>(&["User", "System"]);
   assert_variant_names::<Mutability>(&["Mutable", "Immutable"]);
-  assert_variant_names::<CompletionPolicy>(&["Persistent", "CloseAfterProductiveCycle"]);
-  assert_variant_names::<RuntimeProgramInput>(&["Dormant", "Active"]);
+  assert_variant_names::<crate::CompletionPolicy>(&["Persistent", "CloseAfterProductiveCycle"]);
+  assert_variant_names::<RuntimeContractInput>(&["Dormant", "Active"]);
   assert_variant_names::<ActiveLifecycle>(&["Active", "Paused"]);
   assert_variant_names::<CycleState>(&["Idle", "Suspended"]);
   assert_variant_names::<SimulationStatus>(&["Completed", "Failed", "Suspended", "Closed"]);
@@ -1533,9 +1670,9 @@ fn actor_scale_variant_names_are_stable() {
   assert_variant_names::<SuspensionReason>(&["FundingUnavailable", "Temporary"]);
   assert_variant_names::<CancellationReason>(&[
     "Explicit",
-    "ExecutionPlanChanged",
-    "CompletionPolicyChanged",
-    "FundingPolicyChanged",
+    "StepsChanged",
+    "CompletionChanged",
+    "FundingChanged",
     "ScheduleChanged",
     "Deactivated",
     "Closing",
@@ -2555,7 +2692,7 @@ fn actor_storage_schema_is_explicit() {
     [
       "NextActorId",
       "ActorHot",
-      "ActorProgram",
+      "ActorContract",
       "ActorFunding",
       "ContinuationState",
       "ActorIdentities",
@@ -2619,7 +2756,7 @@ fn actor_storage_schema_is_explicit() {
     [
       ("NextActorId", false, false),
       ("ActorHot", true, true),
-      ("ActorProgram", true, true),
+      ("ActorContract", true, true),
       ("ActorFunding", true, true),
       ("ContinuationState", true, true),
       ("ActorIdentities", true, true),
@@ -2660,8 +2797,33 @@ fn actor_storage_schema_is_explicit() {
   let entries = &metadata.entries;
   assert_plain_storage_type::<u64>(&entries[0]);
   assert_map_storage_types::<u64, crate::ActorHotStateOf<Test>>(&entries[1]);
-  assert_map_storage_types::<u64, crate::ActorProgramStateOf<Test>>(&entries[2]);
+  assert_map_storage_types::<u64, crate::ActorContractStateOf<Test>>(&entries[2]);
   assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[3]);
+
+  let mut registry = scale_info::Registry::new();
+  let contract_type =
+    registry.register_type(&scale_info::meta_type::<crate::ActorContractStateOf<Test>>());
+  let (_, contract) = registry
+    .types()
+    .find(|(symbol, _)| symbol.id == contract_type.id)
+    .expect("Actor Contract type is registered");
+  let scale_info::TypeDef::Composite(contract_fields) = &contract.type_def else {
+    panic!("Actor Contract metadata must be composite");
+  };
+  assert_eq!(
+    contract_fields
+      .fields
+      .iter()
+      .map(|field| field.name.as_deref().expect("named Actor Contract field"))
+      .collect::<Vec<_>>(),
+    [
+      "schedule",
+      "schedule_window",
+      "steps",
+      "funding",
+      "completion"
+    ]
+  );
   assert_map_storage_types::<u64, RuntimeContinuationState>(&entries[4]);
   assert_map_storage_types::<u64, crate::ActorIdentityOf<Test>>(&entries[5]);
   assert_plain_storage_type::<u32>(&entries[6]);
@@ -2771,6 +2933,7 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
       opening_snapshot,
+      opening_predicate_results: Default::default(),
       funding_snapshot: Default::default(),
       cumulative_outcomes: OutcomeTotals {
         executed_steps: 1,
@@ -2884,6 +3047,7 @@ fn continuation_try_state_rejects_marker_and_cursor_drift() {
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
         opening_snapshot: Default::default(),
+        opening_predicate_results: Default::default(),
         funding_snapshot: Default::default(),
         cumulative_outcomes: Default::default(),
       },
@@ -2988,39 +3152,66 @@ fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
   }
 }
 
+fn timed_all_conditions(
+  timing: ObservationTiming,
+  predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
+) -> crate::PreconditionsOf<Test> {
+  let clause = BoundedVec::try_from(
+    predicates
+      .into_iter()
+      .map(|predicate| TimedPredicate { timing, predicate })
+      .collect::<Vec<_>>(),
+  )
+  .expect("predicates fit");
+  Preconditions::AnyOf(BoundedVec::try_from(vec![clause]).expect("clause fits"))
+}
+
 fn all_conditions(
-  conditions: Vec<Condition<TestAsset, Balance, u32, u32>>,
-) -> crate::ConditionSetOf<Test> {
-  ConditionSet::All(BoundedVec::try_from(conditions).expect("conditions fit"))
+  predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
+) -> crate::PreconditionsOf<Test> {
+  timed_all_conditions(ObservationTiming::Current, predicates)
 }
 
 fn any_conditions(
-  conditions: Vec<Condition<TestAsset, Balance, u32, u32>>,
-) -> crate::ConditionSetOf<Test> {
-  ConditionSet::Any(BoundedVec::try_from(conditions).expect("conditions fit"))
+  predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
+) -> crate::PreconditionsOf<Test> {
+  let clauses = predicates
+    .into_iter()
+    .map(|predicate| {
+      BoundedVec::try_from(vec![TimedPredicate {
+        timing: ObservationTiming::Current,
+        predicate,
+      }])
+      .expect("predicate fits")
+    })
+    .collect::<Vec<_>>();
+  Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
 }
 
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Test> {
-    conditions: ConditionSet::Always,
+    preconditions: Preconditions::Unconditional,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
 }
 
-fn inert_execution_plan() -> crate::ExecutionPlanOf<Test> {
+fn inert_execution_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
   execution_plan_with_step(StepOf::<Test> {
-    conditions: all_conditions(vec![Condition::BlockNumberBelow { threshold: 0 }]),
+    preconditions: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
     task: Task::StopCycle,
     on_error: StepErrorPolicy::AbortCycle,
   })
 }
 
-fn execution_plan_with_step(step: RuntimeStep) -> crate::ExecutionPlanOf<Test> {
+fn execution_plan_with_step(step: RuntimeStep) -> crate::ExecutionPlanOf<crate::mock::Test> {
   BoundedVec::try_from(vec![step]).expect("execution_plan must fit")
 }
 
-fn transfer_execution_plan(to: AccountId, amount: Balance) -> crate::ExecutionPlanOf<Test> {
+fn transfer_execution_plan(
+  to: AccountId,
+  amount: Balance,
+) -> crate::ExecutionPlanOf<crate::mock::Test> {
   execution_plan_with_step(make_step(Task::Transfer {
     to,
     asset: TestAsset::Native,
@@ -3028,17 +3219,17 @@ fn transfer_execution_plan(to: AccountId, amount: Balance) -> crate::ExecutionPl
   }))
 }
 
-fn user_active_program(
+fn user_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
-) -> crate::ProgramInputOf<Test> {
-  ProgramInput::Active(ActiveProgramInput {
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+) -> crate::ContractInputOf<Test> {
+  ContractInput::Active(ActiveContractInput {
     schedule,
     schedule_window,
-    execution_plan,
-    completion_policy: CompletionPolicy::Persistent,
-    funding_source_policy: FundingSourcePolicy::OwnerOnly,
+    steps: execution_plan,
+    completion: crate::CompletionPolicy::Persistent,
+    funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
   })
 }
@@ -3047,15 +3238,15 @@ fn create_user_with(
   owner: AccountId,
   mutability: Mutability,
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
 ) -> u64 {
   prefund_active_user_creation(owner, &execution_plan);
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_user_actor(
     RuntimeOrigin::signed(owner),
     mutability,
-    user_active_program(schedule, schedule_window, execution_plan),
+    user_active_contract(schedule, schedule_window, execution_plan),
   ));
   age_fixture_control_clock(id);
   id
@@ -3066,8 +3257,8 @@ fn create_user_with_slot(
   owner_slot: u8,
   mutability: Mutability,
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
 ) -> u64 {
   prefund_user_sovereign(owner, owner_slot, &execution_plan);
   let id = Actors::next_actor_id();
@@ -3075,7 +3266,7 @@ fn create_user_with_slot(
     RuntimeOrigin::signed(owner),
     owner_slot,
     mutability,
-    user_active_program(schedule, schedule_window, execution_plan),
+    user_active_contract(schedule, schedule_window, execution_plan),
   ));
   age_fixture_control_clock(id);
   id
@@ -3084,15 +3275,15 @@ fn create_user_with_slot(
 fn create_system_with(
   owner: AccountId,
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
 ) -> u64 {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
     RuntimeOrigin::root(),
     owner,
     Mutability::Mutable,
-    system_active_program(schedule, schedule_window, execution_plan),
+    system_active_contract(schedule, schedule_window, execution_plan),
   ));
   age_fixture_control_clock(id);
   id
@@ -3102,15 +3293,15 @@ fn create_system_with_mutability(
   owner: AccountId,
   mutability: Mutability,
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
 ) -> u64 {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
     RuntimeOrigin::root(),
     owner,
     mutability,
-    system_active_program(schedule, schedule_window, execution_plan),
+    system_active_contract(schedule, schedule_window, execution_plan),
   ));
   age_fixture_control_clock(id);
   id
@@ -3130,31 +3321,31 @@ fn age_fixture_control_clock(actor_id: ActorId) {
   });
 }
 
-fn system_active_program(
+fn system_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
-) -> crate::ProgramInputOf<Test> {
-  system_active_program_with_completion(
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+) -> crate::ContractInputOf<Test> {
+  system_active_contract_with_completion(
     schedule,
     schedule_window,
     execution_plan,
-    CompletionPolicy::Persistent,
+    crate::CompletionPolicy::Persistent,
   )
 }
 
-fn system_active_program_with_completion(
+fn system_active_contract_with_completion(
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<Test>,
-  completion_policy: CompletionPolicy,
-) -> crate::ProgramInputOf<Test> {
-  ProgramInput::Active(ActiveProgramInput {
+  schedule_window: Option<crate::ScheduleWindow<u64>>,
+  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  completion_policy: crate::CompletionPolicy,
+) -> crate::ContractInputOf<Test> {
+  ContractInput::Active(ActiveContractInput {
     schedule,
     schedule_window,
-    execution_plan,
-    completion_policy,
-    funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+    steps: execution_plan,
+    completion: completion_policy,
+    funding: FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
   })
 }
@@ -3199,9 +3390,9 @@ fn setup_pool(asset_a: TestAsset, asset_b: TestAsset, reserve_a: Balance, reserv
   crate::mock::set_pool_reserves(asset_a, asset_b, reserve_a, reserve_b);
 }
 
-fn temporary_retry_swap_plan() -> crate::ExecutionPlanOf<Test> {
+fn temporary_retry_swap_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
   BoundedVec::try_from(vec![StepOf::<Test> {
-    conditions: ConditionSet::Always,
+    preconditions: Preconditions::Unconditional,
     task: Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(77),
@@ -3245,7 +3436,7 @@ fn fund_native_raw(who: &AccountId, amount: Balance) {
 }
 
 /// User Active prefunding requirement: `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`.
-fn user_prefunding_requirement(plan: &crate::ExecutionPlanOf<Test>) -> Balance {
+fn user_prefunding_requirement(plan: &crate::ExecutionPlanOf<crate::mock::Test>) -> Balance {
   <Test as crate::Config>::MinUserBalance::get().saturating_add(
     Actors::attempt_fee_envelope(ActorType::User, plan, 0)
       .expect("fixture plan has a checked fee envelope")
@@ -3255,7 +3446,11 @@ fn user_prefunding_requirement(plan: &crate::ExecutionPlanOf<Test>) -> Balance {
 
 /// Pre-funds the deterministic User sovereign account so Active creation/activation admits
 /// (spec 7.1), without mutating any pallet state.
-fn prefund_user_sovereign(owner: AccountId, slot: u8, plan: &crate::ExecutionPlanOf<Test>) {
+fn prefund_user_sovereign(
+  owner: AccountId,
+  slot: u8,
+  plan: &crate::ExecutionPlanOf<crate::mock::Test>,
+) {
   fund_native_raw(
     &Actors::sovereign_account_id(&owner, slot),
     user_prefunding_requirement(plan),
@@ -3263,7 +3458,10 @@ fn prefund_user_sovereign(owner: AccountId, slot: u8, plan: &crate::ExecutionPla
 }
 
 /// Pre-funds the next automatically allocated User slot for a direct Active creation fixture.
-fn prefund_active_user_creation(owner: AccountId, plan: &crate::ExecutionPlanOf<Test>) {
+fn prefund_active_user_creation(
+  owner: AccountId,
+  plan: &crate::ExecutionPlanOf<crate::mock::Test>,
+) {
   let slot = Actors::available_owner_slot(&owner, None).expect("fixture owner has a free slot");
   prefund_user_sovereign(owner, slot, plan);
 }
@@ -3284,7 +3482,7 @@ fn starvation_observation_weight() -> Weight {
   <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
 }
 
-/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/program probes, and
+/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/contract probes, and
 /// the head consume, but not the actor's full cycle admission. This materializes a live FIFO head
 /// blocked by weight with no admitted attempt, the only spec 8.6.3 starvation trigger.
 fn starvation_blocked_budget(actor_id: u64) -> Weight {
@@ -3292,17 +3490,17 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
   let cursor = <TestWeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future();
   let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
   let hot = Actors::scheduler_actor_hot_probe_weight_upper();
-  let program = Actors::scheduler_actor_program_probe_weight_upper();
+  let contract = Actors::scheduler_actor_contract_probe_weight_upper();
   let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
   let instance = Actors::active_actor_view(actor_id).expect("actor exists");
   let cycle =
-    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.execution_plan);
+    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
     .saturating_add(hot)
-    .saturating_add(program)
+    .saturating_add(contract)
     .saturating_add(consume)
     .saturating_add(cycle);
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
@@ -3383,13 +3581,13 @@ fn both_user_creation_calls_charge_dormant_admission_fee_before_identity_mutatio
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     assert_ok!(Actors::create_user_actor_at_slot(
       RuntimeOrigin::signed(CHARLIE),
       2,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
 
     assert_eq!(native_balance(&ALICE), alice_before.saturating_sub(fee));
@@ -3417,7 +3615,7 @@ fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InsufficientBalance
     );
@@ -3433,7 +3631,7 @@ fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     assert_eq!(native_balance(&Actors::sovereign_account_id(&ALICE, 0)), 0);
   });
@@ -3454,7 +3652,7 @@ fn user_active_creation_prefunding_boundary_is_exact_floor_plus_envelope() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, plan.clone()),
+        user_active_contract(manual_schedule(), None, plan.clone()),
       ),
       Error::<Test>::InsufficientBalance
     );
@@ -3465,7 +3663,7 @@ fn user_active_creation_prefunding_boundary_is_exact_floor_plus_envelope() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, plan),
+      user_active_contract(manual_schedule(), None, plan),
     ));
     assert_eq!(Actors::active_actor_count(), 1);
   });
@@ -3480,7 +3678,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     let plan = transfer_execution_plan(BOB, 1);
@@ -3489,7 +3687,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        user_active_program(manual_schedule(), None, plan.clone()),
+        user_active_contract(manual_schedule(), None, plan.clone()),
       ),
       Error::<Test>::InsufficientBalance
     );
@@ -3505,7 +3703,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_program(manual_schedule(), None, plan),
+      user_active_contract(manual_schedule(), None, plan),
     ));
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert_eq!(Actors::active_actor_count(), 1);
@@ -3528,14 +3726,14 @@ fn create_system_does_not_charge_creation_fee() {
 }
 
 #[test]
-fn system_creation_accepts_dormant_program_input() {
+fn system_creation_accepts_dormant_contract_input() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let identity = Actors::actor_identities(0).expect("dormant identity exists");
     assert_eq!(identity.actor_class, ActorClass::System { sovereign_id: 0 });
@@ -3546,7 +3744,7 @@ fn system_creation_accepts_dormant_program_input() {
 }
 
 #[test]
-fn exact_slot_user_creation_accepts_dormant_program_input() {
+fn exact_slot_user_creation_accepts_dormant_contract_input() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let owner_slot = 2;
@@ -3554,7 +3752,7 @@ fn exact_slot_user_creation_accepts_dormant_program_input() {
       RuntimeOrigin::signed(ALICE),
       owner_slot,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let identity = Actors::actor_identities(0).expect("dormant identity exists");
     assert_eq!(identity.actor_class, ActorClass::User { owner_slot });
@@ -3572,7 +3770,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let actor_id = 0;
     let identity = Actors::actor_identities(actor_id).expect("dormant identity exists");
@@ -3596,7 +3794,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        ProgramInput::Dormant,
+        ContractInput::Dormant,
       ),
       Error::<Test>::EmptyExecutionPlan
     );
@@ -3606,15 +3804,15 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        ProgramInput::Active(ActiveProgramInput {
+        ContractInput::Active(ActiveContractInput {
           schedule: manual_schedule(),
           schedule_window: None,
-          execution_plan: execution_plan_with_step(make_step(Task::Mint {
+          steps: execution_plan_with_step(make_step(Task::Mint {
             asset: TestAsset::Native,
             amount: AmountResolution::Fixed(1),
           })),
-          completion_policy: CompletionPolicy::Persistent,
-          funding_source_policy: FundingSourcePolicy::AnyVerifiedIngress,
+          completion: crate::CompletionPolicy::Persistent,
+          funding: FundingSourcePolicy::AnyVerifiedIngress,
           auto_close_at_cycle_nonce: None,
         }),
       ),
@@ -3626,19 +3824,21 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ProgramInput::Active(ActiveProgramInput {
+      ContractInput::Active(ActiveContractInput {
         schedule: manual_schedule(),
         schedule_window: None,
-        execution_plan: transfer_execution_plan(BOB, 10),
-        completion_policy: CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::AnyVerifiedIngress,
+        steps: transfer_execution_plan(BOB, 10),
+        completion: crate::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       }),
     ));
     assert!(Actors::actor_identities(actor_id).is_some());
-    let _activated = Actors::active_actor_view(actor_id).expect("active program exists");
+    let _activated = Actors::active_actor_view(actor_id).expect("active Actor Contract exists");
     assert_eq!(
-      actor_funding(actor_id).funding_source_policy,
+      ActorContract::<Test>::get(actor_id)
+        .expect("active Actor Contract")
+        .funding,
       FundingSourcePolicy::AnyVerifiedIngress
     );
     assert_eq!(Actors::actor_identity_count(), 1);
@@ -3713,12 +3913,12 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       user_id,
-      user_active_program(manual_schedule(), None, inert_execution_plan()),
+      user_active_contract(manual_schedule(), None, inert_execution_plan()),
     ));
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       system_id,
-      system_active_program(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_execution_plan()),
     ));
     for actor_id in [user_id, system_id] {
       let active = Actors::active_actor_view(actor_id).expect("reactivated actor");
@@ -3788,13 +3988,13 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    // Reactivate at block 8 with the same program: the fresh hot state has no
+    // Reactivate at block 8 with the same contract: the fresh hot state has no
     // last_cycle_block, so the conservative schedule_anchor (8) anchors cooldown.
     frame_system::Pallet::<Test>::set_block_number(8);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      system_active_program(schedule, None, transfer_execution_plan(BOB, 10)),
+      system_active_contract(schedule, None, transfer_execution_plan(BOB, 10)),
     ));
     let instance = Actors::active_actor_view(actor_id).expect("reactivated");
     assert_eq!(instance.cycle_nonce, 1);
@@ -4011,7 +4211,7 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, execution_plan.clone()),
+      user_active_contract(manual_schedule(), None, execution_plan.clone()),
     ));
     let owner_before = native_balance(&BOB);
     set_guaranteed_on_idle_weight(Weight::from_parts(
@@ -4022,7 +4222,7 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(BOB),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::ExecutionPlanExceedsOnIdleBudget
     );
@@ -4072,11 +4272,11 @@ fn plan_updates_reject_a_prospective_run_above_the_idle_budget() {
       required.proof_size().saturating_sub(1),
     ));
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         replacement,
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::ExecutionPlanExceedsOnIdleBudget
     );
@@ -4145,15 +4345,13 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     scheduler_paged_consume_preserve_page,
     scheduler_paged_consume_delete_page,
     scheduler_actor_hot_probe,
-    scheduler_actor_program_probe,
+    scheduler_actor_contract_probe,
     transaction_extension_ingress_base,
     transaction_extension_ingress_notify,
     continuation_retry,
     continuation_complete,
     continuation_cancel,
-    update_funding_source_policy,
-    update_schedule,
-    update_execution_plan,
+    update_contract,
     set_global_circuit_breaker,
     set_active_actor_limit,
     permissionless_sweep,
@@ -4167,7 +4365,7 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
       );
     })+};
   }
-  same_at!(condition_set_evaluation, 0, 1, 8);
+  same_at!(predicate_set_evaluation, 0, 1, 8);
   same_at!(task_split_transfer, 0, 1, 8);
   same_at!(step_orchestration, 0, 1, 8);
   same_at!(scheduler_paged_tombstone_drain, 0, 1, 10_000);
@@ -4256,9 +4454,9 @@ fn generated_continuation_weights_cover_distinct_storage_paths() {
 fn generated_condition_weight_scales_by_atomic_count_and_covers_both_modes() {
   use crate::WeightInfo;
 
-  let zero = <Test as crate::Config>::WeightInfo::condition_set_evaluation(0);
-  let one = <Test as crate::Config>::WeightInfo::condition_set_evaluation(1);
-  let maximum = <Test as crate::Config>::WeightInfo::condition_set_evaluation(4);
+  let zero = <Test as crate::Config>::WeightInfo::predicate_set_evaluation(0);
+  let one = <Test as crate::Config>::WeightInfo::predicate_set_evaluation(1);
+  let maximum = <Test as crate::Config>::WeightInfo::predicate_set_evaluation(4);
   assert_eq!(zero, Weight::zero());
   assert!(one.ref_time() > 0 && one.proof_size() > 0);
   assert!(maximum.ref_time() >= one.ref_time());
@@ -4315,7 +4513,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
     frame_system::Pallet::<Test>::set_block_number(3);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       timer_schedule,
@@ -4351,7 +4549,7 @@ fn owner_slot_capacity_is_enforced() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::OwnerSlotCapacityExceeded
     );
@@ -4374,7 +4572,7 @@ fn active_actor_capacity_is_enforced() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -4382,7 +4580,7 @@ fn active_actor_capacity_is_enforced() {
 }
 
 #[test]
-fn active_program_input_installs_and_validates_auto_close_target() {
+fn active_contract_input_installs_and_validates_auto_close_target() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = Actors::next_actor_id();
@@ -4390,12 +4588,12 @@ fn active_program_input_installs_and_validates_auto_close_target() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Active(ActiveProgramInput {
+      ContractInput::Active(ActiveContractInput {
         schedule: manual_schedule(),
         schedule_window: None,
-        execution_plan: inert_execution_plan(),
-        completion_policy: CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+        steps: inert_execution_plan(),
+        completion: crate::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: Some(2),
       }),
     ));
@@ -4412,12 +4610,12 @@ fn active_program_input_installs_and_validates_auto_close_target() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ProgramInput::Active(ActiveProgramInput {
+        ContractInput::Active(ActiveContractInput {
           schedule: manual_schedule(),
           schedule_window: None,
-          execution_plan: inert_execution_plan(),
-          completion_policy: CompletionPolicy::Persistent,
-          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+          steps: inert_execution_plan(),
+          completion: crate::CompletionPolicy::Persistent,
+          funding: FundingSourcePolicy::RuntimePolicy,
           auto_close_at_cycle_nonce: Some(0),
         }),
       ),
@@ -4531,7 +4729,7 @@ fn system_sovereign_reattachment_creates_fresh_identity_with_same_custody() {
       first_id,
       ALICE,
       Mutability::Mutable,
-      system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+      system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
     ));
     let fresh = Actors::active_actor_view(fresh_id).expect("fresh System identity exists");
     assert_ne!(fresh_id, first_id);
@@ -4552,7 +4750,7 @@ fn system_sovereign_reattachment_creates_fresh_identity_with_same_custody() {
 }
 
 #[test]
-fn system_sovereign_reattachment_accepts_dormant_program_input() {
+fn system_sovereign_reattachment_accepts_dormant_contract_input() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let first_id = create_system_with(
@@ -4569,7 +4767,7 @@ fn system_sovereign_reattachment_accepts_dormant_program_input() {
       first_id,
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let identity = Actors::actor_identities(fresh_id).expect("dormant identity exists");
     assert_eq!(identity.sovereign_account, sovereign);
@@ -4592,7 +4790,7 @@ fn system_sovereign_reattachment_requires_allocated_vacant_locator() {
         42,
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::SystemSovereignUnknown
     );
@@ -4608,7 +4806,7 @@ fn system_sovereign_reattachment_requires_allocated_vacant_locator() {
         occupied_id,
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::SystemSovereignOccupied
     );
@@ -4670,7 +4868,7 @@ fn reserved_sovereign_account_rejects_creation_at_that_slot() {
         RuntimeOrigin::signed(ALICE),
         slot,
         Mutability::Mutable,
-        ProgramInput::Dormant,
+        ContractInput::Dormant,
       ),
       Error::<Test>::ReservedSovereignAccount
     );
@@ -4783,7 +4981,7 @@ fn create_user_at_slot_fails_when_requested_slot_is_occupied() {
         RuntimeOrigin::signed(ALICE),
         target_slot,
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::OwnerSlotOccupied
     );
@@ -4800,7 +4998,7 @@ fn create_user_at_slot_fails_when_requested_slot_is_out_of_range() {
         RuntimeOrigin::signed(ALICE),
         invalid_slot,
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidOwnerSlot
     );
@@ -4846,7 +5044,7 @@ fn owner_slot_bitmap_covers_byte_boundaries_highest_slot_and_reuse() {
         RuntimeOrigin::signed(ALICE),
         255,
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidOwnerSlot
     );
@@ -4924,7 +5122,7 @@ fn create_atomicity_checkpoint_failure_rolls_back_all_state() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
@@ -4953,14 +5151,14 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(0), Some(2));
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      user_active_program(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(1), Some(2));
   });
@@ -4970,7 +5168,7 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     crate::NextQueueTicket::<Test>::put(u64::MAX);
@@ -4979,7 +5177,7 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_program(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
   });
@@ -5051,7 +5249,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -5198,7 +5396,7 @@ fn continuation_control_placement_failures_roll_back_exactly() {
     let events_before = System::events();
 
     assert_noop!(
-      Actors::update_funding_source_policy(
+      update_contract_partial!(
         RuntimeOrigin::root(),
         actor_id,
         FundingSourcePolicy::AnyVerifiedIngress,
@@ -5224,11 +5422,11 @@ fn continuation_control_placement_failures_roll_back_exactly() {
     let events_before = System::events();
 
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::root(),
         actor_id,
         inert_execution_plan(),
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::QueueTicketExhausted
     );
@@ -5354,7 +5552,7 @@ fn control_placement_failures_roll_back_state_and_events() {
       transfer_execution_plan(BOB, 1),
     );
     crate::NextQueueTicket::<Test>::put(u64::MAX);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       timer_schedule(1),
@@ -5389,7 +5587,7 @@ fn creation_subscription_failures_roll_back_exactly() {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           Mutability::Mutable,
-          user_active_program(
+          user_active_contract(
             observation_schedule(vec![1]),
             None,
             transfer_execution_plan(BOB, 1),
@@ -5427,7 +5625,7 @@ fn creation_wakeup_failures_roll_back_exactly() {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           Mutability::Mutable,
-          user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+          user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
         ),
         Error::<Test>::SchedulerIndexExhausted
       );
@@ -5477,7 +5675,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -5497,7 +5695,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
@@ -5525,7 +5723,7 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InsufficientFee
     );
@@ -5534,7 +5732,7 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
         RuntimeOrigin::signed(CHARLIE),
         2,
         Mutability::Mutable,
-        ProgramInput::Dormant,
+        ContractInput::Dormant,
       ),
       Error::<Test>::InsufficientFee
     );
@@ -5565,7 +5763,7 @@ fn create_rejects_duplicate_trigger_sources() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5584,7 +5782,7 @@ fn create_rejects_empty_whitelist_filter() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5625,7 +5823,7 @@ fn create_rejects_empty_asset_whitelist_filter() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5647,7 +5845,7 @@ fn create_rejects_zero_cadence() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5664,7 +5862,7 @@ fn create_rejects_timer_delay_above_max() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::ExecutionDelayTooLong
     );
@@ -5695,7 +5893,7 @@ fn split_transfer_rejects_share_sum_above_one() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::InvalidSplitTransfer
     );
@@ -5726,7 +5924,7 @@ fn split_transfer_rejects_duplicate_recipients() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::InvalidSplitTransfer
     );
@@ -6797,7 +6995,7 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
       }]),
@@ -6914,7 +7112,7 @@ fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -6956,7 +7154,7 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -7039,7 +7237,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -7053,7 +7251,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program(
+      system_active_contract(
         timer_schedule(1),
         None,
         execution_plan_with_step(failing_step)
@@ -7093,7 +7291,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
       actor_id,
       ALICE,
       Mutability::Mutable,
-      system_active_program(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      system_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
     ));
     assert!(Actors::active_actor_view(fresh_id).is_some());
     assert!(has_actor_event(|event| {
@@ -8370,19 +8568,19 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let actor_id = 0;
     frame_system::Pallet::<Test>::set_block_number(10);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ProgramInput::Active(ActiveProgramInput {
+      ContractInput::Active(ActiveContractInput {
         schedule: timer_schedule(20),
         schedule_window: None,
-        execution_plan: inert_execution_plan(),
-        completion_policy: CompletionPolicy::Persistent,
-        funding_source_policy: FundingSourcePolicy::AnyVerifiedIngress,
+        steps: inert_execution_plan(),
+        completion: crate::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       }),
     ));
@@ -8405,7 +8603,7 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
     let initial_block = scheduled_wakeup_block(actor_id).expect("timer wakeup should be scheduled");
     assert_eq!(scheduled_wakeup_block(actor_id), Some(initial_block));
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       timer_schedule(5),
@@ -8432,7 +8630,7 @@ fn cadence_update_rolls_back_exactly_when_existing_wakeup_cursor_is_corrupt() {
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     assert!(
-      Actors::update_schedule(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         timer_schedule(5),
@@ -8473,7 +8671,7 @@ fn ticket_and_terminal_window_wakeup_coexist_under_one_pointer() {
 
     // Re-schedule the same window; the terminal-only expiry wakeup is installed while the actor
     // keeps its live FIFO ticket.
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       manual_schedule(),
@@ -8556,8 +8754,8 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(50);
       });
-      ActorProgram::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("program").schedule_window =
+      ActorContract::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("contract").schedule_window =
           Some(ScheduleWindow { start: 1, end: 49 });
       });
       assert_eq!(
@@ -8567,8 +8765,8 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(102);
       });
-      ActorProgram::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("program").schedule_window =
+      ActorContract::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("contract").schedule_window =
           Some(ScheduleWindow { start: 1, end: 101 });
       });
       assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -8663,7 +8861,7 @@ fn temporal_membership_try_state_accepts_live_ticket_with_forward_pointer() {
       .expect("manual trigger queues the actor");
     // Replacing the schedule installs a forward cadence wakeup while the manual ticket stays
     // live; the earlier-due contract and terminal membership remain reconcilable.
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       timer_schedule(20),
@@ -8702,7 +8900,7 @@ fn terminal_membership_rolls_back_atomically_with_failed_schedule_replacement() 
     });
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert!(
-      Actors::update_schedule(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         timer_schedule(5),
@@ -9037,7 +9235,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Immutable,
-        user_active_program(manual_schedule(), None, retry_plan.clone()),
+        user_active_contract(manual_schedule(), None, retry_plan.clone()),
       ),
       Error::<Test>::RetryLaterNotAllowedForImmutableActor
     );
@@ -9046,7 +9244,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Immutable,
-        system_active_program(manual_schedule(), None, retry_plan.clone()),
+        system_active_contract(manual_schedule(), None, retry_plan.clone()),
       ),
       Error::<Test>::RetryLaterNotAllowedForImmutableActor
     );
@@ -9055,7 +9253,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, retry_plan.clone()),
+      user_active_contract(manual_schedule(), None, retry_plan.clone()),
     ));
 
     let immutable_id = create_user_with(
@@ -9066,11 +9264,11 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
       transfer_execution_plan(ALICE, 1),
     );
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::signed(BOB),
         immutable_id,
         retry_plan,
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::RetryLaterNotAllowedForImmutableActor
     );
@@ -9087,7 +9285,7 @@ fn retry_later_enforces_the_protocol_fixed_attempt_range() {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           Mutability::Mutable,
-          user_active_program(manual_schedule(), None, plan),
+          user_active_contract(manual_schedule(), None, plan),
         ),
         Error::<Test>::InvalidRetryAttemptLimit
       );
@@ -9099,7 +9297,7 @@ fn retry_later_enforces_the_protocol_fixed_attempt_range() {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, valid_plan),
+        user_active_contract(manual_schedule(), None, valid_plan),
       ));
     }
   });
@@ -9110,7 +9308,7 @@ fn retry_later_aborts_permanent_failure_without_executing_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9165,7 +9363,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9274,7 +9472,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::StopCycle,
         on_error: RETRY_LATER,
       },
@@ -9327,7 +9525,7 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let stop = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1_000,
       }]),
@@ -9374,7 +9572,7 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -9390,11 +9588,11 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program_with_completion(
+      system_active_contract_with_completion(
         timer_schedule(1),
         None,
         execution_plan_with_step(step),
-        CompletionPolicy::CloseAfterProductiveCycle,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
     let actor = sovereign_account(actor_id);
@@ -9457,7 +9655,7 @@ fn close_after_productive_cycle_rechecks_latest_observation_before_execution() {
       },
     );
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::ObservationBelow {
+      preconditions: all_conditions(vec![Predicate::ObservationBelow {
         feed,
         threshold: 100,
         max_age_blocks: 10,
@@ -9474,11 +9672,11 @@ fn close_after_productive_cycle_rechecks_latest_observation_before_execution() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program_with_completion(
+      system_active_contract_with_completion(
         observation_schedule(vec![feed]),
         None,
         execution_plan_with_step(step),
-        CompletionPolicy::CloseAfterProductiveCycle,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
     fund_native(actor_id, 100);
@@ -9523,11 +9721,11 @@ fn close_after_productive_cycle_does_not_treat_stop_cycle_as_effectful() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program_with_completion(
+      system_active_contract_with_completion(
         manual_schedule(),
         None,
         execution_plan_with_step(make_step(Task::StopCycle)),
-        CompletionPolicy::CloseAfterProductiveCycle,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
 
@@ -9563,11 +9761,11 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program_with_completion(
+      system_active_contract_with_completion(
         manual_schedule(),
         None,
         temporary_retry_swap_plan(),
-        CompletionPolicy::CloseAfterProductiveCycle,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
     fund_native(actor_id, 100);
@@ -9608,7 +9806,7 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let retry_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9622,11 +9820,11 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program_with_completion(
+      system_active_contract_with_completion(
         manual_schedule(),
         None,
         execution_plan_with_step(retry_step),
-        CompletionPolicy::CloseAfterProductiveCycle,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
     fund_native(actor_id, 100);
@@ -9788,7 +9986,7 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
       }),
     ])
     .expect("two steps fit");
-    let program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
     let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -9797,11 +9995,11 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
     let events_before = System::events();
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
 
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::System,
       Mutability::Mutable,
-      program,
+      contract,
       SimulationMode::FreshCurrentPlan,
     )
     .expect("ready current plan simulates");
@@ -9826,7 +10024,7 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let execution_plan = transfer_execution_plan(BOB, 10);
-    let program = user_active_program(manual_schedule(), None, execution_plan.clone());
+    let contract = user_active_contract(manual_schedule(), None, execution_plan.clone());
     let prefunded = user_prefunding_requirement(&execution_plan);
     let actor_id = create_user_with(
       ALICE,
@@ -9855,11 +10053,11 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
     let actor_before = Actors::active_actor_view(actor_id).expect("actor before simulation");
     let events_before = System::events();
 
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::User,
       Mutability::Mutable,
-      program,
+      contract,
       SimulationMode::FreshCurrentPlan,
     )
     .expect("terminal viability projects as a closed simulation");
@@ -9887,7 +10085,7 @@ fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back(
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let execution_plan = transfer_execution_plan(BOB, 10);
-    let program = user_active_program(manual_schedule(), None, execution_plan.clone());
+    let contract = user_active_contract(manual_schedule(), None, execution_plan.clone());
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -9906,11 +10104,11 @@ fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back(
     set_fail_fee_sink_transfer(true);
 
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::User,
         Mutability::Mutable,
-        program,
+        contract,
         SimulationMode::FreshCurrentPlan,
       ),
       Err(SimulationError::FeeCollectionFailed)
@@ -9936,7 +10134,7 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -10008,7 +10206,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10104,7 +10302,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10186,7 +10384,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
     setup_temporary_retry_pool();
     let plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -10196,7 +10394,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       },
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(77),
           asset_b: TestAsset::Local(88),
@@ -10242,7 +10440,7 @@ fn global_failure_limit_can_close_before_retry_later_local_limit() {
     set_max_consecutive_failures(1);
     setup_temporary_retry_pool();
     let plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10317,7 +10515,7 @@ fn global_failure_limit_can_close_before_local_retry_limit() {
     set_max_consecutive_failures(1);
     setup_temporary_retry_pool();
     let plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -11231,7 +11429,7 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -11245,7 +11443,7 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
       None,
       execution_plan_with_step(step),
     );
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -11308,7 +11506,7 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -11397,7 +11595,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
         amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: asset_b,
           asset_out,
@@ -11476,7 +11674,7 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -11531,7 +11729,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
     let mut steps = Vec::new();
     for index in 0..8u32 {
       steps.push(StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(100 + index * 2),
           asset_b: TestAsset::Local(101 + index * 2),
@@ -11579,7 +11777,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -11594,7 +11792,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
       None,
       execution_plan_with_step(step),
     );
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -11655,7 +11853,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -11669,7 +11867,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 100);
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -11810,11 +12008,11 @@ fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
       actor_id
     ));
     assert!(Actors::pending_signal(actor_id));
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       inert_execution_plan(),
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     let cancelled = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
     assert_eq!(cancelled.cycle_state, CycleState::Idle);
@@ -11893,31 +12091,31 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
     let encoded_actor_state = |actor_id| {
       (
         ActorHot::<Test>::get(actor_id).encode(),
-        ActorProgram::<Test>::get(actor_id).encode(),
+        ActorContract::<Test>::get(actor_id).encode(),
         crate::ActorFunding::<Test>::get(actor_id).encode(),
         ContinuationStateStore::<Test>::get(actor_id).encode(),
       )
     };
     let plan_id = create_suspended_system_retry(1);
     let plan_before = encoded_actor_state(plan_id);
-    let stored_program = ActorProgram::<Test>::get(plan_id).expect("active program");
+    let stored_contract = ActorContract::<Test>::get(plan_id).expect("active Actor Contract");
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       plan_id,
-      stored_program.execution_plan,
-      stored_program.completion_policy,
+      stored_contract.steps,
+      stored_contract.completion,
     ));
     assert_eq!(encoded_actor_state(plan_id), plan_before);
     assert!(frame_system::Pallet::<Test>::events().is_empty());
 
     let policy_id = create_suspended_system_retry(2);
     let policy_before = encoded_actor_state(policy_id);
-    let policy = crate::ActorFunding::<Test>::get(policy_id)
-      .expect("active funding")
-      .funding_source_policy;
+    let policy = ActorContract::<Test>::get(policy_id)
+      .expect("active Actor Contract")
+      .funding;
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       policy_id,
       policy,
@@ -11927,11 +12125,11 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
 
     let schedule_id = create_suspended_system_retry(3);
     let schedule_before = encoded_actor_state(schedule_id);
-    let stored_schedule = ActorProgram::<Test>::get(schedule_id).expect("active program");
+    let stored_schedule = ActorContract::<Test>::get(schedule_id).expect("active Actor Contract");
     let schedule = stored_schedule.schedule;
     let schedule_window = stored_schedule.schedule_window;
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       schedule_id,
       schedule,
@@ -11976,14 +12174,14 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
 fn semantic_control_origins_share_one_queue_churn_clock() {
   new_test_ext().execute_with(|| {
     let plan_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       plan_id,
       inert_execution_plan(),
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     assert_noop!(
-      Actors::update_schedule(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         plan_id,
         timer_schedule(2),
@@ -11993,7 +12191,7 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
     );
 
     let policy_id = create_suspended_system_retry(2);
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       policy_id,
       FundingSourcePolicy::AnyVerifiedIngress,
@@ -12004,7 +12202,7 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
     );
 
     let schedule_id = create_suspended_system_retry(3);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       schedule_id,
       timer_schedule(2),
@@ -12028,13 +12226,13 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     frame_system::Pallet::<Test>::set_block_number(6);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       dormant_id,
-      system_active_program(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_execution_plan()),
     ));
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::root(), dormant_id),
@@ -12049,17 +12247,17 @@ fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
     let actor_id = create_suspended_system_retry(1);
     let before = Actors::active_actor_view(actor_id).expect("suspended actor");
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
-      before.execution_plan.clone(),
-      CompletionPolicy::CloseAfterProductiveCycle,
+      before.steps.clone(),
+      crate::CompletionPolicy::CloseAfterProductiveCycle,
     ));
     let after = Actors::active_actor_view(actor_id).expect("updated actor");
-    assert_eq!(after.execution_plan, before.execution_plan);
+    assert_eq!(after.steps, before.steps);
     assert_eq!(
-      after.completion_policy,
-      CompletionPolicy::CloseAfterProductiveCycle
+      after.completion,
+      crate::CompletionPolicy::CloseAfterProductiveCycle
     );
     assert_eq!(after.cycle_state, CycleState::Idle);
     assert!(Actors::continuation_state(actor_id).is_none());
@@ -12074,7 +12272,7 @@ fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
       events.first(),
       Some(Event::CycleCancelled {
         actor_id: id,
-        reason: CancellationReason::CompletionPolicyChanged,
+        reason: CancellationReason::CompletionChanged,
         ..
       }) if *id == actor_id
     ));
@@ -12088,44 +12286,44 @@ fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
     ));
     assert!(matches!(
       events.last(),
-      Some(Event::ExecutionPlanUpdated { actor_id: id, .. }) if *id == actor_id
+      Some(Event::ContractUpdated { actor_id: id, .. }) if *id == actor_id
     ));
   });
 }
 
 #[test]
-fn program_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
+fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
   new_test_ext().execute_with(|| {
     let plan_id = create_suspended_system_retry(1);
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       plan_id,
       inert_execution_plan(),
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::CycleCancelled { actor_id, reason: CancellationReason::ExecutionPlanChanged, .. }
+      Event::CycleCancelled { actor_id, reason: CancellationReason::StepsChanged, .. }
         if *actor_id == plan_id
     )));
 
     let policy_id = create_suspended_system_retry(2);
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       policy_id,
       FundingSourcePolicy::AnyVerifiedIngress
     ));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::CycleCancelled { actor_id, reason: CancellationReason::FundingPolicyChanged, .. }
+      Event::CycleCancelled { actor_id, reason: CancellationReason::FundingChanged, .. }
         if *actor_id == policy_id
     )));
 
     let schedule_id = create_suspended_system_retry(3);
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       schedule_id,
       Schedule {
@@ -12243,7 +12441,7 @@ fn cancellation_is_mutable_only() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program(timer_schedule(1), None, inert_execution_plan()),
+      system_active_contract(timer_schedule(1), None, inert_execution_plan()),
     ));
     assert_noop!(
       Actors::cancel_continuation(RuntimeOrigin::root(), actor_id),
@@ -12253,7 +12451,7 @@ fn cancellation_is_mutable_only() {
 }
 
 #[test]
-fn user_immutable_manual_source_changes_readiness_without_mutating_program() {
+fn user_immutable_manual_source_changes_readiness_without_mutating_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_user_with(
@@ -12264,13 +12462,13 @@ fn user_immutable_manual_source_changes_readiness_without_mutating_program() {
       transfer_execution_plan(BOB, 1),
     );
     fund_native(actor_id, 1_000);
-    let program_before = ActorProgram::<Test>::get(actor_id).expect("immutable program");
+    let contract_before = ActorContract::<Test>::get(actor_id).expect("immutable contract");
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     assert!(Actors::pending_signal(actor_id));
-    assert_eq!(ActorProgram::<Test>::get(actor_id), Some(program_before));
+    assert_eq!(ActorContract::<Test>::get(actor_id), Some(contract_before));
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -12282,7 +12480,7 @@ fn user_immutable_manual_source_changes_readiness_without_mutating_program() {
 }
 
 #[test]
-fn immutable_actor_rejects_pause_and_update_execution_plan() {
+fn immutable_actor_rejects_pause_and_update_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_user_with(
@@ -12298,11 +12496,11 @@ fn immutable_actor_rejects_pause_and_update_execution_plan() {
     );
     let replacement = transfer_execution_plan(CHARLIE, 1);
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         replacement,
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::ImmutableActor
     );
@@ -12321,7 +12519,7 @@ fn user_actor_rejects_mint_task_on_create() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::MintNotAllowedForUserActor
     );
@@ -12329,7 +12527,7 @@ fn user_actor_rejects_mint_task_on_create() {
 }
 
 #[test]
-fn update_execution_plan_prunes_stale_funding_accumulators() {
+fn update_contract_prunes_stale_funding_accumulators() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let initial_execution_plan = execution_plan_with_step(make_step(Task::Transfer {
@@ -12360,11 +12558,11 @@ fn update_execution_plan_prunes_stale_funding_accumulators() {
       asset: TestAsset::Local(1),
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       replacement,
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     let funding_after = actor_funding(actor_id);
     assert!(
@@ -12381,7 +12579,7 @@ fn update_execution_plan_prunes_stale_funding_accumulators() {
 }
 
 #[test]
-fn update_execution_plan_rejects_mint_for_user_actor() {
+fn update_contract_rejects_mint_for_user_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_user_with(
@@ -12396,11 +12594,11 @@ fn update_execution_plan_rejects_mint_for_user_actor() {
       amount: AmountResolution::Fixed(1),
     }));
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         replacement,
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::MintNotAllowedForUserActor
     );
@@ -12686,7 +12884,7 @@ fn condition_skip_charges_one_evaluation_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
       }]),
@@ -12728,7 +12926,7 @@ fn balance_conditions_never_read_staking_share_surfaces() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 0,
       }]),
@@ -12772,7 +12970,7 @@ fn true_balance_condition_can_precede_funding_unavailable_resolution() {
       manual_schedule(),
       None,
       execution_plan_with_step(StepOf::<Test> {
-        conditions: all_conditions(vec![Condition::BalanceAbove {
+        preconditions: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 1,
         }]),
@@ -12914,14 +13112,13 @@ fn adapter_failure_retains_one_combined_step_fee() {
 fn cycle_summary_tracks_step_outcomes() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let step_conditions = BoundedVec::try_from(vec![Condition::BalanceAbove {
+    let step_conditions = all_conditions(vec![Predicate::BalanceAbove {
       asset: TestAsset::Native,
       threshold: 1_000,
-    }])
-    .expect("single condition must fit");
+    }]);
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: ConditionSet::All(step_conditions),
+        preconditions: step_conditions,
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -12940,7 +13137,7 @@ fn cycle_summary_tracks_step_outcomes() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -12996,7 +13193,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = |on_error| StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -13055,7 +13252,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     assert!(matches!(continue_events[3], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if actor_id == continue_id));
     assert!(matches!(continue_events[4], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == continue_id));
     let skip_step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1,
       }]),
@@ -13478,7 +13675,7 @@ fn create_accepts_swap_in_with_slippage_tolerance() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, execution_plan),
+      user_active_contract(manual_schedule(), None, execution_plan),
     ));
   });
 }
@@ -13575,7 +13772,7 @@ fn create_rejects_swap_out_with_zero_input_cap() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::InvalidTradeBound
     );
@@ -13597,7 +13794,7 @@ fn create_rejects_zero_liquidity_output_bounds() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, add_plan),
+        user_active_contract(manual_schedule(), None, add_plan),
       ),
       Error::<Test>::InvalidTradeBound
     );
@@ -13614,7 +13811,7 @@ fn create_rejects_zero_liquidity_output_bounds() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, remove_plan),
+        user_active_contract(manual_schedule(), None, remove_plan),
       ),
       Error::<Test>::InvalidTradeBound
     );
@@ -13779,7 +13976,7 @@ fn create_accepts_swap_out_with_optional_absolute_cap() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, execution_plan),
+      user_active_contract(manual_schedule(), None, execution_plan),
     ));
   });
 }
@@ -14395,7 +14592,9 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     ));
     let sys_inst = actor_funding(system_actor);
     assert!(matches!(
-      sys_inst.funding_source_policy,
+      ActorContract::<Test>::get(system_actor)
+        .expect("system Actor Contract")
+        .funding,
       FundingSourcePolicy::RuntimePolicy
     ));
     assert_eq!(
@@ -14404,7 +14603,9 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     );
     let user_inst = actor_funding(user_actor);
     assert!(matches!(
-      user_inst.funding_source_policy,
+      ActorContract::<Test>::get(user_actor)
+        .expect("user Actor Contract")
+        .funding,
       FundingSourcePolicy::OwnerOnly
     ));
     assert_eq!(
@@ -14429,7 +14630,7 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
       })),
     );
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -14465,7 +14666,7 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
     );
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::FundingSourcePolicyUpdated { actor_id: id } if *id == actor_id
+      Event::ContractUpdated { actor_id: id } if *id == actor_id
     )));
 
     crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
@@ -14514,7 +14715,7 @@ fn any_verified_ingress_third_party_shapes_basis_only_with_real_delivered_value(
         amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
       })),
     );
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress,
@@ -14784,7 +14985,7 @@ fn signed_allowlist_accepts_only_verified_listed_signers_for_funding() {
     );
     let allowed = BoundedBTreeSet::try_from([CHARLIE].into_iter().collect::<BTreeSet<_>>())
       .expect("one funding signer fits");
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       FundingSourcePolicy::SignedAllowlist(allowed),
@@ -14822,7 +15023,7 @@ fn signed_allowlist_accepts_only_verified_listed_signers_for_funding() {
 }
 
 #[test]
-fn immutable_user_cannot_update_funding_source_policy() {
+fn immutable_user_cannot_update_contract_funding() {
   new_test_ext().execute_with(|| {
     let actor_id = create_user_with(
       ALICE,
@@ -14832,7 +15033,7 @@ fn immutable_user_cannot_update_funding_source_policy() {
       inert_execution_plan(),
     );
     assert_noop!(
-      Actors::update_funding_source_policy(
+      update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
         FundingSourcePolicy::AnyVerifiedIngress
@@ -15062,7 +15263,7 @@ fn actor_id_overflow_at_max() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
       ),
       Error::<Test>::ActorIdOverflow
     );
@@ -15076,7 +15277,7 @@ fn empty_execution_plan_rejected() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, BoundedVec::default()),
+        user_active_contract(manual_schedule(), None, BoundedVec::default()),
       ),
       Error::<Test>::EmptyExecutionPlan
     );
@@ -15125,13 +15326,13 @@ fn execution_plan_bound_is_single_and_encoded_for_both_classes() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(manual_schedule(), None, maximum.clone()),
+      user_active_contract(manual_schedule(), None, maximum.clone()),
     ));
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program(manual_schedule(), None, maximum),
+      system_active_contract(manual_schedule(), None, maximum),
     ));
   });
 }
@@ -15147,7 +15348,7 @@ fn sovereign_account_collision_rejected() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::SovereignAccountCollision
     );
@@ -15287,7 +15488,7 @@ fn governance_can_manage_system_actor_control_surface() {
     );
     let updated_schedule = timer_schedule(3);
     frame_system::Pallet::<Test>::set_block_number(3);
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       updated_schedule.clone(),
@@ -15307,14 +15508,14 @@ fn governance_can_manage_system_actor_control_surface() {
     });
     frame_system::Pallet::<Test>::set_block_number(4);
     let updated_plan = transfer_execution_plan(BOB, 1);
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       updated_plan.clone(),
-      CompletionPolicy::Persistent,
+      crate::CompletionPolicy::Persistent,
     ));
     let updated = Actors::active_actor_view(actor_id).expect("system actor");
-    assert_eq!(updated.execution_plan, updated_plan);
+    assert_eq!(updated.steps, updated_plan);
     assert_eq!(updated.consecutive_failures, 0);
     frame_system::Pallet::<Test>::set_block_number(5);
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
@@ -15371,7 +15572,7 @@ fn identity_control_clock_tracks_creation_and_survives_deactivation() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_execution_plan()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     assert_eq!(
@@ -15398,7 +15599,7 @@ fn funding_policy_replacement_preserves_placement_without_continuation() {
     let actor_id = create_system_with(ALICE, timer_schedule(10), None, inert_execution_plan());
     let before = Actors::actor_hot(actor_id).expect("actor hot state exists");
     assert!(before.wakeup_pointer.is_some());
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
       FundingSourcePolicy::AnyVerifiedIngress,
@@ -15422,23 +15623,26 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
     let funding_before = actor_funding(actor_id);
+    let funding_policy_before = ActorContract::<Test>::get(actor_id)
+      .expect("active Actor Contract")
+      .funding;
     System::reset_events();
-    assert_ok!(Actors::update_funding_source_policy(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      funding_before.funding_source_policy.clone(),
+      funding_policy_before,
     ));
-    assert_ok!(Actors::update_schedule(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       before.schedule.clone(),
       before.schedule_window,
     ));
-    assert_ok!(Actors::update_execution_plan(
+    assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      before.execution_plan.clone(),
-      before.completion_policy,
+      before.steps.clone(),
+      before.completion,
     ));
     assert_eq!(Actors::active_actor_view(actor_id), Some(before));
     assert_eq!(actor_funding(actor_id), funding_before);
@@ -15946,7 +16150,7 @@ fn global_circuit_breaker_blocks_creation() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
       ),
       Error::<Test>::GlobalCircuitBreakerActive
     );
@@ -15955,7 +16159,7 @@ fn global_circuit_breaker_blocks_creation() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
       ),
       Error::<Test>::GlobalCircuitBreakerActive
     );
@@ -15999,7 +16203,7 @@ fn governance_updates_active_actor_limit_and_creation_respects_it() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -16048,7 +16252,7 @@ fn active_actor_limit_update_validates_bounds() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -16068,7 +16272,7 @@ fn invalid_schedule_window_end_before_start() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           Some(window),
           transfer_execution_plan(BOB, 10)
@@ -16090,7 +16294,7 @@ fn schedule_window_requires_an_exact_end_plus_one_terminal_block() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           Some(window),
           transfer_execution_plan(BOB, 10),
@@ -16115,7 +16319,7 @@ fn in_progress_window_is_admissible_when_now_is_inside() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(
+      user_active_contract(
         manual_schedule(),
         Some(window),
         transfer_execution_plan(BOB, 10),
@@ -16136,7 +16340,7 @@ fn already_expired_window_is_rejected() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           Some(window),
           transfer_execution_plan(BOB, 10),
@@ -16157,7 +16361,7 @@ fn inclusive_window_span_exact_minimum_is_admissible() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(
+      user_active_contract(
         manual_schedule(),
         Some(ScheduleWindow { start: 1, end: 100 }),
         transfer_execution_plan(BOB, 10),
@@ -16167,7 +16371,7 @@ fn inclusive_window_span_exact_minimum_is_admissible() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(BOB),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           Some(ScheduleWindow { start: 1, end: 99 }),
           transfer_execution_plan(CHARLIE, 10),
@@ -16192,7 +16396,7 @@ fn schedule_cooldown_is_bounded_by_max_execution_delay() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(too_long, None, transfer_execution_plan(BOB, 10),),
+        user_active_contract(too_long, None, transfer_execution_plan(BOB, 10),),
       ),
       Error::<Test>::ExecutionDelayTooLong
     );
@@ -16227,7 +16431,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(overflowing_cooldown, None, inert_execution_plan()),
+        system_active_contract(overflowing_cooldown, None, inert_execution_plan()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16252,7 +16456,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(timer_schedule(4), None, inert_execution_plan()),
+        system_active_contract(timer_schedule(4), None, inert_execution_plan()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16290,7 +16494,7 @@ fn future_window_terminal_and_exact_next_block_reject_overflow_without_mutation(
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_execution_plan()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16309,6 +16513,7 @@ fn retry_target_uses_cursor_local_count_and_ignores_cycle_global_attempt() {
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block,
       opening_snapshot: Default::default(),
+      opening_predicate_results: Default::default(),
       funding_snapshot: Default::default(),
       cumulative_outcomes: Default::default(),
     };
@@ -16346,7 +16551,7 @@ fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
   });
 }
 
-// --- Task & Condition Coverage Tests ---
+// --- Task & Predicate Coverage Tests ---
 
 #[test]
 fn mint_works_for_system_actor() {
@@ -16400,68 +16605,257 @@ fn mint_percentage_at_opening_uses_target_not_preservable_surface() {
 }
 
 #[test]
-fn condition_sets_are_canonical_bounded_and_mode_distinct() {
+fn preconditionss_are_canonical_bounded_and_mode_distinct() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let observed = TestAsset::Local(99);
     set_asset_balance(&ALICE, observed, 100);
-    let always: crate::ConditionSetOf<Test> = ConditionSet::Always;
-    assert!(always.is_always());
-    assert_eq!(always.len(), 0);
-    assert_eq!(Actors::evaluate_condition_set(&always, &ALICE, 0), Ok(true));
+    let unconditional: crate::PreconditionsOf<Test> = Preconditions::Unconditional;
+    assert!(unconditional.is_unconditional());
+    assert_eq!(unconditional.predicate_count(), 0);
+    assert_eq!(
+      Actors::evaluate_predicate_set(&unconditional, &ALICE, 0),
+      Ok(true)
+    );
 
     let all = all_conditions(vec![
-      Condition::BalanceAbove {
+      Predicate::BalanceAbove {
         asset: observed,
         threshold: 50,
       },
-      Condition::BlockNumberBelow { threshold: 10 },
-      Condition::BalanceBelow {
+      Predicate::BlockNumberBelow { threshold: 10 },
+      Predicate::BalanceBelow {
         asset: observed,
         threshold: 200,
       },
-      Condition::BlockNumberAbove { threshold: 1 },
+      Predicate::BlockNumberAbove { threshold: 1 },
     ]);
     let any = any_conditions(vec![
-      Condition::BalanceAbove {
+      Predicate::BalanceAbove {
         asset: observed,
         threshold: 1_000,
       },
-      Condition::BlockNumberBelow { threshold: 1 },
-      Condition::BalanceBelow {
+      Predicate::BlockNumberBelow { threshold: 1 },
+      Predicate::BalanceBelow {
         asset: observed,
         threshold: 200,
       },
-      Condition::BlockNumberAbove { threshold: 10 },
+      Predicate::BlockNumberAbove { threshold: 10 },
     ]);
-    assert_eq!(all.len(), 4);
-    assert_eq!(any.len(), 4);
-    assert_eq!(Actors::evaluate_condition_set(&all, &ALICE, 0), Ok(true));
-    assert_eq!(Actors::evaluate_condition_set(&any, &ALICE, 0), Ok(true));
+    assert_eq!(all.predicate_count(), 4);
+    assert_eq!(any.predicate_count(), 4);
+    assert_eq!(Actors::evaluate_predicate_set(&all, &ALICE, 0), Ok(true));
+    assert_eq!(Actors::evaluate_predicate_set(&any, &ALICE, 0), Ok(true));
     assert_ne!(all.encode(), any.encode());
 
     let all_false = all_conditions(vec![
-      Condition::BalanceAbove {
+      Predicate::BalanceAbove {
         asset: observed,
         threshold: 1_000,
       },
-      Condition::BlockNumberAbove { threshold: 10 },
+      Predicate::BlockNumberAbove { threshold: 10 },
     ]);
     let any_false = any_conditions(vec![
-      Condition::BalanceAbove {
+      Predicate::BalanceAbove {
         asset: observed,
         threshold: 1_000,
       },
-      Condition::BlockNumberAbove { threshold: 10 },
+      Predicate::BlockNumberAbove { threshold: 10 },
     ]);
     assert_eq!(
-      Actors::evaluate_condition_set(&all_false, &ALICE, 0),
+      Actors::evaluate_predicate_set(&all_false, &ALICE, 0),
       Ok(false)
     );
     assert_eq!(
-      Actors::evaluate_condition_set(&any_false, &ALICE, 0),
+      Actors::evaluate_predicate_set(&any_false, &ALICE, 0),
       Ok(false)
     );
+  });
+}
+
+#[test]
+fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let first = TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate: Predicate::BlockNumberAbove { threshold: 0 },
+    };
+    let second = TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate: Predicate::BalanceAbove {
+        asset: TestAsset::Native,
+        threshold: 0,
+      },
+    };
+    let raw_preconditions = || {
+      Preconditions::AnyOf(
+        BoundedVec::try_from(vec![
+          BoundedVec::try_from(vec![second, first, second]).expect("predicates fit"),
+        ])
+        .expect("clause fits"),
+      )
+    };
+    let raw_plan = || {
+      execution_plan_with_step(StepOf::<Test> {
+        preconditions: raw_preconditions(),
+        task: Task::StopCycle,
+        on_error: StepErrorPolicy::AbortCycle,
+      })
+    };
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, raw_plan());
+    let stored = Actors::actor_contract(actor_id).expect("contract exists");
+    assert_eq!(stored.steps[0].preconditions.predicate_count(), 2);
+    let Preconditions::AnyOf(clauses) = &stored.steps[0].preconditions else {
+      panic!("stored preconditions use DNF")
+    };
+    assert!(clauses[0][0].encode() < clauses[0][1].encode());
+
+    let event_count = frame_system::Pallet::<Test>::event_count();
+    let control_block = ActorIdentities::<Test>::get(actor_id)
+      .expect("identity exists")
+      .last_control_mutation_block;
+    assert_ok!(Actors::update_contract(
+      RuntimeOrigin::root(),
+      actor_id,
+      stored.schedule.clone(),
+      stored.schedule_window,
+      raw_plan(),
+      stored.funding.clone(),
+      stored.completion,
+    ));
+    assert_eq!(frame_system::Pallet::<Test>::event_count(), event_count);
+    assert_eq!(
+      ActorIdentities::<Test>::get(actor_id)
+        .expect("identity exists")
+        .last_control_mutation_block,
+      control_block
+    );
+
+    let duplicate_clauses = Preconditions::AnyOf(
+      BoundedVec::try_from(vec![
+        BoundedVec::try_from(vec![first, second]).expect("first clause fits"),
+        BoundedVec::try_from(vec![second, first, second]).expect("second clause fits"),
+      ])
+      .expect("clauses fit"),
+    );
+    let duplicate_plan = execution_plan_with_step(StepOf::<Test> {
+      preconditions: duplicate_clauses,
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    });
+    assert_noop!(
+      Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        system_active_contract(manual_schedule(), None, duplicate_plan),
+      ),
+      Error::<Test>::InvalidPredicate
+    );
+  });
+}
+
+#[test]
+fn opening_and_current_predicates_observe_distinct_step_state() {
+  for (timing, second_step_executes) in [
+    (ObservationTiming::Opening, true),
+    (ObservationTiming::Current, false),
+  ] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let plan = BoundedVec::try_from(vec![
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(60),
+        }),
+        StepOf::<Test> {
+          preconditions: timed_all_conditions(
+            timing,
+            vec![Predicate::BalanceAbove {
+              asset: TestAsset::Native,
+              threshold: 50,
+            }],
+          ),
+          task: Task::Transfer {
+            to: CHARLIE,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(10),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        },
+      ])
+      .expect("two-step plan fits");
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
+      fund_native(actor_id, 100);
+      let charlie_before = native_balance(&CHARLIE);
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      run_idle(Weight::MAX);
+      assert_eq!(
+        native_balance(&CHARLIE) > charlie_before,
+        second_step_executes
+      );
+      assert_eq!(
+        has_actor_event(|event| matches!(
+          event,
+          Event::StepSkipped {
+            actor_id: id,
+            step_index: 1,
+            reason: StepSkippedReason::ConditionsNotMet,
+            ..
+          } if *id == actor_id
+        )),
+        !second_step_executes
+      );
+    });
+  }
+}
+
+#[test]
+fn opening_predicate_result_is_reused_by_continuation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let plan = execution_plan_with_step(StepOf::<Test> {
+      preconditions: timed_all_conditions(
+        ObservationTiming::Opening,
+        vec![Predicate::BalanceAbove {
+          asset: TestAsset::Native,
+          threshold: 50,
+        }],
+      ),
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: RETRY_LATER,
+    });
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    fund_native(actor_id, 100);
+    let actor = sovereign_account(actor_id);
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    let continuation = Actors::continuation_state(actor_id).expect("continuation exists");
+    assert_eq!(continuation.opening_predicate_results.len(), 1);
+    assert_ok!(MockAssetOps::transfer(&actor, &BOB, TestAsset::Native, 60));
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::SwapExecuted { actor_id: id, .. } if *id == actor_id
+    )));
   });
 }
 
@@ -16479,22 +16873,22 @@ fn above_and_below_conditions_are_strict_at_equality() {
       },
     );
     let equality_boundaries = [
-      all_conditions(vec![Condition::BalanceAbove {
+      all_conditions(vec![Predicate::BalanceAbove {
         asset,
         threshold: 100,
       }]),
-      all_conditions(vec![Condition::BalanceBelow {
+      all_conditions(vec![Predicate::BalanceBelow {
         asset,
         threshold: 100,
       }]),
-      all_conditions(vec![Condition::BlockNumberAbove { threshold: 5 }]),
-      all_conditions(vec![Condition::BlockNumberBelow { threshold: 5 }]),
-      all_conditions(vec![Condition::ObservationAbove {
+      all_conditions(vec![Predicate::BlockNumberAbove { threshold: 5 }]),
+      all_conditions(vec![Predicate::BlockNumberBelow { threshold: 5 }]),
+      all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 50,
         max_age_blocks: 10,
       }]),
-      all_conditions(vec![Condition::ObservationBelow {
+      all_conditions(vec![Predicate::ObservationBelow {
         feed: 1,
         threshold: 50,
         max_age_blocks: 10,
@@ -16502,7 +16896,7 @@ fn above_and_below_conditions_are_strict_at_equality() {
     ];
     for conditions in equality_boundaries {
       assert_eq!(
-        Actors::evaluate_condition_set(&conditions, &ALICE, 0),
+        Actors::evaluate_predicate_set(&conditions, &ALICE, 0),
         Ok(false)
       );
     }
@@ -16531,37 +16925,37 @@ fn observation_conditions_compare_only_fresh_scalar_values() {
     set_observation(3, crate::ScalarObservationState::Uninitialized);
     set_observation(4, crate::ScalarObservationState::Stale);
     let fresh = all_conditions(vec![
-      Condition::ObservationAbove {
+      Predicate::ObservationAbove {
         feed: 1,
         threshold: 49,
         max_age_blocks: 10,
       },
-      Condition::ObservationBelow {
+      Predicate::ObservationBelow {
         feed: 1,
         threshold: 51,
         max_age_blocks: 10,
       },
-      Condition::ObservationEquals {
+      Predicate::ObservationEquals {
         feed: 1,
         threshold: 50,
         max_age_blocks: 10,
       },
-      Condition::ObservationNotEquals {
+      Predicate::ObservationNotEquals {
         feed: 1,
         threshold: 49,
         max_age_blocks: 10,
       },
     ]);
-    assert_eq!(Actors::evaluate_condition_set(&fresh, &ALICE, 0), Ok(true));
+    assert_eq!(Actors::evaluate_predicate_set(&fresh, &ALICE, 0), Ok(true));
 
     for feed in 2..=4 {
-      let unavailable = all_conditions(vec![Condition::ObservationNotEquals {
+      let unavailable = all_conditions(vec![Predicate::ObservationNotEquals {
         feed,
         threshold: 50,
         max_age_blocks: 10,
       }]);
       assert_eq!(
-        Actors::evaluate_condition_set(&unavailable, &ALICE, 0),
+        Actors::evaluate_predicate_set(&unavailable, &ALICE, 0),
         Ok(false)
       );
     }
@@ -16580,7 +16974,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
       },
     );
     let invalid_condition_step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::ObservationAbove {
+      preconditions: all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 1,
         max_age_blocks: 5,
@@ -16619,7 +17013,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
         step_index: 0,
         error,
         ..
-      } if *id == actor_id && *error == Error::<Test>::InvalidCondition.into()
+      } if *id == actor_id && *error == Error::<Test>::InvalidPredicate.into()
     )));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -16638,14 +17032,14 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
         observed_at: 4,
       },
     );
-    let over_age = all_conditions(vec![Condition::ObservationAbove {
+    let over_age = all_conditions(vec![Predicate::ObservationAbove {
       feed: 1,
       threshold: 1,
       max_age_blocks: 5,
     }]);
     assert_eq!(
-      Actors::evaluate_condition_set(&over_age, &ALICE, 0),
-      Err(Error::<Test>::InvalidCondition.into())
+      Actors::evaluate_predicate_set(&over_age, &ALICE, 0),
+      Err(Error::<Test>::InvalidPredicate.into())
     );
   });
 }
@@ -16669,7 +17063,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          system_active_program(manual_schedule(), None, plan),
+          system_active_contract(manual_schedule(), None, plan),
         ),
         Error::<Test>::InvalidAmountResolution
       );
@@ -16709,7 +17103,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          system_active_program(
+          system_active_contract(
             manual_schedule(),
             None,
             execution_plan_with_step(make_step(task)),
@@ -16746,7 +17140,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          system_active_program(
+          system_active_contract(
             manual_schedule(),
             None,
             execution_plan_with_step(make_step(task)),
@@ -16768,7 +17162,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(
+        system_active_contract(
           manual_schedule(),
           None,
           transfer_execution_plan(system_sovereign, 1),
@@ -16783,7 +17177,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
         RuntimeOrigin::signed(ALICE),
         0,
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           None,
           transfer_execution_plan(user_sovereign, 1),
@@ -16798,11 +17192,11 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
     let active_sovereign = sovereign_account(active_id);
     let before = Actors::active_actor_view(active_id).expect("active actor");
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::root(),
         active_id,
         transfer_execution_plan(active_sovereign, 1),
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::SelfTransferNotAllowed
     );
@@ -16813,7 +17207,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let dormant = Actors::actor_identities(dormant_id).expect("dormant identity");
     let self_leg_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
@@ -16835,7 +17229,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         dormant_id,
-        system_active_program(manual_schedule(), None, self_leg_plan),
+        system_active_contract(manual_schedule(), None, self_leg_plan),
       ),
       Error::<Test>::SelfTransferNotAllowed
     );
@@ -16848,7 +17242,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
 fn zero_observation_max_age_is_rejected_during_plan_validation() {
   new_test_ext().execute_with(|| {
     let plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::ObservationAbove {
+      preconditions: all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 0,
         max_age_blocks: 0,
@@ -16861,7 +17255,7 @@ fn zero_observation_max_age_is_rejected_during_plan_validation() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, plan),
+        system_active_contract(manual_schedule(), None, plan),
       ),
       Error::<Test>::InvalidObservationMaxAge
     );
@@ -16869,12 +17263,15 @@ fn zero_observation_max_age_is_rejected_during_plan_validation() {
 }
 
 #[test]
-fn empty_all_and_any_are_rejected_without_normalization() {
+fn empty_outer_and_inner_preconditions_are_rejected() {
   new_test_ext().execute_with(|| {
-    let empty = BoundedVec::default();
-    for conditions in [ConditionSet::All(empty.clone()), ConditionSet::Any(empty)] {
+    let empty_outer = Preconditions::AnyOf(BoundedVec::default());
+    let empty_inner = Preconditions::AnyOf(
+      BoundedVec::try_from(vec![BoundedVec::default()]).expect("empty clause fits"),
+    );
+    for preconditions in [empty_outer, empty_inner] {
       let plan = execution_plan_with_step(StepOf::<Test> {
-        conditions,
+        preconditions,
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -16883,9 +17280,9 @@ fn empty_all_and_any_are_rejected_without_normalization() {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          system_active_program(manual_schedule(), None, plan),
+          system_active_contract(manual_schedule(), None, plan),
         ),
-        Error::<Test>::EmptyConditionSet
+        Error::<Test>::EmptyPreconditions
       );
     }
   });
@@ -16896,9 +17293,9 @@ fn any_with_multiple_true_atoms_executes_the_task_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      conditions: any_conditions(vec![
-        Condition::BlockNumberAbove { threshold: 1 },
-        Condition::BlockNumberBelow { threshold: 10 },
+      preconditions: any_conditions(vec![
+        Predicate::BlockNumberAbove { threshold: 1 },
+        Predicate::BlockNumberBelow { threshold: 10 },
       ]),
       task: Task::Transfer {
         to: BOB,
@@ -16939,9 +17336,9 @@ fn any_skip_cannot_create_continuation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      conditions: any_conditions(vec![
-        Condition::BlockNumberBelow { threshold: 1 },
-        Condition::BlockNumberAbove { threshold: 10 },
+      preconditions: any_conditions(vec![
+        Predicate::BlockNumberBelow { threshold: 1 },
+        Predicate::BlockNumberAbove { threshold: 10 },
       ]),
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
@@ -16979,9 +17376,9 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let step = StepOf::<Test> {
-      conditions: any_conditions(vec![
-        Condition::BlockNumberBelow { threshold: 2 },
-        Condition::BlockNumberAbove { threshold: 100 },
+      preconditions: any_conditions(vec![
+        Predicate::BlockNumberBelow { threshold: 2 },
+        Predicate::BlockNumberAbove { threshold: 100 },
       ]),
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
@@ -17029,17 +17426,17 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
 #[test]
 fn condition_fee_depends_only_on_total_atomic_count() {
   let forward = all_conditions(vec![
-    Condition::BlockNumberAbove { threshold: 1 },
-    Condition::BlockNumberBelow { threshold: 10 },
+    Predicate::BlockNumberAbove { threshold: 1 },
+    Predicate::BlockNumberBelow { threshold: 10 },
   ]);
   let reverse = any_conditions(vec![
-    Condition::BlockNumberBelow { threshold: 10 },
-    Condition::BlockNumberAbove { threshold: 1 },
+    Predicate::BlockNumberBelow { threshold: 10 },
+    Predicate::BlockNumberAbove { threshold: 1 },
   ]);
-  assert_eq!(forward.len(), reverse.len());
+  assert_eq!(forward.predicate_count(), reverse.predicate_count());
   assert_eq!(
-    Actors::compute_eval_fee(forward.len()),
-    Actors::compute_eval_fee(reverse.len())
+    Actors::compute_eval_fee(forward.predicate_count()),
+    Actors::compute_eval_fee(reverse.predicate_count())
   );
 }
 
@@ -17048,7 +17445,7 @@ fn unavailable_observation_skips_without_incrementing_failures() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::ObservationNotEquals {
+      preconditions: all_conditions(vec![Predicate::ObservationNotEquals {
         feed: 99,
         threshold: 0,
         max_age_blocks: 10,
@@ -17090,7 +17487,7 @@ fn condition_balance_above_skips_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1_000,
       }]),
@@ -17132,7 +17529,7 @@ fn condition_balance_above_executes_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 50,
       }]),
@@ -17165,7 +17562,7 @@ fn condition_block_number_above_skips_before_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BlockNumberAbove { threshold: 10 }]),
+      preconditions: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -17193,7 +17590,7 @@ fn condition_block_number_below_skips_after_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(20);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BlockNumberBelow { threshold: 10 }]),
+      preconditions: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -17221,7 +17618,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -17268,7 +17665,7 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
     set_pool_reserves(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -17323,7 +17720,7 @@ fn invalid_schedule_window_too_short() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_program(
+        user_active_contract(
           manual_schedule(),
           Some(window),
           transfer_execution_plan(BOB, 10)
@@ -17939,7 +18336,7 @@ fn unstake_last_funding_rejects_position_without_transferable_share_asset() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, execution_plan),
+        system_active_contract(manual_schedule(), None, execution_plan),
       ),
       Error::<Test>::InvalidAmountResolution
     );
@@ -17988,7 +18385,7 @@ fn stake_adapter_failure_can_continue_next_step() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(13);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -18036,7 +18433,7 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(14);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -18084,7 +18481,7 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -18131,7 +18528,7 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -18349,7 +18746,7 @@ fn donate_liquidity_asset_b_cap_keeps_capped_task_continuing() {
     let asset_a = TestAsset::Local(11);
     let asset_b = TestAsset::Local(12);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18408,7 +18805,7 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
     let asset_a = TestAsset::Local(15);
     let asset_b = TestAsset::Local(16);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18461,7 +18858,7 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
     let asset_a = TestAsset::Native;
     let asset_b = TestAsset::Local(19);
     let failing_step = StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18511,7 +18908,7 @@ fn condition_balance_below_skips_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceBelow {
+      preconditions: all_conditions(vec![Predicate::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 50,
       }]),
@@ -18542,7 +18939,7 @@ fn condition_balance_below_executes_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceBelow {
+      preconditions: all_conditions(vec![Predicate::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 200,
       }]),
@@ -18571,7 +18968,7 @@ fn condition_balance_equals_matches_exact() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceEquals {
+      preconditions: all_conditions(vec![Predicate::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -18604,7 +19001,7 @@ fn condition_balance_equals_skips_when_not_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceEquals {
+      preconditions: all_conditions(vec![Predicate::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 999,
       }]),
@@ -18635,7 +19032,7 @@ fn condition_balance_not_equals_executes_when_different() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceNotEquals {
+      preconditions: all_conditions(vec![Predicate::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 999,
       }]),
@@ -18664,7 +19061,7 @@ fn condition_balance_not_equals_skips_when_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceNotEquals {
+      preconditions: all_conditions(vec![Predicate::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -18732,7 +19129,7 @@ fn condition_sees_spendable_not_raw_balance_for_user_actor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let threshold = 350;
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold,
       }]),
@@ -18773,7 +19170,7 @@ fn condition_sees_full_balance_for_system_actor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     // System Actors: reserved=0, so spendable == raw
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 150,
       }]),
@@ -18803,7 +19200,7 @@ fn system_condition_respects_adapter_visible_native_lock() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -18844,7 +19241,7 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 60,
       }]),
@@ -19131,7 +19528,7 @@ fn timer_validation_includes_worst_case_deterministic_jitter() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program(
+      system_active_contract(
         timer_schedule(largest_valid_cadence),
         None,
         inert_execution_plan()
@@ -19142,7 +19539,7 @@ fn timer_validation_includes_worst_case_deterministic_jitter() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(
+        system_active_contract(
           timer_schedule(largest_valid_cadence.saturating_add(1)),
           None,
           inert_execution_plan(),
@@ -19164,7 +19561,7 @@ fn user_dca_complete_lifecycle() {
     let foreign = TestAsset::Local(1);
     set_asset_balance(&ALICE, foreign, 10_000);
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: foreign,
         threshold: 50,
       }]),
@@ -19180,7 +19577,7 @@ fn user_dca_complete_lifecycle() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_program(schedule, None, execution_plan),
+      user_active_contract(schedule, None, execution_plan),
     ));
     // Verify creation
     assert!(has_actor_event(|e| matches!(
@@ -19255,7 +19652,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
     // ExecutionPlan: SwapIn(foreign → native) → Transfer(native → cold wallet)
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: all_conditions(vec![Condition::BalanceAbove {
+        preconditions: all_conditions(vec![Predicate::BalanceAbove {
           asset: foreign,
           threshold: 50,
         }]),
@@ -19268,7 +19665,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        conditions: all_conditions(vec![Condition::BalanceAbove {
+        preconditions: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 10,
         }]),
@@ -19311,7 +19708,7 @@ fn user_copybook_savings() {
     let schedule = timer_schedule(10);
     // Transfer 5% of current native balance to savings
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: all_conditions(vec![Condition::BalanceAbove {
+      preconditions: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -19350,7 +19747,7 @@ fn user_portfolio_rebalancer_both_directions() {
     // BalanceBelow checks spendable = raw - fee_reserve
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: all_conditions(vec![Condition::BalanceAbove {
+        preconditions: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 5000,
         }]),
@@ -19362,12 +19759,12 @@ fn user_portfolio_rebalancer_both_directions() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        conditions: all_conditions(vec![
-          Condition::BalanceBelow {
+        preconditions: all_conditions(vec![
+          Predicate::BalanceBelow {
             asset: TestAsset::Native,
             threshold: 500,
           },
-          Condition::BalanceAbove {
+          Predicate::BalanceAbove {
             asset: foreign,
             threshold: 500,
           },
@@ -19423,7 +19820,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
     // ExecutionPlan references both assets via PercentageOfLastFunding
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -19432,7 +19829,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -19451,11 +19848,11 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
 }
 
 #[test]
-fn manual_readiness_mutates_hot_state_without_rewriting_program() {
+fn manual_readiness_mutates_hot_state_without_rewriting_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let program_before = Actors::actor_program(actor_id).expect("actor program exists");
+    let contract_before = Actors::actor_contract(actor_id).expect("actor contract exists");
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -19467,7 +19864,7 @@ fn manual_readiness_mutates_hot_state_without_rewriting_program() {
         .expect("actor hot state exists")
         .pending_signal
     );
-    assert_eq!(Actors::actor_program(actor_id), Some(program_before));
+    assert_eq!(Actors::actor_contract(actor_id), Some(contract_before));
   });
 }
 
@@ -19487,7 +19884,7 @@ fn funding_ingress_mutates_only_actor_funding_state() {
     );
     let instance_before = Actors::active_actor_view(actor_id).expect("Actors exists");
     let hot_before = Actors::actor_hot(actor_id).expect("actor hot state exists");
-    let program_before = Actors::actor_program(actor_id).expect("actor program exists");
+    let contract_before = Actors::actor_contract(actor_id).expect("actor contract exists");
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
@@ -19496,7 +19893,7 @@ fn funding_ingress_mutates_only_actor_funding_state() {
     ));
     assert_eq!(Actors::active_actor_view(actor_id), Some(instance_before));
     assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(Actors::actor_program(actor_id), Some(program_before));
+    assert_eq!(Actors::actor_contract(actor_id), Some(contract_before));
     assert_eq!(
       actor_funding(actor_id)
         .funding_accumulated
@@ -19512,7 +19909,7 @@ fn funding_accumulator_isolated_per_asset() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign = TestAsset::Local(1);
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::Transfer {
         to: BOB,
         asset: foreign,
@@ -19545,7 +19942,7 @@ fn percentage_of_last_funding_multi_asset() {
     let foreign_b = TestAsset::Local(2);
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -19554,7 +19951,7 @@ fn percentage_of_last_funding_multi_asset() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -19628,7 +20025,7 @@ fn scheduler_ignores_sparse_id_gaps() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program(schedule.clone(), None, execution_plan.clone()),
+      system_active_contract(schedule.clone(), None, execution_plan.clone()),
     ));
     let sov_0 = Actors::sovereign_account_id_system(0);
     let _ = Balances::deposit_creating(&sov_0, 1_000_000);
@@ -19638,7 +20035,7 @@ fn scheduler_ignores_sparse_id_gaps() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_program(schedule, None, execution_plan),
+      system_active_contract(schedule, None, execution_plan),
     ));
     let sov_2000 = Actors::sovereign_account_id_system(2000);
     let _ = Balances::deposit_creating(&sov_2000, 1_000_000);
@@ -19681,7 +20078,7 @@ fn active_actors_set_maintains_integrity() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_program(schedule.clone(), None, inert_plan.clone()),
+        system_active_contract(schedule.clone(), None, inert_plan.clone()),
       ));
     }
     assert_eq!(ActorHot::<Test>::iter_keys().count(), 3);
@@ -20070,7 +20467,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program(timer_schedule(1), None, execution_plan.clone()),
+      system_active_contract(timer_schedule(1), None, execution_plan.clone()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     assert_eq!(
@@ -20080,15 +20477,15 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
       Mutability::Immutable
     );
     assert_noop!(
-      Actors::update_schedule(RuntimeOrigin::root(), actor_id, timer_schedule(1), None),
+      update_contract_partial!(RuntimeOrigin::root(), actor_id, timer_schedule(1), None),
       Error::<Test>::ImmutableActor
     );
     assert_noop!(
-      Actors::update_execution_plan(
+      update_contract_partial!(
         RuntimeOrigin::root(),
         actor_id,
         execution_plan.clone(),
-        CompletionPolicy::Persistent,
+        crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::ImmutableActor
     );
@@ -20114,7 +20511,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
         actor_id,
         ALICE,
         Mutability::Immutable,
-        system_active_program(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_execution_plan()),
       ),
       Error::<Test>::SystemSovereignOccupied
     );
@@ -20134,7 +20531,7 @@ fn system_immutable_indefinite_commitment_survives_breaker_mitigation() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program(timer_schedule(10), None, inert_execution_plan()),
+      system_active_contract(timer_schedule(10), None, inert_execution_plan()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     let before = Actors::active_actor_view(actor_id).expect("immutable actor");
@@ -20153,7 +20550,7 @@ fn system_immutable_indefinite_commitment_survives_breaker_mitigation() {
 
     let after = Actors::active_actor_view(actor_id).expect("breaker cannot remove commitment");
     assert_eq!(after.sovereign_account, before.sovereign_account);
-    assert_eq!(after.execution_plan, before.execution_plan);
+    assert_eq!(after.steps, before.steps);
     assert_eq!(after.cycle_nonce, 0);
     assert_eq!(
       Actors::system_sovereigns(actor_id),
@@ -20175,7 +20572,7 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Immutable,
-        system_active_program(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_execution_plan()),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -20183,7 +20580,7 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_program(
+      system_active_contract(
         timer_schedule(1),
         Some(ScheduleWindow { start: 1, end: 101 }),
         inert_execution_plan(),
@@ -20260,10 +20657,10 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       actor_id
     ));
     if reason == CloseReason::WindowExpired {
-      ActorProgram::<Test>::mutate(actor_id, |maybe| {
+      ActorContract::<Test>::mutate(actor_id, |maybe| {
         maybe
           .as_mut()
-          .expect("actor program exists")
+          .expect("actor contract exists")
           .schedule_window = Some(ScheduleWindow { start: 0, end: 0 });
       });
     }
@@ -20276,7 +20673,7 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
     // admission budget covers only the queue discovery and actor probes plus the close.
     let pre_admission = discovery
       .saturating_add(Actors::scheduler_actor_hot_probe_weight_upper())
-      .saturating_add(Actors::scheduler_actor_program_probe_weight_upper());
+      .saturating_add(Actors::scheduler_actor_contract_probe_weight_upper());
     let close = Actors::close_cleanup_weight_upper();
     let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
       .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
@@ -20365,14 +20762,14 @@ fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
 #[cfg(test)]
 mod proptest_actor {
   use super::{
-    RETRY_LATER, asset_balance, create_system_with, fund_native, make_step, manual_schedule,
-    native_balance, prefund_active_user_creation, run_idle, set_asset_balance, setup_pool,
-    setup_temporary_retry_pool, sovereign_account,
+    RETRY_LATER, all_conditions, asset_balance, create_system_with, fund_native, make_step,
+    manual_schedule, native_balance, prefund_active_user_creation, run_idle, set_asset_balance,
+    setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorFunding, ActorHot, ActorIdentities, ActorProgram, AmountResolution, AssetFilter,
-    ConditionSet, ContinuationStateStore, CycleState, Event, FundingSourcePolicy, Mutability,
-    QueueOccupancy, QueuePages, Schedule, ScheduleOf, SourceFilter, StepErrorPolicy, StepOf,
+    ActorContract, ActorFunding, ActorHot, ActorIdentities, AmountResolution, AssetFilter,
+    ContinuationStateStore, CycleState, Event, FundingSourcePolicy, Mutability, Preconditions,
+    QueueOccupancy, QueuePages, Schedule, SourceFilter, StepErrorPolicy, StepOf,
     SystemSovereignState, SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages, mock::*,
   };
   use codec::Encode;
@@ -20386,7 +20783,7 @@ mod proptest_actor {
   };
   use proptest::prelude::*;
 
-  type RuntimeSchedule = ScheduleOf<Test>;
+  type RuntimeSchedule = crate::ScheduleOf<crate::mock::Test>;
   type RuntimeStep = StepOf<Test>;
 
   fn timer_schedule_pt(every_blocks: u32) -> RuntimeSchedule {
@@ -20396,12 +20793,9 @@ mod proptest_actor {
     }
   }
 
-  fn inert_execution_plan() -> crate::ExecutionPlanOf<Test> {
+  fn inert_execution_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
     BoundedVec::try_from(vec![RuntimeStep {
-      conditions: ConditionSet::All(
-        BoundedVec::try_from(vec![crate::Condition::BlockNumberBelow { threshold: 0 }])
-          .expect("one condition fits"),
-      ),
+      preconditions: all_conditions(vec![crate::Predicate::BlockNumberBelow { threshold: 0 }]),
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
@@ -20415,12 +20809,12 @@ mod proptest_actor {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(owner),
       Mutability::Mutable,
-      crate::ProgramInput::Active(crate::ActiveProgramInput {
+      crate::ContractInput::Active(crate::ActiveContractInput {
         schedule: timer_schedule_pt(every_blocks),
         schedule_window: None,
-        execution_plan: plan,
-        completion_policy: crate::CompletionPolicy::Persistent,
-        funding_source_policy: crate::FundingSourcePolicy::OwnerOnly,
+        steps: plan,
+        completion: crate::CompletionPolicy::Persistent,
+        funding: crate::FundingSourcePolicy::OwnerOnly,
         auto_close_at_cycle_nonce: None,
       }),
     ));
@@ -20441,7 +20835,7 @@ mod proptest_actor {
           slippage_tolerance: Perbill::one(),
         }),
         StepOf::<Test> {
-          conditions: ConditionSet::Always,
+          preconditions: Preconditions::Unconditional,
           task: Task::AddLiquidity {
             asset_a: TestAsset::Local(77),
             asset_b: TestAsset::Local(88),
@@ -20534,7 +20928,7 @@ mod proptest_actor {
           amount: AmountResolution::Fixed(10),
         }),
         StepOf::<Test> {
-          conditions: ConditionSet::Always,
+          preconditions: Preconditions::Unconditional,
           task: Task::SwapIn {
             asset_in: TestAsset::Native,
             asset_out: TestAsset::Local(77),
@@ -20591,7 +20985,7 @@ mod proptest_actor {
     ManualTrigger,
     Pause,
     Resume,
-    UpdateProgram,
+    UpdateContract,
     Enqueue,
     Wakeup,
     Execute,
@@ -20612,7 +21006,7 @@ mod proptest_actor {
       5 => ModelOp::ManualTrigger,
       6 => ModelOp::Pause,
       7 => ModelOp::Resume,
-      8 => ModelOp::UpdateProgram,
+      8 => ModelOp::UpdateContract,
       9 => ModelOp::Enqueue,
       10 => ModelOp::Wakeup,
       11 => ModelOp::Execute,
@@ -20625,10 +21019,10 @@ mod proptest_actor {
     })
   }
 
-  fn model_retry_plan() -> crate::ExecutionPlanOf<Test> {
+  fn model_retry_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
     BoundedVec::try_from(vec![
       RuntimeStep {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -20637,7 +21031,7 @@ mod proptest_actor {
         on_error: StepErrorPolicy::AbortCycle,
       },
       RuntimeStep {
-        conditions: ConditionSet::Always,
+        preconditions: Preconditions::Unconditional,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -20650,7 +21044,7 @@ mod proptest_actor {
     .expect("model retry plan fits")
   }
 
-  fn system_program(
+  fn system_contract(
     trigger: Trigger<
       AccountId,
       TestAsset,
@@ -20658,16 +21052,16 @@ mod proptest_actor {
       <Test as crate::Config>::MaxTriggerSources,
       <Test as crate::Config>::ObservationFeedId,
     >,
-  ) -> crate::ProgramInputOf<Test> {
-    crate::ProgramInput::Active(crate::ActiveProgramInput {
+  ) -> crate::ContractInputOf<Test> {
+    crate::ContractInput::Active(crate::ActiveContractInput {
       schedule: Schedule {
         trigger,
         cooldown_blocks: 0,
       },
       schedule_window: None,
-      execution_plan: inert_execution_plan(),
-      completion_policy: crate::CompletionPolicy::Persistent,
-      funding_source_policy: FundingSourcePolicy::AnyVerifiedIngress,
+      steps: inert_execution_plan(),
+      completion: crate::CompletionPolicy::Persistent,
+      funding: FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
     })
   }
@@ -20680,7 +21074,7 @@ mod proptest_actor {
     conserved_total: Balance,
   ) {
     let hot_ids: std::collections::BTreeSet<_> = ActorHot::<Test>::iter_keys().collect();
-    let program_ids: std::collections::BTreeSet<_> = ActorProgram::<Test>::iter_keys().collect();
+    let contract_ids: std::collections::BTreeSet<_> = ActorContract::<Test>::iter_keys().collect();
     let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
     let identity_ids: std::collections::BTreeSet<_> =
       ActorIdentities::<Test>::iter_keys().collect();
@@ -20688,7 +21082,7 @@ mod proptest_actor {
       identity_ids.difference(&hot_ids).copied().collect();
     let continuation_ids: std::collections::BTreeSet<_> =
       ContinuationStateStore::<Test>::iter_keys().collect();
-    assert_eq!(hot_ids, program_ids);
+    assert_eq!(hot_ids, contract_ids);
     assert_eq!(hot_ids, funding_ids);
     assert!(continuation_ids.is_subset(&hot_ids));
     assert!(hot_ids.is_subset(&identity_ids));
@@ -20716,8 +21110,8 @@ mod proptest_actor {
           .all(|asset| funding.funding_tracked_assets.contains(asset))
       );
       if let Some(continuation) = ContinuationStateStore::<Test>::get(actor_id) {
-        let program = ActorProgram::<Test>::get(actor_id).expect("program key resolves");
-        assert!((continuation.cursor as usize) < program.execution_plan.len());
+        let contract = ActorContract::<Test>::get(actor_id).expect("contract key resolves");
+        assert!((continuation.cursor as usize) < contract.steps.len());
         assert!(continuation.cumulative_outcomes.executed_steps <= continuation.cursor);
       }
       if let Some(ticket) = hot.queue_ticket {
@@ -20979,7 +21373,7 @@ mod proptest_actor {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          crate::ProgramInput::Dormant,
+          crate::ContractInput::Dormant,
         ));
         let mut closed = false;
         assert_model_invariants(
@@ -21010,7 +21404,7 @@ mod proptest_actor {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
-                system_program(Trigger::immediate_manual()),
+                system_contract(Trigger::immediate_manual()),
               );
             }
             ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
@@ -21062,7 +21456,7 @@ mod proptest_actor {
                 ),
                 cooldown_blocks: 0,
               };
-              let _ = Actors::update_schedule(RuntimeOrigin::root(), system_id, schedule, None);
+              let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
               if let Some(identity) = ActorIdentities::<Test>::get(system_id) {
                 let provenance = crate::FundingProvenance::Signed;
                 if Actors::preflight_funding_event(
@@ -21100,8 +21494,8 @@ mod proptest_actor {
             ModelOp::Resume if !closed && ActorHot::<Test>::contains_key(system_id) => {
               let _ = Actors::resume_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::UpdateProgram if !closed && ActorHot::<Test>::contains_key(system_id) => {
-              let _ = Actors::update_execution_plan(
+            ModelOp::UpdateContract if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let _ = update_contract_partial!(
                 RuntimeOrigin::root(),
                 system_id,
                 inert_execution_plan(),
@@ -21110,7 +21504,7 @@ mod proptest_actor {
             }
             ModelOp::Wakeup if !closed && ActorHot::<Test>::contains_key(system_id) => {
               let schedule = timer_schedule_pt(2);
-              let _ = Actors::update_schedule(RuntimeOrigin::root(), system_id, schedule, None);
+              let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
             }
             ModelOp::Execute => {
               let _ = Actors::on_idle(block, Weight::MAX);
@@ -21121,7 +21515,7 @@ mod proptest_actor {
               {
                 let identity = ActorIdentities::<Test>::get(system_id)
                   .expect("active actor identity exists");
-                let _ = Actors::update_execution_plan(
+                let _ = update_contract_partial!(
                   RuntimeOrigin::root(),
                   system_id,
                   model_retry_plan(),
@@ -21162,7 +21556,7 @@ mod proptest_actor {
                 RuntimeOrigin::signed(ALICE),
                 0,
                 Mutability::Mutable,
-                crate::ProgramInput::Dormant,
+                crate::ContractInput::Dormant,
               ));
               let user_id = Actors::next_actor_id().saturating_sub(1);
               assert_eq!(
@@ -21247,7 +21641,7 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let execution_plan = transfer_execution_plan(BOB, 10);
-    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
     let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
@@ -21259,11 +21653,11 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
     let actor_balance_before = native_balance(&actor_before.sovereign_account);
     let bob_before = native_balance(&BOB);
     let event_count_before = frame_system::Pallet::<Test>::event_count();
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::System,
       Mutability::Mutable,
-      expected_program,
+      expected_contract,
       SimulationMode::FreshCurrentPlan,
     )
     .expect("ready current plan simulates");
@@ -21304,18 +21698,18 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
 fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
-    let expected_program =
-      system_active_program(manual_schedule(), None, temporary_retry_swap_plan());
+    let expected_contract =
+      system_active_contract(manual_schedule(), None, temporary_retry_swap_plan());
     let continuation_before = Actors::continuation_state(actor_id).expect("continuation exists");
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
     frame_system::Pallet::<Test>::set_block_number(2);
 
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::System,
       Mutability::Mutable,
-      expected_program,
+      expected_contract,
       SimulationMode::CurrentContinuation,
     )
     .expect("eligible continuation simulates");
@@ -21356,7 +21750,7 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: ConditionSet::Always,
+      preconditions: Preconditions::Unconditional,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -21365,7 +21759,7 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
       },
       on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
     });
-    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
     let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
@@ -21376,11 +21770,11 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
 
-    let result = Actors::simulate_current_program(
+    let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::System,
       Mutability::Mutable,
-      expected_program,
+      expected_contract,
       SimulationMode::FreshCurrentPlan,
     )
     .expect("retry exhaustion simulates");
@@ -21394,17 +21788,17 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
 }
 
 #[test]
-fn simulation_rejects_program_and_mode_mismatch_without_execution() {
+fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let execution_plan = transfer_execution_plan(BOB, 10);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan.clone());
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, execution_plan.clone()),
+        system_active_contract(manual_schedule(), None, execution_plan.clone()),
         SimulationMode::FreshCurrentPlan,
       )
       .err(),
@@ -21418,22 +21812,22 @@ fn simulation_rejects_program_and_mode_mismatch_without_execution() {
     let events_before = frame_system::Pallet::<Test>::event_count();
 
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        ProgramInput::Dormant,
+        ContractInput::Dormant,
         SimulationMode::FreshCurrentPlan,
       )
       .err(),
-      Some(SimulationError::ProgramMismatch)
+      Some(SimulationError::ContractMismatch)
     );
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_program(manual_schedule(), None, execution_plan),
+        system_active_contract(manual_schedule(), None, execution_plan),
         SimulationMode::CurrentContinuation,
       )
       .err(),
@@ -21468,7 +21862,7 @@ fn eligibility_projection_reports_not_registered_and_dormant() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Dormant,
+      ContractInput::Dormant,
     ));
     let p = eligibility_projection(fresh_id);
     assert_eq!(p.phase, ActorEligibilityPhase::Dormant);
@@ -21495,8 +21889,8 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let window = ScheduleWindow { start: 1, end: 101 };
     let execution_plan = inert_execution_plan();
-    let expected_program =
-      system_active_program(manual_schedule(), Some(window), execution_plan.clone());
+    let expected_contract =
+      system_active_contract(manual_schedule(), Some(window), execution_plan.clone());
     let actor_id = create_system_with(ALICE, manual_schedule(), Some(window), execution_plan);
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::set_global_circuit_breaker(
@@ -21518,11 +21912,11 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       ActorEligibilityPhase::GlobalCircuitBreaker
     );
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        expected_program.clone(),
+        expected_contract.clone(),
         SimulationMode::FreshCurrentPlan,
       ),
       Err(SimulationError::GlobalCircuitBreaker)
@@ -21537,11 +21931,11 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       ActorEligibilityPhase::CloseDue(CloseReason::WindowExpired)
     );
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        expected_program,
+        expected_contract,
         SimulationMode::FreshCurrentPlan,
       )
       .expect("terminal simulation projects")
@@ -21564,7 +21958,7 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let execution_plan = inert_execution_plan();
-    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
     let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
     let instance = Actors::active_actor_view(actor_id).expect("actor exists");
@@ -21579,11 +21973,11 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       ActorEligibilityPhase::Paused
     );
     assert_eq!(
-      Actors::simulate_current_program(
+      Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        expected_program,
+        expected_contract,
         SimulationMode::FreshCurrentPlan,
       ),
       Err(SimulationError::Paused)

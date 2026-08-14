@@ -12,6 +12,7 @@ import type {
   GovernanceDomainId,
   GovernanceGovXpCounters,
   GovernanceItemId,
+  GovernanceParticipationCoefficient,
   GovernancePayloadHashPreimageStatus,
   GovernancePayloadPreimageNoteCost,
   GovernancePrimaryTrackOption,
@@ -31,7 +32,6 @@ import type {
   GovernanceProviderState,
   GovernanceQuerySurfaceAvailability,
   GovernanceRecentFinalizedProposal,
-  GovernanceRewardCoefficient,
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
@@ -239,10 +239,10 @@ export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockc
     throw new Error(this.unavailableReason);
   }
 
-  async getRewardCoefficient(
+  async getGovernanceParticipationCoefficient(
     _domainId: GovernanceDomainId,
     _accountId: GovernanceAccountId,
-  ): Promise<GovernanceRewardCoefficient | null> {
+  ): Promise<GovernanceParticipationCoefficient | null> {
     throw new Error(this.unavailableReason);
   }
 

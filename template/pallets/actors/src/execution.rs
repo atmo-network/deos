@@ -134,39 +134,40 @@ enum StepControl {
   SuspendCurrent,
 }
 
-fn evaluate_condition_set_with<C, MaxConditions, E, Evaluate>(
-  condition_set: &ConditionSet<C, MaxConditions>,
+fn evaluate_predicate_set_with<P, MaxClauses, MaxPerClause, E, Evaluate>(
+  preconditions: &Preconditions<P, MaxClauses, MaxPerClause>,
   mut evaluate: Evaluate,
 ) -> Result<bool, E>
 where
-  MaxConditions: Get<u32>,
-  Evaluate: FnMut(&C) -> Result<bool, E>,
+  MaxClauses: Get<u32>,
+  MaxPerClause: Get<u32>,
+  Evaluate: FnMut(&TimedPredicate<P>) -> Result<bool, E>,
 {
-  let (conditions, require_all) = match condition_set {
-    ConditionSet::Always => return Ok(true),
-    ConditionSet::All(conditions) => (conditions, true),
-    ConditionSet::Any(conditions) => (conditions, false),
+  let clauses = match preconditions {
+    Preconditions::Unconditional => return Ok(true),
+    Preconditions::AnyOf(clauses) => clauses,
   };
-  let mut all_pass = true;
-  let mut any_pass = false;
+  let mut expression_passes = false;
   let mut first_error = None;
-  for condition in conditions {
-    match evaluate(condition) {
-      Ok(pass) => {
-        all_pass &= pass;
-        any_pass |= pass;
-      }
-      Err(error) => {
-        if first_error.is_none() {
-          first_error = Some(error);
+  for clause in clauses {
+    let mut clause_passes = true;
+    for predicate in clause {
+      match evaluate(predicate) {
+        Ok(pass) => clause_passes &= pass,
+        Err(error) => {
+          clause_passes = false;
+          if first_error.is_none() {
+            first_error = Some(error);
+          }
         }
       }
     }
+    expression_passes |= clause_passes;
   }
   if let Some(error) = first_error {
     return Err(error);
   }
-  Ok(if require_all { all_pass } else { any_pass })
+  Ok(expression_passes)
 }
 
 fn resolve_step_control(result: StepResult, error_policy: StepErrorPolicy) -> StepControl {
@@ -236,13 +237,13 @@ impl<T: Config> Pallet<T> {
     );
     let identity = ActorIdentities::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
     if let Some(continuation) = state.as_ref() {
-      let program = ActorProgram::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
+      let contract = ActorContract::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
       ensure!(
         identity.mutability == Mutability::Mutable
-          && continuation.cursor < program.execution_plan.len() as u32,
+          && continuation.cursor < contract.steps.len() as u32,
         Error::<T>::ContinuationInvariant
       );
-      let max_attempts = program.execution_plan[continuation.cursor as usize]
+      let max_attempts = contract.steps[continuation.cursor as usize]
         .on_error
         .retry_max_attempts()
         .ok_or(Error::<T>::ContinuationInvariant)?;
@@ -356,7 +357,7 @@ impl<T: Config> Pallet<T> {
     let base_weight = T::WeightInfo::cycle_orchestration();
     let is_continuation = instance.cycle_state == CycleState::Suspended;
     let actor = instance.sovereign_account.clone();
-    let execution_plan = &instance.execution_plan;
+    let execution_plan = &instance.steps;
     let fee_envelope = Self::attempt_fee_envelope(
       instance.actor_class.actor_type(),
       execution_plan,
@@ -386,6 +387,7 @@ impl<T: Config> Pallet<T> {
       cumulative_outcomes,
       funding_snapshot,
       opening_snapshot,
+      opening_predicate_results,
     ) = if is_continuation {
       let continuation = Self::begin_continuation_attempt(actor_id, instance.cycle_nonce, now);
       (
@@ -396,6 +398,7 @@ impl<T: Config> Pallet<T> {
         continuation.cumulative_outcomes,
         continuation.funding_snapshot,
         continuation.opening_snapshot,
+        continuation.opening_predicate_results,
       )
     } else {
       if instance.cycle_nonce == u64::MAX {
@@ -417,6 +420,8 @@ impl<T: Config> Pallet<T> {
         execution_plan,
         reserved_fee_remaining,
       );
+      let opening_predicate_results =
+        Self::capture_opening_predicate_results(&actor, execution_plan, reserved_fee_remaining);
       let Some(cycle_nonce) = ActorIdentities::<T>::mutate(actor_id, |maybe| {
         let identity = maybe.as_mut()?;
         identity.cycle_nonce = identity
@@ -446,6 +451,7 @@ impl<T: Config> Pallet<T> {
         OutcomeTotals::default(),
         funding_snapshot,
         opening_snapshot,
+        opening_predicate_results,
       )
     };
     let is_user = instance.actor_class.actor_type() == ActorType::User;
@@ -466,11 +472,19 @@ impl<T: Config> Pallet<T> {
         cycle_nonce,
       });
     }
+    let mut opening_predicate_index =
+      Self::opening_predicate_count_before(execution_plan, start_cursor as usize);
     for step_idx in start_cursor as usize..execution_plan.len() {
       let step = &execution_plan[step_idx];
       let step_num = step_idx as u32;
       let step_fee = &fee_envelope.steps[step_idx - start_cursor as usize];
-      match Self::evaluate_condition_set(&step.conditions, &actor, reserved_fee_remaining) {
+      match Self::evaluate_step_preconditions(
+        &step.preconditions,
+        &actor,
+        reserved_fee_remaining,
+        &opening_predicate_results,
+        &mut opening_predicate_index,
+      ) {
         Ok(true) => {}
         Ok(false) => {
           if is_user {
@@ -854,6 +868,7 @@ impl<T: Config> Pallet<T> {
               cursor as usize,
               &opening_snapshot,
             ),
+            opening_predicate_results: opening_predicate_results.clone(),
             funding_snapshot: funding_snapshot.clone(),
             cumulative_outcomes,
           },
@@ -919,7 +934,7 @@ impl<T: Config> Pallet<T> {
         }
       }
     } else if let Some(inst) = Self::active_actor_view(actor_id) {
-      if inst.completion_policy == CompletionPolicy::CloseAfterProductiveCycle
+      if inst.completion == CompletionPolicy::CloseAfterProductiveCycle
         && committed_effectful_tasks > 0
       {
         Self::finalize_actor(actor_id, &inst, CloseReason::ProductiveCycleCompleted)
@@ -941,11 +956,11 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  pub fn simulate_current_program(
+  pub fn simulate_current_contract(
     actor_id: ActorId,
     expected_type: ActorType,
     expected_mutability: Mutability,
-    expected_program: ProgramInputOf<T>,
+    expected_contract: ContractInputOf<T>,
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
     let instance = Self::active_actor_for_classification(actor_id)
@@ -955,7 +970,10 @@ impl<T: Config> Pallet<T> {
         ActorClassificationError::ComputationOverflow => SimulationError::ComputationOverflow,
       })?
       .ok_or(SimulationError::ActorNotFound)?;
-    let stored_funding = ActorFunding::<T>::get(actor_id).ok_or(SimulationError::ActorInvariant)?;
+    ensure!(
+      ActorFunding::<T>::contains_key(actor_id),
+      SimulationError::ActorInvariant
+    );
     let continuation = ContinuationStateStore::<T>::get(actor_id);
     if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
       return Err(SimulationError::ContinuationInvariant);
@@ -972,25 +990,26 @@ impl<T: Config> Pallet<T> {
     if instance.mutability != expected_mutability {
       return Err(SimulationError::MutabilityMismatch);
     }
-    let ProgramInput::Active(ActiveProgramInput {
+    let ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window,
-      execution_plan,
-      completion_policy,
-      funding_source_policy,
+      steps: execution_plan,
+      completion: completion_policy,
+      funding: funding_source_policy,
       auto_close_at_cycle_nonce,
-    }) = expected_program
+    }) = expected_contract
     else {
-      return Err(SimulationError::ProgramMismatch);
+      return Err(SimulationError::ContractMismatch);
     };
     if instance.schedule != schedule
       || instance.schedule_window != schedule_window
-      || instance.execution_plan != execution_plan
-      || instance.completion_policy != completion_policy
-      || stored_funding.funding_source_policy != funding_source_policy
+      || instance.steps != execution_plan
+      || instance.completion != completion_policy
+      || ActorContract::<T>::get(actor_id)
+        .is_none_or(|contract| contract.funding != funding_source_policy)
       || instance.auto_close_at_cycle_nonce != auto_close_at_cycle_nonce
     {
-      return Err(SimulationError::ProgramMismatch);
+      return Err(SimulationError::ContractMismatch);
     }
     match mode {
       SimulationMode::FreshCurrentPlan if instance.cycle_state != CycleState::Idle => {
@@ -1137,7 +1156,7 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn compute_eval_fee_checked(num_conditions: u32) -> Result<BalanceOf<T>, Error<T>> {
-    let evaluation_weight = T::WeightInfo::condition_set_evaluation(num_conditions)
+    let evaluation_weight = T::WeightInfo::predicate_set_evaluation(num_conditions)
       .saturating_add(T::WeightInfo::fee_collection());
     Ok(T::WeightToFee::weight_to_fee(&evaluation_weight))
   }
@@ -1280,6 +1299,48 @@ impl<T: Config> Pallet<T> {
       Self::collect_percentage_opening_surfaces(&execution_plan[step_index].task, &mut surfaces);
     }
     surfaces
+  }
+
+  fn opening_predicate_count_before(execution_plan: &ExecutionPlanOf<T>, end_step: usize) -> usize {
+    execution_plan
+      .iter()
+      .take(end_step)
+      .map(|step| match &step.preconditions {
+        Preconditions::Unconditional => 0,
+        Preconditions::AnyOf(clauses) => clauses
+          .iter()
+          .flat_map(|clause| clause.iter())
+          .filter(|timed| timed.timing == ObservationTiming::Opening)
+          .count(),
+      })
+      .sum()
+  }
+
+  fn capture_opening_predicate_results(
+    actor: &T::AccountId,
+    execution_plan: &ExecutionPlanOf<T>,
+    reserved: T::Balance,
+  ) -> OpeningPredicateResultsOf<T> {
+    let mut results = OpeningPredicateResultsOf::<T>::default();
+    for step in execution_plan {
+      let Preconditions::AnyOf(clauses) = &step.preconditions else {
+        continue;
+      };
+      for timed in clauses.iter().flat_map(|clause| clause.iter()) {
+        if timed.timing != ObservationTiming::Opening {
+          continue;
+        }
+        let result = match Self::evaluate_atomic_predicate(&timed.predicate, actor, reserved) {
+          Ok(true) => PredicateEvaluation::True,
+          Ok(false) => PredicateEvaluation::False,
+          Err(_) => PredicateEvaluation::Invalid,
+        };
+        results
+          .try_push(result)
+          .unwrap_or_else(|_| panic!("admitted opening predicates fit MaxOpeningPredicateResults"));
+      }
+    }
+    results
   }
 
   fn capture_opening_snapshot(
@@ -1963,61 +2024,89 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  pub(crate) fn evaluate_condition_set(
-    condition_set: &ConditionSetOf<T>,
+  fn evaluate_step_preconditions(
+    preconditions: &PreconditionsOf<T>,
     who: &T::AccountId,
     reserved: T::Balance,
+    opening_results: &OpeningPredicateResultsOf<T>,
+    opening_index: &mut usize,
   ) -> Result<bool, DispatchError> {
-    evaluate_condition_set_with(condition_set, |condition| {
-      Self::evaluate_atomic_condition(condition, who, reserved)
+    evaluate_predicate_set_with(preconditions, |timed| match timed.timing {
+      ObservationTiming::Current => {
+        Self::evaluate_atomic_predicate(&timed.predicate, who, reserved)
+      }
+      ObservationTiming::Opening => {
+        let result = opening_results
+          .get(*opening_index)
+          .copied()
+          .ok_or(Error::<T>::SnapshotUnavailable)?;
+        *opening_index = opening_index
+          .checked_add(1)
+          .ok_or(Error::<T>::ComputationOverflow)?;
+        match result {
+          PredicateEvaluation::True => Ok(true),
+          PredicateEvaluation::False => Ok(false),
+          PredicateEvaluation::Invalid => Err(Error::<T>::InvalidPredicate.into()),
+        }
+      }
     })
   }
 
-  fn evaluate_atomic_condition(
-    condition: &Condition<T::AssetId, T::Balance, u32, T::ObservationFeedId>,
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
+  pub(crate) fn evaluate_predicate_set(
+    preconditions: &PreconditionsOf<T>,
+    who: &T::AccountId,
+    reserved: T::Balance,
+  ) -> Result<bool, DispatchError> {
+    let opening_results = OpeningPredicateResultsOf::<T>::default();
+    Self::evaluate_step_preconditions(preconditions, who, reserved, &opening_results, &mut 0)
+  }
+
+  fn evaluate_atomic_predicate(
+    condition: &Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>,
     who: &T::AccountId,
     reserved: T::Balance,
   ) -> Result<bool, DispatchError> {
     Ok(match condition {
-      Condition::BalanceAbove { asset, threshold } => {
+      Predicate::BalanceAbove { asset, threshold } => {
         Self::spendable_balance(who, *asset, reserved) > *threshold
       }
-      Condition::BalanceBelow { asset, threshold } => {
+      Predicate::BalanceBelow { asset, threshold } => {
         Self::spendable_balance(who, *asset, reserved) < *threshold
       }
-      Condition::BalanceEquals { asset, threshold } => {
+      Predicate::BalanceEquals { asset, threshold } => {
         Self::spendable_balance(who, *asset, reserved) == *threshold
       }
-      Condition::BalanceNotEquals { asset, threshold } => {
+      Predicate::BalanceNotEquals { asset, threshold } => {
         Self::spendable_balance(who, *asset, reserved) != *threshold
       }
-      Condition::BlockNumberAbove { threshold } => {
+      Predicate::BlockNumberAbove { threshold } => {
         let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
         now > *threshold
       }
-      Condition::BlockNumberBelow { threshold } => {
+      Predicate::BlockNumberBelow { threshold } => {
         let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
         now < *threshold
       }
-      Condition::ObservationAbove {
+      Predicate::ObservationAbove {
         feed,
         threshold,
         max_age_blocks,
       } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value > *threshold),
-      Condition::ObservationBelow {
+      Predicate::ObservationBelow {
         feed,
         threshold,
         max_age_blocks,
       } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value < *threshold),
-      Condition::ObservationEquals {
+      Predicate::ObservationEquals {
         feed,
         threshold,
         max_age_blocks,
       } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value == *threshold),
-      Condition::ObservationNotEquals {
+      Predicate::ObservationNotEquals {
         feed,
         threshold,
         max_age_blocks,
@@ -2036,7 +2125,7 @@ impl<T: Config> Pallet<T> {
         let maximum_age: BlockNumberFor<T> = max_age_blocks.saturated_into();
         ensure!(
           observed_at <= now && now.saturating_sub(observed_at) <= maximum_age,
-          Error::<T>::InvalidCondition
+          Error::<T>::InvalidPredicate
         );
         Ok(Some(value))
       }
@@ -2259,34 +2348,32 @@ mod step_control_tests {
   }
 
   #[test]
-  fn condition_set_aggregation_never_short_circuits_truth_or_error() {
+  fn preconditions_dnf_never_short_circuits_truth_or_error() {
     use polkadot_sdk::frame_support::traits::ConstU32;
 
-    let all = ConditionSet::<u8, ConstU32<4>>::All(
-      BoundedVec::try_from(alloc::vec![1, 2]).expect("two atoms fit"),
+    let clause = |predicates| BoundedVec::try_from(predicates).expect("predicates fit");
+    let timed = |predicate| TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate,
+    };
+    let preconditions = Preconditions::<u8, ConstU32<4>, ConstU32<4>>::AnyOf(
+      BoundedVec::try_from(alloc::vec![
+        clause(alloc::vec![timed(1), timed(2)]),
+        clause(alloc::vec![timed(3)]),
+      ])
+      .expect("clauses fit"),
     );
-    let mut all_visited = alloc::vec::Vec::new();
-    let all_result = evaluate_condition_set_with(&all, |atom| {
-      all_visited.push(*atom);
-      Ok::<_, &'static str>(*atom == 2)
-    });
-    assert_eq!(all_result, Ok(false));
-    assert_eq!(all_visited, alloc::vec![1, 2]);
-
-    let any = ConditionSet::<u8, ConstU32<4>>::Any(
-      BoundedVec::try_from(alloc::vec![1, 2, 3]).expect("three atoms fit"),
-    );
-    let mut any_visited = alloc::vec::Vec::new();
-    let any_result = evaluate_condition_set_with(&any, |atom| {
-      any_visited.push(*atom);
-      match atom {
+    let mut visited = alloc::vec::Vec::new();
+    let result = evaluate_predicate_set_with(&preconditions, |timed| {
+      visited.push(timed.predicate);
+      match timed.predicate {
         1 => Ok(true),
-        2 => Err("condition failed"),
+        2 => Err("predicate failed"),
         _ => Ok(false),
       }
     });
-    assert_eq!(any_result, Err("condition failed"));
-    assert_eq!(any_visited, alloc::vec![1, 2, 3]);
+    assert_eq!(result, Err("predicate failed"));
+    assert_eq!(visited, alloc::vec![1, 2, 3]);
   }
 
   #[test]
@@ -2295,16 +2382,22 @@ mod step_control_tests {
     use polkadot_sdk::sp_runtime::StateVersion;
 
     new_test_ext().execute_with(|| {
-      let conditions = ConditionSet::All(
-        BoundedVec::try_from(alloc::vec![Condition::BalanceAbove {
-          asset: TestAsset::Native,
-          threshold: 1,
-        }])
-        .expect("one condition fits"),
+      let conditions = Preconditions::AnyOf(
+        BoundedVec::try_from(alloc::vec![
+          BoundedVec::try_from(alloc::vec![TimedPredicate {
+            timing: ObservationTiming::Current,
+            predicate: Predicate::BalanceAbove {
+              asset: TestAsset::Native,
+              threshold: 1,
+            },
+          }])
+          .expect("one predicate fits"),
+        ])
+        .expect("one clause fits"),
       );
       let before_conditions = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
-        Pallet::<Test>::evaluate_condition_set(&conditions, &ALICE, 0),
+        Pallet::<Test>::evaluate_predicate_set(&conditions, &ALICE, 0),
         Ok(true),
       );
       assert_eq!(

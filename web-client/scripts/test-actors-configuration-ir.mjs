@@ -1,6 +1,6 @@
 /*
 Domain: Actors configuration IR validation
-Owns: Cross-format normalization, structural diagnostics/diff, canonical lowering, decode, and plan identity equivalence.
+Owns: Cross-format normalization, structural diagnostics/diff, canonical lowering, decode, and Actor Contract identity equivalence.
 Excludes: Runtime submission, file-system loaders, UI presentation, and alternate execution semantics.
 Zone: Web-client validation entrypoint; composes configuration IR with canonical authoring and artifact contracts.
 */
@@ -10,11 +10,11 @@ import test from 'node:test';
 
 import {
   createActorArtifactFromAuthoring,
-  lowerActorAuthoringProgram,
+  lowerActorAuthoringContract,
 } from '../src/lib/automation/authoring.ts';
 import {
-  authoringProgramToConfigurationIr,
-  configurationIrToAuthoringProgram,
+  authoringContractToConfigurationIr,
+  configurationIrToAuthoringContract,
   diagnoseActorConfigurationIr,
   diffActorConfigurationIr,
   lowerActorConfigurationIr,
@@ -25,7 +25,7 @@ import {
   serializeActorConfigurationMarkdown,
   serializeActorConfigurationToml,
 } from '../src/lib/automation/configuration-ir.ts';
-import { inspectActorPlanArtifact } from '../src/lib/automation/plan-artifact.ts';
+import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
@@ -44,7 +44,7 @@ const feed = {
   aggregation: { type: 'Ema', halfLifeBlocks: 100 },
   scale: 12,
 };
-const program = {
+const contract = {
   actorType: 'System',
   mutability: 'Mutable',
   completionPolicy: 'CloseAfterProductiveCycle',
@@ -58,16 +58,28 @@ const program = {
   steps: [
     {
       key: 'presentation-key-does-not-lower',
-      conditionSet: {
-        type: 'All',
-        conditions: [
-          {
-            type: 'ObservationBelow',
-            feed,
-            threshold: '1500000000000',
-            maxAgeBlocks: 20,
-          },
-          { type: 'BalanceAbove', asset: native, threshold: '100' },
+      preconditions: {
+        type: 'AnyOf',
+        clauses: [
+          [
+            {
+              timing: 'Opening',
+              predicate: {
+                type: 'ObservationBelow',
+                feed,
+                threshold: '1500000000000',
+                maxAgeBlocks: 20,
+              },
+            },
+            {
+              timing: 'Current',
+              predicate: {
+                type: 'BalanceAbove',
+                asset: native,
+                threshold: '100',
+              },
+            },
+          ],
         ],
       },
       task: {
@@ -101,7 +113,7 @@ const adapters = [
 ];
 
 test('JSON TOML and structured Markdown normalize to one configuration IR', () => {
-  const ir = authoringProgramToConfigurationIr(program);
+  const ir = authoringContractToConfigurationIr(contract);
   for (const adapter of adapters) {
     const first = adapter.serialize(ir);
     const parsed = adapter.parse(first);
@@ -115,8 +127,8 @@ test('JSON TOML and structured Markdown normalize to one configuration IR', () =
   );
 });
 
-test('syntax comments and Markdown prose do not alter lowering or plan identity', () => {
-  const ir = authoringProgramToConfigurationIr(program);
+test('syntax comments and Markdown prose do not alter lowering or Actor Contract identity', () => {
+  const ir = authoringContractToConfigurationIr(contract);
   const sources = [
     parseActorConfigurationJson(serializeActorConfigurationJson(ir)),
     parseActorConfigurationToml(
@@ -129,13 +141,13 @@ test('syntax comments and Markdown prose do not alter lowering or plan identity'
       ),
     ),
   ];
-  const canonicalLowering = lowerActorAuthoringProgram(program);
+  const canonicalLowering = lowerActorAuthoringContract(contract);
   const canonicalArtifact = createActorArtifactFromAuthoring({
-    program,
+    contract: contract,
     metadataBytes,
     runtime,
   });
-  const canonicalInspection = inspectActorPlanArtifact(
+  const canonicalInspection = inspectActorContractArtifact(
     canonicalArtifact,
     metadataBytes,
     runtime,
@@ -143,14 +155,14 @@ test('syntax comments and Markdown prose do not alter lowering or plan identity'
   assert.equal(canonicalInspection.valid, true);
   for (const parsed of sources) {
     assert.deepEqual(lowerActorConfigurationIr(parsed), canonicalLowering);
-    const parsedProgram = configurationIrToAuthoringProgram(parsed);
+    const parsedContract = configurationIrToAuthoringContract(parsed);
     const artifact = createActorArtifactFromAuthoring({
-      program: parsedProgram,
+      contract: parsedContract,
       metadataBytes,
       runtime,
     });
-    assert.equal(artifact.planId, canonicalArtifact.planId);
-    const inspection = inspectActorPlanArtifact(
+    assert.equal(artifact.contractId, canonicalArtifact.contractId);
+    const inspection = inspectActorContractArtifact(
       artifact,
       metadataBytes,
       runtime,
@@ -163,7 +175,7 @@ test('syntax comments and Markdown prose do not alter lowering or plan identity'
 });
 
 test('structural diagnostics and diff remain path-addressed and deterministic', () => {
-  const ir = authoringProgramToConfigurationIr(program);
+  const ir = authoringContractToConfigurationIr(contract);
   const changed = structuredClone(ir);
   changed.cooldownBlocks = 9;
   changed.steps[0].task.amountIn.value = '30';

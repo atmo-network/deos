@@ -27,6 +27,7 @@ use frame_system::{
   EnsureRoot,
   limits::{BlockLength, BlockWeights},
 };
+use pallet_staking::WeightInfo as _;
 use pallet_xcm::{EnsureXcm, IsVoiceOfBody};
 use parachains_common::message_queue::{NarrowOriginToSibling, ParaIdToSibling};
 use polkadot_runtime_common::{
@@ -322,6 +323,44 @@ impl DelegationWeightedCollatorSessionManager {
   #[cfg(not(test))]
   fn note_ranking_backing_lookup() {}
 
+  pub(crate) fn native_security_topology_readiness()
+  -> Option<pallet_staking::NativeSecurityReadiness> {
+    use pallet_staking::NativeSecurityReadiness;
+
+    let candidates = polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get();
+    if candidates.is_empty() {
+      return Some(NativeSecurityReadiness::EligibleOperatorSetEmpty);
+    }
+    for (candidate_index, candidate) in candidates
+      .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
+      .enumerate()
+    {
+      if candidates
+        .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
+        .take(candidate_index)
+        .any(|prior| prior.who == candidate.who)
+      {
+        return Some(NativeSecurityReadiness::CandidateSetInconsistent);
+      }
+    }
+    let participants = crate::Staking::native_security_participants();
+    let mut eligible_operator_found = false;
+    for account in &participants {
+      for operator in &crate::Staking::native_nomination_operators(account) {
+        let is_candidate = candidates
+          .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
+          .any(|candidate| &candidate.who == operator);
+        if is_candidate && !crate::Staking::operator_native_lp_locked(operator).is_zero() {
+          eligible_operator_found = true;
+        }
+      }
+    }
+    if participants.is_empty() || !eligible_operator_found {
+      return Some(NativeSecurityReadiness::EligibleOperatorSetEmpty);
+    }
+    Some(NativeSecurityReadiness::Ready)
+  }
+
   pub(crate) fn rank_candidates(
     mut candidates: Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>>,
   ) -> Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>> {
@@ -344,7 +383,6 @@ impl DelegationWeightedCollatorSessionManager {
         .unwrap_or_default();
       right_backing
         .cmp(&left_backing)
-        .then_with(|| right.deposit.cmp(&left.deposit))
         .then_with(|| left.who.cmp(&right.who))
     });
     candidates
@@ -355,47 +393,43 @@ impl DelegationWeightedCollatorSessionManager {
   }
 
   pub(crate) fn conservative_native_lp_backing_value(candidate: &AccountId) -> Balance {
-    Self::conservative_native_lp_value(crate::Staking::operator_native_lp_locked(candidate))
-  }
-
-  pub(crate) fn native_nomination_reward_base_weight(account: &AccountId) -> Balance {
-    Self::conservative_native_lp_value(crate::Staking::account_native_collator_lp_locked(account))
+    Self::try_conservative_native_lp_value(crate::Staking::operator_native_lp_locked(candidate))
+      .unwrap_or_default()
   }
 
   pub(crate) fn conservative_native_lp_value(locked_lp: Balance) -> Balance {
+    Self::try_conservative_native_lp_value(locked_lp).unwrap_or_default()
+  }
+
+  pub(crate) fn try_conservative_native_lp_value(locked_lp: Balance) -> Option<Balance> {
     if locked_lp.is_zero() {
-      return Balance::zero();
+      return Some(Balance::zero());
     }
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let Some(staked_asset_id) = crate::Staking::staked_asset_id(native_asset_id) else {
-      return Balance::zero();
-    };
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)?;
     let base_asset = AssetKind::Local(native_asset_id);
     let staked_asset = AssetKind::Local(staked_asset_id);
     let Ok(pool_id) = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(
       &base_asset,
       &staked_asset,
     ) else {
-      return Balance::zero();
+      return None;
     };
-    let Some(pool) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pool_id) else {
-      return Balance::zero();
-    };
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pool_id)?;
     let lp_supply =
       <Runtime as pallet_asset_conversion::Config>::PoolAssets::total_issuance(pool.lp_token);
     if lp_supply.is_zero() {
-      return Balance::zero();
+      return None;
     }
-    let Ok((reserve_native, reserve_staked)) =
-      crate::AssetConversion::get_reserves(base_asset, staked_asset)
-    else {
-      return Balance::zero();
-    };
-    let Some(staking_pool) = pallet_staking::Pools::<Runtime>::get(native_asset_id) else {
-      return Balance::zero();
-    };
-    if staking_pool.total_shares.is_zero() {
-      return Balance::zero();
+    let (reserve_native, reserve_staked) =
+      crate::AssetConversion::get_reserves(base_asset, staked_asset).ok()?;
+    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)?;
+    if reserve_native.is_zero()
+      || reserve_staked.is_zero()
+      || staking_pool.total_shares.is_zero()
+      || staking_pool.accounted_balance.is_zero()
+    {
+      return None;
     }
     let staked_reserve_native_value = Self::mul_div_floor(
       reserve_staked,
@@ -405,7 +439,11 @@ impl DelegationWeightedCollatorSessionManager {
     let balanced_pool_native_value = reserve_native
       .min(staked_reserve_native_value)
       .saturating_mul(2);
-    Self::mul_div_floor(locked_lp, balanced_pool_native_value, lp_supply)
+    Some(Self::mul_div_floor(
+      locked_lp,
+      balanced_pool_native_value,
+      lp_supply,
+    ))
   }
 
   fn mul_div_floor(value: Balance, numerator: Balance, denominator: Balance) -> Balance {
@@ -424,7 +462,9 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
   fn new_session(index: SessionIndex) -> Option<Vec<AccountId>> {
     let mut collators =
       polkadot_sdk::pallet_collator_selection::Invulnerables::<Runtime>::get().into_inner();
-    if !PermissionlessCollatorsEnabled::get() {
+    if <crate::configs::staking_config::RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
+      == pallet_staking::NativeSecurityMode::TrustedSet
+    {
       log::info!(
         target: "runtime::collator-selection",
         "new_session({index}) -> trusted-collator phase active, using {} invulnerables only",
@@ -432,6 +472,38 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       );
       return Some(collators);
     }
+    let readiness = crate::Staking::native_security_readiness();
+    crate::Staking::note_native_security_boundary(index, readiness);
+    if readiness != pallet_staking::NativeSecurityReadiness::Ready {
+      log::error!(
+        target: "runtime::collator-selection",
+        "new_session({index}) -> LP-backed security not ready ({readiness:?}); preserving the current validator set",
+      );
+      return None;
+    }
+    let eligible_operators =
+      polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get()
+        .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
+        .filter(|candidate| !crate::Staking::operator_native_lp_locked(&candidate.who).is_zero())
+        .map(|candidate| candidate.who.clone())
+        .collect::<Vec<_>>();
+    if crate::Staking::open_native_security_epoch(index, &eligible_operators).is_err() {
+      crate::Staking::note_native_security_boundary(
+        index,
+        pallet_staking::NativeSecurityReadiness::SnapshotOpenFailed,
+      );
+      log::error!(
+        target: "runtime::collator-selection",
+        "new_session({index}) -> atomic LP-backed security snapshot failed; preserving the current validator set",
+      );
+      return None;
+    }
+    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
+      <Runtime as pallet_staking::Config>::WeightInfo::open_native_security_epoch(
+        crate::Staking::native_security_participants().len() as u32,
+      ),
+      DispatchClass::Mandatory,
+    );
     let candidates_len_before: u32 =
       polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::decode_len()
         .unwrap_or_default()
@@ -470,7 +542,17 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
     Some(collators)
   }
 
-  fn start_session(_: SessionIndex) {}
+  fn start_session(index: SessionIndex) {
+    if <crate::configs::staking_config::RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
+      == pallet_staking::NativeSecurityMode::LpBackedSelection
+      && crate::Staking::activate_native_security_epoch(index).is_err()
+    {
+      log::error!(
+        target: "runtime::collator-selection",
+        "start_session({index}) -> planned LP-backed security epoch could not activate",
+      );
+    }
+  }
 
   fn end_session(_: SessionIndex) {}
 }
@@ -504,7 +586,6 @@ impl pallet_aura::Config for Runtime {
 parameter_types! {
     pub const PotId: PalletId = PalletId(*b"potstake");
     pub const SessionLength: BlockNumber = 6 * HOURS;
-    pub const PermissionlessCollatorsEnabled: bool = false;
     // StakingAdmin pluralistic body.
     pub const StakingAdminBodyId: BodyId = BodyId::Defense;
 }

@@ -24,6 +24,7 @@ polkadot-sdk = { workspace = true, features = [
   "frame-system",
   "pallet-assets",
   "sp-runtime",
+  "sp-staking",
   "sp-core",
 ] }
 

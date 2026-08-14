@@ -1,92 +1,55 @@
 use super::assets_config::AssetId;
 use super::*;
 
-#[cfg(feature = "runtime-benchmarks")]
-use alloc::boxed::Box;
-use alloc::{
-  collections::{BTreeMap, BTreeSet},
-  format,
-};
-use pallet_governance::Event as GovernanceEvent;
+use alloc::{boxed::Box, format};
 use polkadot_sdk::frame_support::traits::fungibles::metadata::Inspect as MetadataInspect;
 use polkadot_sdk::{
-  frame_support::{PalletId, parameter_types, weights::Weight},
+  frame_support::{PalletId, parameter_types},
   frame_system::EnsureRoot,
   pallet_asset_conversion::PoolLocator,
-  pallet_assets::Event as AssetsEvent,
-  sp_runtime::FixedU128,
+  sp_core::U256,
+  sp_runtime::{DispatchError, FixedU128, PerThing, Perbill, traits::Zero},
 };
-#[cfg(test)]
-use std::cell::Cell;
-
 parameter_types! {
   pub const StakingPalletId: PalletId = PalletId(*primitives::ecosystem::pallet_ids::STAKING_PALLET_ID);
   pub const NativeStakingAssetId: AssetId = 0;
-  pub const MaxOperatorCommission: polkadot_sdk::sp_runtime::Perbill = polkadot_sdk::sp_runtime::Perbill::from_percent(50);
-  pub const MaxRewardEventScanPerBlock: u32 = 128;
-  pub const MaxRewardRolloverAssetsPerBlock: u32 = 32;
-  pub const MaxRewardAccountsPerAssetEpoch: u32 = 256;
-  pub const MaxRewardAssetsPerGovernanceDomain: u32 = 16;
-  pub const MaxClaimEpochsPerCall: u32 = 16;
+  pub const NativeGovernanceDomainId: AssetId = 0;
+  pub SecurityRewardFundingSource: AccountId = crate::Actors::sovereign_account_id_system(
+    primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
+  );
+  pub const MaxNativeSecurityParticipants: u32 = 100;
+  pub const MaxNativeSecurityOperators: u32 = 100;
+  pub const MaxNominationsPerAccount: u32 = 16;
   pub const NativeLpUnlockDelay: BlockNumber = 7 * 24 * HOURS;
+  pub const SecurityRewardClaimHorizon: u32 = 12;
+  pub const MaxSecurityRewardClaimsPerCall: u32 = 12;
+  pub NativeSecurityCompoundMaxRatioDeviation: Perbill = Perbill::from_percent(1);
 }
 
-pub(crate) const REWARD_INGRESS_EVENT_SCAN_WEIGHT_REF_TIME: u64 = 1_000;
-pub(crate) const REWARD_INGRESS_ACCOUNT_TOUCH_WEIGHT_REF_TIME: u64 = 2_000;
-pub(crate) const REWARD_INGRESS_RECORD_WEIGHT_REF_TIME: u64 = 4_000;
+pub struct RuntimeNativeSecurityModeProvider;
+impl pallet_staking::NativeSecurityModeProvider for RuntimeNativeSecurityModeProvider {
+  fn mode() -> pallet_staking::NativeSecurityMode {
+    #[cfg(feature = "runtime-benchmarks")]
+    return pallet_staking::NativeSecurityMode::LpBackedSelection;
+    #[cfg(not(feature = "runtime-benchmarks"))]
+    pallet_staking::NativeSecurityMode::TrustedSet
+  }
 
-#[cfg(test)]
-thread_local! {
-  static REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT: Cell<u32> = const { Cell::new(0) };
-  static REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT: Cell<u32> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub fn reset_reward_ingress_lookup_probes() {
-  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(|count| count.set(0));
-  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub fn reward_ingress_receipt_base_lookup_probe_count() -> u32 {
-  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(Cell::get)
-}
-
-#[cfg(test)]
-pub fn reward_ingress_governance_domain_lookup_probe_count() -> u32 {
-  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT.with(Cell::get)
-}
-
-pub(crate) fn reward_ingress_expected_ref_time(
-  scanned: u64,
-  touched: u64,
-  recorded_inflows: u64,
-) -> u64 {
-  scanned
-    .saturating_mul(REWARD_INGRESS_EVENT_SCAN_WEIGHT_REF_TIME)
-    .saturating_add(touched.saturating_mul(REWARD_INGRESS_ACCOUNT_TOUCH_WEIGHT_REF_TIME))
-    .saturating_add(recorded_inflows.saturating_mul(REWARD_INGRESS_RECORD_WEIGHT_REF_TIME))
-}
-
-#[cfg(test)]
-fn note_reward_ingress_receipt_base_lookup() {
-  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-}
-
-#[cfg(test)]
-fn note_reward_ingress_governance_domain_lookup() {
-  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT
-    .with(|count| count.set(count.get().saturating_add(1)));
+  #[cfg(feature = "runtime-benchmarks")]
+  fn benchmark_prepare_lp_backed_selection() {}
 }
 
 pub struct RuntimeNativeOperatorValidator;
 impl pallet_staking::NativeOperatorValidator<AccountId> for RuntimeNativeOperatorValidator {
   fn is_valid_operator(account: &AccountId) -> bool {
-    pallet_collator_selection::Invulnerables::<Runtime>::get().contains(account)
-      || (PermissionlessCollatorsEnabled::get()
-        && pallet_collator_selection::CandidateList::<Runtime>::get()
-          .iter()
-          .any(|candidate| &candidate.who == account))
+    if pallet_collator_selection::Invulnerables::<Runtime>::get().contains(account) {
+      return true;
+    }
+    <RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
+      == pallet_staking::NativeSecurityMode::LpBackedSelection
+      && pallet_collator_selection::CandidateList::<Runtime>::get()
+        .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
+        .any(|candidate| &candidate.who == account)
   }
 
   #[cfg(feature = "runtime-benchmarks")]
@@ -100,6 +63,24 @@ impl pallet_staking::NativeOperatorValidator<AccountId> for RuntimeNativeOperato
     pallet_collator_selection::Invulnerables::<Runtime>::put(BoundedVec::truncate_from(
       invulnerables,
     ));
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
+  fn benchmark_prepare_snapshot_operator(account: &AccountId) {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+    let mut candidates = pallet_collator_selection::CandidateList::<Runtime>::get().into_inner();
+    if candidates
+      .iter() // deos-bypass: bounded-iter — runtime-benchmarks only, collator-selection MaxCandidates
+      .any(|candidate| &candidate.who == account)
+    {
+      return;
+    }
+    candidates.push(CandidateInfo {
+      who: account.clone(),
+      deposit: Balance::default(),
+    });
+    pallet_collator_selection::CandidateList::<Runtime>::put(BoundedVec::truncate_from(candidates));
   }
 }
 
@@ -199,290 +180,25 @@ impl pallet_staking::StakedAssetLifecycle<AccountId, AssetId> for RuntimeStakedA
   }
 }
 
-pub struct RuntimeRewardGovernanceDomainResolver;
-impl pallet_staking::RewardGovernanceDomainResolver<AssetId, AssetId>
-  for RuntimeRewardGovernanceDomainResolver
-{
-  fn reward_governance_domain(asset_id: AssetId) -> Option<AssetId> {
-    Some(asset_id)
+pub struct RuntimeSecurityEpochProvider;
+impl pallet_staking::SecurityEpochProvider for RuntimeSecurityEpochProvider {
+  fn current_security_epoch() -> pallet_staking::SecurityEpoch {
+    crate::Session::current_index()
   }
 }
 
-pub struct RuntimeRewardEpochProvider;
-impl pallet_staking::RewardEpochProvider<BlockNumber> for RuntimeRewardEpochProvider {
-  fn current_reward_epoch() -> BlockNumber {
-    crate::System::block_number()
-  }
-}
-
-pub struct RuntimeRewardCoefficientProvider;
-impl pallet_staking::RewardCoefficientProvider<AccountId, AssetId>
-  for RuntimeRewardCoefficientProvider
+pub struct RuntimeGovernanceParticipationCoefficientProvider;
+impl pallet_staking::GovernanceParticipationCoefficientProvider<AccountId, AssetId>
+  for RuntimeGovernanceParticipationCoefficientProvider
 {
-  fn reward_coefficient(domain: AssetId, account: &AccountId) -> FixedU128 {
-    crate::Governance::reward_coefficient(domain, account.clone())
+  fn governance_participation_coefficient(domain: AssetId, account: &AccountId) -> FixedU128 {
+    crate::Governance::governance_participation_coefficient(domain, account.clone())
   }
 
   #[cfg(feature = "runtime-benchmarks")]
   fn benchmark_prepare_positive_coefficient(domain: AssetId, account: &AccountId) {
     let item_id = crate::System::block_number();
     let _ = crate::Governance::ingest_winning_vote_resolution(domain, item_id, account.clone());
-  }
-}
-
-pub struct RuntimeRewardBaseWeightProvider;
-impl pallet_staking::RewardBaseWeightProvider<AccountId, AssetId, Balance>
-  for RuntimeRewardBaseWeightProvider
-{
-  fn reward_base_weight(asset_id: AssetId, account: &AccountId) -> Option<Balance> {
-    if asset_id != NativeStakingAssetId::get() {
-      return None;
-    }
-    Some(DelegationWeightedCollatorSessionManager::native_nomination_reward_base_weight(account))
-  }
-}
-
-pub struct RuntimeNonNativeRewardEventIngress;
-impl pallet_staking::RewardSnapshotEventIngress<BlockNumber>
-  for RuntimeNonNativeRewardEventIngress
-{
-  fn ingest(epoch: BlockNumber, max_scan: usize, remaining_weight: Weight) -> Weight {
-    fn reward_base_asset_id(asset_id: AssetId) -> Option<AssetId> {
-      #[cfg(test)]
-      note_reward_ingress_receipt_base_lookup();
-      let base_asset_id = crate::Staking::live_base_asset_for_staked_asset(asset_id)?;
-      if base_asset_id == NativeStakingAssetId::get() {
-        return None;
-      }
-      Some(base_asset_id)
-    }
-    fn reward_assets_for_governance_domain(domain: AssetId) -> alloc::vec::Vec<AssetId> {
-      #[cfg(test)]
-      note_reward_ingress_governance_domain_lookup();
-      crate::Staking::reward_assets_for_governance_domain(domain)
-        .into_inner()
-        .into_iter()
-        .filter(|asset_id| *asset_id != NativeStakingAssetId::get())
-        .collect()
-    }
-    fn reward_inflow_asset_id(asset_id: AssetId, recipient: &AccountId) -> Option<AssetId> {
-      if asset_id == NativeStakingAssetId::get() {
-        return None;
-      }
-      if !pallet_staking::Pools::<Runtime>::contains_key(asset_id) {
-        return None;
-      }
-      if crate::Staking::reward_account_for(asset_id) != *recipient {
-        return None;
-      }
-      Some(asset_id)
-    }
-    let max_ref_time = remaining_weight.ref_time();
-    let mut scanned = 0u64;
-    let mut touched = 0u64;
-    let mut recorded_reward_inflows = 0u64;
-    let mut truncated = false;
-    let mut pending_reward_touches: BTreeSet<(AssetId, AccountId)> = BTreeSet::new();
-    let mut pending_reward_inflows: BTreeMap<AssetId, Balance> = BTreeMap::new();
-    for record in crate::System::read_events_no_consensus().take(max_scan.saturating_add(1)) {
-      let next_scanned = scanned.saturating_add(1);
-      let scan_only_ref_time = reward_ingress_expected_ref_time(
-        next_scanned,
-        pending_reward_touches.len() as u64,
-        pending_reward_inflows.len() as u64,
-      );
-      if scan_only_ref_time > max_ref_time {
-        break;
-      }
-      scanned = next_scanned;
-      if scanned > max_scan as u64 {
-        truncated = true;
-        break;
-      }
-      let mut projected_touches = pending_reward_touches.len();
-      let mut projected_inflows = pending_reward_inflows.len();
-      match &record.event {
-        crate::RuntimeEvent::Assets(AssetsEvent::Transferred {
-          asset_id,
-          from,
-          to,
-          amount,
-        })
-        | crate::RuntimeEvent::Assets(AssetsEvent::TransferredApproved {
-          asset_id,
-          owner: from,
-          destination: to,
-          amount,
-          ..
-        }) => {
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
-            projected_inflows = projected_inflows.saturating_add(usize::from(
-              !pending_reward_inflows.contains_key(&reward_asset_id),
-            ));
-          }
-          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, from.clone())),
-            ));
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, to.clone())),
-            ));
-          }
-          let projected_ref_time = reward_ingress_expected_ref_time(
-            scanned,
-            projected_touches as u64,
-            projected_inflows as u64,
-          );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
-            pending_reward_inflows
-              .entry(reward_asset_id)
-              .and_modify(|value| *value = value.saturating_add(*amount))
-              .or_insert(*amount);
-          }
-          let Some(base_asset_id) = reward_base_asset_id(*asset_id) else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, from.clone()));
-          pending_reward_touches.insert((base_asset_id, to.clone()));
-        }
-        crate::RuntimeEvent::Assets(
-          AssetsEvent::Issued {
-            asset_id,
-            owner,
-            amount,
-          }
-          | AssetsEvent::Deposited {
-            asset_id,
-            who: owner,
-            amount,
-          },
-        ) => {
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
-            projected_inflows = projected_inflows.saturating_add(usize::from(
-              !pending_reward_inflows.contains_key(&reward_asset_id),
-            ));
-          }
-          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, owner.clone())),
-            ));
-          }
-          let projected_ref_time = reward_ingress_expected_ref_time(
-            scanned,
-            projected_touches as u64,
-            projected_inflows as u64,
-          );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
-            pending_reward_inflows
-              .entry(reward_asset_id)
-              .and_modify(|value| *value = value.saturating_add(*amount))
-              .or_insert(*amount);
-          }
-          let Some(base_asset_id) = reward_base_asset_id(*asset_id) else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, owner.clone()));
-        }
-        crate::RuntimeEvent::Assets(
-          AssetsEvent::Burned {
-            asset_id,
-            owner,
-            balance: _,
-          }
-          | AssetsEvent::Withdrawn {
-            asset_id,
-            who: owner,
-            amount: _,
-          },
-        ) => {
-          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
-            projected_touches = projected_touches.saturating_add(usize::from(
-              !pending_reward_touches.contains(&(base_asset_id, owner.clone())),
-            ));
-          }
-          let projected_ref_time = reward_ingress_expected_ref_time(
-            scanned,
-            projected_touches as u64,
-            projected_inflows as u64,
-          );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          let Some(base_asset_id) = reward_base_asset_id(*asset_id) else {
-            continue;
-          };
-          pending_reward_touches.insert((base_asset_id, owner.clone()));
-        }
-        crate::RuntimeEvent::Governance(
-          GovernanceEvent::WinningVoteRecorded {
-            domain, account, ..
-          }
-          | GovernanceEvent::WinningVoteWindowEvicted {
-            domain, account, ..
-          },
-        ) => {
-          let reward_assets = reward_assets_for_governance_domain(*domain);
-          projected_touches =
-            reward_assets
-              .clone()
-              .into_iter()
-              .fold(projected_touches, |count, asset_id| {
-                count.saturating_add(usize::from(
-                  !pending_reward_touches.contains(&(asset_id, account.clone())),
-                ))
-              });
-          let projected_ref_time = reward_ingress_expected_ref_time(
-            scanned,
-            projected_touches as u64,
-            projected_inflows as u64,
-          );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-          reward_assets.into_iter().for_each(|asset_id| {
-            pending_reward_touches.insert((asset_id, account.clone()));
-          });
-        }
-        _ => {
-          let projected_ref_time = reward_ingress_expected_ref_time(
-            scanned,
-            projected_touches as u64,
-            projected_inflows as u64,
-          );
-          if projected_ref_time > max_ref_time {
-            truncated = true;
-            break;
-          }
-        }
-      }
-    }
-    if truncated {
-      crate::Staking::note_reward_ingress_truncated(epoch, scanned as u32, max_scan as u32);
-    }
-    for (asset_id, amount) in pending_reward_inflows {
-      recorded_reward_inflows = recorded_reward_inflows.saturating_add(u64::from(
-        crate::Staking::note_reward_inflow(asset_id, amount).is_ok(),
-      ));
-    }
-    for (asset_id, account) in pending_reward_touches {
-      touched = touched.saturating_add(u64::from(crate::Staking::note_reward_touch(
-        asset_id, &account,
-      )));
-    }
-    Weight::from_parts(
-      reward_ingress_expected_ref_time(scanned, touched, recorded_reward_inflows),
-      0,
-    )
   }
 }
 
@@ -579,6 +295,19 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance>
     )?;
     Ok(native_asset_id)
   }
+
+  fn set_security_epoch(epoch: pallet_staking::SecurityEpoch) {
+    pallet_session::CurrentIndex::<Runtime>::put(epoch);
+  }
+
+  fn fund_native_account(account: &AccountId, amount: Balance) {
+    crate::Balances::force_set_balance(
+      crate::RuntimeOrigin::root(),
+      account.clone().into(),
+      amount,
+    )
+    .expect("benchmark native account funding must succeed");
+  }
 }
 
 pub struct RuntimeNativeGovernanceLockProvider;
@@ -590,18 +319,112 @@ impl pallet_staking::NativeGovernanceLockProvider<AccountId, BlockNumber>
   }
 }
 
-pub struct RuntimeNativeNominationRewardCompounder;
-impl pallet_staking::NativeNominationRewardCompounder<AccountId, Balance>
-  for RuntimeNativeNominationRewardCompounder
+pub struct RuntimeNativeSecurityRewardCompound;
+impl pallet_staking::NativeSecurityRewardCompound<AccountId, AssetId, Balance>
+  for RuntimeNativeSecurityRewardCompound
 {
   fn compound(
     account: &AccountId,
-    operator: &AccountId,
-    amount: Balance,
-  ) -> Result<Balance, polkadot_sdk::sp_runtime::DispatchError> {
-    crate::configs::AssetConversionAdapter::compound_native_nomination_reward_to_locked_lp(
-      account, operator, amount,
-    )
+    reward: Balance,
+    min_lp_out: Balance,
+  ) -> Result<(AssetId, Balance), DispatchError> {
+    use polkadot_sdk::frame_support::traits::{
+      Currency,
+      fungibles::{Inspect, Mutate},
+    };
+
+    let native_asset_id = NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    let base_asset = primitives::AssetKind::Local(native_asset_id);
+    let staked_asset = primitives::AssetKind::Local(staked_asset_id);
+    let (lp_asset_id, reserve_native, reserve_staked, _) =
+      crate::configs::AssetConversionAdapter::native_staking_liquidity_pool_read_model().ok_or(
+        DispatchError::Other("NativeStakingLiquidityPoolUnavailable"),
+      )?;
+    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)
+      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    if reward.is_zero()
+      || reserve_native.is_zero()
+      || reserve_staked.is_zero()
+      || staking_pool.accounted_balance.is_zero()
+      || staking_pool.total_shares.is_zero()
+    {
+      return Err(DispatchError::Other(
+        "NativeSecurityCompoundStateUnavailable",
+      ));
+    }
+    let numerator = U256::from(reserve_staked)
+      .checked_mul(U256::from(reward))
+      .and_then(|value| value.checked_mul(U256::from(staking_pool.accounted_balance)))
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    let denominator = U256::from(reserve_staked)
+      .checked_mul(U256::from(staking_pool.accounted_balance))
+      .and_then(|left| {
+        U256::from(reserve_native)
+          .checked_mul(U256::from(staking_pool.total_shares))
+          .and_then(|right| left.checked_add(right))
+      })
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    let stake_amount: Balance = numerator
+      .checked_div(denominator)
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?
+      .try_into()
+      .map_err(|_| DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    let native_liquidity = reward
+      .checked_sub(stake_amount)
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    if stake_amount.is_zero() || native_liquidity.is_zero() {
+      return Err(DispatchError::Other("NativeSecurityCompoundAmountTooSmall"));
+    }
+
+    let (_, unslashed) = <crate::Balances as Currency<AccountId>>::slash(account, reward);
+    if !unslashed.is_zero() {
+      return Err(DispatchError::Other(
+        "NativeSecurityCompoundNativeUnavailable",
+      ));
+    }
+    <crate::Assets as Mutate<AccountId>>::mint_into(native_asset_id, account, reward)?;
+    let staked_before = <crate::Assets as Inspect<AccountId>>::balance(staked_asset_id, account);
+    crate::Staking::stake_native(crate::RuntimeOrigin::signed(account.clone()), stake_amount)?;
+    let staked_out = <crate::Assets as Inspect<AccountId>>::balance(staked_asset_id, account)
+      .checked_sub(staked_before)
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    if staked_out.is_zero() {
+      return Err(DispatchError::Other("NativeSecurityCompoundAmountTooSmall"));
+    }
+    let left = U256::from(native_liquidity)
+      .checked_mul(U256::from(reserve_staked))
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    let right = U256::from(staked_out)
+      .checked_mul(U256::from(reserve_native))
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    let difference = left.abs_diff(right);
+    let allowed = NativeSecurityCompoundMaxRatioDeviation::get() * left.max(right);
+    if difference > allowed {
+      return Err(DispatchError::Other("NativeSecurityCompoundRatioExceeded"));
+    }
+    let lp_before = <crate::Assets as Inspect<AccountId>>::balance(lp_asset_id, account);
+    let min_native =
+      NativeSecurityCompoundMaxRatioDeviation::get().left_from_one() * native_liquidity;
+    let min_staked = NativeSecurityCompoundMaxRatioDeviation::get().left_from_one() * staked_out;
+    crate::AssetConversion::add_liquidity(
+      crate::RuntimeOrigin::signed(account.clone()),
+      Box::new(base_asset),
+      Box::new(staked_asset),
+      native_liquidity,
+      staked_out,
+      min_native,
+      min_staked,
+      account.clone(),
+    )?;
+    let lp_out = <crate::Assets as Inspect<AccountId>>::balance(lp_asset_id, account)
+      .checked_sub(lp_before)
+      .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;
+    if lp_out < min_lp_out {
+      return Err(DispatchError::Other("NativeSecurityCompoundMinimumNotMet"));
+    }
+    Ok((lp_asset_id, lp_out))
   }
 }
 
@@ -614,7 +437,11 @@ impl pallet_staking::NativeStakingReadModelProvider<AssetId, Balance>
   }
 
   fn native_lp_value(locked_lp: Balance) -> Option<Balance> {
-    Some(DelegationWeightedCollatorSessionManager::conservative_native_lp_value(locked_lp))
+    DelegationWeightedCollatorSessionManager::try_conservative_native_lp_value(locked_lp)
+  }
+
+  fn native_security_topology_readiness() -> Option<pallet_staking::NativeSecurityReadiness> {
+    DelegationWeightedCollatorSessionManager::native_security_topology_readiness()
   }
 }
 
@@ -622,30 +449,31 @@ impl pallet_staking::Config for Runtime {
   type AdminOrigin = EnsureRoot<AccountId>;
   type AssetId = AssetId;
   type NativeStakingAssetId = NativeStakingAssetId;
+  type NativeCurrency = crate::Balances;
+  type SecurityRewardFundingOrigin = EnsureRoot<AccountId>;
+  type SecurityRewardFundingSource = SecurityRewardFundingSource;
   type GovernanceDomainId = AssetId;
-  type RewardEpoch = BlockNumber;
+  type NativeGovernanceDomainId = NativeGovernanceDomainId;
   type NativeOperatorValidator = RuntimeNativeOperatorValidator;
   type NativeStakingLpAssetValidator = RuntimeNativeStakingLpAssetValidator;
   type NativeLpAssetNamespaceInitializer = RuntimeNativeLpAssetNamespaceInitializer;
   type NativeGovernanceLockProvider = RuntimeNativeGovernanceLockProvider;
+  type NativeSecurityModeProvider = RuntimeNativeSecurityModeProvider;
   type StakedAssetIdResolver = RuntimeStakedAssetIdResolver;
   type StakedAssetLifecycle = RuntimeStakedAssetLifecycle;
-  type RewardGovernanceDomainResolver = RuntimeRewardGovernanceDomainResolver;
-  type RewardEpochProvider = RuntimeRewardEpochProvider;
-  type RewardCoefficientProvider = RuntimeRewardCoefficientProvider;
-  type RewardBaseWeightProvider = RuntimeRewardBaseWeightProvider;
-  type NativeNominationRewardCompounder = RuntimeNativeNominationRewardCompounder;
+  type SecurityEpochProvider = RuntimeSecurityEpochProvider;
+  type GovernanceParticipationCoefficientProvider =
+    RuntimeGovernanceParticipationCoefficientProvider;
   type NativeStakingReadModelProvider = RuntimeNativeStakingReadModelProvider;
-  type RewardSnapshotEventIngress = RuntimeNonNativeRewardEventIngress;
+  type NativeSecurityRewardCompound = RuntimeNativeSecurityRewardCompound;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = RuntimeStakingBenchmarkHelper;
-  type MaxOperatorCommission = MaxOperatorCommission;
-  type MaxRewardEventScanPerBlock = MaxRewardEventScanPerBlock;
-  type MaxRewardRolloverAssetsPerBlock = MaxRewardRolloverAssetsPerBlock;
-  type MaxRewardAccountsPerAssetEpoch = MaxRewardAccountsPerAssetEpoch;
-  type MaxRewardAssetsPerGovernanceDomain = MaxRewardAssetsPerGovernanceDomain;
-  type MaxClaimEpochsPerCall = MaxClaimEpochsPerCall;
+  type MaxNativeSecurityParticipants = MaxNativeSecurityParticipants;
+  type MaxNativeSecurityOperators = MaxNativeSecurityOperators;
+  type MaxNominationsPerAccount = MaxNominationsPerAccount;
   type NativeLpUnlockDelay = NativeLpUnlockDelay;
+  type SecurityRewardClaimHorizon = SecurityRewardClaimHorizon;
+  type MaxSecurityRewardClaimsPerCall = MaxSecurityRewardClaimsPerCall;
   type Balance = Balance;
   type Assets = crate::Assets;
   type PalletId = StakingPalletId;

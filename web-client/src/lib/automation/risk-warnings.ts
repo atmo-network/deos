@@ -2,10 +2,10 @@
 Domain: Actors risk and composition warnings
 Owns: Bounded projection of shipped runtime facts into typed composition warnings.
 Excludes: New protocol policy, scoring, probability, economic stability claims, and runtime mutation.
-Zone: Automation domain capability; consumes ProgramStaticAnalysis and plan artifacts only.
+Zone: Automation domain capability; consumes ActorContractStaticAnalysis and Actor Contract artifacts only.
 */
-import type { ProgramStaticAnalysis } from './analysis.ts';
-import type { ActorPlanArtifact } from './plan-artifact.ts';
+import type { ActorContractStaticAnalysis } from './analysis.ts';
+import type { ActorContractArtifact } from './contract-artifact.ts';
 
 export type ActorCompositionWarningKind =
   | 'ImmutableWithoutReachableTerminal'
@@ -23,15 +23,17 @@ export type ActorCompositionWarning = {
 };
 
 export type ActorCompositionWarningInput = {
-  artifact: ActorPlanArtifact;
-  analysis: ProgramStaticAnalysis;
+  artifact: ActorContractArtifact;
+  analysis: ActorContractStaticAnalysis;
   strictFifoHeadOfLine?: boolean;
   simulatorStatus?: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   successfulTaskCount?: number;
   totalTaskCount?: number;
 };
 
-function isTerminalStep(step: ProgramStaticAnalysis['steps'][number]): boolean {
+function isTerminalStep(
+  step: ActorContractStaticAnalysis['steps'][number],
+): boolean {
   // A step is terminal-reachable when a failure path ends the run without a
   // later resumable step: AbortCycle error policy or a zero-retry boundary.
   return step.errorPolicy === 'AbortCycle' || step.retryMaxAttempts === 0;

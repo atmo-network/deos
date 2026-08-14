@@ -45,15 +45,35 @@ fn submit_root_action_proposal(item_id: u32, payload_hash: crate::Hash) {
   ));
 }
 
-fn submit_signed_intent_proposal(item_id: u32, payload_hash: crate::Hash) {
-  assert_ok!(Governance::submit_signed_proposal(
-    RuntimeOrigin::signed(ALICE),
-    PROTOCOL_GOVERNANCE_DOMAIN,
-    item_id,
-    pallet_governance::ProposalCadenceMode::Ordinary,
-    pallet_governance::ProposalPayloadKind::Intent,
-    payload_hash,
+fn note_advisory_preimage(signer: crate::AccountId, summary: &[u8]) -> crate::Hash {
+  let payload = (
+    Option::<crate::Hash>::None,
+    summary.to_vec(),
+    Option::<Vec<u8>>::None,
+  )
+    .encode();
+  let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+  assert_ok!(Preimage::note_preimage(
+    RuntimeOrigin::signed(signer),
+    payload
   ));
+  hash
+}
+
+fn note_treasury_preimage(signer: crate::AccountId) -> crate::Hash {
+  let payload = TacticalTreasuryInvoicePayload {
+    beneficiary: signer.clone(),
+    payout_asset: TACTICAL_GOVERNANCE_DOMAIN,
+    base_amount: 1,
+    funding_source: TacticalTreasuryFundingSource::BldrTreasury,
+  }
+  .encode();
+  let hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+  assert_ok!(Preimage::note_preimage(
+    RuntimeOrigin::signed(signer),
+    payload
+  ));
+  hash
 }
 
 fn service_pending_enactment(domain: u32, item_id: u32) {
@@ -163,6 +183,12 @@ fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
 fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
   new_test_ext().execute_with(|| {
     let code_hash = crate::Hash::repeat_byte(29);
+    let encoded_payload = StrategicRuntimeUpgradePayload { code_hash }.encode();
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      encoded_payload,
+    ));
     let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
     assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
       veto_asset, &ALICE, 100,
@@ -176,7 +202,7 @@ fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
         109,
         pallet_governance::ProposalCadenceMode::Ordinary,
         pallet_governance::ProposalPayloadKind::L1RootAction,
-        code_hash,
+        payload_hash,
       ),
       pallet_governance::Error::<Runtime>::ProposalSubmitterNotPrimaryEligible
     );
@@ -199,7 +225,7 @@ fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
       109,
       pallet_governance::ProposalCadenceMode::Ordinary,
       pallet_governance::ProposalPayloadKind::L1RootAction,
-      code_hash,
+      payload_hash,
     ));
     assert_eq!(
       Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 109),
@@ -212,6 +238,99 @@ fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
     assert_eq!(
       Balances::free_balance(actor_fee_sink_account()),
       fee_sink_before.saturating_add(crate::configs::governance_config::ProposalOpeningFee::get())
+    );
+  });
+}
+
+#[test]
+fn signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserve() {
+  new_test_ext().execute_with(|| {
+    let general_limit = crate::configs::governance_config::MaxActiveProposalsPerDomain::get()
+      .saturating_sub(crate::configs::governance_config::StrategicProposalReserve::get());
+    let author_limit = crate::configs::governance_config::MaxActiveProposalsPerAuthor::get();
+    for item_id in 0..general_limit {
+      if item_id > 0 && item_id % 4 == 0 {
+        System::set_block_number(System::block_number().saturating_add(1));
+      }
+      let author_seed = 10u8.saturating_add((item_id / author_limit) as u8);
+      assert_ok!(Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        item_id,
+        crate::AccountId::new([author_seed; 32]),
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        pallet_governance::ProposalPayloadKind::Intent,
+        crate::Hash::repeat_byte(item_id as u8),
+      ));
+    }
+    assert_eq!(
+      Governance::active_proposal_count(PROTOCOL_GOVERNANCE_DOMAIN),
+      general_limit
+    );
+
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    let code_hash = crate::Hash::repeat_byte(247);
+    let encoded_payload = StrategicRuntimeUpgradePayload { code_hash }.encode();
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      encoded_payload,
+    ));
+    let bob_before = Balances::free_balance(BOB);
+    let fee_sink_before = Balances::free_balance(actor_fee_sink_account());
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      1_000,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    ));
+    assert_eq!(
+      Governance::active_proposal_count(PROTOCOL_GOVERNANCE_DOMAIN),
+      general_limit.saturating_add(1)
+    );
+    assert_eq!(
+      Balances::free_balance(BOB),
+      bob_before.saturating_sub(crate::configs::governance_config::ProposalOpeningFee::get())
+    );
+    assert_eq!(
+      Balances::free_balance(actor_fee_sink_account()),
+      fee_sink_before.saturating_add(crate::configs::governance_config::ProposalOpeningFee::get())
+    );
+
+    resolve_root_action_proposal(1_000);
+    assert_eq!(
+      Governance::active_proposal_count(PROTOCOL_GOVERNANCE_DOMAIN),
+      general_limit
+    );
+    assert_eq!(
+      Governance::authorized_runtime_upgrade(),
+      Some(pallet_governance::AuthorizedRuntimeUpgrade {
+        code_hash,
+        check_version: true,
+      })
+    );
+    assert!(matches!(
+      Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 1_000),
+      Some(pallet_governance::FinalizedProposalOutcome::Enacted { .. })
+    ));
+
+    System::set_block_number(System::block_number().saturating_add(1));
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      1_001,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    ));
+    assert_eq!(
+      Governance::active_proposal_count(PROTOCOL_GOVERNANCE_DOMAIN),
+      general_limit.saturating_add(1)
     );
   });
 }
@@ -817,7 +936,7 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
         PROTOCOL_GOVERNANCE_DOMAIN,
         pallet_governance::ProposalPayloadKind::Intent,
       ),
-      pallet_governance::ProposalSubmissionAuthority::Signed
+      pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
     assert_eq!(
       Governance::proposal_opening_fee(
@@ -905,16 +1024,28 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
 #[test]
 fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer() {
   new_test_ext().execute_with(|| {
-    let balance_before = Balances::free_balance(ALICE);
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
     let fee_sink = actor_fee_sink_account();
     let fee_sink_before = Balances::free_balance(&fee_sink);
-    submit_signed_intent_proposal(110, crate::Hash::repeat_byte(12));
+    let payload_hash = note_advisory_preimage(BOB, b"protocol intent");
+    let balance_before = Balances::free_balance(BOB);
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      110,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::Intent,
+      payload_hash,
+    ));
     assert_eq!(
       Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 110),
-      Some(ALICE)
+      Some(BOB)
     );
     assert_eq!(
-      Balances::free_balance(ALICE),
+      Balances::free_balance(BOB),
       balance_before.saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
     );
     assert!(System::events().iter().any(|record| {
@@ -922,7 +1053,7 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
         == RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
           domain: PROTOCOL_GOVERNANCE_DOMAIN,
           item_id: 110,
-          proposer: ALICE,
+          proposer: BOB,
           amount: 10 * crate::EXISTENTIAL_DEPOSIT,
         })
     }));
@@ -936,6 +1067,7 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
 #[test]
 fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
+    let payload_hash = note_advisory_preimage(ALICE, b"tactical signal");
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(ALICE),
@@ -943,7 +1075,7 @@ fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer(
       111,
       pallet_governance::ProposalCadenceMode::Ordinary,
       pallet_governance::ProposalPayloadKind::L2SignalToL1,
-      crate::Hash::repeat_byte(13),
+      payload_hash,
     ));
     assert_eq!(
       Governance::proposal_author(TACTICAL_GOVERNANCE_DOMAIN, 111),
@@ -959,6 +1091,7 @@ fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer(
 #[test]
 fn signed_tactical_treasury_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
+    let payload_hash = note_treasury_preimage(ALICE);
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(ALICE),
@@ -966,7 +1099,7 @@ fn signed_tactical_treasury_submission_collects_opening_fee_and_records_signer()
       112,
       pallet_governance::ProposalCadenceMode::Ordinary,
       pallet_governance::ProposalPayloadKind::L2TreasurySpend,
-      crate::Hash::repeat_byte(14),
+      payload_hash,
     ));
     assert_eq!(
       Governance::proposal_author(TACTICAL_GOVERNANCE_DOMAIN, 112),

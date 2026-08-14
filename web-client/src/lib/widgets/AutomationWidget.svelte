@@ -16,13 +16,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     DEOS_ACTORS_AUTHORING_LIMITS,
     appendActorStep,
     createActorArtifactFromAuthoring,
-    createActorAuthoringProgram,
+    createActorAuthoringContract,
     createActorAuthoringStep,
     moveActorStep,
     removeActorStep,
-    validateActorAuthoringProgram,
+    validateActorAuthoringContract,
   } from '$lib/automation/authoring';
-  import type { ActorPlanArtifact } from '$lib/automation/plan-artifact';
+  import type { ActorContractArtifact } from '$lib/automation/contract-artifact';
   import type {
     AutomationActorSnapshot,
     AutomationAuthoringContext,
@@ -51,10 +51,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   let error = $state<string | null>(null);
   let actors = $state<AutomationActorSnapshot[]>([]);
   let view = $state<AutomationView>('actors');
-  let draft = $state(createActorAuthoringProgram());
+  let draft = $state(createActorAuthoringContract());
   let autoCloseTargetText = $state('');
   let nextStepId = $state(2);
-  let artifact = $state<ActorPlanArtifact | null>(null);
+  let artifact = $state<ActorContractArtifact | null>(null);
   let artifactContext = $state<AutomationAuthoringContext | null>(null);
   let boundDraftFingerprint = $state<string | null>(null);
   let artifactBusy = $state(false);
@@ -63,7 +63,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorProgram + Actors.ContinuationState + System.Account + ActorEligibilityApi',
+    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorContract + Actors.ContinuationState + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -85,7 +85,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const compactPane = $derived(viewport.width > 0 && viewport.width < 520);
   const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-  const validation = $derived.by(() => validateActorAuthoringProgram(draft));
+  const validation = $derived.by(() => validateActorAuthoringContract(draft));
   const maxSteps = DEOS_ACTORS_AUTHORING_LIMITS.maxExecutionPlanSteps;
   const canAddStep = $derived(draft.steps.length < maxSteps);
   const rootIssues = $derived(
@@ -186,7 +186,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function bindArtifact() {
     artifactMessage = null;
     copiedPlanId = false;
-    const currentValidation = validateActorAuthoringProgram(draft);
+    const currentValidation = validateActorAuthoringContract(draft);
     if (!currentValidation.valid) {
       artifactMessage = 'Resolve the visible validation findings first.';
       return;
@@ -201,7 +201,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     try {
       const context = await loadContext.call(systemStore.adapter);
       const nextArtifact = createActorArtifactFromAuthoring({
-        program: draft,
+        contract: draft,
         metadataBytes: context.metadataBytes,
         runtime: context.runtime,
       });
@@ -220,7 +220,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   async function copyPlanId() {
     if (!artifact) return;
-    await navigator.clipboard.writeText(artifact.planId);
+    await navigator.clipboard.writeText(artifact.contractId);
     copiedPlanId = true;
   }
 
@@ -710,7 +710,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     Plan ID
                   </div>
                   <code class="break-all text-[10px] text-(--mono-text)">
-                    {artifact.planId}
+                    {artifact.contractId}
                   </code>
                 </div>
                 <Button
@@ -752,8 +752,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   valueClass="font-mono text-(--mono-text)"
                 />
                 <DetailRow
-                  label="Program SCALE"
-                  value={`${(artifact.programScale.length - 2) / 2} bytes`}
+                  label="Contract SCALE"
+                  value={`${(artifact.contractScale.length - 2) / 2} bytes`}
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow

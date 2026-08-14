@@ -1,14 +1,14 @@
 /*
 Domain: Actors deterministic feedback analysis
 Owns: Bounded structural graph projection across analyzed actors, typed observations, shared assets, signals, and declared parameter actuators.
-Excludes: Program decoding, runtime execution, economic stability, probability, causal strength, scoring, and consensus rules.
-Zone: Automation domain capability; consumes manifest-authoritative ProgramStaticAnalysis output.
+Excludes: Contract decoding, runtime execution, economic stability, probability, causal strength, scoring, and consensus rules.
+Zone: Automation domain capability; consumes manifest-authoritative ActorContractStaticAnalysis output.
 */
 import type {
+  ActorContractStaticAnalysis,
   ActorStaticStepAnalysis,
-  ProgramStaticAnalysis,
 } from './analysis.ts';
-import type { ActorPlanProjection } from './plan-artifact.ts';
+import type { ActorContractProjection } from './contract-artifact.ts';
 
 import { DEOS_OBSERVATION_RUNTIME_EVIDENCE } from '../observation/runtime-evidence.generated.ts';
 
@@ -33,10 +33,10 @@ export type ActorFeedbackExactResource = {
 
 export type ActorFeedbackActor = {
   id: string;
-  analysis: ProgramStaticAnalysis;
+  analysis: ActorContractStaticAnalysis;
   exactResources?: ActorFeedbackExactResource[];
   sovereignAccount?: {
-    value: ActorPlanProjection;
+    value: ActorContractProjection;
     evidence: ActorFeedbackEvidenceReference;
   };
 };
@@ -44,7 +44,7 @@ export type ActorFeedbackActor = {
 export type ActorObservationEffectMatcher = {
   actorId?: string;
   effectClasses?: ActorFeedbackEffectClass[];
-  assetsWritten?: ActorPlanProjection[];
+  assetsWritten?: ActorContractProjection[];
 };
 
 export type ActorFeedbackEvidenceReference = {
@@ -54,7 +54,7 @@ export type ActorFeedbackEvidenceReference = {
 
 export type ActorFeedbackObservation = {
   id: string;
-  feed: ActorPlanProjection;
+  feed: ActorContractProjection;
   producer: 'DeosRouterPreExecutionReserves' | 'DeclaredExternal' | 'Unknown';
   lifecycle: 'Active' | 'Paused' | 'Deactivated' | 'Unknown';
   evidence: ActorFeedbackEvidenceReference;
@@ -68,7 +68,7 @@ export type ActorFeedbackParameterActuator = {
   evidenceIdentity: string;
   controlledByActorId: string;
   affectsObservationIds: string[];
-  affectsAssets: ActorPlanProjection[];
+  affectsAssets: ActorContractProjection[];
 };
 
 export type ActorFeedbackNode =
@@ -92,8 +92,8 @@ export type ActorFeedbackNode =
         | 'Tmc'
         | 'Unknown';
       resourceIdentity: string;
-      asset?: ActorPlanProjection;
-      account?: ActorPlanProjection;
+      asset?: ActorContractProjection;
+      account?: ActorContractProjection;
       actorId?: string;
     }
   | { id: string; kind: 'ParameterActuator'; actuatorId: string };
@@ -338,7 +338,7 @@ function observationProvenance(
   }
 }
 
-function fingerprint(value: ActorPlanProjection) {
+function fingerprint(value: ActorContractProjection) {
   return JSON.stringify(value);
 }
 
@@ -623,7 +623,7 @@ export function analyzeActorFeedback(input: {
         resource.evidence,
         ['RuntimeDerived', 'ArtifactDerived'],
         resource.evidence.provenance === 'ArtifactDerived'
-          ? actor.analysis.identity.planId
+          ? actor.analysis.identity.contractId
           : null,
         `Actor ${actor.id} ${resource.kind} resource`,
       );
@@ -647,7 +647,7 @@ export function analyzeActorFeedback(input: {
       throw new Error('Actors must use manifest-authoritative static analysis');
     }
     requireEvidenceIdentity(
-      actor.analysis.identity.planId,
+      actor.analysis.identity.contractId,
       `Actor ${actor.id} artifact`,
     );
   }
@@ -807,7 +807,7 @@ export function analyzeActorFeedback(input: {
   const resourceByKey = new Map<string, ResourceDescriptor>();
   const actorResourceKey = (
     actor: ActorFeedbackActor,
-    asset: ActorPlanProjection,
+    asset: ActorContractProjection,
   ) => {
     const assetIdentity = fingerprint(asset);
     if (actor.sovereignAccount != null) {
@@ -907,7 +907,7 @@ export function analyzeActorFeedback(input: {
     ]);
     const artifactIdentity =
       edge.actorId != null && artifactKinds.has(edge.kind)
-        ? actorById.get(edge.actorId)?.analysis.identity.planId
+        ? actorById.get(edge.actorId)?.analysis.identity.contractId
         : null;
     const evidenceIdentities = uniqueStrings(
       [artifactIdentity, ...suppliedEvidenceIdentities].filter(
@@ -964,9 +964,11 @@ export function analyzeActorFeedback(input: {
       }
     }
     for (const step of actor.analysis.steps) {
-      for (const condition of step.conditions) {
+      for (const condition of step.predicates) {
         if (condition.observation !== 'scalar-observation') continue;
-        const surface = condition.readSurface as { feed: ActorPlanProjection };
+        const surface = condition.readSurface as {
+          feed: ActorContractProjection;
+        };
         const observationId = feedToObservation.get(fingerprint(surface.feed));
         if (observationId != null) {
           addEdge(
@@ -1319,10 +1321,10 @@ export function analyzeActorFeedback(input: {
       );
       const thresholdSteps = new Map<string, number[]>();
       for (const step of actor.analysis.steps) {
-        for (const condition of step.conditions) {
+        for (const condition of step.predicates) {
           if (condition.observation !== 'scalar-observation') continue;
           const surface = condition.readSurface as {
-            feed: ActorPlanProjection;
+            feed: ActorContractProjection;
             maxAgeBlocks: number;
           };
           const observationId = feedToObservation.get(
@@ -1363,7 +1365,7 @@ export function analyzeActorFeedback(input: {
             steps: [...new Set(steps)].sort((left, right) => left - right),
             interpretation: 'StructuralPossibility' as const,
             evidenceIdentity: evidence.identity,
-            artifactIdentity: actor.analysis.identity.planId,
+            artifactIdentity: actor.analysis.identity.contractId,
           };
           findings.push({ kind: 'MissingHysteresisOrPersistence', ...base });
           findings.push({ kind: 'ThresholdChatterRisk', ...base });

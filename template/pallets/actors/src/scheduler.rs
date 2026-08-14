@@ -235,7 +235,7 @@ impl<T: Config> Pallet<T> {
     let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
       .max(T::WeightInfo::scheduler_paged_consume_delete_page());
     let hot_probe_weight = Self::scheduler_actor_hot_probe_weight_upper();
-    let program_probe_weight = Self::scheduler_actor_program_probe_weight_upper();
+    let program_probe_weight = Self::scheduler_actor_contract_probe_weight_upper();
     if !cycle_meter.can_consume(hot_probe_weight.saturating_add(consume_weight)) {
       return FifoStepResult::Blocked(BlockKind::Weight);
     }
@@ -283,7 +283,7 @@ impl<T: Config> Pallet<T> {
     if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
       return FifoStepResult::Blocked(BlockKind::Weight);
     }
-    let Some(program) = ActorProgram::<T>::get(entry.actor_id) else {
+    let Some(contract) = ActorContract::<T>::get(entry.actor_id) else {
       cycle_meter.consume(program_probe_weight);
       if Self::paged_consume_head_at(position).is_err() {
         return FifoStepResult::Blocked(BlockKind::NonWeight);
@@ -293,7 +293,7 @@ impl<T: Config> Pallet<T> {
     };
     cycle_meter.consume(program_probe_weight);
     let actor_id = entry.actor_id;
-    let instance = Self::derive_active_actor_view(identity, hot, program);
+    let instance = Self::derive_active_actor_view(identity, hot, contract);
     match Self::apply_admission(actor_id, &instance, cycle_meter) {
       AdmissionDecision::Admit(weight) => {
         if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
@@ -1588,13 +1588,13 @@ impl<T: Config> Pallet<T> {
     T::WeightInfo::scheduler_actor_hot_probe()
   }
 
-  pub fn scheduler_actor_program_probe_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_actor_program_probe()
+  pub fn scheduler_actor_contract_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_actor_contract_probe()
   }
 
   pub fn scheduler_actor_probe_weight_upper() -> Weight {
     Self::scheduler_actor_hot_probe_weight_upper()
-      .saturating_add(Self::scheduler_actor_program_probe_weight_upper())
+      .saturating_add(Self::scheduler_actor_contract_probe_weight_upper())
   }
 
   #[cfg(feature = "runtime-benchmarks")]
@@ -1605,15 +1605,15 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_scheduler_actor_program_probe(
+  pub(crate) fn benchmark_scheduler_actor_contract_probe(
     actor_id: ActorId,
     hot: ActorHotStateOf<T>,
   ) {
     let identity =
       ActorIdentities::<T>::get(actor_id).expect("benchmark actor identity must exist");
-    let program =
-      ActorProgram::<T>::get(actor_id).expect("benchmark actor program state must exist");
-    core::hint::black_box(Self::derive_active_actor_view(identity, hot, program));
+    let contract =
+      ActorContract::<T>::get(actor_id).expect("benchmark actor contract state must exist");
+    core::hint::black_box(Self::derive_active_actor_view(identity, hot, contract));
   }
 
   pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
@@ -1922,7 +1922,7 @@ impl<T: Config> Pallet<T> {
   }
 
   // Deterministic User viability precedence is BalanceExhausted, then
-  // FeeBudgetExhausted. The caller supplies the current program cursor.
+  // FeeBudgetExhausted. The caller supplies the current contract cursor.
   pub(crate) fn user_viability_close_reason(
     instance: &ActiveActorViewOf<T>,
     start_cursor: usize,
@@ -1953,13 +1953,13 @@ impl<T: Config> Pallet<T> {
     };
     match (
       ActorHot::<T>::get(actor_id),
-      ActorProgram::<T>::get(actor_id),
+      ActorContract::<T>::get(actor_id),
       ActorFunding::<T>::contains_key(actor_id),
     ) {
       (None, None, false) => Ok(None),
-      (Some(hot), Some(program), true) => {
-        Ok(Some(Self::derive_active_actor_view(identity, hot, program)))
-      }
+      (Some(hot), Some(contract), true) => Ok(Some(Self::derive_active_actor_view(
+        identity, hot, contract,
+      ))),
       _ => Err(ActorClassificationError::ActorInvariant),
     }
   }
@@ -1976,9 +1976,9 @@ impl<T: Config> Pallet<T> {
       .as_ref()
       .map_or(0, |state| state.cursor as usize);
     if let Some(state) = continuation.as_ref() {
-      if cursor >= instance.execution_plan.len()
+      if cursor >= instance.steps.len()
         || state.unsuccessful_attempts_at_cursor == 0
-        || instance.execution_plan[cursor]
+        || instance.steps[cursor]
           .on_error
           .retry_max_attempts()
           .is_none()
@@ -1997,7 +1997,7 @@ impl<T: Config> Pallet<T> {
     } else if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
       Some(CloseReason::CycleNonceExhausted)
     } else if continuation.as_ref().is_some_and(|state| {
-      instance.execution_plan[state.cursor as usize]
+      instance.steps[state.cursor as usize]
         .on_error
         .retry_max_attempts()
         .is_some_and(|max_attempts| state.unsuccessful_attempts_at_cursor >= max_attempts)
@@ -2080,8 +2080,8 @@ impl<T: Config> Pallet<T> {
     if Self::failure_limit_reached(instance.consecutive_failures.saturating_add(1)) {
       return true;
     }
-    for index in start_cursor..instance.execution_plan.len() {
-      let step = &instance.execution_plan[index];
+    for index in start_cursor..instance.steps.len() {
+      let step = &instance.steps[index];
       if step.on_error.retry_max_attempts().is_some_and(|limit| {
         let next_attempt = if index == start_cursor {
           prior_unsuccessful_attempts_at_cursor
@@ -2190,16 +2190,16 @@ impl<T: Config> Pallet<T> {
       });
     };
     let hot = ActorHot::<T>::get(actor_id);
-    let program = ActorProgram::<T>::get(actor_id);
+    let contract = ActorContract::<T>::get(actor_id);
     let funding = ActorFunding::<T>::contains_key(actor_id);
-    let instance = match (hot, program, funding) {
+    let instance = match (hot, contract, funding) {
       (None, None, false) => {
         return Ok(ActorEligibilityProjection {
           phase: ActorEligibilityPhase::Dormant,
           next_eligible_block: None,
         });
       }
-      (Some(hot), Some(program), true) => Self::derive_active_actor_view(identity, hot, program),
+      (Some(hot), Some(contract), true) => Self::derive_active_actor_view(identity, hot, contract),
       _ => return Err(ActorEligibilityError::ActorInvariant),
     };
     let classification =
@@ -2324,11 +2324,14 @@ impl<T: Config> Pallet<T> {
   fn funding_event_authorized(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
-    funding: &ActorFundingStateOf<T>,
+    _funding: &ActorFundingStateOf<T>,
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> bool {
-    match &funding.funding_source_policy {
+    let Some(contract) = ActorContract::<T>::get(actor_id) else {
+      return false;
+    };
+    match &contract.funding {
       FundingSourcePolicy::OwnerOnly => {
         provenance == Some(&FundingProvenance::Signed) && source == Some(&instance.owner)
       }

@@ -378,7 +378,7 @@ impl pallet_deos_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter 
       return Err(pallet_deos_router::AdapterFailure::new(
         DispatchError::Other("Forced fee routing failure"),
         pallet_deos_router::RouterFailureClass::FeeRejected,
-        pallet_deos_router::RetryClass::Permanent,
+        pallet_deos_router::RetryDisposition::Permanent,
       ));
     }
     COLLECTED_FEES.with(|f| f.borrow_mut().push((*who, asset, amount)));
@@ -427,7 +427,7 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
       return Err(pallet_deos_router::AdapterFailure::new(
         DispatchError::Other("Forced oracle publication failure"),
         pallet_deos_router::RouterFailureClass::PublicationRejected,
-        pallet_deos_router::RetryClass::RetryLater,
+        pallet_deos_router::RetryDisposition::RetryLater,
       ));
     }
     set_oracle_price(asset_in, asset_out, price);
@@ -621,7 +621,7 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
       return Err(pallet_deos_router::AdapterFailure::new(
         DispatchError::Other("SlippageExceeded"),
         pallet_deos_router::RouterFailureClass::ProtectionRejected,
-        pallet_deos_router::RetryClass::RetryLater,
+        pallet_deos_router::RetryDisposition::RetryLater,
       ));
     }
 
@@ -643,7 +643,7 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
       return Err(pallet_deos_router::AdapterFailure::new(
         DispatchError::Other("SlippageExceeded"),
         pallet_deos_router::RouterFailureClass::ProtectionRejected,
-        pallet_deos_router::RetryClass::RetryLater,
+        pallet_deos_router::RetryDisposition::RetryLater,
       ));
     }
     let recipient_amount_out = Self::execute_single_pool_exact_input(

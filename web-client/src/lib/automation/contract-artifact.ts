@@ -1,6 +1,6 @@
 /*
 Domain: Actors control-plane artifacts
-Owns: Metadata-bound plan identity, SCALE round trips, lossless projections, and structural diffs.
+Owns: Metadata-bound Actor Contract identity, SCALE round trips, lossless projections, and structural diffs.
 Excludes: Runtime state queries, amount/fee forecasts, simulation, governance submission, and history persistence.
 Zone: Automation domain capability; safe for adapters, stores, and widgets to import.
 */
@@ -15,84 +15,86 @@ import {
 } from '@polkadot-api/substrate-bindings';
 import { blake2AsHex } from '@polkadot/util-crypto';
 
-export const ACTORS_PLAN_FORMAT = 'deos.actor.plan' as const;
-export const ACTORS_PLAN_FORMAT_VERSION = 1 as const;
+export const ACTOR_CONTRACT_FORMAT = 'deos.actor.contract' as const;
+export const ACTOR_CONTRACT_FORMAT_VERSION = 1 as const;
 
-export type ActorPlanType = 'User' | 'System';
-export type ActorPlanMutability = 'Mutable' | 'Immutable';
-export type ActorPlanHex = `0x${string}`;
+export type ActorContractType = 'User' | 'System';
+export type ActorContractMutability = 'Mutable' | 'Immutable';
+export type ActorContractHex = `0x${string}`;
 
-export type ActorPlanArtifact = {
-  format: typeof ACTORS_PLAN_FORMAT;
-  formatVersion: typeof ACTORS_PLAN_FORMAT_VERSION;
-  genesisHash: ActorPlanHex;
+export type ActorContractArtifact = {
+  format: typeof ACTOR_CONTRACT_FORMAT;
+  formatVersion: typeof ACTOR_CONTRACT_FORMAT_VERSION;
+  genesisHash: ActorContractHex;
   specVersion: number;
   transactionVersion: number;
-  metadataHash: ActorPlanHex;
-  actorType: ActorPlanType;
-  mutability: ActorPlanMutability;
-  programScale: ActorPlanHex;
-  planId: ActorPlanHex;
+  metadataHash: ActorContractHex;
+  actorType: ActorContractType;
+  mutability: ActorContractMutability;
+  contractScale: ActorContractHex;
+  contractId: ActorContractHex;
 };
 
-export type ActorPlanProjection =
+export type ActorContractProjection =
   | null
   | boolean
   | string
-  | { $bytes: ActorPlanHex }
+  | { $bytes: ActorContractHex }
   | { $integer: string; $runtimeType: 'number' | 'bigint' }
   | { $none: true }
-  | ActorPlanProjection[]
-  | { [key: string]: ActorPlanProjection };
+  | ActorContractProjection[]
+  | { [key: string]: ActorContractProjection };
 
-export type ActorPlanInspection =
+export type ActorContractInspection =
   | {
       valid: true;
-      artifact: ActorPlanArtifact;
-      projection: ActorPlanProjection;
+      artifact: ActorContractArtifact;
+      projection: ActorContractProjection;
       runtimeValue: unknown;
     }
   | { valid: false; errors: string[] };
 
-export type ActorPlanRuntimeIdentity = {
-  genesisHash: ActorPlanHex;
+export type ActorContractRuntimeIdentity = {
+  genesisHash: ActorContractHex;
   specVersion: number;
   transactionVersion: number;
 };
 
-export type ActorPlanDiff =
+export type ActorContractDiff =
   | {
       kind: 'add';
       path: string;
-      value: ActorPlanProjection;
+      value: ActorContractProjection;
     }
   | {
       kind: 'remove';
       path: string;
-      value: ActorPlanProjection;
+      value: ActorContractProjection;
     }
   | {
       kind: 'replace';
       path: string;
-      before: ActorPlanProjection;
-      after: ActorPlanProjection;
+      before: ActorContractProjection;
+      after: ActorContractProjection;
     }
   | {
       kind: 'move';
       path: string;
       from: string;
-      value: ActorPlanProjection;
+      value: ActorContractProjection;
     };
 
-export type ActorPlanDiffResult =
-  | { compatible: true; changes: ActorPlanDiff[] }
+export type ActorContractDiffResult =
+  | { compatible: true; changes: ActorContractDiff[] }
   | {
       compatible: false;
       reason: 'IncompatibleUntilRebound';
       mismatches: Array<'genesisHash' | 'metadataHash'>;
     };
 
-const PLAN_DOMAIN_BYTES = new TextEncoder().encode('deos:actor-plan:v1');
+const CONTRACT_IDENTITY_DOMAIN_BYTES = new TextEncoder().encode(
+  'deos:actor-contract:v1',
+);
 const HEX_PATTERN = /^0x(?:[0-9a-f]{2})*$/;
 const HASH_PATTERN = /^0x[0-9a-f]{64}$/;
 
@@ -116,10 +118,10 @@ function encodeLeU32(value: number) {
   return bytes;
 }
 
-function bytesToHex(bytes: Uint8Array): ActorPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorContractHex {
   let value = '0x';
   for (const byte of bytes) value += byte.toString(16).padStart(2, '0');
-  return value as ActorPlanHex;
+  return value as ActorContractHex;
 }
 
 function hexToBytes(value: string) {
@@ -161,28 +163,31 @@ function enumDiscriminant(
   return Uint8Array.of(variant.index);
 }
 
-function programCodec(metadata: UnifiedMetadata) {
+function contractCodec(metadata: UnifiedMetadata) {
   const entry = metadataEntry(
     metadata,
-    'pallet_deos_actors::types::ProgramInput',
+    'pallet_deos_actors::types::ContractInput',
   );
   return getDynamicBuilder(getLookupFn(metadata)).buildDefinition(entry.id);
 }
 
-function decodeProgram(metadata: UnifiedMetadata, programScale: ActorPlanHex) {
-  const codec = programCodec(metadata);
-  const sourceBytes = hexToBytes(programScale);
+function decodeContract(
+  metadata: UnifiedMetadata,
+  contractScale: ActorContractHex,
+) {
+  const codec = contractCodec(metadata);
+  const sourceBytes = hexToBytes(contractScale);
   const runtimeValue = codec.dec(sourceBytes);
   const roundTrip = codec.enc(runtimeValue);
-  if (bytesToHex(roundTrip) !== programScale) {
+  if (bytesToHex(roundTrip) !== contractScale) {
     throw new Error(
-      'ProgramInput must decode and re-encode to the exact SCALE bytes',
+      'ContractInput must decode and re-encode to the exact SCALE bytes',
     );
   }
   return { runtimeValue, projection: projectRuntimeValue(runtimeValue) };
 }
 
-function projectRuntimeValue(value: unknown): ActorPlanProjection {
+function projectRuntimeValue(value: unknown): ActorContractProjection {
   if (value === undefined) return { $none: true };
   if (
     value === null ||
@@ -202,7 +207,7 @@ function projectRuntimeValue(value: unknown): ActorPlanProjection {
   if (value instanceof Uint8Array) return { $bytes: bytesToHex(value) };
   if (Array.isArray(value)) return value.map(projectRuntimeValue);
   if (typeof value === 'object') {
-    const projection: Record<string, ActorPlanProjection> = {};
+    const projection: Record<string, ActorContractProjection> = {};
     for (const key of Object.keys(value).sort()) {
       projection[key] = projectRuntimeValue(
         (value as Record<string, unknown>)[key],
@@ -213,12 +218,12 @@ function projectRuntimeValue(value: unknown): ActorPlanProjection {
   throw new Error(`Unsupported runtime projection value: ${typeof value}`);
 }
 
-function planIdBytes(
+function contractIdentityBytes(
   metadata: UnifiedMetadata,
-  artifact: Omit<ActorPlanArtifact, 'planId'>,
+  artifact: Omit<ActorContractArtifact, 'contractId'>,
 ) {
   return concatBytes([
-    PLAN_DOMAIN_BYTES,
+    CONTRACT_IDENTITY_DOMAIN_BYTES,
     encodeLeU32(artifact.specVersion),
     encodeLeU32(artifact.transactionVersion),
     hexToBytes(artifact.genesisHash),
@@ -233,15 +238,18 @@ function planIdBytes(
       'pallet_deos_actors::types::Mutability',
       artifact.mutability,
     ),
-    hexToBytes(artifact.programScale),
+    hexToBytes(artifact.contractScale),
   ]);
 }
 
-function calculatePlanId(
+function calculateContractIdentity(
   metadata: UnifiedMetadata,
-  artifact: Omit<ActorPlanArtifact, 'planId'>,
+  artifact: Omit<ActorContractArtifact, 'contractId'>,
 ) {
-  return blake2AsHex(planIdBytes(metadata, artifact), 256) as ActorPlanHex;
+  return blake2AsHex(
+    contractIdentityBytes(metadata, artifact),
+    256,
+  ) as ActorContractHex;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -260,26 +268,26 @@ function isU32(value: unknown): value is number {
 function parseArtifact(
   value: unknown,
   errors: string[],
-): ActorPlanArtifact | null {
+): ActorContractArtifact | null {
   if (!isRecord(value)) {
     errors.push('Artifact must be an object');
     return null;
   }
-  if (value.format !== ACTORS_PLAN_FORMAT)
-    errors.push(`format must be ${ACTORS_PLAN_FORMAT}`);
-  if (value.formatVersion !== ACTORS_PLAN_FORMAT_VERSION) {
-    errors.push(`formatVersion must be ${ACTORS_PLAN_FORMAT_VERSION}`);
+  if (value.format !== ACTOR_CONTRACT_FORMAT)
+    errors.push(`format must be ${ACTOR_CONTRACT_FORMAT}`);
+  if (value.formatVersion !== ACTOR_CONTRACT_FORMAT_VERSION) {
+    errors.push(`formatVersion must be ${ACTOR_CONTRACT_FORMAT_VERSION}`);
   }
-  for (const field of ['genesisHash', 'metadataHash', 'planId'] as const) {
+  for (const field of ['genesisHash', 'metadataHash', 'contractId'] as const) {
     if (typeof value[field] !== 'string' || !HASH_PATTERN.test(value[field])) {
       errors.push(`${field} must be canonical lowercase 32-byte hex`);
     }
   }
   if (
-    typeof value.programScale !== 'string' ||
-    !HEX_PATTERN.test(value.programScale)
+    typeof value.contractScale !== 'string' ||
+    !HEX_PATTERN.test(value.contractScale)
   ) {
-    errors.push('programScale must be canonical lowercase hex');
+    errors.push('contractScale must be canonical lowercase hex');
   }
   if (!isU32(value.specVersion))
     errors.push('specVersion must be an unsigned u32');
@@ -292,51 +300,54 @@ function parseArtifact(
   if (value.mutability !== 'Mutable' && value.mutability !== 'Immutable') {
     errors.push('mutability must be Mutable or Immutable');
   }
-  return errors.length === 0 ? (value as ActorPlanArtifact) : null;
+  return errors.length === 0 ? (value as ActorContractArtifact) : null;
 }
 
-export function encodeActorProgramValue(
+export function encodeActorContractValue(
   metadataBytes: Uint8Array,
   runtimeValue: unknown,
-): ActorPlanHex {
+): ActorContractHex {
   const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
-  const programScale = bytesToHex(programCodec(metadata).enc(runtimeValue));
-  decodeProgram(metadata, programScale);
-  return programScale;
+  const contractScale = bytesToHex(contractCodec(metadata).enc(runtimeValue));
+  decodeContract(metadata, contractScale);
+  return contractScale;
 }
 
-export function createActorPlanArtifact(input: {
+export function createActorContractArtifact(input: {
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity;
-  actorType: ActorPlanType;
-  mutability: ActorPlanMutability;
-  programScale: ActorPlanHex;
-}): ActorPlanArtifact {
+  runtime: ActorContractRuntimeIdentity;
+  actorType: ActorContractType;
+  mutability: ActorContractMutability;
+  contractScale: ActorContractHex;
+}): ActorContractArtifact {
   const metadata = unifyMetadata(decAnyMetadata(input.metadataBytes));
-  decodeProgram(metadata, input.programScale);
-  const artifact: Omit<ActorPlanArtifact, 'planId'> = {
-    format: ACTORS_PLAN_FORMAT,
-    formatVersion: ACTORS_PLAN_FORMAT_VERSION,
+  decodeContract(metadata, input.contractScale);
+  const artifact: Omit<ActorContractArtifact, 'contractId'> = {
+    format: ACTOR_CONTRACT_FORMAT,
+    formatVersion: ACTOR_CONTRACT_FORMAT_VERSION,
     ...input.runtime,
-    metadataHash: blake2AsHex(input.metadataBytes, 256) as ActorPlanHex,
+    metadataHash: blake2AsHex(input.metadataBytes, 256) as ActorContractHex,
     actorType: input.actorType,
     mutability: input.mutability,
-    programScale: input.programScale,
+    contractScale: input.contractScale,
   };
-  return { ...artifact, planId: calculatePlanId(metadata, artifact) };
+  return {
+    ...artifact,
+    contractId: calculateContractIdentity(metadata, artifact),
+  };
 }
 
-export function inspectActorPlanArtifact(
+export function inspectActorContractArtifact(
   value: unknown,
   metadataBytes: Uint8Array,
-  expectedRuntime?: ActorPlanRuntimeIdentity,
-): ActorPlanInspection {
+  expectedRuntime?: ActorContractRuntimeIdentity,
+): ActorContractInspection {
   const errors: string[] = [];
   const artifact = parseArtifact(value, errors);
   if (artifact == null) return { valid: false, errors };
 
   try {
-    const metadataHash = blake2AsHex(metadataBytes, 256) as ActorPlanHex;
+    const metadataHash = blake2AsHex(metadataBytes, 256) as ActorContractHex;
     if (artifact.metadataHash !== metadataHash)
       errors.push('metadataHash does not match metadata');
     if (expectedRuntime != null) {
@@ -351,10 +362,12 @@ export function inspectActorPlanArtifact(
       }
     }
     const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
-    const decoded = decodeProgram(metadata, artifact.programScale);
-    const { planId: _planId, ...identity } = artifact;
-    if (calculatePlanId(metadata, identity) !== artifact.planId) {
-      errors.push('planId does not match the canonical artifact fields');
+    const decoded = decodeContract(metadata, artifact.contractScale);
+    const { contractId: _contractId, ...identity } = artifact;
+    if (calculateContractIdentity(metadata, identity) !== artifact.contractId) {
+      errors.push(
+        'contractId does not match the canonical Actor Contract fields',
+      );
     }
     return errors.length === 0
       ? { valid: true, artifact, ...decoded }
@@ -373,13 +386,13 @@ function childPath(path: string, segment: string | number) {
   return `${path}/${pointerSegment(segment)}`;
 }
 
-function projectionFingerprint(value: ActorPlanProjection) {
+function projectionFingerprint(value: ActorContractProjection) {
   return JSON.stringify(value);
 }
 
 function longestCommonSubsequence(
-  before: ActorPlanProjection[],
-  after: ActorPlanProjection[],
+  before: ActorContractProjection[],
+  after: ActorContractProjection[],
 ) {
   const rows = before.length + 1;
   const columns = after.length + 1;
@@ -416,10 +429,10 @@ function longestCommonSubsequence(
 }
 
 function diffArrays(
-  before: ActorPlanProjection[],
-  after: ActorPlanProjection[],
+  before: ActorContractProjection[],
+  after: ActorContractProjection[],
   path: string,
-  changes: ActorPlanDiff[],
+  changes: ActorContractDiff[],
 ) {
   const matchedBefore = new Set<number>();
   const matchedAfter = new Set<number>();
@@ -481,10 +494,10 @@ function diffArrays(
 }
 
 function diffProjection(
-  before: ActorPlanProjection,
-  after: ActorPlanProjection,
+  before: ActorContractProjection,
+  after: ActorContractProjection,
   path: string,
-  changes: ActorPlanDiff[],
+  changes: ActorContractDiff[],
 ) {
   if (projectionFingerprint(before) === projectionFingerprint(after)) return;
   if (Array.isArray(before) && Array.isArray(after)) {
@@ -492,8 +505,8 @@ function diffProjection(
     return;
   }
   if (isRecord(before) && isRecord(after)) {
-    const beforeRecord = before as Record<string, ActorPlanProjection>;
-    const afterRecord = after as Record<string, ActorPlanProjection>;
+    const beforeRecord = before as Record<string, ActorContractProjection>;
+    const afterRecord = after as Record<string, ActorContractProjection>;
     const keys = [
       ...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)]),
     ].sort();
@@ -516,10 +529,16 @@ function diffProjection(
   changes.push({ kind: 'replace', path, before, after });
 }
 
-export function diffActorPlanArtifacts(
-  before: { artifact: ActorPlanArtifact; projection: ActorPlanProjection },
-  after: { artifact: ActorPlanArtifact; projection: ActorPlanProjection },
-): ActorPlanDiffResult {
+export function diffActorContractArtifacts(
+  before: {
+    artifact: ActorContractArtifact;
+    projection: ActorContractProjection;
+  },
+  after: {
+    artifact: ActorContractArtifact;
+    projection: ActorContractProjection;
+  },
+): ActorContractDiffResult {
   const mismatches: Array<'genesisHash' | 'metadataHash'> = [];
   if (before.artifact.genesisHash !== after.artifact.genesisHash) {
     mismatches.push('genesisHash');
@@ -534,7 +553,7 @@ export function diffActorPlanArtifacts(
       mismatches,
     };
   }
-  const changes: ActorPlanDiff[] = [];
+  const changes: ActorContractDiff[] = [];
   diffProjection(before.projection, after.projection, '', changes);
   return { compatible: true, changes };
 }

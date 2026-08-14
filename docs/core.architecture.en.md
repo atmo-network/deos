@@ -32,11 +32,41 @@ The reference runtime composes dedicated mechanism pallets with bounded System A
 
 The concrete DEOS System address catalog, genesis states, execution-plan families, governance activation paths, runtime bounds, and operational surfaces live in [DEOS Actors Integration](./actors.integration.en.md). DEOS Oracle publication, Router sampling, reactive Actor ingress, client provenance, and rollback composition live in [DEOS Oracle Integration](./oracle.integration.en.md).
 
-### 3.2 Type System Foundation: The Bitmask Architecture
+### 3.2 Runtime Composition DAG
+
+The five changing subsystems remain reusable leaf packages. Concrete DEOS composition exists only in `template/runtime`: Governance exports bounded policy and participation projections; DEOS Staking owns custody, native value, security epochs, and reward liability; DEOS Router executes typed economic routes; DEOS Oracle owns bounded current observations; and DEOS Actors owns autonomous scheduling and execution through narrow host adapters.
+
+```text
+Governance projections ─┐
+DEOS Staking custody ───┼─> DEOS runtime adapters/composition
+DEOS Router execution ──┤                 │
+DEOS Oracle current truth ────────────────┤
+DEOS Actors scheduler <───────────────────┘
+```
+
+The arrows denote capability use, not storage ownership transfer. A reusable pallet does not depend directly on another one of these five pallets, inspect or repair its storage, or reinterpret its canonical state. Runtime adapters may read an owner's public projection and invoke its public contract transactionally; callbacks return facts or typed failures to the composition root. The diff-aware alignment gate enforces the package-dependency boundary through `audit-runtime-composition-dag.sh`.
+
+Runtime-facing failures keep cause and retry policy orthogonal. DEOS Router exposes `RouterFailureClass` plus `RetryDisposition::{Permanent, RetryLater}`; its Actors adapter maps only that disposition to Actors' package-local `RetryClass::{Permanent, Temporary}` while preserving the Router cause until the signed-dispatch boundary. Other Actors adapters likewise classify concrete host causes before returning `TaskFailure`; unknown dispatch failures default to Permanent. No adapter infers retry from error text, pallet identity, or a raw `DispatchError`.
+
+#### 3.2.1 Public Surface Closure Map
+
+Package specifications own intended semantics; package architecture maps own shipped storage, calls, events, errors, traits, and bounded views; code and metadata own exhaustive names.
+
+| Owner | Shipped constructor or mutator family | Explicit invariant | Executable evidence |
+| --- | --- | --- | --- |
+| [Governance](../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, maturity, and strategic reserve are checked before economics or mutation | Package `general_proposal_cap_preserves_the_strategic_reserve`; runtime `signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserve` |
+| [DEOS Staking](../template/pallets/staking/docs/specification.en.md) | Pool/receipt, LP nomination, governance custody, session security, certified reward, claim, compound, expiry, and cleanup families | One mode and `SessionIndex` owner bind bounded custody, frozen rights, conservative backing, exact liability, and transactional settlement | Package `compound_security_reward_claims_roll_back_every_effect`; runtime `lp_backed_security_path_composes_sessions_funding_claim_expiry_and_cleanup` |
+| [DEOS Actors](../template/pallets/actors/docs/specification.en.md) | Actor Contract lifecycle, trigger, scheduler, simulation, sweep, and repair families | Canonical typed contracts execute bounded FIFO attempts with explicit preconditions, paid failure, atomic task effects, and one Continuation owner | Package `actor_scale_variant_names_are_stable`; generated semantic manifest; runtime temporary and permanent cross-system failure paths |
+| [DEOS Router](../template/pallets/router/docs/specification.en.md) | Pool registration, quote preparation, and atomic exact-input/output swap families | Prepared identity, maximum recipient output, concrete failure cause, retry disposition, Oracle publication, and fee ingress commit together | `adversarial_corpus_is_complete_unique_and_anchor_bound`; runtime Router/Oracle/Burn success and rollback paths |
+| [DEOS Oracle](../template/pallets/oracle/docs/specification.en.md) | Feed admission, lifecycle, typed publication, and bounded observation views | Producer authority, aggregation, semantic no-op revision rules, atomic publication, and deferred reactive fanout have one owner | Package `equal_refresh_and_rejected_producers_preserve_reactive_state`; runtime `stale_observation_subscriber_page_fails_closed_without_losing_dirty_state` |
+
+Errors are fail-closed causes within these families, not independent mechanisms. Events report committed transitions from the same mutators. Runtime adapters may compose only these public contracts and projections; they do not create shadow storage or alternate policy.
+
+### 3.3 Type System Foundation: The Bitmask Architecture
 
 To guarantee O(1) execution complexity and maximal interoperability, the architecture relies on a high-performance `Bitmask Identification Strategy` implemented in `primitives/src/assets.rs`.
 
-#### 3.2.1 Asset Taxonomy
+#### 3.3.1 Asset Taxonomy
 
 The system uses a 32-bit ID space where the most significant nibble (4 bits) determines the asset category. Five production types are currently defined — additional nibbles are reserved for future use.
 
@@ -60,7 +90,7 @@ Native token ($NTVE) uses `AssetKind::Native` enum variant, not a bitmask ID.
 | `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Governance token (deferred) |
 | `$BLDR` | `Local(0x1000_0002)` | `0x1000_0002` | Builder incentive token, L2 TMC emission |
 
-#### 3.2.2 Zero-Cost Abstractions
+#### 3.3.2 Zero-Cost Abstractions
 
 This architecture enables "Zero-Cost Inspection" where complex economic properties are verified via bitwise operations rather than storage reads.
 
@@ -70,7 +100,7 @@ This architecture enables "Zero-Cost Inspection" where complex economic properti
 
 > `Fee Policy`: All asset pairs pay the same flat Router fee (default 0.5%). No discounts or special rates based on asset type. Fee rate is configurable via governance.
 
-### 3.3 Actor Responsibilities
+### 3.4 Actor Responsibilities
 
 #### DEOS Router (Pallet — The Decision Engine)
 
@@ -101,11 +131,11 @@ System Actors roles compose bounded burn, fee allocation, liquidity, custody, tr
 
 The canonical role-to-address mapping, active versus dormant genesis state, plan ordering, percentages, cadence, and activation prerequisites belong to [DEOS Actors Integration](./actors.integration.en.md). Fee routing policy remains governed by the framework and TMCTOL contracts linked from that integration map.
 
-### 3.4 Token Lifecycle Orchestration
+### 3.5 Token Lifecycle Orchestration
 
 Token onboarding composes explicit asset registration, pool or curve creation, and governance-controlled actor activation. No implicit cross-pallet callback installs an economic policy. The Asset Registry, Router, TMC, governance, and Actors integration documents own the concrete order, prerequisites, and failure boundaries for their respective parts.
 
-### 3.5 Antifragile Design Principles
+### 3.6 Antifragile Design Principles
 
 - `Fail-fast over silent drift`: Actors step errors use explicit `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater`; only adapter-classified Temporary failure may suspend. No silent retry heuristic exists.
 - `Static operations`: Tasks own no mutable workflow memory. Sparse scheduler-owned Continuation records only bounded unresolved-suffix progress while a Mutable run remains suspended.

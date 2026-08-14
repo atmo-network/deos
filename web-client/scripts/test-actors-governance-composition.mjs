@@ -9,11 +9,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { ACTORS_MAX_OWNER_SLOTS } from '../src/lib/automation/actors-protocol-bounds.ts';
-import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import {
-  createActorPlanArtifact,
-  encodeActorProgramValue,
-} from '../src/lib/automation/plan-artifact.ts';
+  createActorContractArtifact,
+  encodeActorContractValue,
+} from '../src/lib/automation/contract-artifact.ts';
+import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
@@ -25,13 +25,13 @@ const runtime = {
 };
 const owner = '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT';
 
-function artifact(actorType, programScale = '0x00') {
-  return createActorPlanArtifact({
+function artifact(actorType, contractScale = '0x00') {
+  return createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType,
     mutability: 'Mutable',
-    programScale,
+    contractScale,
   });
 }
 
@@ -86,7 +86,7 @@ test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots boun
 });
 
 test('System Actors composition exposes exact Root call but denies current governance admission', () => {
-  const programScale = encodeActorProgramValue(metadataBytes, {
+  const contractScale = encodeActorContractValue(metadataBytes, {
     type: 'Active',
     value: {
       schedule: {
@@ -99,11 +99,21 @@ test('System Actors composition exposes exact Root call but denies current gover
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
-      execution_plan: [
+      steps: [
         {
-          conditions: {
-            type: 'Any',
-            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          preconditions: {
+            type: 'AnyOf',
+            value: [
+              [
+                {
+                  timing: { type: 'Current', value: undefined },
+                  predicate: {
+                    type: 'BlockNumberAbove',
+                    value: { threshold: 1 },
+                  },
+                },
+              ],
+            ],
           },
           task: {
             type: 'Mint',
@@ -115,15 +125,15 @@ test('System Actors composition exposes exact Root call but denies current gover
           on_error: { type: 'AbortCycle', value: undefined },
         },
       ],
-      completion_policy: {
+      completion: {
         type: 'CloseAfterProductiveCycle',
         value: undefined,
       },
-      funding_source_policy: { type: 'OwnerOnly', value: undefined },
+      funding: { type: 'OwnerOnly', value: undefined },
     },
   });
   const composed = composeActorRuntimeCall({
-    artifact: artifact('System', programScale),
+    artifact: artifact('System', contractScale),
     metadataBytes,
     runtime,
     target: { type: 'Create', owner },
@@ -148,7 +158,7 @@ test('activation and custody reattachment preserve artifact identity and reject 
     target: { type: 'Activate', actorId: 9n },
   });
   assert.equal(activation.call.bytes, '0x3711090000000000000000');
-  assert.equal(activation.planId, userArtifact.planId);
+  assert.equal(activation.contractId, userArtifact.contractId);
 
   assert.throws(
     () =>

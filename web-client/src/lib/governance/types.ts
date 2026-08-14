@@ -9,7 +9,7 @@ export type GovernanceItemId = number;
 export type GovernanceEpoch = number;
 export type GovernanceAccountId = string;
 export type GovernanceWeight = bigint;
-export type GovernanceRewardCoefficient = string;
+export type GovernanceParticipationCoefficient = string;
 export type GovernanceVoteKind =
   | 'aye'
   | 'nay'
@@ -312,7 +312,7 @@ export type GovernanceQuerySurfaceAvailability = {
   proposalTally: GovernanceQuerySurfaceKind;
   accountGovernancePower: GovernanceQuerySurfaceKind;
   votePowerProfiles: GovernanceQuerySurfaceKind;
-  rewardCoefficient: GovernanceQuerySurfaceKind;
+  governanceParticipationCoefficient: GovernanceQuerySurfaceKind;
   govxpCounters: GovernanceQuerySurfaceKind;
   proposalExecutionDetail: GovernanceQuerySurfaceKind;
   ballotTimelines: GovernanceQuerySurfaceKind;
@@ -439,10 +439,10 @@ export type GovernanceReadAdapter = {
     itemId: GovernanceItemId,
     voteKind: GovernanceVoteKind,
   ): Promise<GovernanceVotePowerProfile | null>;
-  getRewardCoefficient(
+  getGovernanceParticipationCoefficient(
     domainId: GovernanceDomainId,
     accountId: GovernanceAccountId,
-  ): Promise<GovernanceRewardCoefficient | null>;
+  ): Promise<GovernanceParticipationCoefficient | null>;
   getGovXpCounters(
     domainId: GovernanceDomainId,
     accountId: GovernanceAccountId,

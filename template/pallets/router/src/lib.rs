@@ -99,7 +99,7 @@ pub enum RouterFailureClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetryClass {
+pub enum RetryDisposition {
   Permanent,
   RetryLater,
 }
@@ -108,19 +108,19 @@ pub enum RetryClass {
 pub struct AdapterFailure {
   dispatch_error: DispatchError,
   failure_class: RouterFailureClass,
-  retry_class: RetryClass,
+  retry_disposition: RetryDisposition,
 }
 
 impl AdapterFailure {
   pub const fn new(
     dispatch_error: DispatchError,
     failure_class: RouterFailureClass,
-    retry_class: RetryClass,
+    retry_disposition: RetryDisposition,
   ) -> Self {
     Self {
       dispatch_error,
       failure_class,
-      retry_class,
+      retry_disposition,
     }
   }
 
@@ -128,7 +128,7 @@ impl AdapterFailure {
     Self::new(
       dispatch_error,
       RouterFailureClass::InvariantViolation,
-      RetryClass::Permanent,
+      RetryDisposition::Permanent,
     )
   }
 
@@ -136,8 +136,8 @@ impl AdapterFailure {
     self.failure_class
   }
 
-  pub const fn retry_class(&self) -> RetryClass {
-    self.retry_class
+  pub const fn retry_disposition(&self) -> RetryDisposition {
+    self.retry_disposition
   }
 
   pub fn into_dispatch_error(self) -> DispatchError {
@@ -161,7 +161,7 @@ impl<T: Config> core::fmt::Debug for ExecutionError<T> {
     formatter
       .debug_struct("ExecutionError")
       .field("failure_class", &self.failure_class())
-      .field("retry_class", &self.retry_class())
+      .field("retry_disposition", &self.retry_disposition())
       .finish()
   }
 }
@@ -186,10 +186,10 @@ impl<T: Config> ExecutionError<T> {
     }
   }
 
-  pub fn retry_class(&self) -> RetryClass {
+  pub fn retry_disposition(&self) -> RetryDisposition {
     match self {
-      Self::Router(error) => error.retry_class(),
-      Self::Adapter(failure) => failure.retry_class(),
+      Self::Router(error) => error.retry_disposition(),
+      Self::Adapter(failure) => failure.retry_disposition(),
     }
   }
 
@@ -575,7 +575,7 @@ pub mod pallet {
       }
     }
 
-    pub const fn retry_class(&self) -> RetryClass {
+    pub const fn retry_disposition(&self) -> RetryDisposition {
       match self {
         Self::NoRouteFound
         | Self::NoMultiHopRoute
@@ -583,7 +583,7 @@ pub mod pallet {
         | Self::SlippageExceeded
         | Self::PriceDeviationExceeded
         | Self::InsufficientInputBalance
-        | Self::InvalidOracleData => RetryClass::RetryLater,
+        | Self::InvalidOracleData => RetryDisposition::RetryLater,
         Self::IdenticalAssets
         | Self::ZeroAmount
         | Self::AmountTooLow
@@ -593,7 +593,7 @@ pub mod pallet {
         | Self::LpTokenPairCollision
         | Self::LpPairCapacityExceeded
         | Self::InvalidPoolPair
-        | Self::PreparedRouteMismatch => RetryClass::Permanent,
+        | Self::PreparedRouteMismatch => RetryDisposition::Permanent,
         Self::__Ignore(_, never) => match *never {},
       }
     }

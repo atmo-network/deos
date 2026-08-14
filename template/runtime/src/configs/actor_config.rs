@@ -38,6 +38,9 @@ parameter_types! {
   pub const ActorMaxExecutionPlanSteps: u32 = 8;
   pub const ActorMaxFundingTrackedAssets: u32 = 10;
   pub const ActorMaxOpeningSnapshotEntries: u32 = 16;
+  pub const ActorMaxOpeningPredicateResults: u32 = 32;
+  pub const ActorMaxPreconditionClauses: u32 = 4;
+  pub const ActorMaxPredicatesPerClause: u32 = 4;
   pub const ActorMaxConditionsPerStep: u32 = 4;
   pub const ActorMaxSplitTransferLegs: u32 = 8;
 
@@ -281,7 +284,21 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
               polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
             )
             .map_err(TaskFailure::permanent)?;
-            Self::bridge_native_staking_ingress(to, amount).map_err(TaskFailure::permanent)?;
+            if from
+              == &crate::Actors::sovereign_account_id_system(
+                ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
+              )
+              && to == &crate::Staking::native_security_reward_account()
+            {
+              crate::Staking::certify_native_security_reward_funding(
+                from,
+                crate::Staking::current_security_epoch(),
+                amount,
+              )
+              .map_err(TaskFailure::permanent)?;
+            } else {
+              Self::bridge_native_staking_ingress(to, amount).map_err(TaskFailure::permanent)?;
+            }
           }
           AssetKind::Local(id) | AssetKind::Foreign(id) => {
             <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
@@ -402,6 +419,18 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     if amount == 0 {
       return Ok(());
     }
+    if asset == AssetKind::Native
+      && from
+        == &crate::Actors::sovereign_account_id_system(ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
+      && to == &crate::Staking::native_security_reward_account()
+    {
+      crate::Staking::preflight_native_security_reward_funding(
+        from,
+        crate::Staking::current_security_epoch(),
+        amount,
+      )
+      .map_err(TaskFailure::permanent)?;
+    }
     let deposit = match asset {
       AssetKind::Native => {
         <Balances as NativeInspect<AccountId>>::can_withdraw(from, amount)
@@ -468,24 +497,24 @@ pub(crate) fn classify_remove_liquidity_failure(error: DispatchError) -> TaskFai
 }
 
 pub(crate) fn classify_router_failure(error: pallet_deos_router::Error<Runtime>) -> TaskFailure {
-  let retry = error.retry_class();
+  let retry = error.retry_disposition();
   classify_router_retry(retry, error.into())
 }
 
 pub(crate) fn classify_router_execution_failure(
   error: pallet_deos_router::ExecutionError<Runtime>,
 ) -> TaskFailure {
-  let retry = error.retry_class();
+  let retry = error.retry_disposition();
   classify_router_retry(retry, error.into_dispatch_error())
 }
 
 fn classify_router_retry(
-  retry: pallet_deos_router::RetryClass,
+  retry: pallet_deos_router::RetryDisposition,
   error: DispatchError,
 ) -> TaskFailure {
   match retry {
-    pallet_deos_router::RetryClass::Permanent => TaskFailure::permanent(error),
-    pallet_deos_router::RetryClass::RetryLater => TaskFailure::temporary(error),
+    pallet_deos_router::RetryDisposition::Permanent => TaskFailure::permanent(error),
+    pallet_deos_router::RetryDisposition::RetryLater => TaskFailure::temporary(error),
   }
 }
 
@@ -850,6 +879,7 @@ impl TmctolGenesisSystemActors {
     accounts.push(crate::Staking::pool_account_for(
       <Runtime as pallet_staking::Config>::NativeStakingAssetId::get(),
     ));
+    accounts.push(crate::Staking::native_security_reward_account());
     accounts
   }
 
@@ -903,7 +933,7 @@ impl
     };
     let dust = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     // Genesis execution_plan: swap known foreign assets → native, then burn.
-    // Governance adds steps for new foreign assets via `update_execution_plan`.
+    // Governance replaces the canonical contract when adding steps for new foreign assets.
     let burn_execution_plan: pallet_deos_actors::ExecutionPlanOf<Runtime> =
       Self::build_burn_execution_plan(alloc::vec![], dust);
 
@@ -992,43 +1022,74 @@ impl
 
 impl TmctolGenesisSystemActors {
   fn all_conditions(
-    conditions: alloc::vec::Vec<
-      pallet_deos_actors::Condition<AssetKind, Balance, u32, primitives::OracleFeedId>,
+    predicates: alloc::vec::Vec<
+      pallet_deos_actors::Predicate<AssetKind, Balance, u32, primitives::OracleFeedId>,
     >,
-  ) -> pallet_deos_actors::ConditionSetOf<Runtime> {
-    pallet_deos_actors::ConditionSet::All(
-      conditions
+  ) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+    let clause = predicates
+      .into_iter()
+      .map(|predicate| pallet_deos_actors::TimedPredicate {
+        timing: pallet_deos_actors::ObservationTiming::Current,
+        predicate,
+      })
+      .collect::<alloc::vec::Vec<_>>()
+      .try_into()
+      .expect("runtime predicate clause fits MaxPredicatesPerClause");
+    pallet_deos_actors::Preconditions::AnyOf(
+      alloc::vec![clause]
         .try_into()
-        .expect("runtime condition group fits MaxConditionsPerStep"),
+        .expect("runtime clause fits MaxPreconditionClauses"),
     )
   }
 
   pub fn build_phase1_fee_sink_execution_plan() -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
     use pallet_deos_actors::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
+    let lp_backed = <crate::configs::staking_config::RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
+      == pallet_staking::NativeSecurityMode::LpBackedSelection;
+    let legs = if lp_backed {
+      alloc::vec![
+        SplitLeg {
+          to: crate::Staking::native_security_reward_account(),
+          share: Perbill::from_percent(34),
+        },
+        SplitLeg {
+          to: crate::Staking::pool_account_for(0),
+          share: Perbill::from_percent(33),
+        },
+        SplitLeg {
+          to: crate::Actors::sovereign_account_id_system(
+            ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+          ),
+          share: Perbill::from_percent(33),
+        },
+      ]
+    } else {
+      alloc::vec![
+        SplitLeg {
+          to: crate::Staking::pool_account_for(0),
+          share: Perbill::from_percent(50),
+        },
+        SplitLeg {
+          to: crate::Actors::sovereign_account_id_system(
+            ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+          ),
+          share: Perbill::from_percent(50),
+        },
+      ]
+    };
     alloc::vec![Step {
-      conditions: Default::default(),
+      preconditions: Default::default(),
       task: Task::SplitTransfer {
         asset: AssetKind::Native,
         amount: AmountResolution::AllAvailable,
-        legs: alloc::vec![
-          SplitLeg {
-            to: crate::Staking::pool_account_for(0),
-            share: Perbill::from_percent(50),
-          },
-          SplitLeg {
-            to: crate::Actors::sovereign_account_id_system(
-              ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
-            ),
-            share: Perbill::from_percent(50),
-          },
-        ]
-        .try_into()
-        .expect("phase1 fee-sink split legs fit"),
+        legs: legs
+          .try_into()
+          .expect("phase-aware fee-sink split legs fit"),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }]
     .try_into()
-    .expect("phase1 fee-sink execution_plan fits")
+    .expect("phase-aware fee-sink execution_plan fits")
   }
 
   /// Builds the Burn Actor execution_plan: for each known foreign asset, add a
@@ -1037,9 +1098,9 @@ impl TmctolGenesisSystemActors {
     foreign_assets: alloc::vec::Vec<AssetKind>,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let dust_guard = |asset: AssetKind| {
-      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
         threshold: dust_threshold,
       }])
@@ -1047,7 +1108,7 @@ impl TmctolGenesisSystemActors {
     let mut steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec::Vec::new();
     for foreign in foreign_assets {
       steps.push(Step {
-        conditions: dust_guard(foreign),
+        preconditions: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
           amount_in: AmountResolution::AllAvailable,
@@ -1059,7 +1120,7 @@ impl TmctolGenesisSystemActors {
     }
     // Final step: burn all accumulated native (only if above dust)
     steps.push(Step {
-      conditions: dust_guard(AssetKind::Native),
+      preconditions: dust_guard(AssetKind::Native),
       task: Task::Burn {
         asset: AssetKind::Native,
         amount: AmountResolution::AllAvailable,
@@ -1085,20 +1146,20 @@ impl TmctolGenesisSystemActors {
     lp_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, SplitLeg, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, SplitLeg, Step, StepErrorPolicy, Task};
     let dust_guard = |asset: AssetKind| {
-      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
         threshold: dust_threshold,
       }])
     };
     let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| {
       Self::all_conditions(alloc::vec![
-        Condition::BalanceAbove {
+        Predicate::BalanceAbove {
           asset: asset_a,
           threshold: dust_threshold,
         },
-        Condition::BalanceAbove {
+        Predicate::BalanceAbove {
           asset: asset_b,
           threshold: dust_threshold,
         },
@@ -1109,7 +1170,7 @@ impl TmctolGenesisSystemActors {
       // Step 1: Opportunistic LP provisioning — add both sides at current pool ratio
       // AllAvailable for native subtracts ED at resolution layer, safe with Preserve semantics
       Step {
-        conditions: dual_dust_guard(AssetKind::Native, foreign),
+        preconditions: dual_dust_guard(AssetKind::Native, foreign),
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
@@ -1121,7 +1182,7 @@ impl TmctolGenesisSystemActors {
       },
       // Step 2: Patriotic accumulation — convert leftover Foreign to Native
       Step {
-        conditions: dust_guard(foreign),
+        preconditions: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
           amount_in: AmountResolution::AllAvailable,
@@ -1132,7 +1193,7 @@ impl TmctolGenesisSystemActors {
       },
       // Step 3: Distribute LP tokens to TOL buckets
       Step {
-        conditions: dust_guard(lp_asset),
+        preconditions: dust_guard(lp_asset),
         task: Task::SplitTransfer {
           asset: lp_asset,
           amount: AmountResolution::AllAvailable,
@@ -1183,11 +1244,11 @@ impl TmctolGenesisSystemActors {
     unwind_pct: polkadot_sdk::sp_runtime::Perbill,
     treasury_actor_id: u64,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let treasury_account =
       pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(treasury_actor_id);
     alloc::vec![Step {
-      conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      preconditions: Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset: lp_asset,
         threshold: dust_threshold,
       }]),
@@ -1209,7 +1270,7 @@ impl TmctolGenesisSystemActors {
     lp_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let lp_id = match lp_asset {
       AssetKind::Local(id) => id,
       _ => panic!("Treasury LP unwind requires a Local LP asset"),
@@ -1217,7 +1278,7 @@ impl TmctolGenesisSystemActors {
     let (asset_a, asset_b) = crate::DeosRouter::lp_pair_by_token_id(lp_id)
       .expect("Treasury LP unwind requires a registered LP pair");
     alloc::vec![Step {
-      conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      preconditions: Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset: lp_asset,
         threshold: dust_threshold,
       }]),
@@ -1244,9 +1305,9 @@ impl TmctolGenesisSystemActors {
     bldr_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, SplitLeg, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, SplitLeg, Step, StepErrorPolicy, Task};
     let dust_guard = |asset: AssetKind| {
-      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
         threshold: dust_threshold,
       }])
@@ -1258,7 +1319,7 @@ impl TmctolGenesisSystemActors {
       ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
     );
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![Step {
-      conditions: dust_guard(bldr_asset),
+      preconditions: dust_guard(bldr_asset),
       task: Task::SplitTransfer {
         asset: bldr_asset,
         amount: AmountResolution::AllAvailable,
@@ -1292,20 +1353,20 @@ impl TmctolGenesisSystemActors {
     lp_asset: AssetKind,
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let dust_guard = |asset: AssetKind| {
-      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+      Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset,
         threshold: dust_threshold,
       }])
     };
     let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| {
       Self::all_conditions(alloc::vec![
-        Condition::BalanceAbove {
+        Predicate::BalanceAbove {
           asset: asset_a,
           threshold: dust_threshold,
         },
-        Condition::BalanceAbove {
+        Predicate::BalanceAbove {
           asset: asset_b,
           threshold: dust_threshold,
         },
@@ -1316,7 +1377,7 @@ impl TmctolGenesisSystemActors {
     );
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
       Step {
-        conditions: dual_dust_guard(AssetKind::Native, bldr_asset),
+        preconditions: dual_dust_guard(AssetKind::Native, bldr_asset),
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: bldr_asset,
@@ -1327,7 +1388,7 @@ impl TmctolGenesisSystemActors {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       Step {
-        conditions: dust_guard(lp_asset),
+        preconditions: dust_guard(lp_asset),
         task: Task::Transfer {
           to: bldr_bucket_a,
           asset: lp_asset,
@@ -1353,7 +1414,7 @@ impl TmctolGenesisSystemActors {
     crate::Actors::activate_actor(
       RuntimeOrigin::root(),
       ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
-      pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
+      pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
         schedule: pallet_deos_actors::Schedule {
           trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
             pallet_deos_actors::SourceFilter::Any,
@@ -1362,9 +1423,9 @@ impl TmctolGenesisSystemActors {
           cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
         },
         schedule_window: None,
-        execution_plan,
-        completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
-        funding_source_policy: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
+        steps: execution_plan,
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       }),
     )
@@ -1399,18 +1460,18 @@ impl TmctolGenesisSystemActors {
   pub fn build_native_staking_liquidity_execution_plan(
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
     let native_staking_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let native_asset = AssetKind::Local(native_staking_asset_id);
     let staked_asset_id = crate::Staking::staked_asset_id(native_staking_asset_id)
       .expect("native staking liquidity activation checks staked asset first");
     let staked_asset = AssetKind::Local(staked_asset_id);
-    let native_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+    let native_dust = Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
       asset: native_asset,
       threshold: dust_threshold,
     }]);
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![Step {
-      conditions: native_dust,
+      preconditions: native_dust,
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
@@ -1437,19 +1498,19 @@ impl TmctolGenesisSystemActors {
     dust_threshold: Balance,
     slippage: polkadot_sdk::sp_runtime::Perbill,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
-    use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    let native_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+    use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
+    let native_dust = Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
       asset: AssetKind::Native,
       threshold: dust_threshold,
     }]);
-    let target_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
+    let target_dust = Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
       asset: target_asset,
       threshold: dust_threshold,
     }]);
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
       // Step 1: Swap NTVE → target (% of current balance)
       Step {
-        conditions: native_dust,
+        preconditions: native_dust,
         task: Task::SwapIn {
           asset_in: AssetKind::Native,
           amount_in: AmountResolution::PercentageOfCurrent(buyback_pct),
@@ -1460,7 +1521,7 @@ impl TmctolGenesisSystemActors {
       },
       // Step 2: Burn all acquired target tokens
       Step {
-        conditions: target_dust,
+        preconditions: target_dust,
         task: Task::Burn {
           asset: target_asset,
           amount: AmountResolution::AllAvailable,
@@ -1611,6 +1672,9 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxActiveActors = ActorMaxActiveActors;
   type MaxActorIdentities = ActorMaxActiveActors;
   type MaxSystemSovereigns = ActorMaxActiveActors;
+  type MaxOpeningPredicateResults = ActorMaxOpeningPredicateResults;
+  type MaxPreconditionClauses = ActorMaxPreconditionClauses;
+  type MaxPredicatesPerClause = ActorMaxPredicatesPerClause;
   type MaxConditionsPerStep = ActorMaxConditionsPerStep;
   type MaxConsecutiveFailures = ActorMaxConsecutiveFailures;
   type MaxRetryAttempts = ActorMaxRetryAttempts;

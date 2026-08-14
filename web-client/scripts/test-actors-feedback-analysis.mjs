@@ -44,7 +44,7 @@ const treasuryFeed = {
 function projectionStep({
   index = 0,
   task = 'Transfer',
-  conditions = [],
+  predicates = [],
   reads = [],
   writes = [],
   recipients = [],
@@ -52,7 +52,7 @@ function projectionStep({
   return {
     index,
     task,
-    conditions,
+    predicates,
     economicSurface: {
       assetsRead: reads,
       assetsWritten: writes,
@@ -94,7 +94,7 @@ function analysis({
   return {
     provenance: 'StaticStructuralProjection',
     identity: {
-      planId: 'artifact:test-plan',
+      contractId: 'artifact:test-plan',
       genesisHash: 'runtime:test-genesis',
       metadataHash: 'runtime:test-metadata',
       specVersion: 1,
@@ -260,7 +260,7 @@ test('reactive findings bind timing and policy claims to identified evidence', (
           steps: [
             projectionStep({
               task: 'SwapIn',
-              conditions: [
+              predicates: [
                 observationCondition(priceFeed, { maxAgeBlocks: 3 }),
               ],
               reads: [native],

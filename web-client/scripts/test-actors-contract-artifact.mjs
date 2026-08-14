@@ -9,11 +9,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
-  createActorPlanArtifact,
-  diffActorPlanArtifacts,
-  encodeActorProgramValue,
-  inspectActorPlanArtifact,
-} from '../src/lib/automation/plan-artifact.ts';
+  createActorContractArtifact,
+  diffActorContractArtifacts,
+  encodeActorContractValue,
+  inspectActorContractArtifact,
+} from '../src/lib/automation/contract-artifact.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
@@ -25,22 +25,26 @@ const runtime = {
 };
 
 function dormantArtifact() {
-  return createActorPlanArtifact({
+  return createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType: 'User',
     mutability: 'Mutable',
-    programScale: '0x00',
+    contractScale: '0x00',
   });
 }
 
 test('canonical dormant artifact is deterministic and round-trips exact SCALE', () => {
   const artifact = dormantArtifact();
   assert.equal(
-    artifact.planId,
-    '0x6e4138e42e3fd2e3a5451f2b30b39a2eca66928e8dcf1fb0409531337fddca05',
+    artifact.contractId,
+    '0x7be5d17ce09332bbb771c2dbb378db5e422be5c3a95741898af928ce82312639',
   );
-  const inspection = inspectActorPlanArtifact(artifact, metadataBytes, runtime);
+  const inspection = inspectActorContractArtifact(
+    artifact,
+    metadataBytes,
+    runtime,
+  );
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
     assert.deepEqual(inspection.projection, {
@@ -50,8 +54,8 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   }
 });
 
-test('active ProgramInput encodes and projects every nested value losslessly', () => {
-  const programScale = encodeActorProgramValue(metadataBytes, {
+test('active ContractInput encodes and projects every nested value losslessly', () => {
+  const contractScale = encodeActorContractValue(metadataBytes, {
     type: 'Active',
     value: {
       schedule: {
@@ -64,11 +68,21 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
-      execution_plan: [
+      steps: [
         {
-          conditions: {
-            type: 'All',
-            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          preconditions: {
+            type: 'AnyOf',
+            value: [
+              [
+                {
+                  timing: { type: 'Current', value: undefined },
+                  predicate: {
+                    type: 'BlockNumberAbove',
+                    value: { threshold: 1 },
+                  },
+                },
+              ],
+            ],
           },
           task: {
             type: 'Transfer',
@@ -81,42 +95,57 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
           on_error: { type: 'AbortCycle', value: undefined },
         },
       ],
-      completion_policy: { type: 'Persistent', value: undefined },
-      funding_source_policy: { type: 'OwnerOnly', value: undefined },
+      completion: { type: 'Persistent', value: undefined },
+      funding: { type: 'OwnerOnly', value: undefined },
     },
   });
-  const artifact = createActorPlanArtifact({
+  const artifact = createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType: 'User',
     mutability: 'Mutable',
-    programScale,
+    contractScale,
   });
-  const inspection = inspectActorPlanArtifact(artifact, metadataBytes, runtime);
+  const inspection = inspectActorContractArtifact(
+    artifact,
+    metadataBytes,
+    runtime,
+  );
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
     assert.deepEqual(
-      inspection.projection.value.execution_plan[0].task.value.amount.value,
+      inspection.projection.value.steps[0].task.value.amount.value,
       { $integer: '10', $runtimeType: 'bigint' },
     );
   }
 });
 
-test('condition aggregate mode changes canonical identity and remains diff-visible', () => {
-  const makeArtifact = (mode) => {
-    const conditions =
-      mode === 'Always'
-        ? { type: 'Always', value: undefined }
-        : {
-            type: mode,
-            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
-          };
-    return createActorPlanArtifact({
+test('DNF timing and clause topology change canonical identity and remain diff-visible', () => {
+  const makeArtifact = (timing, separateClauses = false) => {
+    const predicate = {
+      timing: { type: timing, value: undefined },
+      predicate: {
+        type: 'BlockNumberAbove',
+        value: { threshold: 1 },
+      },
+    };
+    const second = {
+      timing: { type: 'Current', value: undefined },
+      predicate: {
+        type: 'BlockNumberBelow',
+        value: { threshold: 10 },
+      },
+    };
+    const preconditions = {
+      type: 'AnyOf',
+      value: separateClauses ? [[predicate], [second]] : [[predicate, second]],
+    };
+    return createActorContractArtifact({
       metadataBytes,
       runtime,
       actorType: 'User',
       mutability: 'Mutable',
-      programScale: encodeActorProgramValue(metadataBytes, {
+      contractScale: encodeActorContractValue(metadataBytes, {
         type: 'Active',
         value: {
           schedule: {
@@ -129,22 +158,25 @@ test('condition aggregate mode changes canonical identity and remains diff-visib
             cooldown_blocks: 0,
           },
           schedule_window: undefined,
-          execution_plan: [
+          steps: [
             {
-              conditions,
+              preconditions,
               task: { type: 'StopCycle', value: undefined },
               on_error: { type: 'AbortCycle', value: undefined },
             },
           ],
-          completion_policy: { type: 'Persistent', value: undefined },
-          funding_source_policy: { type: 'OwnerOnly', value: undefined },
+          completion: { type: 'Persistent', value: undefined },
+          funding: { type: 'OwnerOnly', value: undefined },
         },
       }),
     });
   };
-  const inspected = ['Always', 'All', 'Any'].map((mode) => {
-    const artifact = makeArtifact(mode);
-    const inspection = inspectActorPlanArtifact(
+  const inspected = [
+    makeArtifact('Opening'),
+    makeArtifact('Current'),
+    makeArtifact('Current', true),
+  ].map((artifact) => {
+    const inspection = inspectActorContractArtifact(
       artifact,
       metadataBytes,
       runtime,
@@ -152,55 +184,55 @@ test('condition aggregate mode changes canonical identity and remains diff-visib
     assert.equal(inspection.valid, true);
     if (!inspection.valid) throw new Error('fixture must inspect');
     assert.equal(
-      inspection.projection.value.execution_plan[0].conditions.type,
-      mode,
+      inspection.projection.value.steps[0].preconditions.type,
+      'AnyOf',
     );
     return inspection;
   });
   assert.equal(
-    new Set(inspected.map(({ artifact }) => artifact.planId)).size,
+    new Set(inspected.map(({ artifact }) => artifact.contractId)).size,
     3,
   );
-  const changedMode = diffActorPlanArtifacts(inspected[1], inspected[2]);
+  const changedMode = diffActorContractArtifacts(inspected[0], inspected[1]);
   assert.equal(changedMode.compatible, true);
   if (changedMode.compatible) {
     assert(
       changedMode.changes.some(
         (change) =>
           change.kind === 'replace' &&
-          change.path.endsWith('/conditions/type') &&
-          change.before === 'All' &&
-          change.after === 'Any',
+          change.path.includes('/preconditions/value/0/0/timing/type') &&
+          change.before === 'Opening' &&
+          change.after === 'Current',
       ),
     );
   }
 });
 
-test('trigger admission diff stays inside the trigger tree and never invents plan control', () => {
+test('trigger admission diff stays inside the trigger tree and never invents contract control', () => {
   const inspectTrigger = (trigger) => {
-    const artifact = createActorPlanArtifact({
+    const artifact = createActorContractArtifact({
       metadataBytes,
       runtime,
       actorType: 'User',
       mutability: 'Mutable',
-      programScale: encodeActorProgramValue(metadataBytes, {
+      contractScale: encodeActorContractValue(metadataBytes, {
         type: 'Active',
         value: {
           schedule: { trigger, cooldown_blocks: 0 },
           schedule_window: undefined,
-          execution_plan: [
+          steps: [
             {
-              conditions: { type: 'Always', value: undefined },
+              preconditions: { type: 'Unconditional', value: undefined },
               task: { type: 'StopCycle', value: undefined },
               on_error: { type: 'AbortCycle', value: undefined },
             },
           ],
-          completion_policy: { type: 'Persistent', value: undefined },
-          funding_source_policy: { type: 'OwnerOnly', value: undefined },
+          completion: { type: 'Persistent', value: undefined },
+          funding: { type: 'OwnerOnly', value: undefined },
         },
       }),
     });
-    const inspection = inspectActorPlanArtifact(
+    const inspection = inspectActorContractArtifact(
       artifact,
       metadataBytes,
       runtime,
@@ -246,7 +278,7 @@ test('trigger admission diff stays inside the trigger tree and never invents pla
     '100',
   );
   assert.equal(observationSource.value.feed.scale.$integer, '12');
-  const observationDiff = diffActorPlanArtifacts(immediate, observation);
+  const observationDiff = diffActorContractArtifacts(immediate, observation);
   assert.equal(observationDiff.compatible, true);
   if (observationDiff.compatible) {
     assert(
@@ -264,7 +296,7 @@ test('trigger admission diff stays inside the trigger tree and never invents pla
       mode: { type: 'WhenSignalled', value: manual },
     },
   });
-  const diff = diffActorPlanArtifacts(immediate, cadenced);
+  const diff = diffActorContractArtifacts(immediate, cadenced);
   assert.equal(diff.compatible, true);
   if (diff.compatible) {
     assert(diff.changes.length > 0);
@@ -289,7 +321,7 @@ test('trigger admission diff stays inside the trigger tree and never invents pla
 
 test('artifact inspection rejects identity drift and noncanonical bytes', () => {
   const artifact = dormantArtifact();
-  const stale = inspectActorPlanArtifact(artifact, metadataBytes, {
+  const stale = inspectActorContractArtifact(artifact, metadataBytes, {
     ...runtime,
     specVersion: 2,
   });
@@ -301,8 +333,8 @@ test('artifact inspection rejects identity drift and noncanonical bytes', () => 
       ),
     );
   }
-  const corrupted = inspectActorPlanArtifact(
-    { ...artifact, planId: `0x${'00'.repeat(32)}` },
+  const corrupted = inspectActorContractArtifact(
+    { ...artifact, contractId: `0x${'00'.repeat(32)}` },
     metadataBytes,
     runtime,
   );
@@ -310,18 +342,18 @@ test('artifact inspection rejects identity drift and noncanonical bytes', () => 
   if (!corrupted.valid) {
     assert(
       corrupted.errors.includes(
-        'planId does not match the canonical artifact fields',
+        'contractId does not match the canonical Actor Contract fields',
       ),
     );
   }
   assert.throws(
     () =>
-      createActorPlanArtifact({
+      createActorContractArtifact({
         metadataBytes,
         runtime,
         actorType: 'User',
         mutability: 'Mutable',
-        programScale: '0x0000',
+        contractScale: '0x0000',
       }),
     /exact SCALE bytes/,
   );
@@ -332,7 +364,7 @@ test('ordered structural diff distinguishes moves, insertion, and metadata incom
   const taskA = { task: 'A' };
   const taskB = { task: 'B' };
   const taskX = { task: 'X' };
-  const moved = diffActorPlanArtifacts(
+  const moved = diffActorContractArtifacts(
     { artifact, projection: { steps: [taskA, taskB] } },
     { artifact, projection: { steps: [taskB, taskA] } },
   );
@@ -343,7 +375,7 @@ test('ordered structural diff distinguishes moves, insertion, and metadata incom
     ],
   });
 
-  const inserted = diffActorPlanArtifacts(
+  const inserted = diffActorContractArtifacts(
     { artifact, projection: { steps: [taskA, taskB] } },
     { artifact, projection: { steps: [taskX, taskA, taskB] } },
   );
@@ -352,7 +384,7 @@ test('ordered structural diff distinguishes moves, insertion, and metadata incom
     changes: [{ kind: 'add', path: '/steps/0', value: taskX }],
   });
 
-  const incompatible = diffActorPlanArtifacts(
+  const incompatible = diffActorContractArtifacts(
     { artifact, projection: { steps: [] } },
     {
       artifact: { ...artifact, metadataHash: `0x${'22'.repeat(32)}` },

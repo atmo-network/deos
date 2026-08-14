@@ -100,17 +100,17 @@ pub struct FeeManagerImpl<T: pallet_deos_router::pallet::Config>(core::marker::P
 fn router_adapter_failure(
   error: DispatchError,
   failure_class: pallet_deos_router::RouterFailureClass,
-  retry_class: pallet_deos_router::RetryClass,
+  retry_disposition: pallet_deos_router::RetryDisposition,
 ) -> pallet_deos_router::AdapterFailure {
-  pallet_deos_router::AdapterFailure::new(error, failure_class, retry_class)
+  pallet_deos_router::AdapterFailure::new(error, failure_class, retry_disposition)
 }
 
 fn actor_ingress_failure(
   failure: pallet_deos_actors::IngressFailure,
 ) -> pallet_deos_router::AdapterFailure {
   let retry = match failure.retry {
-    pallet_deos_actors::RetryClass::Permanent => pallet_deos_router::RetryClass::Permanent,
-    pallet_deos_actors::RetryClass::Temporary => pallet_deos_router::RetryClass::RetryLater,
+    pallet_deos_actors::RetryClass::Permanent => pallet_deos_router::RetryDisposition::Permanent,
+    pallet_deos_actors::RetryClass::Temporary => pallet_deos_router::RetryDisposition::RetryLater,
   };
   router_adapter_failure(
     failure.error,
@@ -134,7 +134,7 @@ pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_rout
     router_adapter_failure(
       error,
       pallet_deos_router::RouterFailureClass::LiquidityUnavailable,
-      pallet_deos_router::RetryClass::RetryLater,
+      pallet_deos_router::RetryDisposition::RetryLater,
     )
   } else {
     pallet_deos_router::AdapterFailure::unknown(error)
@@ -147,23 +147,23 @@ fn oracle_publication_failure(error: DispatchError) -> pallet_deos_router::Adapt
     return router_adapter_failure(
       error,
       pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryClass::RetryLater,
+      pallet_deos_router::RetryDisposition::RetryLater,
     );
   }
   if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into() {
     return router_adapter_failure(
       error,
       pallet_deos_router::RouterFailureClass::IngressRejected,
-      pallet_deos_router::RetryClass::Permanent,
+      pallet_deos_router::RetryDisposition::Permanent,
     );
   }
   router_adapter_failure(
     error,
     pallet_deos_router::RouterFailureClass::PublicationRejected,
     if retryable {
-      pallet_deos_router::RetryClass::RetryLater
+      pallet_deos_router::RetryDisposition::RetryLater
     } else {
-      pallet_deos_router::RetryClass::Permanent
+      pallet_deos_router::RetryDisposition::Permanent
     },
   )
 }
@@ -282,103 +282,6 @@ impl AssetConversionAdapter {
         ));
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-    })
-  }
-
-  pub fn compound_native_nomination_reward_to_locked_lp(
-    account: &AccountId,
-    operator: &AccountId,
-    total_native: Balance,
-  ) -> Result<Balance, DispatchError> {
-    if total_native.is_zero() {
-      return Err(DispatchError::Other("InvalidCompoundAmount"));
-    }
-    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
-      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
-    let base_asset = AssetKind::Local(native_asset_id);
-    let staked_asset = AssetKind::Local(staked_asset_id);
-    let pool_id = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(
-      &base_asset,
-      &staked_asset,
-    )
-    .map_err(|_| DispatchError::Other("NativeStakingAmmUnavailable"))?;
-    let pool = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
-      .ok_or(DispatchError::Other("NativeStakingAmmUnavailable"))?;
-    let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
-      &base_asset,
-      &staked_asset,
-    )
-    .map_err(|_| DispatchError::Other("NativeStakingAmmUnavailable"))?;
-    let reserve_native = Self::asset_balance(base_asset, &pool_account);
-    let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
-    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)
-      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
-    if reserve_native.is_zero()
-      || reserve_staked.is_zero()
-      || staking_pool.accounted_balance.is_zero()
-      || staking_pool.total_shares.is_zero()
-    {
-      return Err(DispatchError::Other("NativeStakingAmmEmpty"));
-    }
-    let stake_amount = Self::native_stake_amount_for_balanced_donation(
-      total_native,
-      reserve_native,
-      reserve_staked,
-      staking_pool.accounted_balance,
-      staking_pool.total_shares,
-    )?;
-    let native_liquidity = total_native
-      .checked_sub(stake_amount)
-      .ok_or(DispatchError::Other("CompoundAmountOverflow"))?;
-    if stake_amount.is_zero() || native_liquidity.is_zero() {
-      return Err(DispatchError::Other("CompoundAmountTooSmall"));
-    }
-    let staked_before = Self::asset_balance(staked_asset, account);
-    let lp_before =
-      <Runtime as pallet_asset_conversion::Config>::PoolAssets::balance(pool.lp_token, account);
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(error) =
-        crate::Staking::stake_native(RuntimeOrigin::signed(account.clone()), stake_amount)
-      {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-      }
-      let staked_after = Self::asset_balance(staked_asset, account);
-      let staked_liquidity = staked_after.saturating_sub(staked_before);
-      if staked_liquidity.is_zero() {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          DispatchError::Other("CompoundAmountTooSmall"),
-        ));
-      }
-      if let Err(error) = AssetConversion::add_liquidity(
-        RuntimeOrigin::signed(account.clone()),
-        Box::new(base_asset),
-        Box::new(staked_asset),
-        native_liquidity,
-        staked_liquidity,
-        1,
-        1,
-        account.clone(),
-      ) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-      }
-      let lp_after =
-        <Runtime as pallet_asset_conversion::Config>::PoolAssets::balance(pool.lp_token, account);
-      let lp_minted = lp_after.saturating_sub(lp_before);
-      if lp_minted.is_zero() {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          DispatchError::Other("CompoundLpNotMinted"),
-        ));
-      }
-      if let Err(error) = crate::Staking::lock_native_lp_for_collator(
-        RuntimeOrigin::signed(account.clone()),
-        pool.lp_token,
-        lp_minted,
-        operator.clone(),
-      ) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-      }
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(lp_minted))
     })
   }
 
@@ -796,7 +699,7 @@ impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
         return Err(router_adapter_failure(
           DispatchError::Other("Price deviation exceeded"),
           pallet_deos_router::RouterFailureClass::ProtectionRejected,
-          pallet_deos_router::RetryClass::RetryLater,
+          pallet_deos_router::RetryDisposition::RetryLater,
         ));
       }
     }
@@ -827,7 +730,7 @@ impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImp
           router_adapter_failure(
             DispatchError::Token(TokenError::FundsUnavailable),
             pallet_deos_router::RouterFailureClass::FeeRejected,
-            pallet_deos_router::RetryClass::RetryLater,
+            pallet_deos_router::RetryDisposition::RetryLater,
           )
         };
         match asset {

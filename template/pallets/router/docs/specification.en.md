@@ -259,12 +259,12 @@ The public error enum may retain finer variants. Every variant maps exhaustively
 Router execution preserves one internal typed value until the signed-dispatch boundary:
 
 ```rust
-pub enum RetryClass { Permanent, RetryLater }
+pub enum RetryDisposition { Permanent, RetryLater }
 
 pub struct AdapterFailure {
     dispatch_error: DispatchError,
     failure_class: FailureClass,
-    retry_class: RetryClass,
+    retry_disposition: RetryDisposition,
 }
 
 pub enum ExecutionError<T> {
@@ -273,7 +273,7 @@ pub enum ExecutionError<T> {
 }
 ```
 
-`ExecutionError::failure_class()` and `ExecutionError::retry_class()` delegate to the concrete Router variant or adapter value independently. Conversion to `DispatchError` occurs only in the signed extrinsic; pallet-to-pallet callers receive `ExecutionError`. Unknown external failures construct `AdapterFailure` with `InvariantViolation` and `Permanent`, never a temporary wildcard.
+`ExecutionError::failure_class()` and `ExecutionError::retry_disposition()` delegate to the concrete Router variant or adapter value independently. Conversion to `DispatchError` occurs only in the signed extrinsic; pallet-to-pallet callers receive `ExecutionError`. Unknown external failures construct `AdapterFailure` with `InvariantViolation` and `Permanent`, never a temporary wildcard.
 
 Quote-time and execution-time adapter failures use the same cause constructors. An adapter must select a typed cause before returning across the Router host boundary; Router and Actors do not reconstruct retry policy from an erased `DispatchError`.
 

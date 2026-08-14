@@ -151,7 +151,13 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<DomainId>
     domain: DomainId,
     payload_kind: pallet_governance::ProposalPayloadKind,
   ) -> pallet_governance::ProposalSubmissionAuthority {
-    if domain == 42 && payload_kind == pallet_governance::ProposalPayloadKind::L1RootAction {
+    if domain == 42
+      && matches!(
+        payload_kind,
+        pallet_governance::ProposalPayloadKind::L1RootAction
+          | pallet_governance::ProposalPayloadKind::Intent
+      )
+    {
       return pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned;
     }
     if domain == 44 && payload_kind == pallet_governance::ProposalPayloadKind::Intent {
@@ -179,18 +185,21 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, DomainI
 pub struct MockGovernanceBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_governance::BenchmarkHelper<AccountId, DomainId> for MockGovernanceBenchmarkHelper {
+impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256>
+  for MockGovernanceBenchmarkHelper
+{
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(DomainId, H256), polkadot_sdk::sp_runtime::DispatchError> {
     PROPOSAL_VOTE_WEIGHTS.with(|weights| {
       weights.borrow_mut().insert(*account, 1);
     });
+    set_payload_preimage_state(H256::default(), true, false);
     let _ =
       <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
         account, 100,
       );
-    Ok(42)
+    Ok((42, H256::default()))
   }
 }
 
@@ -234,7 +243,7 @@ impl pallet_governance::VetoVotePowerProvider<AccountId, DomainId, u32, Epoch>
 }
 
 pub struct MockProposalPayloadPreimageProvider;
-impl pallet_governance::ProposalPayloadPreimageProvider<H256>
+impl pallet_governance::ProposalPayloadPreimageProvider<H256, DomainId>
   for MockProposalPayloadPreimageProvider
 {
   fn have_preimage(hash: &H256) -> bool {
@@ -259,6 +268,20 @@ impl pallet_governance::ProposalPayloadPreimageProvider<H256>
 
   fn preimage_len(hash: &H256) -> Option<u32> {
     PAYLOAD_PREIMAGE_STATES.with(|states| states.borrow().get(hash).and_then(|state| state.2))
+  }
+
+  fn validate_for_submission(
+    _domain: DomainId,
+    _payload_kind: pallet_governance::ProposalPayloadKind,
+    hash: &H256,
+  ) -> Result<(), pallet_governance::ProposalPreimageAdmissionError> {
+    let state = PAYLOAD_PREIMAGE_STATES.with(|states| states.borrow().get(hash).copied());
+    match state {
+      Some((true, _, Some(length))) if length <= 256 => Ok(()),
+      Some((true, _, Some(_))) => Err(pallet_governance::ProposalPreimageAdmissionError::Oversized),
+      Some((true, _, None)) => Err(pallet_governance::ProposalPreimageAdmissionError::Invalid),
+      _ => Err(pallet_governance::ProposalPreimageAdmissionError::Missing),
+    }
   }
 }
 
@@ -341,6 +364,8 @@ impl pallet_governance::Config for Test {
   type MaxWinningVoteResolutionItemsPerEpoch = ConstU32<16>;
   type MaxWinningVoteAccountsPerCall = ConstU32<256>;
   type MaxActiveProposalsPerDomain = ConstU32<16>;
+  type StrategicProposalReserve = ConstU32<1>;
+  type MaxActiveProposalsPerAuthor = ConstU32<8>;
   type MaxMaturingProposalsPerEpoch = ConstU32<4>;
   type MaxPendingEnactmentsPerEpoch = ConstU32<4>;
   type ProposalVotingPeriod = ConstU64<2>;
@@ -350,11 +375,9 @@ impl pallet_governance::Config for Test {
   type ProposalEnactmentDelay = ProposalEnactmentDelay;
   type ProposalFastTrackPassThreshold = ProposalFastTrackPassThreshold;
   type ProposalApprovalThreshold = ProposalApprovalThreshold;
-  type ProposalApprovalCeiling = ProposalApprovalThreshold;
   type ProposalVetoThreshold = ProposalVetoThreshold;
   type ProposalVetoMinimumVetoTurnout = ProposalVetoMinimumVetoTurnout;
   type ProposalMinimumTurnout = ConstU64<2>;
-  type ProposalTurnoutCeiling = ConstU64<2>;
   type ProposalConfirmPeriod = ConstU64<0>;
   type FinalizedProposalOutcomeRetentionEpochs = ConstU32<3>;
   type MaxFinalizedProposalOutcomesPerEpoch = ConstU32<1024>;
@@ -373,7 +396,6 @@ impl pallet_governance::Config for Test {
   type VetoVotePowerProvider = MockVetoVotePowerProvider;
   type ProposalPayloadPreimageProvider = MockProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = MockProposalPayloadExecutor;
-  type WinningVoteRewardTouchHandler = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = MockGovernanceBenchmarkHelper;
   type WeightInfo = ();

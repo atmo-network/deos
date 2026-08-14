@@ -14,6 +14,7 @@ import type {
   GovernanceFinalizedProposalOutcome,
   GovernanceGovXpCounters,
   GovernanceItemId,
+  GovernanceParticipationCoefficient,
   GovernancePayloadHashPreimageStatus,
   GovernancePayloadPreimageNoteCost,
   GovernancePrimaryTrackOption,
@@ -33,7 +34,6 @@ import type {
   GovernanceProposalVoteTally,
   GovernanceProviderState,
   GovernanceRecentFinalizedProposal,
-  GovernanceRewardCoefficient,
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
@@ -370,9 +370,9 @@ function ratioString(numerator: bigint, denominator: bigint): string {
   return `${whole}.${fraction}`;
 }
 
-function rewardCoefficientForCounters(
+function governanceParticipationCoefficientForCounters(
   counters: GovernanceGovXpCounters,
-): GovernanceRewardCoefficient {
+): GovernanceParticipationCoefficient {
   return ratioString(
     BigInt(Math.min(counters.rollingWinningParticipation, 12)),
     12n,
@@ -455,7 +455,10 @@ function proposalSubmissionAuthority(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalSubmissionAuthority {
-  if (domainId === 0 && payloadKind === 'L1RootAction') {
+  if (
+    domainId === 0 &&
+    (payloadKind === 'L1RootAction' || payloadKind === 'Intent')
+  ) {
     return 'PrimaryEligibleSigned';
   }
   if (payloadKind === 'Intent') {
@@ -1345,12 +1348,14 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     );
   }
 
-  async getRewardCoefficient(
+  async getGovernanceParticipationCoefficient(
     domainId: GovernanceDomainId,
     accountId: GovernanceAccountId,
-  ): Promise<GovernanceRewardCoefficient | null> {
+  ): Promise<GovernanceParticipationCoefficient | null> {
     const counters = this.domain(domainId).govxpCounters[accountId];
-    return counters ? rewardCoefficientForCounters(counters) : null;
+    return counters
+      ? governanceParticipationCoefficientForCounters(counters)
+      : null;
   }
 
   async getGovXpCounters(

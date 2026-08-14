@@ -8,11 +8,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { analyzeActorProgram } from '../src/lib/automation/analysis.ts';
+import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import { createActorArtifactFromAuthoring } from '../src/lib/automation/authoring.ts';
+import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
-import { inspectActorPlanArtifact } from '../src/lib/automation/plan-artifact.ts';
 import { encodeActorRuntimeSimulationResult } from '../src/lib/automation/runtime-simulation-codec.ts';
 import { simulateActorLocally } from '../src/lib/automation/simulation.ts';
 
@@ -33,7 +33,7 @@ const feed = {
   aggregation: { type: 'Ema', halfLifeBlocks: 100 },
   scale: 12,
 };
-const canonicalProgram = {
+const canonicalContract = {
   actorType: 'User',
   mutability: 'Mutable',
   completionPolicy: 'CloseAfterProductiveCycle',
@@ -47,20 +47,28 @@ const canonicalProgram = {
   steps: [
     {
       key: 'one-shot-buy-bucket',
-      conditionSet: {
-        type: 'All',
-        conditions: [
-          {
-            type: 'ObservationBelow',
-            feed,
-            threshold: '1000000000000',
-            maxAgeBlocks: 12,
-          },
-          {
-            type: 'BalanceAbove',
-            asset: native,
-            threshold: '99',
-          },
+      preconditions: {
+        type: 'AnyOf',
+        clauses: [
+          [
+            {
+              timing: 'Opening',
+              predicate: {
+                type: 'ObservationBelow',
+                feed,
+                threshold: '1000000000000',
+                maxAgeBlocks: 12,
+              },
+            },
+            {
+              timing: 'Current',
+              predicate: {
+                type: 'BalanceAbove',
+                asset: native,
+                threshold: '99',
+              },
+            },
+          ],
         ],
       },
       task: {
@@ -75,7 +83,7 @@ const canonicalProgram = {
   ],
 };
 const artifact = createActorArtifactFromAuthoring({
-  program: canonicalProgram,
+  contract: canonicalContract,
   metadataBytes,
   runtime,
 });
@@ -104,9 +112,9 @@ const weightModel = {
 function localStep() {
   return {
     stepIndex: 0,
-    conditionSet: canonicalProgram.steps[0].conditionSet,
+    preconditions: canonicalContract.steps[0].preconditions,
     taskControl: 'Execute',
-    onError: canonicalProgram.steps[0].errorPolicy,
+    onError: canonicalContract.steps[0].errorPolicy,
   };
 }
 
@@ -136,12 +144,16 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   assert.deepEqual(
     artifact,
     createActorArtifactFromAuthoring({
-      program: structuredClone(canonicalProgram),
+      contract: structuredClone(canonicalContract),
       metadataBytes,
       runtime,
     }),
   );
-  const inspection = inspectActorPlanArtifact(artifact, metadataBytes, runtime);
+  const inspection = inspectActorContractArtifact(
+    artifact,
+    metadataBytes,
+    runtime,
+  );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
   assert.equal(
@@ -149,34 +161,36 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
     'OnObservationChange',
   );
   assert.deepEqual(
-    inspection.projection.value.execution_plan[0].conditions.value.map(
-      (condition) => condition.type,
-    ),
-    ['ObservationBelow', 'BalanceAbove'],
+    inspection.projection.value.steps[0].preconditions.value[0].map((timed) => [
+      timed.timing.type,
+      timed.predicate.type,
+    ]),
+    [
+      ['Opening', 'ObservationBelow'],
+      ['Current', 'BalanceAbove'],
+    ],
   );
+  assert.equal(inspection.projection.value.steps[0].task.type, 'SwapIn');
   assert.equal(
-    inspection.projection.value.execution_plan[0].task.type,
-    'SwapIn',
-  );
-  assert.equal(
-    inspection.projection.value.execution_plan[0].on_error.type,
+    inspection.projection.value.steps[0].on_error.type,
     'RetryLater',
   );
   assert.equal(
-    inspection.projection.value.completion_policy.type,
+    inspection.projection.value.completion.type,
     'CloseAfterProductiveCycle',
   );
 
-  const analysis = analyzeActorProgram({
+  const analysis = analyzeActorContract({
     artifact,
     metadataBytes,
     runtime: { ...runtime, modelIdentity: 'reactive-authoring-fixture' },
     weightModel,
   });
-  assert.equal(analysis.identity.planId, artifact.planId);
+  assert.equal(analysis.identity.contractId, artifact.contractId);
   assert.equal(analysis.trigger.sourceKinds[0], 'ObservationChange');
-  assert.equal(analysis.steps[0].conditionSet.mode, 'All');
-  assert.equal(analysis.steps[0].conditionSet.atomicCount, 2);
+  assert.equal(analysis.steps[0].preconditions.mode, 'AnyOf');
+  assert.equal(analysis.steps[0].preconditions.clauseCount, 1);
+  assert.equal(analysis.steps[0].preconditions.atomicCount, 2);
   assert.equal(analysis.steps[0].task, 'SwapIn');
   assert.equal(analysis.steps[0].errorPolicy, 'RetryLater');
   assert.equal(analysis.steps[0].retryMaxAttempts, 3);
@@ -184,33 +198,27 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
 });
 
 test('reactive strategy preserves topology under persistent lifecycle policy', () => {
-  const persistentProgram = structuredClone(canonicalProgram);
-  persistentProgram.completionPolicy = 'Persistent';
+  const persistentContract = structuredClone(canonicalContract);
+  persistentContract.completionPolicy = 'Persistent';
   const persistentArtifact = createActorArtifactFromAuthoring({
-    program: persistentProgram,
+    contract: persistentContract,
     metadataBytes,
     runtime,
   });
-  const inspection = inspectActorPlanArtifact(
+  const inspection = inspectActorContractArtifact(
     persistentArtifact,
     metadataBytes,
     runtime,
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(
-    inspection.projection.value.completion_policy.type,
-    'Persistent',
-  );
+  assert.equal(inspection.projection.value.completion.type, 'Persistent');
   assert.equal(
     inspection.projection.value.schedule.trigger.value.sources[0].type,
     'OnObservationChange',
   );
-  assert.equal(
-    inspection.projection.value.execution_plan[0].task.type,
-    'SwapIn',
-  );
-  assert.notEqual(persistentArtifact.planId, artifact.planId);
+  assert.equal(inspection.projection.value.steps[0].task.type, 'SwapIn');
+  assert.notEqual(persistentArtifact.contractId, artifact.contractId);
 });
 
 test('canonical reactive artifact composes without runtime bucket policy', () => {
@@ -220,7 +228,7 @@ test('canonical reactive artifact composes without runtime bucket policy', () =>
     runtime,
     target: { type: 'Create' },
   });
-  assert.equal(composition.planId, artifact.planId);
+  assert.equal(composition.contractId, artifact.contractId);
   assert.equal(composition.authority.requiredOrigin, 'OwnerSigned');
   assert.equal(composition.preimage.governanceAdmission, 'DirectCallOnly');
   assert.equal(composition.call.method, 'create_user_actor');
@@ -241,7 +249,8 @@ test('local projection preserves one-shot readiness, retry, and productive closu
   };
   const notReady = simulateActorLocally({
     ...base,
-    evaluateCondition(condition, state) {
+    evaluateCondition(timed, state) {
+      const condition = timed.predicate;
       if (condition.type === 'ObservationBelow') {
         return { kind: 'Value', value: false };
       }
@@ -322,7 +331,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
       ],
     },
   });
-  let requestedPlanId = null;
+  let requestedContractId = null;
   const response = await runActorMatchingWasmSimulation({
     artifact,
     actorId: 9n,
@@ -336,11 +345,11 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
       stateRoot: `0x${'33'.repeat(32)}`,
       stateSource: 'FinalizedBlock',
     },
-    runtimeApi: 'ActorSimulationApi_simulate_current_program',
+    runtimeApi: 'ActorSimulationApi_simulate_current_contract',
     runtimeApiVersion: 1,
     provider: {
       async simulate(request) {
-        requestedPlanId = request.pin.planId;
+        requestedContractId = request.pin.contractId;
         return {
           engine: 'RuntimeWasm',
           pin: request.pin,
@@ -349,7 +358,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
       },
     },
   });
-  assert.equal(requestedPlanId, artifact.planId);
+  assert.equal(requestedContractId, artifact.contractId);
   assert.equal(response.outcome.status, 'Closed');
   assert.equal(response.outcome.closeReason, 'ProductiveCycleCompleted');
 });

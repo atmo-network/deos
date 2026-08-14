@@ -63,13 +63,13 @@ Funding uses ordinary inbound transfers rather than a dedicated value-transfer c
 
 ## Verifiable Straight-Line Composition
 
-Each plan remains an ordered list of typed steps. A step uses exactly one non-nested `ConditionSet`: `Always`, non-empty `All`, or non-empty `Any`. Every atomic condition is observed, any atomic error fails the whole group, and a false group only advances to the next fixed step. Typed observation atoms compare only Fresh scalar values through a generic provider; unavailable, uninitialized, or stale state remains an ordinary false condition. These aggregates do not introduce branches, jumps, loops, callbacks, arbitrary calls, or graph-authored successors. Authoring preserves the complete directional feed identity, raw scalar threshold, and nonzero maximum age; the Rust-generated manifest pins all ten condition variants to exact SCALE indices `0..9`, and static analysis fails closed on identity or ordering drift.
+Each plan remains an ordered list of typed steps. A step uses `Preconditions::Unconditional` or bounded `AnyOf` DNF: outer clauses compose with OR and timed predicates inside each clause compose with AND. Every admitted predicate is visited, any predicate error fails the whole expression, and false preconditions only advance to the next fixed step. `Opening` results freeze for the logical cycle and survive Continuation; `Current` reads run immediately before the step and observe successful earlier effects. No precondition introduces jumps, loops, callbacks, arbitrary calls, or authored successors.
 
 Fieldless `StopCycle` provides one explicit successful terminal operation after condition evaluation and ordinary User fee collection. It commits no task-local economic effect and leaves the suffix unreachable. Its pre-execution failures still obey `on_error`: `ContinueNextStep` can bypass the intended stop, execute the suffix, and later reach ordinary success, so authoring and analysis expose that fall-through.
 
-An Active program chooses `Persistent` or `CloseAfterProductiveCycle`. The latter closes only after successful logical-cycle completion with at least one committed effectful task, including a committed prefix resumed through Continuation. False latest-state conditions, skips, rolled-back failures, suspension, abort, retry exhaustion, and bare `StopCycle` leave the one-shot policy unconsumed.
+An Active Actor Contract chooses `Persistent` or `CloseAfterProductiveCycle`. The latter closes only after successful logical-cycle completion with at least one committed effectful task, including a committed prefix resumed through Continuation. False latest-state conditions, skips, rolled-back failures, suspension, abort, retry exhaustion, and bare `StopCycle` leave the one-shot policy unconsumed.
 
-Canonical SCALE `ProgramInput` remains the source of truth across metadata-bound authoring, structural diff, static analysis, simulation, and governance composition. Visual blocks or neural proposals may project or propose this finite AST, but deterministic validation, human approval, encoding, and runtime execution stay authoritative.
+Canonical SCALE `ContractInput` remains the source of truth across metadata-bound authoring, structural diff, static analysis, simulation, and governance composition. Visual blocks or neural proposals may project or propose this finite AST, but deterministic validation, human approval, encoding, and runtime execution stay authoritative.
 
 The control-plane corpus models descending buy and ascending sell buckets as independent bounded one-shot actors over directional local-pool observations. It does not mislabel those price feeds as treasury reserve ratios or absolute liquidity depth: only the manual execution cores exist for those reactions until typed producers and meanings ship. A block-height release demonstrates an available non-price scalar strategy using runtime-owned current block truth.
 
@@ -103,7 +103,7 @@ External runtimes can reuse `pallet-deos-actor` without inheriting the DEOS/TMCT
 
 The independent `template/pallets/actors/embedding-runtime` external-consumer fixture makes this boundary executable. It starts with zero System Actors, uses local account/asset types and smaller scheduler pages, and proves direct Executive ingress, fresh-genesis integrity, deterministic unsupported adapters, User/System Continuation, User exact-output swaps, System-only minting, try-state, and no-std operation. It is portability evidence, not a second product or prescribed topology.
 
-The `0.7.4` line keeps the unlaunched reference chain at fresh-baseline storage version `1`; it ships no historical migration. The independent embedding gate executes `Always → All → Any`, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
+The unlaunched reference chain keeps fresh-baseline storage version `1` and ships no historical migration. The independent embedding gate executes `Unconditional`, bounded DNF, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
 
 The DEOS reference runtime also owns `LpPairByTokenId` outside generic Actors, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded. Both authored minimum outputs reach Asset Conversion directly; an outer transactional balance-delta check remains as defense in depth.
 
@@ -111,7 +111,7 @@ The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fai
 
 ## Control-Plane Boundary
 
-Off-chain tooling binds an executable plan to genesis hash, runtime versions, metadata hash, actor type, mutability, and exact `ProgramInput` SCALE bytes. Human JSON is a lossless projection, not runtime truth. A deterministic `planId` supports review and correlation while metadata changes require explicit decode, validation, and re-encoding.
+Off-chain tooling binds an executable plan to genesis hash, runtime versions, metadata hash, actor type, mutability, and exact `ContractInput` SCALE bytes. Human JSON is a lossless projection, not runtime truth. A deterministic `contractId` supports review and correlation while metadata changes require explicit decode, validation, and re-encoding.
 
 Plan diffs, forecasts, simulations, governance composition, and long configuration/cycle history remain local or materialized surfaces. They carry block, metadata, and model provenance and never expand consensus state or authorize signing implicitly.
 
@@ -132,7 +132,7 @@ This keeps Actors useful outside one tokenomic configuration.
 
 On the current reference line, Actors is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with an explicit schedule, cycle plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
+The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active Actor Contracts at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These contracts react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-contract input with an explicit schedule, cycle plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
 Actors does not replace TMC, DEOS Router, DEOS Staking, or DEOS Governance. Those subsystems own math and domain rules. Actors gives them a deterministic way to be orchestrated together.
 

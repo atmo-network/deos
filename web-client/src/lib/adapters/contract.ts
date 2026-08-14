@@ -89,10 +89,11 @@ export type MarketAdapter = {
 };
 
 export type StakingAdapter = {
-  claimNominationReward?(epoch: number): void | Promise<void>;
-  claimAndCompoundNominationReward?(
+  claimNativeSecurityReward?(epoch: number): void | Promise<void>;
+  claimAndCompoundNativeSecurityReward?(
     epoch: number,
     operator: string,
+    minLpOut: bigint,
   ): void | Promise<void>;
   lockNativeLpForCollator?(
     amount: bigint,
@@ -134,9 +135,6 @@ export type StakingAdapter = {
     | NativeGovernanceCustodyPositionProjection
     | null
     | Promise<NativeGovernanceCustodyPositionProjection | null>;
-  getNativeNominationRewardClaimable?(
-    epoch: number,
-  ): bigint | null | Promise<bigint | null>;
 };
 
 export type LogFeedAdapter = {

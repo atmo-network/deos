@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Staking
-summary: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts. The Phase 1 launch line enables liquid `$NTVE -> stNTVE` accounting but keeps user LP nomination and claimable nomination rewards inactive; those belong to an explicit Phase 2 runtime-upgrade boundary.
+summary: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts and a session-native LP security snapshot. Phase 1 keeps LP-backed selection and native reward settlement inactive behind an explicit runtime-upgrade boundary.
 locale: en
 canonical_page_id: staking
 translation_status: source
@@ -23,7 +23,7 @@ related:
   - Routing and Minting Loop
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-07-28
+last_compiled: 2026-08-13
 confidence: 0.85
 ---
 
@@ -31,7 +31,7 @@ confidence: 0.85
 
 ## Summary
 
-DEOS staking is a multi-asset share-vault system. Each registered staking asset has a pool, deterministic accounts, and share/receipt accounting so backing can rise without writing rewards to every holder.
+DEOS staking is a multi-asset share-vault system. Each registered staking asset has one deterministic pool account and share/receipt accounting so backing can rise without writing rewards to every holder.
 
 The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The Phase 1 launch line uses trusted permissioned collators and keeps user LP nomination and claimable nomination rewards inactive. Phase 2 may use locked `NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
 
@@ -42,7 +42,7 @@ For each staking asset, the system keeps:
 - One deterministic pool account
 - One pool state object
 - Transferable receipt supply when a `stXXX` asset exists
-- Bounded read surfaces for exchange rate, account value, and reward claimability
+- Bounded read surfaces for exchange rate, account value, custody, security mode, readiness, and session identity
 
 Ownership is represented by shares. Pool inflows increase what each share is worth instead of forcing a fan-out write across every user account.
 
@@ -90,22 +90,18 @@ The same native value surface can also be locked for governance-only `NativeVote
 
 ## Phase 2 Native Nomination Rewards
 
-The specification reserves native-specific claim paths for Phase 2. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through the non-native auto-compound path.
+The runtime currently freezes one atomic session-native eligibility snapshot containing bounded participants, candidate-eligible operators, conservative LP values, governance coefficients, account weights, and the total denominator. Funding, liabilities, retention, claims, expiry, and compound settlement remain unavailable until their complete bounded Phase 2 contract ships.
 
-The implemented settlement surface includes:
-
-- `claim_nomination_reward(epoch)` for liquid `$NTVE` payout
-- `claim_and_compound_nomination_reward(epoch, operator)` for turning payout into locked LP
-- `claim_nomination_reward_batch(epochs)` for bounded multi-epoch native claims
+The legacy generic block-based reward engine, rollover cursor, reward-account inference, bootstrap call, and claim surfaces are absent.
 
 ## Relationship to Governance Rewards
 
 Staking and governance remain separate subsystems:
 
-- Staking owns pool math, receipts, locked LP custody, reward snapshots, and settlement
+- Staking owns pool math, receipts, locked LP custody, and session security snapshots
 - Governance owns bounded participation memory, vote-power policy, execution state, and exported reward coefficients
 
-For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Current recognition uses bounded current-block event ingress with explicit scan and Weight budgets; truncation makes the epoch unclaimable, and this path never claims historical replay. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
+Generic non-native share-vault yield remains receipt appreciation after direct backing inflow and `sync_pool`; it creates no reward pot, liability, claim, or event-ingress dependency. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
 
 ## Related
 

@@ -38,6 +38,7 @@ reject_pattern() {
 check_canonical_ingress() {
     local governance_config="$TEMPLATE_DIR/runtime/src/configs/governance_config.rs"
     local governance_lib="$TEMPLATE_DIR/pallets/governance/src/lib.rs"
+    local governance_admission="$TEMPLATE_DIR/pallets/governance/src/epoch_service.rs"
     require_anchor \
         'ProposalSubmissionAuthority::PrimaryEligibleSigned' \
         "$governance_config" \
@@ -52,8 +53,8 @@ check_canonical_ingress() {
         "ineligible signed submission has a typed failure"
     require_anchor \
         'T::ProposalSubmissionEligibilityProvider::has_primary_governance_power' \
-        "$governance_lib" \
-        "eligibility is enforced by the pallet before proposal mutation"
+        "$governance_admission" \
+        "eligibility is enforced by the pallet admission classifier before proposal mutation"
     require_anchor \
         'RuntimeCall::System\(frame_system::Call::authorize_upgrade' \
         "$governance_config" \

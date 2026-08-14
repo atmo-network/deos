@@ -60,29 +60,29 @@ test('fresh System reattachment accepts a custody locator rather than an actor i
   );
 });
 
-test('ProgramInput delegates one canonical ActiveProgramInput shape', () => {
-  const programInput = graphNode('pallet_deos_actors::types::ProgramInput');
-  const activeProgram = graphNode(
-    'pallet_deos_actors::types::ActiveProgramInput',
+test('ContractInput delegates one canonical ActiveContractInput shape', () => {
+  const contractInput = graphNode('pallet_deos_actors::types::ContractInput');
+  const activeContract = graphNode(
+    'pallet_deos_actors::types::ActiveContractInput',
   );
-  assert(programInput, 'ProgramInput must remain public Actors metadata');
+  assert(contractInput, 'ContractInput must remain public Actors metadata');
   assert(
-    activeProgram,
-    'ActiveProgramInput must remain public Actors metadata',
+    activeContract,
+    'ActiveContractInput must remain public Actors metadata',
   );
-  const active = programInput.def.value.find(
+  const active = contractInput.def.value.find(
     (variant) => variant.name === 'Active',
   );
   assert.equal(active?.fields.length, 1);
-  assert.equal(active?.fields[0]?.type, activeProgram.id);
+  assert.equal(active?.fields[0]?.type, activeContract.id);
   assert.deepEqual(
-    activeProgram.def.value.map((field) => field.name),
+    activeContract.def.value.map((field) => field.name),
     [
       'schedule',
       'schedule_window',
-      'execution_plan',
-      'completion_policy',
-      'funding_source_policy',
+      'steps',
+      'funding',
+      'completion',
       'auto_close_at_cycle_nonce',
     ],
   );

@@ -4,27 +4,120 @@ use frame::prelude::*;
 use polkadot_sdk::frame_support::transactional;
 use polkadot_sdk::sp_runtime::traits::SaturatedConversion;
 
+pub(crate) struct ProposalAdmission<Epoch, Balance> {
+  pub active_count_after: u32,
+  pub maturity_epoch: Epoch,
+  pub opening_fee: Option<Balance>,
+}
+
 impl<T: Config> Pallet<T> {
+  pub(crate) fn proposal_admission_policy(
+    domain: T::DomainId,
+    payload_kind: ProposalPayloadKind,
+  ) -> ProposalAdmissionPolicyView<BalanceOf<T>> {
+    let authority = T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind);
+    let capacity_lane = if payload_kind == ProposalPayloadKind::L1RootAction
+      && authority == ProposalSubmissionAuthority::PrimaryEligibleSigned
+    {
+      ProposalCapacityLane::Strategic
+    } else {
+      ProposalCapacityLane::General
+    };
+    let maximum = T::MaxActiveProposalsPerDomain::get();
+    ProposalAdmissionPolicyView {
+      authority,
+      capacity_lane,
+      capacity_limit: match capacity_lane {
+        ProposalCapacityLane::Strategic => maximum,
+        ProposalCapacityLane::General => maximum.saturating_sub(T::StrategicProposalReserve::get()),
+      },
+      author_limit: T::MaxActiveProposalsPerAuthor::get(),
+      signed_preimage_required: authority != ProposalSubmissionAuthority::AdminOnly,
+      opening_fee: (authority != ProposalSubmissionAuthority::AdminOnly)
+        .then(T::ProposalOpeningFee::get),
+    }
+  }
+
+  fn active_proposal_count_for_author(
+    domain: T::DomainId,
+    proposer: &T::AccountId,
+  ) -> Result<u32, DispatchError> {
+    ActiveProposalIdsByDomain::<T>::get(domain)
+      .iter() // deos-bypass: bounded-iter — MaxActiveProposalsPerDomain ids
+      .try_fold(0u32, |count, item_id| {
+        let author = ProposalAuthorsByItem::<T>::get(domain, item_id)
+          .ok_or(Error::<T>::ActiveProposalAuthorMissing)?;
+        Ok(count.saturating_add(u32::from(author == *proposer)))
+      })
+  }
+
+  pub(crate) fn classify_proposal_admission(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    proposer: &T::AccountId,
+    payload_kind: ProposalPayloadKind,
+    payload_hash: &T::Hash,
+    signed: bool,
+  ) -> Result<ProposalAdmission<T::Epoch, BalanceOf<T>>, DispatchError> {
+    let policy = Self::proposal_admission_policy(domain, payload_kind);
+    if signed {
+      ensure!(
+        policy.authority != ProposalSubmissionAuthority::AdminOnly,
+        Error::<T>::ProposalSubmissionNotAllowedForSignedOrigin
+      );
+      if policy.authority == ProposalSubmissionAuthority::PrimaryEligibleSigned {
+        ensure!(
+          T::ProposalSubmissionEligibilityProvider::has_primary_governance_power(domain, proposer,),
+          Error::<T>::ProposalSubmitterNotPrimaryEligible
+        );
+      }
+      T::ProposalPayloadPreimageProvider::validate_for_submission(
+        domain,
+        payload_kind,
+        payload_hash,
+      )
+      .map_err(|error| match error {
+        ProposalPreimageAdmissionError::Missing => Error::<T>::ProposalPreimageMissing,
+        ProposalPreimageAdmissionError::Oversized => Error::<T>::ProposalPreimageOversized,
+        ProposalPreimageAdmissionError::Invalid => Error::<T>::ProposalPreimageInvalid,
+        ProposalPreimageAdmissionError::Incompatible => Error::<T>::ProposalPreimageIncompatible,
+      })?;
+    }
+    ensure!(
+      !ActiveProposals::<T>::contains_key(domain, item_id),
+      Error::<T>::ProposalAlreadyActive
+    );
+    let active_count = ActiveProposalCounts::<T>::get(domain);
+    ensure!(
+      active_count < policy.capacity_limit,
+      Error::<T>::ActiveProposalCapReached
+    );
+    ensure!(
+      Self::active_proposal_count_for_author(domain, proposer)?
+        < T::MaxActiveProposalsPerAuthor::get(),
+      Error::<T>::ActiveProposalAuthorCapReached
+    );
+    let maturity_epoch = Self::proposal_maturity_epoch(T::EpochProvider::current_epoch())?;
+    Self::ensure_proposal_maturity_capacity(maturity_epoch, domain, item_id)?;
+    Ok(ProposalAdmission {
+      active_count_after: active_count.saturating_add(1),
+      maturity_epoch,
+      opening_fee: signed.then_some(policy.opening_fee).flatten(),
+    })
+  }
+
+  #[transactional]
   pub fn submit_active_proposal(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     proposer: T::AccountId,
     metadata: ProposalMetadata<T::Hash>,
+    admission: ProposalAdmission<T::Epoch, BalanceOf<T>>,
   ) -> DispatchResult {
     let current_epoch = T::EpochProvider::current_epoch();
-    let maturity_epoch = Self::proposal_maturity_epoch(current_epoch)?;
-    let active_count = ActiveProposalCounts::<T>::try_mutate(domain, |active_count| {
-      ensure!(
-        !ActiveProposals::<T>::contains_key(domain, item_id),
-        Error::<T>::ProposalAlreadyActive
-      );
-      ensure!(
-        *active_count < T::MaxActiveProposalsPerDomain::get(),
-        Error::<T>::ActiveProposalCapReached
-      );
-      *active_count = active_count.saturating_add(1);
-      Ok::<u32, DispatchError>(*active_count)
-    })?;
+    let maturity_epoch = admission.maturity_epoch;
+    let active_count = admission.active_count_after;
+    ActiveProposalCounts::<T>::insert(domain, active_count);
     ActiveProposals::<T>::insert(
       domain,
       item_id,
@@ -152,6 +245,22 @@ impl<T: Config> Pallet<T> {
       effective_primary_close_epoch,
       pending_enactment_epoch,
     })
+  }
+
+  fn ensure_proposal_maturity_capacity(
+    maturity_epoch: T::Epoch,
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) -> DispatchResult {
+    let bucket = ProposalMaturityBuckets::<T>::get(maturity_epoch);
+    let exists = bucket
+      .iter() // deos-bypass: bounded-iter — MaxMaturitiesPerEpoch bucket
+      .any(|entry| entry.domain == domain && entry.item_id == item_id);
+    ensure!(
+      exists || (bucket.len() as u32) < T::MaxMaturingProposalsPerEpoch::get(),
+      Error::<T>::ProposalMaturityBucketFull
+    );
+    Ok(())
   }
 
   pub(crate) fn schedule_proposal_maturity_at(
@@ -463,7 +572,6 @@ impl<T: Config> Pallet<T> {
             false
           });
         if evicted {
-          T::WinningVoteRewardTouchHandler::note_winning_vote_evicted(touch.domain, &touch.account);
           Self::deposit_event(Event::WinningVoteWindowEvicted {
             domain: touch.domain,
             account: touch.account,

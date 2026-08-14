@@ -24,8 +24,8 @@ Plan/read-only tooling for the canonical local NTVE/stNTVE staking-pool bootstra
 It never signs or submits transactions.
 
 Subcommands:
-  check            Check staking assets, native pool, AMM liquidity, and staking Liquidity Actor readiness
-  prepare-calls    Emit the next Root/governance or signed operator call data needed for bootstrap
+  check            Check security mode, staking assets, native pool, AMM liquidity, and staking Liquidity Actor readiness
+  prepare-calls    Emit the next Root/governance or signed operator pool-bootstrap call data
 
 Options:
   --ws URI                  WebSocket endpoint (default: ws://127.0.0.1:9988)
@@ -253,6 +253,7 @@ async function encoded(label, authority, tx, params) {
 }
 
 function checkPhase(checks) {
+  if (!checks.securityModeKnown) return "unknown-native-security-mode";
   if (!checks.nativeAssetExists || !checks.stakedAssetExists || !checks.exchangeRateAvailable) return "missing-staking-assets";
   if (!checks.nativeStakingPoolExists) return "missing-ntve-stntve-pool";
   if (!checks.nativeStakingPoolHasLiquidity) return "empty-ntve-stntve-pool";
@@ -262,6 +263,7 @@ function checkPhase(checks) {
 
 function checkRecommendation(phase) {
   switch (phase) {
+    case "unknown-native-security-mode": return "Use matching runtime metadata before classifying native-security readiness";
     case "missing-staking-assets": return "Regenerate the chain spec with current presets or run staking asset registration before creating the pool";
     case "missing-ntve-stntve-pool": return "Create the canonical Local(NTVE)/Local(stNTVE) Asset Conversion pool";
     case "empty-ntve-stntve-pool": return "Seed balanced initial NTVE/stNTVE liquidity before enabling dependent flows";
@@ -295,17 +297,26 @@ try {
   const block = await client.getFinalizedBlock();
   const nativeAssetDetails = await api.view.Assets.asset_details(nativeAssetId, { at: block.hash });
   const stakedAssetDetails = await api.view.Assets.asset_details(stakedNativeAssetId, { at: block.hash });
-  const exchangeRate = await api.view.Staking.native_staking_exchange_rate({ at: block.hash });
-  const pool = await api.view.Staking.native_staking_liquidity_pool({ at: block.hash });
+  const [securityMode, securityCapabilities, securityReadiness, securityEpoch, boundaryDiagnostic, exchangeRate, pool] = await Promise.all([
+    api.view.Staking.native_security_mode({ at: block.hash }),
+    api.view.Staking.native_security_capabilities({ at: block.hash }),
+    api.view.Staking.native_security_readiness({ at: block.hash }),
+    api.view.Staking.current_security_epoch({ at: block.hash }),
+    api.query.Staking.LastNativeSecurityBoundaryDiagnostic.getValue({ at: block.hash }),
+    api.view.Staking.native_staking_exchange_rate({ at: block.hash }),
+    api.view.Staking.native_staking_liquidity_pool({ at: block.hash }),
+  ]);
   if (mode === "check") {
     const [stakingLiquidityHot, stakingLiquidityProgram] = await Promise.all([
       api.query.Actors.ActorHot.getValue(actorId, { at: block.hash }),
-      api.query.Actors.ActorProgram.getValue(actorId, { at: block.hash }),
+      api.query.Actors.ActorContract.getValue(actorId, { at: block.hash }),
     ]);
     const stakingLiquidityActor = stakingLiquidityHot != null && stakingLiquidityProgram != null
       ? { hot: stakingLiquidityHot, program: stakingLiquidityProgram }
       : null;
     const checks = {
+      securityModeKnown: securityMode?.type === "TrustedSet" || securityMode?.type === "LpBackedSelection",
+      lpBackedSelectionActive: securityMode?.type === "LpBackedSelection",
       nativeAssetExists: nativeAssetDetails != null,
       stakedAssetExists: stakedAssetDetails != null,
       exchangeRateAvailable: exchangeRate != null,
@@ -314,12 +325,12 @@ try {
       stakingLiquidityActorExists: stakingLiquidityActor != null,
     };
     const phase = checkPhase(checks);
-    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, actorId: Number(actorId), phase, recommendedAction: checkRecommendation(phase), checks, exchangeRate, pool, stakingLiquidityActor };
+    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, actorId: Number(actorId), phase, recommendedAction: checkRecommendation(phase), securityMode, securityCapabilities, securityReadiness, securityEpoch, boundaryDiagnostic, checks, exchangeRate, pool, stakingLiquidityActor };
     if (jsonOutput) console.log(stringify(payload));
     else {
       console.log(`Phase: ${payload.phase}`);
       console.log(`Recommended action: ${payload.recommendedAction}`);
-      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, actorId: payload.actorId, checks, exchangeRate, pool, stakingLiquidityActor }));
+      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, actorId: payload.actorId, securityMode, securityCapabilities, securityReadiness, securityEpoch, boundaryDiagnostic, checks, exchangeRate, pool, stakingLiquidityActor }));
     }
   } else {
     const operatorStakedBalance = await api.view.Assets.balance_of(operatorAddress, stakedNativeAssetId, { at: block.hash }) ?? 0n;
@@ -355,13 +366,13 @@ try {
       }));
     }
     const phase = preparePhase(checks);
-    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, operatorAddress, requestedAmounts: { stakeAmount, liquidityNative, liquidityStaked, minNative, minStaked }, phase, recommendedAction: prepareRecommendation(phase), checks, exchangeRate, pool, operatorStakedBalance, calls, submissionPolicy: "Plan-only: submit emitted calls through the stated authority; this helper never signs or submits" };
+    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, operatorAddress, requestedAmounts: { stakeAmount, liquidityNative, liquidityStaked, minNative, minStaked }, phase, recommendedAction: prepareRecommendation(phase), securityMode, securityCapabilities, securityReadiness, securityEpoch, boundaryDiagnostic, checks, exchangeRate, pool, operatorStakedBalance, calls, submissionPolicy: "Plan-only: submit emitted calls through the stated authority; this helper never signs or submits. LP-backed security actions require the reported runtime capability and are not synthesized here" };
     if (jsonOutput) console.log(stringify(payload));
     else {
       console.log(`Phase: ${payload.phase}`);
       console.log(`Recommended action: ${payload.recommendedAction}`);
       console.log(`Submission policy: ${payload.submissionPolicy}`);
-      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, operatorAddress, checks, exchangeRate, pool, operatorStakedBalance, calls }));
+      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, operatorAddress, securityMode, securityCapabilities, securityReadiness, securityEpoch, boundaryDiagnostic, checks, exchangeRate, pool, operatorStakedBalance, calls }));
     }
   }
 } finally {

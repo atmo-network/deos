@@ -598,8 +598,8 @@
         "subscriberPageReachable",
         "boundedWork"
       ],
-      "expectedWeightClass": "Actors::set_program",
-      "rollbackBoundary": "ProgramReplacementTransaction",
+      "expectedWeightClass": "Actors::set_contract",
+      "rollbackBoundary": "ContractReplacementTransaction",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
       "executionAnchor": {
         "path": "template/pallets/actors/src/tests.rs",
@@ -642,8 +642,8 @@
         "subscriberPageReachable",
         "boundedWork"
       ],
-      "expectedWeightClass": "Actors::set_program",
-      "rollbackBoundary": "ProgramReplacementTransaction",
+      "expectedWeightClass": "Actors::set_contract",
+      "rollbackBoundary": "ContractReplacementTransaction",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
       "executionAnchor": {
         "path": "template/pallets/actors/src/tests.rs",

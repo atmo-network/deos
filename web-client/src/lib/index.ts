@@ -92,7 +92,7 @@ export type {
   GovernanceQuerySurfaceKind,
   GovernanceReadAdapter,
   GovernanceRecentFinalizedProposal,
-  GovernanceRewardCoefficient,
+  GovernanceParticipationCoefficient,
   GovernanceVetoCancellationMode,
   GovernanceViewerState,
   GovernanceVoteKind,
@@ -130,7 +130,7 @@ export {
 export * from './automation/forecast';
 export * from './automation/governance-composition';
 export * from './automation/matching-wasm';
-export * from './automation/plan-artifact';
+export * from './automation/contract-artifact';
 export * from './automation/runtime-simulation-codec';
 export * from './automation/simulation';
 export * from './automation/types';

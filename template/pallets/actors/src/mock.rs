@@ -1066,6 +1066,9 @@ impl pallet_deos_actors::Config for Test {
   type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<10>;
   type MaxOpeningSnapshotEntries = ConstU32<16>;
+  type MaxOpeningPredicateResults = ConstU32<32>;
+  type MaxPreconditionClauses = ConstU32<4>;
+  type MaxPredicatesPerClause = ConstU32<4>;
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<255>;
   type MaxExecutionsPerBlock = ConstU32<3>;

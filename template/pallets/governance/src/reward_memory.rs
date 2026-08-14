@@ -53,7 +53,10 @@ impl<T: Config> Pallet<T> {
     Self::ingest_winning_vote_resolution_batch_internal(domain, item_id, accounts, true)
   }
 
-  pub(crate) fn do_reward_coefficient(domain: T::DomainId, account: &T::AccountId) -> FixedU128 {
+  pub(crate) fn do_governance_participation_coefficient(
+    domain: T::DomainId,
+    account: &T::AccountId,
+  ) -> FixedU128 {
     let Some(mut window) = WinningVoteWindows::<T>::get(domain, account) else {
       return FixedU128::from_inner(0);
     };
@@ -194,7 +197,6 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })?;
     Self::schedule_expiry(domain, &account, current_epoch)?;
-    T::WinningVoteRewardTouchHandler::note_winning_vote_recorded(domain, &account);
     Self::deposit_event(Event::WinningVoteRecorded {
       domain,
       item_id,

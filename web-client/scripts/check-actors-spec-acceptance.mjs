@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ACCEPTED_SPEC_SHA256 =
-  '38a934a30f7eee3eae70cc4a0f67bcf57abed71ce6b200798c35a34a95e4c677';
+  '85059ea9f69bbffbe0d010eb4cf0fa951b7edebfa1a2889f580fdbb479823fef';
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const specPath = path.resolve(
   scriptDir,

@@ -251,7 +251,7 @@ impl TmctolReadModel {
     let dust_threshold = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorProgram::<Runtime>::get(actor_id));
+      .zip(pallet_deos_actors::ActorContract::<Runtime>::get(actor_id));
     let (
       actor_exists,
       is_system,
@@ -262,15 +262,9 @@ impl TmctolReadModel {
     ) = maybe_actor
       .map(|((identity, hot), program)| {
         let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
-        let has_required_burn_step = program
-          .execution_plan
-          .iter()
-          .any(|step| burn_match(&step.task));
-        let has_required_swap_step = !requires_swap
-          || program
-            .execution_plan
-            .iter()
-            .any(|step| swap_match(&step.task));
+        let has_required_burn_step = program.steps.iter().any(|step| burn_match(&step.task));
+        let has_required_swap_step =
+          !requires_swap || program.steps.iter().any(|step| swap_match(&step.task));
         (
           true,
           identity.actor_class.actor_type() == ActorType::System,
@@ -322,7 +316,7 @@ impl TmctolReadModel {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorProgram::<Runtime>::get(actor_id));
+      .zip(pallet_deos_actors::ActorContract::<Runtime>::get(actor_id));
     let Some(((identity, hot), program)) = maybe_actor else {
       let status = if pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized
@@ -360,7 +354,7 @@ impl TmctolReadModel {
     let mut split_shares_sum_to_one = false;
     let mut split_shares_match_policy = false;
 
-    for step in &program.execution_plan {
+    for step in &program.steps {
       match &step.task {
         Task::AddLiquidity {
           asset_a, asset_b, ..

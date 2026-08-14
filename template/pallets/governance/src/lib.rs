@@ -109,6 +109,26 @@ pub enum ProposalSubmissionAuthority {
   AdminOnly,
 }
 
+#[derive(
+  Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub enum ProposalCapacityLane {
+  General,
+  Strategic,
+}
+
+#[derive(
+  Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct ProposalAdmissionPolicyView<Balance> {
+  pub authority: ProposalSubmissionAuthority,
+  pub capacity_lane: ProposalCapacityLane,
+  pub capacity_limit: u32,
+  pub author_limit: u32,
+  pub signed_preimage_required: bool,
+  pub opening_fee: Option<Balance>,
+}
+
 pub trait ProposalSubmissionAuthorityProvider<DomainId> {
   fn authority(
     _domain: DomainId,
@@ -187,29 +207,22 @@ pub trait ProposalSubmissionEligibilityProvider<AccountId, DomainId> {
 impl<AccountId, DomainId> ProposalSubmissionEligibilityProvider<AccountId, DomainId> for () {}
 
 #[cfg(feature = "runtime-benchmarks")]
-pub trait BenchmarkHelper<AccountId, DomainId> {
+pub trait BenchmarkHelper<AccountId, DomainId, Hash> {
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError>;
+  ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
-impl<AccountId, DomainId> BenchmarkHelper<AccountId, DomainId> for () {
+impl<AccountId, DomainId, Hash> BenchmarkHelper<AccountId, DomainId, Hash> for () {
   fn prepare_primary_eligible_submitter(
     _account: &AccountId,
-  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError> {
     Err(polkadot_sdk::sp_runtime::DispatchError::Other(
       "GovernanceBenchmarkHelperNotConfigured",
     ))
   }
 }
-
-pub trait WinningVoteRewardTouchHandler<AccountId, DomainId> {
-  fn note_winning_vote_recorded(_domain: DomainId, _account: &AccountId) {}
-  fn note_winning_vote_evicted(_domain: DomainId, _account: &AccountId) {}
-}
-
-impl<AccountId, DomainId> WinningVoteRewardTouchHandler<AccountId, DomainId> for () {}
 
 impl<Hash> ProposalRuntimeUpgradeAuthorizationProvider<Hash> for () {}
 
@@ -225,12 +238,31 @@ pub trait VetoVotePowerProvider<AccountId, DomainId, ItemId, Epoch> {
   fn total_issuance(domain: DomainId) -> u64;
 }
 
-pub trait ProposalPayloadPreimageProvider<Hash> {
+pub trait ProposalPayloadPreimageProvider<Hash, DomainId> {
   fn have_preimage(hash: &Hash) -> bool;
   fn preimage_requested(hash: &Hash) -> bool;
   fn preimage_len(_hash: &Hash) -> Option<u32> {
     None
   }
+  fn validate_for_submission(
+    _domain: DomainId,
+    _payload_kind: ProposalPayloadKind,
+    hash: &Hash,
+  ) -> Result<(), ProposalPreimageAdmissionError> {
+    if Self::have_preimage(hash) {
+      Ok(())
+    } else {
+      Err(ProposalPreimageAdmissionError::Missing)
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProposalPreimageAdmissionError {
+  Missing,
+  Oversized,
+  Invalid,
+  Incompatible,
 }
 
 #[derive(
@@ -369,7 +401,7 @@ impl<AccountId, DomainId, ItemId, Epoch> VetoVotePowerProvider<AccountId, Domain
   }
 }
 
-impl<Hash> ProposalPayloadPreimageProvider<Hash> for () {
+impl<Hash, DomainId> ProposalPayloadPreimageProvider<Hash, DomainId> for () {
   fn have_preimage(_hash: &Hash) -> bool {
     false
   }
@@ -474,8 +506,7 @@ pub mod pallet {
   use crate::{
     EpochProvider as _, GovernanceDomainPolicyProvider as _,
     ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
-    ProposalRuntimeUpgradeAuthorizationProvider as _, ProposalSubmissionAuthorityProvider as _,
-    ProposalSubmissionEligibilityProvider as _, WeightInfo as _,
+    ProposalRuntimeUpgradeAuthorizationProvider as _, WeightInfo as _,
   };
   use codec::{Decode, Encode};
   use frame::prelude::*;
@@ -521,6 +552,12 @@ pub mod pallet {
     type MaxWinningVoteAccountsPerCall: Get<u32>;
     #[pallet::constant]
     type MaxActiveProposalsPerDomain: Get<u32>;
+    /// Capacity withheld from general proposals for protocol-domain strategic ingress.
+    #[pallet::constant]
+    type StrategicProposalReserve: Get<u32>;
+    /// Maximum proposals one author may keep active in one domain.
+    #[pallet::constant]
+    type MaxActiveProposalsPerAuthor: Get<u32>;
     #[pallet::constant]
     type MaxMaturingProposalsPerEpoch: Get<u32>;
     #[pallet::constant]
@@ -539,22 +576,12 @@ pub mod pallet {
     type ProposalFastTrackPassThreshold: Get<Perbill>;
     #[pallet::constant]
     type ProposalApprovalThreshold: Get<Perbill>;
-    /// Approval ceiling for adaptive curves. When equal to `ProposalApprovalThreshold`,
-    /// the curve degenerates to a flat threshold (current behavior). When greater,
-    /// approval requirement starts at ceiling and decays to the floor over the voting window.
-    #[pallet::constant]
-    type ProposalApprovalCeiling: Get<Perbill>;
     #[pallet::constant]
     type ProposalVetoThreshold: Get<Perbill>;
     #[pallet::constant]
     type ProposalVetoMinimumVetoTurnout: Get<Perbill>;
     #[pallet::constant]
     type ProposalMinimumTurnout: Get<u64>;
-    /// Turnout ceiling for adaptive curves. When equal to `ProposalMinimumTurnout`,
-    /// the curve degenerates to a flat threshold (current behavior). When greater,
-    /// turnout requirement starts at ceiling and decays to the floor over the voting window.
-    #[pallet::constant]
-    type ProposalTurnoutCeiling: Get<u64>;
     /// Confirm period: number of epochs a passing proposal must sustain approval
     /// before finalization. Zero disables confirm (immediate finalization at maturity).
     #[pallet::constant]
@@ -587,16 +614,15 @@ pub mod pallet {
         Self::WinningVoteItemId,
         Self::Epoch,
       >;
-    type ProposalPayloadPreimageProvider: crate::ProposalPayloadPreimageProvider<Self::Hash>;
+    type ProposalPayloadPreimageProvider: crate::ProposalPayloadPreimageProvider<Self::Hash, Self::DomainId>;
     type ProposalPayloadExecutor: crate::ProposalPayloadExecutor<
         Self::AccountId,
         Self::DomainId,
         Self::WinningVoteItemId,
         Self::Hash,
       >;
-    type WinningVoteRewardTouchHandler: crate::WinningVoteRewardTouchHandler<Self::AccountId, Self::DomainId>;
     #[cfg(feature = "runtime-benchmarks")]
-    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::DomainId>;
+    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::DomainId, Self::Hash>;
     type WeightInfo: crate::WeightInfo;
   }
 
@@ -1523,10 +1549,17 @@ pub mod pallet {
     ProposalVoteKindNotAllowedForPrimaryTrackFamily,
     ProposalSubmissionNotAllowedForSignedOrigin,
     ProposalSubmitterNotPrimaryEligible,
+    ProposalPreimageMissing,
+    ProposalPreimageOversized,
+    ProposalPreimageInvalid,
+    ProposalPreimageIncompatible,
     InsufficientProposalOpeningFeeBalance,
     ProposalVoteSetFull,
     ProposalProtectionTrackClosed,
     ActiveProposalCapReached,
+    ActiveProposalAuthorCapReached,
+    ActiveProposalAuthorMissing,
+    ActiveProposalCountUnderflow,
     ProposalMaturityBucketFull,
     PendingEnactmentBucketFull,
     FinalizedProposalOutcomeExpiryBucketFull,
@@ -1554,6 +1587,18 @@ pub mod pallet {
       assert!(
         T::MaxRecentFinalizedProposalsPerDomain::get() >= required_recent_finalized_capacity,
         "MaxRecentFinalizedProposalsPerDomain must cover the full retained finalized-outcome horizon"
+      );
+      assert!(
+        T::StrategicProposalReserve::get() > 0
+          && T::StrategicProposalReserve::get() < T::MaxActiveProposalsPerDomain::get(),
+        "StrategicProposalReserve must reserve a nonzero strict subset of domain capacity"
+      );
+      assert!(
+        T::MaxActiveProposalsPerAuthor::get() > 0
+          && T::MaxActiveProposalsPerAuthor::get()
+            < T::MaxActiveProposalsPerDomain::get()
+              .saturating_sub(T::StrategicProposalReserve::get()),
+        "MaxActiveProposalsPerAuthor must be a nonzero strict subset of general domain capacity"
       );
     }
   }
@@ -1586,6 +1631,7 @@ pub mod pallet {
 
     #[pallet::call_index(2)]
     #[pallet::weight(T::WeightInfo::submit_proposal())]
+    #[transactional]
     pub fn submit_proposal(
       origin: OriginFor<T>,
       domain: T::DomainId,
@@ -1596,6 +1642,14 @@ pub mod pallet {
       payload_hash: T::Hash,
     ) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
+      let admission = Self::classify_proposal_admission(
+        domain,
+        item_id,
+        &proposer,
+        payload_kind,
+        &payload_hash,
+        false,
+      )?;
       Self::submit_active_proposal(
         domain,
         item_id,
@@ -1605,6 +1659,7 @@ pub mod pallet {
           payload_kind,
           payload_hash,
         },
+        admission,
       )
     }
 
@@ -1620,19 +1675,15 @@ pub mod pallet {
       payload_hash: T::Hash,
     ) -> DispatchResult {
       let proposer = ensure_signed(origin)?;
-      let submission_authority =
-        T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind);
-      ensure!(
-        submission_authority != crate::ProposalSubmissionAuthority::AdminOnly,
-        Error::<T>::ProposalSubmissionNotAllowedForSignedOrigin
-      );
-      if submission_authority == crate::ProposalSubmissionAuthority::PrimaryEligibleSigned {
-        ensure!(
-          T::ProposalSubmissionEligibilityProvider::has_primary_governance_power(domain, &proposer,),
-          Error::<T>::ProposalSubmitterNotPrimaryEligible
-        );
-      }
-      let opening_fee = T::ProposalOpeningFee::get();
+      let admission = Self::classify_proposal_admission(
+        domain,
+        item_id,
+        &proposer,
+        payload_kind,
+        &payload_hash,
+        true,
+      )?;
+      let opening_fee = admission.opening_fee.unwrap_or_default();
       if !opening_fee.is_zero() {
         T::Currency::transfer(
           &proposer,
@@ -1657,6 +1708,7 @@ pub mod pallet {
           payload_kind,
           payload_hash,
         },
+        admission,
       )
     }
 
@@ -1738,8 +1790,11 @@ pub mod pallet {
 
   #[pallet::view_functions]
   impl<T: Config> Pallet<T> {
-    pub fn reward_coefficient(domain: T::DomainId, account: T::AccountId) -> FixedU128 {
-      Self::do_reward_coefficient(domain, &account)
+    pub fn governance_participation_coefficient(
+      domain: T::DomainId,
+      account: T::AccountId,
+    ) -> FixedU128 {
+      Self::do_governance_participation_coefficient(domain, &account)
     }
 
     pub fn govxp_counters(domain: T::DomainId, account: T::AccountId) -> GovXpCounters {
@@ -1814,20 +1869,25 @@ pub mod pallet {
       T::ProposalRuntimeUpgradeAuthorizationProvider::authorized_upgrade()
     }
 
+    pub fn proposal_admission_policy_view(
+      domain: T::DomainId,
+      payload_kind: ProposalPayloadKind,
+    ) -> crate::ProposalAdmissionPolicyView<BalanceOf<T>> {
+      Self::proposal_admission_policy(domain, payload_kind)
+    }
+
     pub fn proposal_submission_authority(
       domain: T::DomainId,
       payload_kind: ProposalPayloadKind,
     ) -> crate::ProposalSubmissionAuthority {
-      T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind)
+      Self::proposal_admission_policy(domain, payload_kind).authority
     }
 
     pub fn proposal_opening_fee(
       domain: T::DomainId,
       payload_kind: ProposalPayloadKind,
     ) -> Option<BalanceOf<T>> {
-      (T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind)
-        != crate::ProposalSubmissionAuthority::AdminOnly)
-        .then(T::ProposalOpeningFee::get)
+      Self::proposal_admission_policy(domain, payload_kind).opening_fee
     }
 
     pub fn proposal_payload_availability(

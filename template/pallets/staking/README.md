@@ -14,27 +14,25 @@ The current core/runtime slice provides:
 - Governance registration of staking assets
 - No automatic staking-pool creation from asset-registration hooks
 - One deterministic sovereign pool account per registered asset
-- One deterministic future reward-account helper per registered asset (`reward_account_for(asset_id)`) for the planned governance-conditioned reward channel
 - Per-asset pool state (`total_shares`, `accounted_balance`)
 - Per-account share positions
 - Tokenized receipt mode for native/local (`0x5...`) and foreign (`0x6...`) staking assets
 - Lazy `sync_pool` against actual sovereign balance
 - `stake` and `unstake` over `pallet-assets` / `fungibles`
-- Governance bootstrap of live reward snapshots through `bootstrap_reward_snapshot(asset_id, account)`
-- Same-asset auto-compound reward settlement through `claim_reward(asset_id, epoch)` and bounded sweeping via `claim_reward_batch(asset_id, epochs)`
+- No generic reward epoch, rollover cursor, reward-account ingress, bootstrap snapshot, or claim surface
+- Retained atomic session-native security snapshots and one certified Fee Sink funding path with exact pot/liability accounting
 - Efficient ownership lookup through shares rather than per-inflow writes
 - Liquid native `$NTVE -> stNTVE` staking through `stake_native(amount)` without operator binding
 - Locked `NTVE/stNTVE` LP nomination lifecycle (`lock_native_lp_for_collator`, `request_unlock_native_lp`, `withdraw_unlocked_native_lp`, `redelegate_native_lp`)
-- Per-operator commission configuration (`set_operator_commission`, `OperatorCommissions`, `MaxOperatorCommission`)
 - Explicit native query helpers (`native_stake_value`, `passive_native_stake_value`, `delegated_native_stake_value`)
 
-The currently intended future direction keeps the pallet generic and runtime-configurable while adding a second, governance-conditioned reward inflow channel per staking asset.
+The native security-reward channel owns certified funding, retained session pots, exact liabilities, liquid/batch claims, atomic claim-and-compound into canonical locked LP, duplicate markers, session-horizon admission, one-shot expiry return to Fee Sink, and bounded cleanup.
 
 ## Key rule
 
 External inflow to a pool sovereign account is distributed by share-price appreciation, not by iterating all stakers.
 
-Future reward inflow must remain separate from this rule: governance-conditioned reward inflow should use a dedicated reward account, epoch-scoped reward weights, and same-asset auto-compound claim semantics instead of changing share price directly. The current scaffold now includes `reward_account_for(asset_id)`, per-block aggregated reward-account ingress into `note_reward_inflow(asset_id, amount)` through a weight-accounted `on_idle` scan, sparse one-epoch-lag reward-weight snapshots driven by staking touches, `stXXX` transfer ingress, governance-memory events, an explicit governance bootstrap surface for already-live holders before an epoch's denominator is fixed, and concrete settlement paths through both `claim_reward(asset_id, epoch)` and bounded `claim_reward_batch(asset_id, epochs)`.
+Future native security rewards must remain separate from this rule. The shipped baseline freezes bounded LP value, eligible operators, governance coefficients, account weights, and a total denominator atomically at a session boundary; it exposes no block-based rollover or generic non-native claim engine.
 
 ## Security isolation rule
 
@@ -63,7 +61,7 @@ Permissionless collators stay inactive until a relay-beacon-backed design is rea
 ## Runtime-as-Config rule
 
 The pallet must stay generic.
-Concrete reward-politics decisions such as governance-domain mapping, winning-vote lookback length, coefficient formula, and reward-claim mode belong in runtime configuration rather than in hardcoded pallet logic. The current helper surface already reflects this rule through runtime-resolved `reward_governance_domain(asset_id)`.
+Concrete governance participation policy belongs in runtime configuration rather than hardcoded pallet logic. Staking consumes one runtime-provided coefficient only while opening a native security snapshot.
 
 ## Non-goals of the current slice
 

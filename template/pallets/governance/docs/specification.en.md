@@ -27,7 +27,7 @@ The governance layer has four jobs:
 1. Govern proposals and referenda through explicit, bounded lifecycle rules
 2. Express differentiated voting tracks (ordinary, protection, and payload-specific primary tracks such as invoice-style treasury spending)
 3. Provide explicit L1 Strategy / L2 Tactics layering with protection flow from strategic to tactical domains
-4. Export resolved governance quality (including authorship) into the staking reward path without unbounded storage growth
+4. Export bounded resolved governance participation (including authorship inputs) without owning downstream reward settlement
 
 This document is the contract layer for **how governance should behave**.
 `template/pallets/governance/docs/architecture.en.md` remains the implementation-first description of the paired runtime architecture.
@@ -38,7 +38,7 @@ This document is the contract layer for **how governance should behave**.
 
 ### 2.1 Governance Domain
 
-A `GovernanceDomain` is the unit within which proposals, ballots, winning memory, and reward coefficients are evaluated.
+A `GovernanceDomain` is the unit within which proposals, ballots, winning memory, and governance participation coefficients are evaluated.
 
 The runtime MUST define how domain ids map to actual governed subjects.
 This specification version permits asset-scoped domain bindings, but governance is not required to remain forever identical to today's `DomainId = AssetId` style.
@@ -609,7 +609,7 @@ The specification MUST state the intended control contract honestly:
 
 1. Signed users SHOULD be able to participate in the public voting tracks enabled for their domain + payload-kind combinations
 2. Proposal submission MAY remain payload-kind-specific and runtime-configurable, but the public v1 path SHOULD move toward signed submission for the combinations that are meant to be public
-3. Submission MAY charge a runtime-configured opening fee collected into the runtime Fee Sink; the v1 anti-spam contract intentionally uses fee plus bounded active-cap pressure rather than an outcome-dependent proposal bond
+3. Submission MAY charge a runtime-configured opening fee collected into the runtime Fee Sink as economic friction only; liveness, bounded-state, and anti-DoS claims MUST rely on structural domain, strategic-reserve, per-author, maturity, enactment, ballot, and per-block service bounds rather than the fee's configured amount or market value
 4. If GovXP / reputation policy depends on proposal authorship, each live proposal MUST carry one explicit proposer / sponsor identity even when a privileged origin submits it on that account's behalf
 5. Proposal-opening and proposal-success authorship counters MUST be recorded on-chain from v1 so later GovXP policy can consume them without archive reconstruction
 6. Narrow admin recovery / override tools MAY exist, but they MUST be explicit and limited
@@ -621,14 +621,27 @@ A protocol `L1RootAction` MUST be creatable after bootstrap through the existing
 
 Contract rules:
 
-1. Signed strategic submission MUST be admitted only for the runtime-declared protocol / Native domain plus `L1RootAction` combination
-2. Admission MUST require a runtime provider to confirm that the signer has nonzero primary-track governance power for that domain; protection-track power MUST NOT satisfy this predicate
-3. The eligible signed path MUST retain the ordinary signed proposal opening fee, bounded active-proposal capacity, duplicate rejection, proposer identity, authorship counters, preimage contract, and transactional rollback behavior
-4. An ineligible signer MUST fail before fee transfer, events, authorship mutation, active-count mutation, maturity indexing, or preimage requests
-5. Submission grants only the right to create the bounded proposal lifecycle; it MUST NOT expose a direct Root dispatcher, arbitrary runtime call, or privileged control action to the signer
-6. Successful enactment MUST remain restricted to the existing strategic `L1RootAction` payload executor, which accepts only its dedicated bounded payload contract and derives Root-equivalent execution internally after governance approval
-7. `$VETO` remains protection power only: holding or voting `$VETO` MUST NOT satisfy primary submission eligibility or create positive agenda-setting authority
-8. Sudo, genesis-only proposal fixtures, development Root accounts, XCM superuser conversion, rehearsal-only authority, and fabricated pending authorization state are non-conforming substitutes for this ingress
+1. Signed strategic submission MUST be admitted only for runtime-declared protocol / Native domain combinations; the current strategic surface contains `L1RootAction` and `Intent`
+2. Signed protocol-domain `L1RootAction` and `Intent` admission MUST require a runtime provider to confirm that the signer has nonzero primary-track governance power for that domain; protection-track power MUST NOT satisfy this predicate
+3. Signed `Intent` may remain public without primary-track eligibility only in tactical or other explicitly public non-protocol domains
+4. Every signed proposal MUST reference an available preimage that passes the runtime's bounded payload-kind/domain validator before capacity or fee mutation; missing, oversized, malformed, trailing-byte, and incompatible payloads MUST fail with typed admission errors and exact pre-state
+5. Administrative submission MAY retain hash-first bootstrap/recovery behavior, but it MUST pass the same item, domain, author, maturity, and capacity classifier and gains no signed-ingress bypass
+6. The eligible signed path MUST retain the ordinary signed proposal opening fee, bounded active-proposal capacity, duplicate rejection, proposer identity, authorship counters, preimage contract, and transactional rollback behavior
+7. Each domain MUST reserve `StrategicProposalReserve` slots inside `MaxActiveProposalsPerDomain`; general proposals stop at `MaxActiveProposalsPerDomain - StrategicProposalReserve`, while protocol-domain `L1RootAction` may consume the complete domain cap
+8. One admission classifier MUST derive submission authority, required signer eligibility, capacity limit, author bound, opening-fee applicability, and rejection precedence before economic mutation; dispatch and bounded authority/fee views MUST consume that classifier rather than reimplementing policy
+9. Rejection precedence MUST be signed authority, primary eligibility when required, signed preimage availability and compatibility, duplicate identity, domain/capacity lane, canonical author-index integrity, per-author capacity, and maturity-bucket capacity, followed only then by fee collection and proposal insertion
+10. Admission MUST compute the exact maturity epoch and prove room in that bounded bucket before fee transfer; the later transactional insertion MUST use the admitted epoch, so no intervening policy or time recomputation can move the proposal to a different bucket
+11. Strategic capacity classification MUST derive internally from the existing `(domain, payload_kind)` submission-authority binding; callers MUST NOT select a priority, lane, or proposal class
+12. The reserve MUST be nonzero and strictly below the domain cap; it creates no second proposal collection or count cache, and every ordinary terminal path releases capacity by removing the proposal from the existing active set
+13. One author MUST hold fewer than `MaxActiveProposalsPerAuthor` active proposals per domain before admission; the implementation MUST derive this bounded count from the canonical active-id and author records rather than persisting another count cache
+14. A missing author record for any indexed active proposal MUST fail admission as an invariant error rather than undercounting occupancy
+15. Every terminal path MUST use one shared cleanup operation that validates nonzero domain occupancy before removing canonical active state, removes the author and active-id entry once, and decrements the domain count exactly once; inconsistent occupancy MUST fail closed and roll back the terminal transaction
+16. Enactment success or execution failure occurs only after proposal resolution has already performed this shared active-capacity release; pending enactment MUST NOT retain active admission capacity
+17. An ineligible signer MUST fail before fee transfer, events, authorship mutation, active-count mutation, maturity indexing, or preimage requests
+18. Submission grants only the right to create the bounded proposal lifecycle; it MUST NOT expose a direct Root dispatcher, arbitrary runtime call, or privileged control action to the signer
+19. Successful enactment MUST remain restricted to the existing strategic `L1RootAction` payload executor, which accepts only its dedicated bounded payload contract and derives Root-equivalent execution internally after governance approval
+20. `$VETO` remains protection power only: holding or voting `$VETO` MUST NOT satisfy primary submission eligibility or create positive agenda-setting authority
+21. Sudo, genesis-only proposal fixtures, development Root accounts, XCM superuser conversion, rehearsal-only authority, and fabricated pending authorization state are non-conforming substitutes for this ingress
 
 ### 7.2 Proposal Payload and Execution Authority
 
@@ -691,10 +704,10 @@ Retiring external superuser dependence is part of the constitutional target, not
 
 ---
 
-## 9. Reward-Memory Export Contract
+## 9. Governance Participation Export Contract
 
-Governance reward memory is a secondary export, not the primary meaning of governance.
-Still, the governance pallet MUST preserve this contract because staking already depends on it.
+Governance participation memory is a secondary export, not the primary meaning of governance.
+The pallet owns this bounded projection but MUST NOT callback into, schedule, or mutate downstream reward settlement.
 
 Rules:
 
@@ -704,7 +717,7 @@ Rules:
 4. If an account's rolling winning-memory sum reaches zero, its reward-memory storage SHOULD be evicted
 5. The exported coefficient MUST remain normalized against bounded runtime-configured capacity, not against unbounded historical totals
 
-This keeps governance reward memory sparse and economically relevant instead of archival.
+This keeps governance participation memory sparse and economically relevant instead of archival.
 
 ---
 
@@ -728,7 +741,7 @@ The governance query contract MUST distinguish bounded canonical on-chain projec
 - Runtime-declared vote-power profile identity for each live enabled track
 - Recent finalized outcome inside bounded retention
 - Veto-cancelled status when applicable
-- Reward coefficient export
+- Governance participation coefficient export
 - Active proposer / sponsor identity when authorship is part of on-chain GovXP policy
 - Recent execution result and execution-failure reason when enactment has already been attempted
 - GovXP input counters (`rolling winning`, `cumulative total participation`, `cumulative total winning participation`, `cumulative authored proposals`, `cumulative successful authored proposals`)
@@ -846,7 +859,7 @@ The governance contract SHOULD remain analyzable against at least these attack f
 - `mint-whale or tactical capture` — mitigated by explicit primary/protection hierarchy above tactical execution
 - `flash or late-stage governance` — mitigated by early-open protection, lead-in, and ballot-time Declining Power on ordinary tracks
 - `protocol capture` — mitigated by the constitutional `$VETO` protection layer above strategic governance
-- `proposal spam or agenda flooding` — mitigated by bounded active caps plus a Fee Sink-collected opening fee on proposal creation
+- `proposal spam or agenda flooding` — structurally bounded by domain capacity, strategic reserve, per-author capacity, bounded maturity/enactment buckets, bounded ballots, and bounded servicing; the Fee Sink-collected opening fee adds economic friction but is not a liveness or anti-DoS premise
 - `treasury drain or invoice fraud` — mitigated by domain/payload-specific thresholds, binary protection cancellation, and explicit proposal/invoice lifecycle rules
 - `GovXP farming or reputation manipulation` — mitigated in v1 by storing bounded counters while deferring any live vote-power amplification to a later explicit policy revision, and by keeping advisory payloads non-rewarding by default
 
@@ -924,7 +937,7 @@ This version does not try to specify:
 - A promise that all governance payload kinds become public-submittable in the immediate next runtime slice
 - Conviction-style lock-for-weight mechanics — TMCTOL's liquid staking architecture (`stXXX` receipts) is structurally incompatible with hard token locks; the temporal-weighting role is already served by Declining Power, and commitment signals belong in later GovXP policy rather than in a separate lock multiplier
 - Per-track delegation or proxy voting — reserved for a later version, not specified here
-- Proposal bonds or refundable decision deposits as the anti-spam contract for v1; this version prefers a Fee Sink-collected opening fee plus bounded caps
+- Proposal bonds or refundable decision deposits as the anti-spam contract for v1; this version uses bounded structural admission/service limits and permits a Fee Sink-collected opening fee only as additional economic friction
 - Adaptive approval/support curves in any form
 
 Those remain future evolutions or explicit exclusions, but any later extension SHOULD compose with the track, vote-power, lifecycle, and boundedness rules defined here.

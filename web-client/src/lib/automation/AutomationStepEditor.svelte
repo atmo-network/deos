@@ -1,7 +1,7 @@
 <!--
 Domain: Automation step editor
 Owns: One stable ordered Step row, condition controls, task parameters, error policy, and linear move/remove actions.
-Excludes: Program storage, artifact encoding, analysis, simulation, and runtime execution.
+Excludes: Contract storage, artifact encoding, analysis, simulation, and runtime execution.
 Zone: Automation presentation helper; composes typed authoring fields without successor selection.
 -->
 <script lang="ts">
@@ -10,9 +10,9 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   import {
     type ActorAuthoringIssue,
     type ActorAuthoringStep,
-    createActorAuthoringCondition,
+    createActorAuthoringPredicate,
   } from '$lib/automation/authoring';
-  import type { ActorPlanType } from '$lib/automation/plan-artifact';
+  import type { ActorContractType } from '$lib/automation/contract-artifact';
   import type { AutomationMutability } from '$lib/automation/types';
   import {
     Badge,
@@ -30,7 +30,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     step: ActorAuthoringStep;
     index: number;
     total: number;
-    actorType: ActorPlanType;
+    actorType: ActorContractType;
     mutability: AutomationMutability;
     compact?: boolean;
     issues?: ActorAuthoringIssue[];
@@ -50,22 +50,28 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     onRemove,
   }: Props = $props();
 
-  function selectConditionMode(event: Event) {
+  function selectPreconditionMode(event: Event) {
     const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Always'
-      | 'All'
-      | 'Any';
+      | 'Unconditional'
+      | 'AnyOf';
     step = {
       ...step,
-      conditionSet:
-        type === 'Always'
+      preconditions:
+        type === 'Unconditional'
           ? { type }
-          : step.conditionSet.type === 'Always'
+          : step.preconditions.type === 'Unconditional'
             ? {
                 type,
-                conditions: [createActorAuthoringCondition('BalanceAbove')],
+                clauses: [
+                  [
+                    {
+                      timing: 'Current',
+                      predicate: createActorAuthoringPredicate('BalanceAbove'),
+                    },
+                  ],
+                ],
               }
-            : { type, conditions: step.conditionSet.conditions },
+            : step.preconditions,
     };
   }
 
@@ -89,35 +95,98 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     };
   }
 
-  function addCondition() {
-    if (
-      step.conditionSet.type === 'Always' ||
-      step.conditionSet.conditions.length >= 4
-    )
+  function predicateCount() {
+    return step.preconditions.type === 'Unconditional'
+      ? 0
+      : step.preconditions.clauses.reduce(
+          (total, clause) => total + clause.length,
+          0,
+        );
+  }
+
+  function addClause() {
+    if (step.preconditions.type === 'Unconditional' || predicateCount() >= 4)
       return;
     step = {
       ...step,
-      conditionSet: {
-        ...step.conditionSet,
-        conditions: [
-          ...step.conditionSet.conditions,
-          createActorAuthoringCondition('BalanceAbove'),
+      preconditions: {
+        ...step.preconditions,
+        clauses: [
+          ...step.preconditions.clauses,
+          [
+            {
+              timing: 'Current',
+              predicate: createActorAuthoringPredicate('BalanceAbove'),
+            },
+          ],
         ],
       },
     };
   }
 
-  function removeCondition(indexToRemove: number) {
-    if (step.conditionSet.type === 'Always') return;
-    const conditions = step.conditionSet.conditions.filter(
-      (_, candidate) => candidate !== indexToRemove,
-    );
+  function addPredicate(clauseIndex: number) {
+    if (step.preconditions.type === 'Unconditional' || predicateCount() >= 4)
+      return;
     step = {
       ...step,
-      conditionSet:
-        conditions.length === 0
-          ? { type: 'Always' }
-          : { ...step.conditionSet, conditions },
+      preconditions: {
+        ...step.preconditions,
+        clauses: step.preconditions.clauses.map((clause, candidate) =>
+          candidate === clauseIndex
+            ? [
+                ...clause,
+                {
+                  timing: 'Current',
+                  predicate: createActorAuthoringPredicate('BalanceAbove'),
+                },
+              ]
+            : clause,
+        ),
+      },
+    };
+  }
+
+  function setTiming(
+    clauseIndex: number,
+    predicateIndex: number,
+    event: Event,
+  ) {
+    if (step.preconditions.type === 'Unconditional') return;
+    const timing = (event.currentTarget as HTMLSelectElement).value as
+      | 'Opening'
+      | 'Current';
+    step = {
+      ...step,
+      preconditions: {
+        ...step.preconditions,
+        clauses: step.preconditions.clauses.map((clause, candidateClause) =>
+          candidateClause === clauseIndex
+            ? clause.map((timed, candidatePredicate) =>
+                candidatePredicate === predicateIndex
+                  ? { ...timed, timing }
+                  : timed,
+              )
+            : clause,
+        ),
+      },
+    };
+  }
+
+  function removePredicate(clauseIndex: number, predicateIndex: number) {
+    if (step.preconditions.type === 'Unconditional') return;
+    const clauses = step.preconditions.clauses
+      .map((clause, candidateClause) =>
+        candidateClause === clauseIndex
+          ? clause.filter((_, candidate) => candidate !== predicateIndex)
+          : clause,
+      )
+      .filter((clause) => clause.length > 0);
+    step = {
+      ...step,
+      preconditions:
+        clauses.length === 0
+          ? { type: 'Unconditional' }
+          : { type: 'AnyOf', clauses },
     };
   }
 </script>
@@ -147,9 +216,9 @@ Zone: Automation presentation helper; composes typed authoring fields without su
           {step.task.type.replace(/([a-z])([A-Z])/g, '$1 $2')}
         </div>
         <div class="text-[10px] text-(--mono-muted)">
-          {step.conditionSet.type === 'Always'
-            ? 'Always attempted when reached'
-            : `${step.conditionSet.conditions.length} ${step.conditionSet.type === 'All' ? 'conjunctive' : 'disjunctive'} condition${step.conditionSet.conditions.length === 1 ? '' : 's'}`}
+          {step.preconditions.type === 'Unconditional'
+            ? 'Unconditional when reached'
+            : `${step.preconditions.clauses.length} clause${step.preconditions.clauses.length === 1 ? '' : 's'} · ${predicateCount()} timed predicate${predicateCount() === 1 ? '' : 's'}`}
         </div>
       </div>
     </div>
@@ -182,28 +251,28 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
     <div class="flex flex-wrap items-end justify-between gap-2">
       <SelectField
-        label="Condition mode"
-        value={step.conditionSet.type}
-        onchange={selectConditionMode}
+        label="Preconditions"
+        value={step.preconditions.type}
+        onchange={selectPreconditionMode}
         selectClass="h-9 py-1.5 text-xs"
       >
-        <option value="Always">Always</option>
-        <option value="All">All conditions</option>
-        <option value="Any">Any condition</option>
+        <option value="Unconditional">Unconditional</option>
+        <option value="AnyOf">Bounded DNF</option>
       </SelectField>
-      {#if step.conditionSet.type !== 'Always'}
+      {#if step.preconditions.type === 'AnyOf'}
         <Button
           size="sm"
           variant="ghost"
-          onclick={addCondition}
-          disabled={step.conditionSet.conditions.length >= 4}
+          onclick={addClause}
+          disabled={predicateCount() >= 4 ||
+            step.preconditions.clauses.length >= 4}
           class="inline-flex items-center gap-1"
         >
-          <Plus size={12} /> Add condition
+          <Plus size={12} /> Add OR clause
         </Button>
       {/if}
     </div>
-    {#if step.conditionSet.type === 'Always'}
+    {#if step.preconditions.type === 'Unconditional'}
       <div
         class="rounded-xl border border-dashed border-(--mono-border) px-3 py-2 text-[10px] text-(--mono-muted)"
       >
@@ -212,17 +281,51 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       </div>
     {:else}
       <div class="text-[10px] text-(--mono-muted)">
-        Every atom is evaluated. {step.conditionSet.type === 'All'
-          ? 'All must pass.'
-          : 'At least one must pass; any atomic error fails the group.'}
-        A false group skips only this task and advances.
+        Clauses compose with OR; predicates inside each clause compose with AND.
+        Every predicate is visited. False skips only this task and advances.
       </div>
-      {#each step.conditionSet.conditions as condition, conditionIndex}
-        <AutomationConditionEditor
-          bind:condition={step.conditionSet.conditions[conditionIndex]}
-          {compact}
-          onRemove={() => removeCondition(conditionIndex)}
-        />
+      {#each step.preconditions.clauses as clause, clauseIndex}
+        <div
+          class="grid gap-2 rounded-xl border border-(--mono-border) bg-white p-2"
+        >
+          <div
+            class="flex items-center justify-between gap-2 text-[10px] text-(--mono-muted)"
+          >
+            <span>OR clause {clauseIndex + 1} · all predicates must pass</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onclick={() => addPredicate(clauseIndex)}
+              disabled={predicateCount() >= 4 || clause.length >= 4}
+            >
+              <Plus size={12} /> Add AND predicate
+            </Button>
+          </div>
+          {#each clause as timed, predicateIndex}
+            <div class="grid gap-2">
+              <SelectField
+                label="Observation timing"
+                value={timed.timing}
+                onchange={(event) =>
+                  setTiming(clauseIndex, predicateIndex, event)}
+                selectClass="h-9 py-1.5 text-xs"
+              >
+                <option value="Opening">Opening — frozen for cycle</option>
+                <option value="Current"
+                  >Current — immediately before step</option
+                >
+              </SelectField>
+              <AutomationConditionEditor
+                bind:condition={
+                  step.preconditions.clauses[clauseIndex][predicateIndex]
+                    .predicate
+                }
+                {compact}
+                onRemove={() => removePredicate(clauseIndex, predicateIndex)}
+              />
+            </div>
+          {/each}
+        </div>
       {/each}
     {/if}
   </div>

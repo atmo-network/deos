@@ -1,11 +1,11 @@
 use pallet_deos_actors::contract::{
   ActorAvailability, AdapterRequirement, AmountDataDependency, BoundedInternalAlgorithm,
-  ClassifiedStepControl, ConditionInstructionContract, ConditionObservation, ConditionReadSurface,
-  ContextDependency, EffectClass, ObservationWindow, RecipientSurface, RetryObservation,
-  TaskAmountRole, TaskInstructionContract, TaskWeightOwner, describe_amount_resolution,
-  describe_condition, describe_task,
+  ClassifiedStepControl, ContextDependency, EffectClass, ObservationWindow,
+  PredicateInstructionContract, PredicateObservation, PredicateReadSurface, RecipientSurface,
+  RetryObservation, TaskAmountRole, TaskInstructionContract, TaskWeightOwner,
+  describe_amount_resolution, describe_predicate, describe_task,
 };
-use pallet_deos_actors::{AmountResolution, Condition, InputLimit, SplitLeg, Task};
+use pallet_deos_actors::{AmountResolution, InputLimit, Predicate, SplitLeg, Task};
 use polkadot_sdk::frame_support::{BoundedVec, traits::ConstU32};
 use polkadot_sdk::sp_runtime::Perbill;
 use scale_info::{TypeDef, TypeInfo};
@@ -13,9 +13,9 @@ use serde::Serialize;
 use std::{env, fs, path::Path};
 
 type ManifestTask = Task<u32, u128, u64, ConstU32<8>>;
-type ManifestCondition = Condition<u32, u128, u32, u32>;
+type ManifestPredicate = Predicate<u32, u128, u32, u32>;
 type Contract = TaskInstructionContract<u32, u64>;
-type ConditionContract = ConditionInstructionContract<u32, u32>;
+type PredicateContract = PredicateInstructionContract<u32, u32>;
 
 const ASSET: u32 = 11;
 const ASSET_IN: u32 = 12;
@@ -33,7 +33,7 @@ struct SemanticManifest {
   format: &'static str,
   format_version: u32,
   tasks: Vec<TaskManifest>,
-  conditions: Vec<ConditionManifest>,
+  predicates: Vec<PredicateManifest>,
   amount_resolutions: Vec<AmountResolutionManifest>,
 }
 
@@ -73,11 +73,11 @@ struct AmountSurfaceManifest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ConditionManifest {
-  condition: &'static str,
+struct PredicateManifest {
+  predicate: &'static str,
   scale_index: u8,
   observation: &'static str,
-  read_surface: ConditionReadSurfaceManifest,
+  read_surface: PredicateReadSurfaceManifest,
   pure: bool,
   observation_window: &'static str,
   bounded_read_count: u32,
@@ -85,7 +85,7 @@ struct ConditionManifest {
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all_fields = "camelCase")]
-enum ConditionReadSurfaceManifest {
+enum PredicateReadSurfaceManifest {
   SpendableAssetBalance {
     path: &'static str,
   },
@@ -130,47 +130,47 @@ fn amount_resolution_cases() -> Vec<(&'static str, AmountResolution<u128>)> {
   ]
 }
 
-fn condition_cases() -> Vec<(&'static str, ManifestCondition)> {
+fn predicate_cases() -> Vec<(&'static str, ManifestPredicate)> {
   vec![
     (
       "BalanceAbove",
-      Condition::BalanceAbove {
+      Predicate::BalanceAbove {
         asset: ASSET,
         threshold: 1,
       },
     ),
     (
       "BalanceBelow",
-      Condition::BalanceBelow {
+      Predicate::BalanceBelow {
         asset: ASSET,
         threshold: 1,
       },
     ),
     (
       "BalanceEquals",
-      Condition::BalanceEquals {
+      Predicate::BalanceEquals {
         asset: ASSET,
         threshold: 1,
       },
     ),
     (
       "BalanceNotEquals",
-      Condition::BalanceNotEquals {
+      Predicate::BalanceNotEquals {
         asset: ASSET,
         threshold: 1,
       },
     ),
     (
       "BlockNumberAbove",
-      Condition::BlockNumberAbove { threshold: 1 },
+      Predicate::BlockNumberAbove { threshold: 1 },
     ),
     (
       "BlockNumberBelow",
-      Condition::BlockNumberBelow { threshold: 1 },
+      Predicate::BlockNumberBelow { threshold: 1 },
     ),
     (
       "ObservationAbove",
-      Condition::ObservationAbove {
+      Predicate::ObservationAbove {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
@@ -178,7 +178,7 @@ fn condition_cases() -> Vec<(&'static str, ManifestCondition)> {
     ),
     (
       "ObservationBelow",
-      Condition::ObservationBelow {
+      Predicate::ObservationBelow {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
@@ -186,7 +186,7 @@ fn condition_cases() -> Vec<(&'static str, ManifestCondition)> {
     ),
     (
       "ObservationEquals",
-      Condition::ObservationEquals {
+      Predicate::ObservationEquals {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
@@ -194,7 +194,7 @@ fn condition_cases() -> Vec<(&'static str, ManifestCondition)> {
     ),
     (
       "ObservationNotEquals",
-      Condition::ObservationNotEquals {
+      Predicate::ObservationNotEquals {
         feed: 1,
         threshold: 1,
         max_age_blocks: 1,
@@ -478,33 +478,33 @@ fn task_manifest(task: &'static str, contract: Contract) -> TaskManifest {
   }
 }
 
-fn condition_manifest(
-  condition: &'static str,
+fn predicate_manifest(
+  predicate: &'static str,
   scale_index: u8,
-  contract: ConditionContract,
-) -> ConditionManifest {
+  contract: PredicateContract,
+) -> PredicateManifest {
   let observation = match contract.observation {
-    ConditionObservation::BalanceComparison => "BalanceComparison",
-    ConditionObservation::BlockNumberComparison => "BlockNumberComparison",
-    ConditionObservation::ScalarObservationComparison => "ScalarObservationComparison",
+    PredicateObservation::BalanceComparison => "BalanceComparison",
+    PredicateObservation::BlockNumberComparison => "BlockNumberComparison",
+    PredicateObservation::ScalarObservationComparison => "ScalarObservationComparison",
   };
   let read_surface = match contract.read_surface {
-    ConditionReadSurface::SpendableAssetBalance(ASSET) => {
-      ConditionReadSurfaceManifest::SpendableAssetBalance { path: "/asset" }
+    PredicateReadSurface::SpendableAssetBalance(ASSET) => {
+      PredicateReadSurfaceManifest::SpendableAssetBalance { path: "/asset" }
     }
-    ConditionReadSurface::SpendableAssetBalance(asset) => {
-      panic!("unknown condition asset sentinel {asset}")
+    PredicateReadSurface::SpendableAssetBalance(asset) => {
+      panic!("unknown predicate asset sentinel {asset}")
     }
-    ConditionReadSurface::CurrentBlockNumber => ConditionReadSurfaceManifest::CurrentBlockNumber,
-    ConditionReadSurface::TypedObservation { .. } => {
-      ConditionReadSurfaceManifest::TypedObservation {
+    PredicateReadSurface::CurrentBlockNumber => PredicateReadSurfaceManifest::CurrentBlockNumber,
+    PredicateReadSurface::TypedObservation { .. } => {
+      PredicateReadSurfaceManifest::TypedObservation {
         feed_path: "/feed",
         max_age_blocks_path: "/max_age_blocks",
       }
     }
   };
-  ConditionManifest {
-    condition,
+  PredicateManifest {
+    predicate,
     scale_index,
     observation,
     read_surface,
@@ -552,24 +552,24 @@ fn manifest() -> SemanticManifest {
     case_names, metadata_names,
     "manifest must cover Task in SCALE order"
   );
-  let condition_cases = condition_cases();
-  let TypeDef::Variant(condition_type) = <ManifestCondition as TypeInfo>::type_info().type_def
+  let predicate_cases = predicate_cases();
+  let TypeDef::Variant(predicate_type) = <ManifestPredicate as TypeInfo>::type_info().type_def
   else {
-    panic!("Condition metadata must remain a variant type");
+    panic!("Predicate metadata must remain a variant type");
   };
-  let condition_metadata = condition_type.variants;
+  let predicate_metadata = predicate_type.variants;
   assert_eq!(
-    condition_cases
+    predicate_cases
       .as_slice()
       .into_iter()
       .map(|(name, _)| *name)
       .collect::<Vec<_>>(),
-    condition_metadata
+    predicate_metadata
       .as_slice()
       .into_iter()
       .map(|variant| variant.name)
       .collect::<Vec<_>>(),
-    "manifest must cover Condition in SCALE order"
+    "manifest must cover Predicate in SCALE order"
   );
   let amount_cases = amount_resolution_cases();
   let TypeDef::Variant(amount_type) = <AmountResolution<u128> as TypeInfo>::type_info().type_def
@@ -596,15 +596,15 @@ fn manifest() -> SemanticManifest {
       .into_iter()
       .map(|(name, task)| task_manifest(name, describe_task(&task)))
       .collect(),
-    conditions: condition_cases
+    predicates: predicate_cases
       .into_iter()
-      .zip(condition_metadata)
-      .map(|((name, condition), metadata)| {
+      .zip(predicate_metadata)
+      .map(|((name, predicate), metadata)| {
         assert_eq!(
           name, metadata.name,
-          "condition case and metadata order differ"
+          "predicate case and metadata order differ"
         );
-        condition_manifest(name, metadata.index, describe_condition(&condition))
+        predicate_manifest(name, metadata.index, describe_predicate(&predicate))
       })
       .collect(),
     amount_resolutions: amount_cases

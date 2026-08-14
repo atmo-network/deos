@@ -227,16 +227,16 @@ pub(crate) const fn execution_plan_steps_bound_is_valid(bound: u32) -> bool {
 }
 
 sp_api::decl_runtime_apis! {
-  pub trait ActorSimulationApi<Program, Simulation>
+  pub trait ActorSimulationApi<Contract, Simulation>
   where
-    Program: codec::Codec,
+    Contract: codec::Codec,
     Simulation: codec::Codec,
   {
-    fn simulate_current_program(
+    fn simulate_current_contract(
       actor_id: types::ActorId,
       expected_type: types::ActorType,
       expected_mutability: types::Mutability,
-      expected_program: Program,
+      expected_contract: Contract,
       mode: types::SimulationMode,
     ) -> Result<Simulation, types::SimulationError>;
   }
@@ -313,6 +313,12 @@ pub mod pallet {
     type MaxFundingTrackedAssets: Get<u32>;
     #[pallet::constant]
     type MaxOpeningSnapshotEntries: Get<u32>;
+    #[pallet::constant]
+    type MaxOpeningPredicateResults: Get<u32>;
+    #[pallet::constant]
+    type MaxPreconditionClauses: Get<u32>;
+    #[pallet::constant]
+    type MaxPredicatesPerClause: Get<u32>;
     #[pallet::constant]
     type MaxConditionsPerStep: Get<u32>;
     #[pallet::constant]
@@ -455,14 +461,15 @@ pub mod pallet {
     <T as Config>::ObservationFeedId,
   >;
 
-  pub type ConditionSetOf<T> = ConditionSet<
-    Condition<
+  pub type PreconditionsOf<T> = Preconditions<
+    Predicate<
       <T as Config>::AssetId,
       <T as Config>::Balance,
       u32,
       <T as Config>::ObservationFeedId,
     >,
-    <T as Config>::MaxConditionsPerStep,
+    <T as Config>::MaxPreconditionClauses,
+    <T as Config>::MaxPredicatesPerClause,
   >;
 
   pub type TaskOf<T> = super::types::Task<
@@ -481,7 +488,8 @@ pub mod pallet {
     <T as Config>::AssetId,
     <T as Config>::Balance,
     <T as frame_system::Config>::AccountId,
-    <T as Config>::MaxConditionsPerStep,
+    <T as Config>::MaxPreconditionClauses,
+    <T as Config>::MaxPredicatesPerClause,
     <T as Config>::MaxSplitTransferLegs,
     <T as Config>::ObservationFeedId,
   >;
@@ -494,15 +502,15 @@ pub mod pallet {
   pub type FundingSourcePolicyOf<T> =
     FundingSourcePolicy<<T as frame_system::Config>::AccountId, <T as Config>::MaxWhitelistSize>;
 
-  pub type ActiveProgramInputOf<T> = ActiveProgramInput<
+  pub type ActiveContractInputOf<T> = ActiveContractInput<
     ScheduleOf<T>,
     BlockNumberFor<T>,
     ExecutionPlanOf<T>,
     FundingSourcePolicyOf<T>,
   >;
 
-  pub type ProgramInputOf<T> =
-    ProgramInput<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>, FundingSourcePolicyOf<T>>;
+  pub type ContractInputOf<T> =
+    ContractInput<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>, FundingSourcePolicyOf<T>>;
 
   pub type FundingAccumulatedOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
@@ -521,12 +529,16 @@ pub mod pallet {
     <T as Config>::MaxOpeningSnapshotEntries,
   >;
 
+  pub type OpeningPredicateResultsOf<T> =
+    BoundedVec<PredicateEvaluation, <T as Config>::MaxOpeningPredicateResults>;
+
   pub type ContinuationStateOf<T> = ContinuationState<
     <T as Config>::AssetId,
     <T as Config>::Balance,
     BlockNumberFor<T>,
     <T as Config>::MaxOpeningSnapshotEntries,
     <T as Config>::MaxFundingTrackedAssets,
+    <T as Config>::MaxOpeningPredicateResults,
   >;
 
   pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
@@ -543,11 +555,15 @@ pub mod pallet {
 
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
 
-  pub type ActorProgramStateOf<T> =
-    ActorProgramState<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>>;
+  pub type ActorContractStateOf<T> = ActorContractState<
+    ScheduleOf<T>,
+    BlockNumberFor<T>,
+    ExecutionPlanOf<T>,
+    FundingSourcePolicyOf<T>,
+  >;
 
   pub type ActorFundingStateOf<T> =
-    ActorFundingState<FundingSourcePolicyOf<T>, FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
+    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
 
   pub type ActorIdentityOf<T> =
     ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
@@ -568,9 +584,9 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, ActorId, ActorHotStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn actor_program)]
-  pub type ActorProgram<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorProgramStateOf<T>, OptionQuery>;
+  #[pallet::getter(fn actor_contract)]
+  pub type ActorContract<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorContractStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_funding)]
@@ -587,7 +603,7 @@ pub mod pallet {
     pub(crate) fn derive_active_actor_view(
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
-      program: ActorProgramStateOf<T>,
+      contract: ActorContractStateOf<T>,
     ) -> ActiveActorViewOf<T> {
       ActiveActorView {
         sovereign_account: identity.sovereign_account,
@@ -596,10 +612,10 @@ pub mod pallet {
         mutability: identity.mutability,
         lifecycle: hot.lifecycle,
         cycle_state: hot.cycle_state,
-        schedule: program.schedule,
-        schedule_window: program.schedule_window,
-        execution_plan: program.execution_plan,
-        completion_policy: program.completion_policy,
+        schedule: contract.schedule,
+        schedule_window: contract.schedule_window,
+        steps: contract.steps,
+        completion: contract.completion,
         cycle_nonce: identity.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
         consecutive_failures: hot.consecutive_failures,
@@ -615,7 +631,7 @@ pub mod pallet {
       Some(Self::derive_active_actor_view(
         ActorIdentities::<T>::get(actor_id)?,
         ActorHot::<T>::get(actor_id)?,
-        ActorProgram::<T>::get(actor_id)?,
+        ActorContract::<T>::get(actor_id)?,
       ))
     }
 
@@ -626,26 +642,26 @@ pub mod pallet {
     pub(crate) fn active_actor_exists(actor_id: ActorId) -> bool {
       ActorIdentities::<T>::contains_key(actor_id)
         && ActorHot::<T>::contains_key(actor_id)
-        && ActorProgram::<T>::contains_key(actor_id)
+        && ActorContract::<T>::contains_key(actor_id)
     }
 
     pub(crate) fn insert_active_actor(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
-      program: ActorProgramStateOf<T>,
+      contract: ActorContractStateOf<T>,
     ) -> DispatchResult {
-      Self::replace_observation_subscriptions(actor_id, &program.schedule)?;
+      Self::replace_observation_subscriptions(actor_id, &contract.schedule)?;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorProgram::<T>::insert(actor_id, program);
+      ActorContract::<T>::insert(actor_id, contract);
       Ok(())
     }
 
     pub(crate) fn remove_active_actor(actor_id: ActorId) -> DispatchResult {
       Self::remove_observation_subscriptions(actor_id)?;
       ActorHot::<T>::remove(actor_id);
-      ActorProgram::<T>::remove(actor_id);
+      ActorContract::<T>::remove(actor_id);
       ContinuationStateStore::<T>::remove(actor_id);
       Ok(())
     }
@@ -854,7 +870,7 @@ pub mod pallet {
     }
 
     /// Runtime-declared deterministic custody accounts that need a provider at genesis
-    /// but own no generic Actors identity, program, or scheduler state.
+    /// but own no generic Actors identity, contract, or scheduler state.
     fn system_custody_accounts() -> alloc::vec::Vec<ActorId> {
       alloc::vec::Vec::new()
     }
@@ -891,6 +907,20 @@ pub mod pallet {
         execution_plan_steps_bound_is_valid(T::MaxExecutionPlanSteps::get()),
         "MaxExecutionPlanSteps must be in 1..=255"
       );
+      assert_eq!(
+        T::MaxOpeningSnapshotEntries::get(),
+        T::MaxExecutionPlanSteps::get()
+          .checked_mul(2)
+          .expect("opening amount-surface bound must fit u32"),
+        "MaxOpeningSnapshotEntries must equal two per execution-plan step"
+      );
+      assert_eq!(
+        T::MaxOpeningPredicateResults::get(),
+        T::MaxExecutionPlanSteps::get()
+          .checked_mul(T::MaxConditionsPerStep::get())
+          .expect("opening predicate-result bound must fit u32"),
+        "MaxOpeningPredicateResults must equal MaxExecutionPlanSteps * MaxConditionsPerStep"
+      );
       STORAGE_VERSION.put::<Pallet<T>>();
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
@@ -901,7 +931,7 @@ pub mod pallet {
         mutability,
         schedule,
         schedule_window,
-        execution_plan,
+        mut execution_plan,
         completion_policy,
       ) in T::GenesisSystemActors::system_actors()
       {
@@ -924,8 +954,10 @@ pub mod pallet {
           mutability == Mutability::Mutable || !schedule.trigger.manual_source_enabled(),
           "genesis System Immutable Actors cannot admit Manual readiness"
         );
+        Pallet::<T>::canonicalize_preconditions(&mut execution_plan)
+          .expect("genesis preconditions must have valid bounded DNF");
         Pallet::<T>::validate_execution_plan_shape(ActorType::System, &execution_plan)
-          .expect("genesis execution plan must have valid task and condition shapes");
+          .expect("genesis execution plan must have valid task and predicate shapes");
         Pallet::<T>::validate_recipient_configuration(&execution_plan, &sovereign_account)
           .expect("genesis execution plan cannot transfer to its own sovereign account");
         Pallet::<T>::validate_opening_snapshot_surfaces(&execution_plan)
@@ -961,11 +993,12 @@ pub mod pallet {
           schedule_anchor,
           last_cycle_block: None,
         };
-        let program = ActorProgramState {
+        let contract = ActorContractState {
           schedule,
           schedule_window,
-          execution_plan,
-          completion_policy,
+          steps: execution_plan,
+          funding: FundingSourcePolicy::RuntimePolicy,
+          completion: completion_policy,
         };
         let active_count = Pallet::<T>::active_instance_count();
         assert!(
@@ -984,12 +1017,11 @@ pub mod pallet {
         SystemSovereignCount::<T>::mutate(|count| *count += 1);
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        Pallet::<T>::insert_active_actor(actor_id, identity, hot, program)
+        Pallet::<T>::insert_active_actor(actor_id, identity, hot, contract)
           .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}"));
         ActorFunding::<T>::insert(
           actor_id,
           ActorFundingState {
-            funding_source_policy: FundingSourcePolicy::RuntimePolicy,
             funding_accumulated: Default::default(),
             funding_tracked_assets,
           },
@@ -1400,14 +1432,7 @@ pub mod pallet {
       amount_a: T::Balance,
       amount_b: T::Balance,
     },
-    ScheduleUpdated {
-      actor_id: ActorId,
-    },
-    ExecutionPlanUpdated {
-      actor_id: ActorId,
-      completion_policy: CompletionPolicy,
-    },
-    FundingSourcePolicyUpdated {
+    ContractUpdated {
       actor_id: ActorId,
     },
     AutoCloseNonceSet {
@@ -1474,7 +1499,7 @@ pub mod pallet {
     InsufficientBalance,
     InsufficientFee,
     InvalidAmountResolution,
-    InvalidCondition,
+    InvalidPredicate,
     InvalidAutoCloseNonce,
     InvalidScheduleWindow,
     InvalidSplitTransfer,
@@ -1510,7 +1535,7 @@ pub mod pallet {
     ContinuationNotFound,
     ContinuationInvariant,
     ComputationOverflow,
-    EmptyConditionSet,
+    EmptyPreconditions,
     ManualSourceDisabled,
     RecipientDepositUnavailable,
     ObservationSubscriptionCapacityExceeded,
@@ -1528,10 +1553,10 @@ pub mod pallet {
     pub fn create_user_actor(
       origin: OriginFor<T>,
       mutability: Mutability,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_actor(owner, mutability, None, program)
+      Self::do_create_user_actor(owner, mutability, None, contract)
     }
 
     #[pallet::call_index(1)]
@@ -1540,25 +1565,25 @@ pub mod pallet {
       origin: OriginFor<T>,
       owner_slot: u8,
       mutability: Mutability,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_actor(owner, mutability, Some(owner_slot), program)
+      Self::do_create_user_actor(owner, mutability, Some(owner_slot), contract)
     }
 
     #[pallet::call_index(2)]
-    #[pallet::weight(match &program {
-      ProgramInput::Dormant => T::WeightInfo::create_dormant_system_actor(),
-      ProgramInput::Active(_) => T::WeightInfo::create_system_actor(),
+    #[pallet::weight(match &contract {
+      ContractInput::Dormant => T::WeightInfo::create_dormant_system_actor(),
+      ContractInput::Active(_) => T::WeightInfo::create_system_actor(),
     })]
     pub fn create_system_actor(
       origin: OriginFor<T>,
       owner: T::AccountId,
       mutability: Mutability,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
-      Self::do_create_system_actor(owner, mutability, program, None)
+      Self::do_create_system_actor(owner, mutability, contract, None)
     }
 
     #[pallet::call_index(3)]
@@ -1568,7 +1593,7 @@ pub mod pallet {
       sovereign_id: SystemSovereignId,
       owner: T::AccountId,
       mutability: Mutability,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
       match SystemSovereigns::<T>::get(sovereign_id) {
@@ -1580,7 +1605,7 @@ pub mod pallet {
           return Err(Error::<T>::SystemSovereignUnknown.into());
         }
       }
-      Self::do_create_system_actor(owner, mutability, program, Some(sovereign_id))
+      Self::do_create_system_actor(owner, mutability, contract, Some(sovereign_id))
     }
 
     #[pallet::call_index(4)]
@@ -1671,53 +1696,6 @@ pub mod pallet {
       })
     }
 
-    #[pallet::call_index(7)]
-    #[pallet::weight(
-      T::WeightInfo::update_funding_source_policy()
-        .saturating_add(Pallet::<T>::close_dispatch_weight_upper())
-    )]
-    pub fn update_funding_source_policy(
-      origin: OriginFor<T>,
-      actor_id: ActorId,
-      policy: FundingSourcePolicyOf<T>,
-    ) -> DispatchResult {
-      let instance = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      Self::ensure_control_origin(origin, &instance)?;
-      Self::ensure_not_system_immutable(&instance)?;
-      if Self::expiry_substitution_due(actor_id, &instance)? {
-        return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
-      }
-      ensure!(
-        instance.mutability == Mutability::Mutable,
-        Error::<T>::ImmutableActor
-      );
-      let current_funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      if current_funding.funding_source_policy == policy {
-        return Ok(());
-      }
-      let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_mutation_allowed(&instance, now)?;
-      Self::with_control_transaction(|| {
-        let continuation_cancelled = Self::cancel_continuation_internal(
-          actor_id,
-          CancellationReason::FundingPolicyChanged,
-          None,
-        )?;
-        ActorFunding::<T>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("active actor funding existence was prevalidated")
-            .funding_source_policy = policy;
-        });
-        Self::record_control_mutation(actor_id, now);
-        Self::deposit_event(Event::FundingSourcePolicyUpdated { actor_id });
-        if continuation_cancelled {
-          Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
-        }
-        Ok(())
-      })
-    }
-
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
@@ -1732,13 +1710,18 @@ pub mod pallet {
     }
 
     #[pallet::call_index(9)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
-    pub fn update_schedule(
+    #[pallet::weight(T::WeightInfo::update_contract().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
+    pub fn update_contract(
       origin: OriginFor<T>,
       actor_id: ActorId,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
+      mut steps: ExecutionPlanOf<T>,
+      funding: FundingSourcePolicyOf<T>,
+      completion: CompletionPolicy,
     ) -> DispatchResult {
+      ensure!(!steps.is_empty(), Error::<T>::EmptyExecutionPlan);
+      Self::canonicalize_preconditions(&mut steps)?;
       Self::validate_schedule(&schedule)?;
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
@@ -1746,8 +1729,8 @@ pub mod pallet {
       Self::validate_future_schedule_targets(actor_id, &schedule, schedule_window)?;
       let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_retry_later_allowed(snapshot.mutability, &steps)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      Self::validate_opening_snapshot_surfaces(&snapshot.execution_plan)?;
       if Self::expiry_substitution_due(actor_id, &snapshot)? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1755,34 +1738,87 @@ pub mod pallet {
         snapshot.mutability == Mutability::Mutable,
         Error::<T>::ImmutableActor
       );
-      if snapshot.schedule == schedule && snapshot.schedule_window == schedule_window {
+      let schedule_changed =
+        snapshot.schedule != schedule || snapshot.schedule_window != schedule_window;
+      let steps_changed = snapshot.steps != steps;
+      let funding_changed = ActorContract::<T>::get(actor_id)
+        .ok_or(Error::<T>::ActorNotFound)?
+        .funding
+        != funding;
+      let completion_changed = snapshot.completion != completion;
+      if !schedule_changed && !steps_changed && !funding_changed && !completion_changed {
         return Ok(());
       }
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
-      // Semantic schedule replacement resets the Active-epoch anchor unconditionally
-      // (spec 4.3); the exact no-op path above already returned without mutation.
+      Self::validate_execution_plan_shape(snapshot.actor_class.actor_type(), &steps)?;
+      Self::validate_recipient_configuration(&steps, &snapshot.sovereign_account)?;
+      Self::validate_opening_snapshot_surfaces(&steps)?;
+      Self::ensure_execution_plan_fits_idle_budget(snapshot.actor_class.actor_type(), &steps)?;
+      ensure!(
+        (steps.len() as u32) <= T::MaxExecutionPlanSteps::get(),
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if snapshot.actor_class.actor_type() == ActorType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&steps),
+          Error::<T>::MintNotAllowedForUserActor
+        );
+      }
+      let new_tracked = Self::derive_funding_tracked_assets(&steps)?;
+      let mut funding_state = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      funding_state.funding_tracked_assets = new_tracked.clone();
+      funding_state
+        .funding_accumulated
+        .retain(|asset, _| new_tracked.contains(asset));
+      let cancellation_reason = if schedule_changed {
+        CancellationReason::ScheduleChanged
+      } else if steps_changed {
+        CancellationReason::StepsChanged
+      } else if funding_changed {
+        CancellationReason::FundingChanged
+      } else {
+        CancellationReason::CompletionChanged
+      };
       let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
-      Self::preflight_observation_subscription_replace(actor_id, &schedule)?;
+      if schedule_changed {
+        Self::preflight_observation_subscription_replace(actor_id, &schedule)?;
+      }
       Self::with_control_transaction(|| {
-        Self::cancel_continuation_internal(actor_id, CancellationReason::ScheduleChanged, None)?;
-        Self::replace_observation_subscriptions(actor_id, &schedule)?;
-        ActorProgram::<T>::mutate(actor_id, |maybe| {
-          let program = maybe
+        let continuation_cancelled =
+          Self::cancel_continuation_internal(actor_id, cancellation_reason, None)?;
+        if schedule_changed {
+          Self::replace_observation_subscriptions(actor_id, &schedule)?;
+        }
+        ActorContract::<T>::mutate(actor_id, |maybe| {
+          let contract = maybe
             .as_mut()
-            .expect("active actor program existence was prevalidated");
-          program.schedule = schedule;
-          program.schedule_window = schedule_window;
+            .expect("active Actor Contract existence was prevalidated");
+          contract.schedule = schedule;
+          contract.schedule_window = schedule_window;
+          contract.steps = steps;
+          contract.funding = funding;
+          contract.completion = completion;
         });
         ActorHot::<T>::mutate(actor_id, |maybe| {
-          if let Some(hot) = maybe.as_mut() {
+          let hot = maybe
+            .as_mut()
+            .expect("active actor hot-state existence was prevalidated");
+          if schedule_changed {
             hot.schedule_anchor = schedule_anchor;
             hot.terminal_at = schedule_window.map(|window| Self::window_terminal_at(&window));
-            Self::record_control_mutation(actor_id, now);
           }
+          if steps_changed {
+            hot.consecutive_failures = 0;
+          }
+          Self::record_control_mutation(actor_id, now);
         });
-        Self::deposit_event(Event::ScheduleUpdated { actor_id });
-        Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
+        ActorFunding::<T>::insert(actor_id, funding_state);
+        Self::deposit_event(Event::ContractUpdated { actor_id });
+        if schedule_changed || continuation_cancelled {
+          Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
+        }
+        Ok(())
       })
     }
 
@@ -1801,90 +1837,6 @@ pub mod pallet {
     pub fn permissionless_sweep(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let _who = ensure_signed(origin)?;
       Self::evaluate_actor_liveness(actor_id)
-    }
-
-    #[pallet::call_index(12)]
-    #[pallet::weight(T::WeightInfo::update_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
-    pub fn update_execution_plan(
-      origin: OriginFor<T>,
-      actor_id: ActorId,
-      execution_plan: ExecutionPlanOf<T>,
-      completion_policy: CompletionPolicy,
-    ) -> DispatchResult {
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      Self::ensure_retry_later_allowed(snapshot.mutability, &execution_plan)?;
-      Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::expiry_substitution_due(actor_id, &snapshot)? {
-        return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
-      }
-      ensure!(
-        snapshot.mutability == Mutability::Mutable,
-        Error::<T>::ImmutableActor
-      );
-      let execution_plan_changed = snapshot.execution_plan != execution_plan;
-      let completion_policy_changed = snapshot.completion_policy != completion_policy;
-      if !execution_plan_changed && !completion_policy_changed {
-        return Ok(());
-      }
-      let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_mutation_allowed(&snapshot, now)?;
-      Self::validate_execution_plan_shape(snapshot.actor_class.actor_type(), &execution_plan)?;
-      Self::validate_recipient_configuration(&execution_plan, &snapshot.sovereign_account)?;
-      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
-      Self::ensure_execution_plan_fits_idle_budget(
-        snapshot.actor_class.actor_type(),
-        &execution_plan,
-      )?;
-      ensure!(
-        (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
-      );
-      if snapshot.actor_class.actor_type() == ActorType::User {
-        ensure!(
-          !Self::execution_plan_contains_mint(&execution_plan),
-          Error::<T>::MintNotAllowedForUserActor
-        );
-      }
-      let new_tracked = Self::derive_funding_tracked_assets(&execution_plan)?;
-      let mut funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      funding.funding_tracked_assets = new_tracked.clone();
-      funding
-        .funding_accumulated
-        .retain(|asset, _| new_tracked.contains(asset));
-      let cancellation_reason = if execution_plan_changed {
-        CancellationReason::ExecutionPlanChanged
-      } else {
-        CancellationReason::CompletionPolicyChanged
-      };
-      Self::with_control_transaction(|| {
-        let continuation_cancelled =
-          Self::cancel_continuation_internal(actor_id, cancellation_reason, None)?;
-        ActorProgram::<T>::mutate(actor_id, |maybe| {
-          let program = maybe
-            .as_mut()
-            .expect("active actor program existence was prevalidated");
-          program.execution_plan = execution_plan;
-          program.completion_policy = completion_policy;
-        });
-        ActorHot::<T>::mutate(actor_id, |maybe| {
-          let hot = maybe
-            .as_mut()
-            .expect("active actor hot-state existence was prevalidated");
-          hot.consecutive_failures = 0;
-          Self::record_control_mutation(actor_id, now);
-        });
-        ActorFunding::<T>::insert(actor_id, funding);
-        Self::deposit_event(Event::ExecutionPlanUpdated {
-          actor_id,
-          completion_policy,
-        });
-        if continuation_cancelled {
-          Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
-        }
-        Ok(())
-      })
     }
 
     #[pallet::call_index(13)]
@@ -1959,7 +1911,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(15)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
+    #[pallet::weight(T::WeightInfo::update_contract().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn set_auto_close_at_cycle_nonce(
       origin: OriginFor<T>,
       actor_id: ActorId,
@@ -1991,7 +1943,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(16)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
+    #[pallet::weight(T::WeightInfo::update_contract().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn increment_auto_close_nonce(
       origin: OriginFor<T>,
       actor_id: ActorId,
@@ -2033,7 +1985,7 @@ pub mod pallet {
     pub fn activate_actor(
       origin: OriginFor<T>,
       actor_id: ActorId,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
       let identity = ActorIdentities::<T>::get(actor_id).ok_or_else(|| {
         if Self::active_actor_exists(actor_id) {
@@ -2043,7 +1995,7 @@ pub mod pallet {
         }
       })?;
       Self::ensure_identity_control_origin(origin, &identity)?;
-      Self::do_activate_actor(actor_id, identity, program)
+      Self::do_activate_actor(actor_id, identity, contract)
     }
 
     #[pallet::call_index(18)]
@@ -2128,7 +2080,8 @@ pub mod pallet {
       let mut upper = T::WeightInfo::step_orchestration(execution_plan.len() as u32);
       for step_index in start_cursor..execution_plan.len() {
         let step = &execution_plan[step_index];
-        let condition_evaluation = T::WeightInfo::condition_set_evaluation(step.conditions.len());
+        let condition_evaluation =
+          T::WeightInfo::predicate_set_evaluation(step.preconditions.evaluation_units());
         upper = upper
           .saturating_add(condition_evaluation)
           .saturating_add(Self::weight_upper_bound(&step.task));
@@ -2167,7 +2120,7 @@ pub mod pallet {
       let mut inputs = BoundedVec::default();
       for step in execution_plan {
         let evaluation = if actor_type == ActorType::User {
-          Self::compute_eval_fee_checked(step.conditions.len())?
+          Self::compute_eval_fee_checked(step.preconditions.evaluation_units())?
         } else {
           Zero::zero()
         };
@@ -2197,11 +2150,11 @@ pub mod pallet {
     ) -> Weight {
       let mut upper = Self::compute_cycle_weight_upper_from(
         instance.actor_class.actor_type(),
-        &instance.execution_plan,
+        &instance.steps,
         start_cursor,
       );
       if instance.cycle_state == CycleState::Suspended {
-        let suffix_steps = instance.execution_plan.len().saturating_sub(start_cursor) as u32;
+        let suffix_steps = instance.steps.len().saturating_sub(start_cursor) as u32;
         // Retry and terminal transition touch the same bounded Continuation value. The transition
         // envelope already carries its maximum proof, so only incremental RefTime composes here.
         let retry = T::WeightInfo::continuation_retry();
@@ -2219,7 +2172,7 @@ pub mod pallet {
     ) -> BalanceOf<T> {
       Self::attempt_fee_envelope(
         instance.actor_class.actor_type(),
-        &instance.execution_plan,
+        &instance.steps,
         start_cursor,
       )
       .expect("admitted execution plans have a checked fee envelope")
@@ -2586,22 +2539,22 @@ pub mod pallet {
       owner: T::AccountId,
       mutability: Mutability,
       preferred_slot: Option<u8>,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
-      match program {
-        ProgramInput::Dormant => {
+      match contract {
+        ContractInput::Dormant => {
           ensure!(
             mutability == Mutability::Mutable,
             Error::<T>::ImmutableActor
           );
           Self::do_create_dormant_actor(owner, ActorType::User, preferred_slot, None)
         }
-        ProgramInput::Active(ActiveProgramInput {
+        ContractInput::Active(ActiveContractInput {
           schedule,
           schedule_window,
-          execution_plan,
-          completion_policy,
-          funding_source_policy,
+          steps: execution_plan,
+          completion: completion_policy,
+          funding: funding_source_policy,
           auto_close_at_cycle_nonce,
         }) => Self::do_create_actor(
           owner,
@@ -2622,11 +2575,11 @@ pub mod pallet {
     fn do_create_system_actor(
       owner: T::AccountId,
       mutability: Mutability,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
       requested_system_sovereign_id: Option<SystemSovereignId>,
     ) -> DispatchResult {
-      match program {
-        ProgramInput::Dormant => {
+      match contract {
+        ContractInput::Dormant => {
           ensure!(
             mutability == Mutability::Mutable,
             Error::<T>::ImmutableActor
@@ -2638,12 +2591,12 @@ pub mod pallet {
             requested_system_sovereign_id,
           )
         }
-        ProgramInput::Active(ActiveProgramInput {
+        ContractInput::Active(ActiveContractInput {
           schedule,
           schedule_window,
-          execution_plan,
-          completion_policy,
-          funding_source_policy,
+          steps: execution_plan,
+          completion: completion_policy,
+          funding: funding_source_policy,
           auto_close_at_cycle_nonce,
         }) => Self::do_create_actor(
           owner,
@@ -2667,8 +2620,8 @@ pub mod pallet {
       mutability: Mutability,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
-      completion_policy: CompletionPolicy,
+      mut steps: ExecutionPlanOf<T>,
+      completion: CompletionPolicy,
       funding_source_policy: FundingSourcePolicyOf<T>,
       auto_close_at_cycle_nonce: Option<u64>,
       preferred_user_slot: Option<u8>,
@@ -2678,14 +2631,15 @@ pub mod pallet {
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      ensure!(!steps.is_empty(), Error::<T>::EmptyExecutionPlan);
+      Self::canonicalize_preconditions(&mut steps)?;
       ensure!(
-        (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
+        (steps.len() as u32) <= T::MaxExecutionPlanSteps::get(),
         Error::<T>::ExecutionPlanTooLong
       );
       if actor_type == ActorType::User {
         ensure!(
-          !Self::execution_plan_contains_mint(&execution_plan),
+          !Self::execution_plan_contains_mint(&steps),
           Error::<T>::MintNotAllowedForUserActor
         );
       }
@@ -2694,9 +2648,9 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_future_schedule_targets(NextActorId::<T>::get(), &schedule, schedule_window)?;
-      Self::validate_execution_plan_shape(actor_type, &execution_plan)?;
-      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
-      Self::ensure_retry_later_allowed(mutability, &execution_plan)?;
+      Self::validate_execution_plan_shape(actor_type, &steps)?;
+      Self::validate_opening_snapshot_surfaces(&steps)?;
+      Self::ensure_retry_later_allowed(mutability, &steps)?;
       if let Some(target_nonce) = auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(0, target_nonce)?;
       }
@@ -2715,8 +2669,8 @@ pub mod pallet {
         ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
         Error::<T>::ActorIdentityCapacityExceeded
       );
-      Self::ensure_execution_plan_fits_idle_budget(actor_type, &execution_plan)?;
-      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
+      Self::ensure_execution_plan_fits_idle_budget(actor_type, &steps)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&steps)?;
       let actor_id = NextActorId::<T>::get();
       ensure!(
         !Self::active_actor_exists(actor_id) && !ActorIdentities::<T>::contains_key(actor_id),
@@ -2753,7 +2707,7 @@ pub mod pallet {
         }
         ActorType::System => Self::sovereign_account_id_system(system_sovereign_id),
       };
-      Self::validate_recipient_configuration(&execution_plan, &prospective_sovereign_account)?;
+      Self::validate_recipient_configuration(&steps, &prospective_sovereign_account)?;
       let next_id = actor_id.checked_add(1).ok_or(Error::<T>::ActorIdOverflow)?;
       let now = frame_system::Pallet::<T>::block_number();
       polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -2779,9 +2733,7 @@ pub mod pallet {
           // Spec 7.1: the allocated sovereign fee-native balance must cover
           // `MinUserBalance + attempt_fee_envelope(plan, 0, User).total` before the opening
           // fee or Active state commits; Dormant creation remains unfunded.
-          if let Err(error) =
-            Self::ensure_user_active_prefunding(&sovereign_account, &execution_plan)
-          {
+          if let Err(error) = Self::ensure_user_active_prefunding(&sovereign_account, &steps) {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
           if let Err(error) = Self::charge_creation_fee(&owner) {
@@ -2817,20 +2769,20 @@ pub mod pallet {
           schedule_anchor,
           last_cycle_block: None,
         };
-        let program = ActorProgramState {
+        let contract = ActorContractState {
           schedule,
           schedule_window,
-          execution_plan,
-          completion_policy,
+          steps: steps,
+          funding: funding_source_policy,
+          completion: completion,
         };
         SovereignIndex::<T>::insert(sovereign_account.clone(), actor_id);
-        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, program) {
+        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, contract) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
           actor_id,
           ActorFundingState {
-            funding_source_policy,
             funding_accumulated: Default::default(),
             funding_tracked_assets,
           },
@@ -2893,16 +2845,16 @@ pub mod pallet {
     fn do_activate_actor(
       actor_id: ActorId,
       mut identity: ActorIdentityOf<T>,
-      program: ProgramInputOf<T>,
+      contract: ContractInputOf<T>,
     ) -> DispatchResult {
-      let ProgramInput::Active(ActiveProgramInput {
+      let ContractInput::Active(ActiveContractInput {
         schedule,
         schedule_window,
-        execution_plan,
-        completion_policy,
-        funding_source_policy,
+        steps: mut execution_plan,
+        completion: completion_policy,
+        funding: funding_source_policy,
         auto_close_at_cycle_nonce,
-      }) = program
+      }) = contract
       else {
         return Err(Error::<T>::EmptyExecutionPlan.into());
       };
@@ -2916,6 +2868,7 @@ pub mod pallet {
       );
       let actor_type = identity.actor_class.actor_type();
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      Self::canonicalize_preconditions(&mut execution_plan)?;
       ensure!(
         (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
         Error::<T>::ExecutionPlanTooLong
@@ -2969,11 +2922,12 @@ pub mod pallet {
         schedule_anchor,
         last_cycle_block: None,
       };
-      let program = ActorProgramState {
+      let contract = ActorContractState {
         schedule,
         schedule_window,
-        execution_plan,
-        completion_policy,
+        steps: execution_plan,
+        funding: funding_source_policy,
+        completion: completion_policy,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if !ActorIdentities::<T>::contains_key(actor_id) || Self::active_actor_exists(actor_id) {
@@ -2981,13 +2935,12 @@ pub mod pallet {
             Error::<T>::ActorAlreadyActive.into(),
           ));
         }
-        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, program) {
+        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, contract) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
           actor_id,
           ActorFundingState {
-            funding_source_policy,
             funding_accumulated: Default::default(),
             funding_tracked_assets,
           },
@@ -3201,6 +3154,54 @@ pub mod pallet {
       Ok(())
     }
 
+    fn canonicalize_preconditions(execution_plan: &mut ExecutionPlanOf<T>) -> DispatchResult {
+      let mut opening_predicate_count = 0u32;
+      for step in execution_plan.iter_mut() {
+        let Preconditions::AnyOf(clauses) = &mut step.preconditions else {
+          continue;
+        };
+        ensure!(!clauses.is_empty(), Error::<T>::EmptyPreconditions);
+        let mut canonical_clauses = alloc::vec::Vec::with_capacity(clauses.len());
+        for clause in clauses.iter() {
+          ensure!(!clause.is_empty(), Error::<T>::EmptyPreconditions);
+          let mut predicates = clause.to_vec();
+          predicates.sort_by_key(Encode::encode);
+          predicates.dedup();
+          canonical_clauses.push(
+            BoundedVec::try_from(predicates).map_err(|_| Error::<T>::AdmissionBoundOverflow)?,
+          );
+        }
+        canonical_clauses.sort_by_key(Encode::encode);
+        ensure!(
+          !canonical_clauses.windows(2).any(|pair| pair[0] == pair[1]),
+          Error::<T>::InvalidPredicate
+        );
+        let predicate_count = canonical_clauses
+          .iter()
+          .try_fold(0u32, |total, clause| total.checked_add(clause.len() as u32))
+          .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+        ensure!(
+          predicate_count <= T::MaxConditionsPerStep::get(),
+          Error::<T>::AdmissionBoundOverflow
+        );
+        let step_opening_count = canonical_clauses
+          .iter()
+          .flat_map(|clause| clause.iter())
+          .filter(|timed| timed.timing == ObservationTiming::Opening)
+          .count() as u32;
+        opening_predicate_count = opening_predicate_count
+          .checked_add(step_opening_count)
+          .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+        *clauses = BoundedVec::try_from(canonical_clauses)
+          .map_err(|_| Error::<T>::AdmissionBoundOverflow)?;
+      }
+      ensure!(
+        opening_predicate_count <= T::MaxOpeningPredicateResults::get(),
+        Error::<T>::AdmissionBoundOverflow
+      );
+      Ok(())
+    }
+
     fn validate_execution_plan_shape(
       actor_type: ActorType,
       execution_plan: &ExecutionPlanOf<T>,
@@ -3217,20 +3218,22 @@ pub mod pallet {
             Error::<T>::InvalidRetryAttemptLimit
           );
         }
-        ensure!(
-          !matches!(
-            &step.conditions,
-            ConditionSet::All(conditions) | ConditionSet::Any(conditions) if conditions.is_empty()
-          ),
-          Error::<T>::EmptyConditionSet
-        );
-        if let ConditionSet::All(conditions) | ConditionSet::Any(conditions) = &step.conditions {
-          for condition in conditions {
-            let max_age_blocks = match condition {
-              Condition::ObservationAbove { max_age_blocks, .. }
-              | Condition::ObservationBelow { max_age_blocks, .. }
-              | Condition::ObservationEquals { max_age_blocks, .. }
-              | Condition::ObservationNotEquals { max_age_blocks, .. } => Some(max_age_blocks),
+        if let Preconditions::AnyOf(clauses) = &step.preconditions {
+          ensure!(!clauses.is_empty(), Error::<T>::EmptyPreconditions);
+          ensure!(
+            clauses.iter().all(|clause| !clause.is_empty()),
+            Error::<T>::EmptyPreconditions
+          );
+          ensure!(
+            step.preconditions.predicate_count() <= T::MaxConditionsPerStep::get(),
+            Error::<T>::AdmissionBoundOverflow
+          );
+          for timed in clauses.iter().flat_map(|clause| clause.iter()) {
+            let max_age_blocks = match &timed.predicate {
+              Predicate::ObservationAbove { max_age_blocks, .. }
+              | Predicate::ObservationBelow { max_age_blocks, .. }
+              | Predicate::ObservationEquals { max_age_blocks, .. }
+              | Predicate::ObservationNotEquals { max_age_blocks, .. } => Some(max_age_blocks),
               _ => None,
             };
             if let Some(max_age_blocks) = max_age_blocks {
@@ -3762,16 +3765,16 @@ pub mod pallet {
         ));
       }
       for actor_id in ActorHot::<T>::iter_keys() {
-        if !ActorProgram::<T>::contains_key(actor_id) {
+        if !ActorContract::<T>::contains_key(actor_id) {
           return Err(TryRuntimeError::Other(
-            "ActorHot entry has no matching ActorProgram entry",
+            "ActorHot entry has no matching ActorContract entry",
           ));
         }
       }
-      for actor_id in ActorProgram::<T>::iter_keys() {
+      for actor_id in ActorContract::<T>::iter_keys() {
         if !ActorHot::<T>::contains_key(actor_id) {
           return Err(TryRuntimeError::Other(
-            "ActorProgram entry has no matching ActorHot entry",
+            "ActorContract entry has no matching ActorHot entry",
           ));
         }
       }
@@ -3782,8 +3785,8 @@ pub mod pallet {
         let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
           "ActorHot entry has no matching ActorIdentity entry",
         ))?;
-        let program = ActorProgram::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ActorHot entry has no matching ActorProgram entry",
+        let contract = ActorContract::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+          "ActorHot entry has no matching ActorContract entry",
         ))?;
         let has_continuation = ContinuationStateStore::<T>::contains_key(actor_id);
         if (hot.cycle_state == CycleState::Suspended) != has_continuation {
@@ -3794,17 +3797,17 @@ pub mod pallet {
         // Terminal membership is derived from the schedule window: `terminal_at` is the sole
         // terminal-membership authority and must equal the window's exact terminal block, or be
         // absent without a window (spec 5.1).
-        let program_window = program.schedule_window;
+        let program_window = contract.schedule_window;
         let expected_terminal_at = program_window.map(|window| Self::window_terminal_at(&window));
         if hot.terminal_at != expected_terminal_at {
           return Err(TryRuntimeError::Other(
             "ActorHot terminal_at disagrees with schedule window terminal membership",
           ));
         }
-        let instance = Self::derive_active_actor_view(identity, hot, program);
+        let instance = Self::derive_active_actor_view(identity, hot, contract);
         if !Self::execution_plan_admission_weight_upper(
           instance.actor_class.actor_type(),
-          &instance.execution_plan,
+          &instance.steps,
         )
         .all_lte(
           Self::guaranteed_actor_service_weight().ok_or(TryRuntimeError::Other(
@@ -3812,7 +3815,7 @@ pub mod pallet {
           ))?,
         ) {
           return Err(TryRuntimeError::Other(
-            "active actor plan exceeds current actor-service envelope",
+            "active Actor Contract exceeds current actor-service envelope",
           ));
         }
         max_id = Some(max_id.map_or(actor_id, |prev| prev.max(actor_id)));
@@ -3868,19 +3871,19 @@ pub mod pallet {
         let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
           "ContinuationState entry has no matching ActorIdentity entry",
         ))?;
-        let program = ActorProgram::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ContinuationState entry has no matching ActorProgram entry",
+        let contract = ActorContract::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+          "ContinuationState entry has no matching ActorContract entry",
         ))?;
         if hot.cycle_state != CycleState::Suspended
           || identity.mutability != Mutability::Mutable
           || identity.cycle_nonce == 0
-          || continuation.cursor >= program.execution_plan.len() as u32
+          || continuation.cursor >= contract.steps.len() as u32
         {
           return Err(TryRuntimeError::Other(
             "ContinuationState violates run marker, mutability, or cursor bounds",
           ));
         }
-        let max_attempts = program.execution_plan[continuation.cursor as usize]
+        let max_attempts = contract.steps[continuation.cursor as usize]
           .on_error
           .retry_max_attempts()
           .ok_or(TryRuntimeError::Other(
@@ -3894,7 +3897,7 @@ pub mod pallet {
           ));
         }
         let expected_surfaces =
-          Self::opening_surfaces(&program.execution_plan, continuation.cursor as usize);
+          Self::opening_surfaces(&contract.steps, continuation.cursor as usize);
         let mut surfaces_match = expected_surfaces.len() == continuation.opening_snapshot.len();
         for surface in &expected_surfaces {
           if !continuation.opening_snapshot.contains_key(surface) {
@@ -3905,6 +3908,23 @@ pub mod pallet {
         if !surfaces_match {
           return Err(TryRuntimeError::Other(
             "ContinuationState opening snapshot disagrees with unresolved suffix",
+          ));
+        }
+        let expected_opening_predicates = contract
+          .steps
+          .iter()
+          .map(|step| match &step.preconditions {
+            Preconditions::Unconditional => 0,
+            Preconditions::AnyOf(clauses) => clauses
+              .iter()
+              .flat_map(|clause| clause.iter())
+              .filter(|timed| timed.timing == ObservationTiming::Opening)
+              .count(),
+          })
+          .sum::<usize>();
+        if continuation.opening_predicate_results.len() != expected_opening_predicates {
+          return Err(TryRuntimeError::Other(
+            "ContinuationState opening predicate results disagree with the Actor Contract",
           ));
         }
       }

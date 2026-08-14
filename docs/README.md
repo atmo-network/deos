@@ -54,7 +54,7 @@ The flagship economic standard combining minting curves with automatic liquidity
   Package-owned host-runtime checklist for reusing `pallet-deos-actors` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
 
 - [DEOS Actors Control-Plane Contract](./actors-control-plane.contract.en.md)
-  Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded Actor programs.
+  Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded Actor Contracts.
 
 - [DEOS Staking Specification](../template/pallets/staking/docs/specification.en.md)
   Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.

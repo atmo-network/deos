@@ -16,11 +16,11 @@ import { blake2AsHex } from '@polkadot/util-crypto';
 
 import { ACTORS_MAX_OWNER_SLOTS } from './actors-protocol-bounds.ts';
 import {
-  type ActorPlanArtifact,
-  type ActorPlanHex,
-  type ActorPlanRuntimeIdentity,
-  inspectActorPlanArtifact,
-} from './plan-artifact.ts';
+  type ActorContractArtifact,
+  type ActorContractHex,
+  type ActorContractRuntimeIdentity,
+  inspectActorContractArtifact,
+} from './contract-artifact.ts';
 
 export type ActorCompositionTarget =
   | { type: 'Create'; owner?: string; ownerSlot?: number }
@@ -28,8 +28,8 @@ export type ActorCompositionTarget =
   | { type: 'ReattachSystem'; sovereignId: bigint; owner: string };
 
 export type ActorGovernanceComposition = {
-  planId: ActorPlanHex;
-  runtime: ActorPlanRuntimeIdentity & { metadataHash: ActorPlanHex };
+  contractId: ActorContractHex;
+  runtime: ActorContractRuntimeIdentity & { metadataHash: ActorContractHex };
   call: {
     pallet: string;
     method:
@@ -38,26 +38,26 @@ export type ActorGovernanceComposition = {
       | 'create_system_actor'
       | 'activate_actor'
       | 'create_system_actor_at_sovereign_id';
-    bytes: ActorPlanHex;
+    bytes: ActorContractHex;
     byteLength: number;
-    hash: ActorPlanHex;
+    hash: ActorContractHex;
   };
   authority: {
     requiredOrigin: 'OwnerSigned' | 'Root';
     governanceDomain: 'StrategicNative' | null;
   };
   preimage: {
-    bytes: ActorPlanHex;
-    hash: ActorPlanHex;
+    bytes: ActorContractHex;
+    hash: ActorContractHex;
     governanceAdmission: 'DirectCallOnly' | 'UnsupportedActorRootCall';
     reason: string;
   };
 };
 
-function bytesToHex(bytes: Uint8Array): ActorPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorContractHex {
   let value = '0x';
   for (const byte of bytes) value += byte.toString(16).padStart(2, '0');
-  return value as ActorPlanHex;
+  return value as ActorContractHex;
 }
 
 function validateActorId(value: bigint) {
@@ -74,19 +74,19 @@ function validateOwner(owner: string | undefined) {
 }
 
 export function composeActorRuntimeCall(input: {
-  artifact: ActorPlanArtifact;
+  artifact: ActorContractArtifact;
   metadataBytes: Uint8Array;
-  runtime: ActorPlanRuntimeIdentity;
+  runtime: ActorContractRuntimeIdentity;
   target: ActorCompositionTarget;
 }): ActorGovernanceComposition {
-  const inspection = inspectActorPlanArtifact(
+  const inspection = inspectActorContractArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
   );
   if (!inspection.valid) {
     throw new Error(
-      `Invalid Actors plan artifact: ${inspection.errors.join('; ')}`,
+      `Invalid Actors Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
 
@@ -94,7 +94,7 @@ export function composeActorRuntimeCall(input: {
     type: input.artifact.mutability,
     value: undefined,
   };
-  const program = inspection.runtimeValue;
+  const contract = inspection.runtimeValue;
   let method: ActorGovernanceComposition['call']['method'];
   let callValue: unknown;
   let requiredOrigin: ActorGovernanceComposition['authority']['requiredOrigin'];
@@ -107,7 +107,7 @@ export function composeActorRuntimeCall(input: {
         }
         if (input.target.ownerSlot == null) {
           method = 'create_user_actor';
-          callValue = { mutability, program };
+          callValue = { mutability, contract };
         } else {
           if (
             !Number.isSafeInteger(input.target.ownerSlot) ||
@@ -122,7 +122,7 @@ export function composeActorRuntimeCall(input: {
           callValue = {
             owner_slot: input.target.ownerSlot,
             mutability,
-            program,
+            contract,
           };
         }
         requiredOrigin = 'OwnerSigned';
@@ -136,7 +136,7 @@ export function composeActorRuntimeCall(input: {
         callValue = {
           owner: validateOwner(input.target.owner),
           mutability,
-          program,
+          contract,
         };
         requiredOrigin = 'Root';
       }
@@ -144,7 +144,7 @@ export function composeActorRuntimeCall(input: {
     case 'Activate':
       validateActorId(input.target.actorId);
       method = 'activate_actor';
-      callValue = { actor_id: input.target.actorId, program };
+      callValue = { actor_id: input.target.actorId, contract };
       requiredOrigin =
         input.artifact.actorType === 'User' ? 'OwnerSigned' : 'Root';
       break;
@@ -160,7 +160,7 @@ export function composeActorRuntimeCall(input: {
         sovereign_id: input.target.sovereignId,
         owner: validateOwner(input.target.owner),
         mutability,
-        program,
+        contract,
       };
       requiredOrigin = 'Root';
       break;
@@ -198,11 +198,11 @@ export function composeActorRuntimeCall(input: {
       'RuntimeCall must decode and re-encode to exact SCALE bytes',
     );
   }
-  const callHash = blake2AsHex(bytes, 256) as ActorPlanHex;
+  const callHash = blake2AsHex(bytes, 256) as ActorContractHex;
   const directOwnerCall = requiredOrigin === 'OwnerSigned';
 
   return {
-    planId: input.artifact.planId,
+    contractId: input.artifact.contractId,
     runtime: {
       ...input.runtime,
       metadataHash: input.artifact.metadataHash,

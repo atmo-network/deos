@@ -16,7 +16,7 @@ import {
 const hash = (byte) => `0x${byte.repeat(64)}`;
 
 const artifact = {
-  format: 'deos.actor.plan',
+  format: 'deos.actor.contract',
   formatVersion: 1,
   genesisHash: hash('1'),
   specVersion: 1,
@@ -24,8 +24,8 @@ const artifact = {
   metadataHash: hash('2'),
   actorType: 'User',
   mutability: 'Mutable',
-  programScale: '0x00',
-  planId: hash('3'),
+  contractScale: '0x00',
+  contractId: hash('3'),
 };
 
 function observation(overrides) {

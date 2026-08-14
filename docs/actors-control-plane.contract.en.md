@@ -6,7 +6,7 @@
 
 The control plane operates above `pallet-deos-actors`. It does not change task semantics, scheduler behavior, storage, dispatch indices, or runtime admission. Its first obligation is to preserve an exact relationship between a human-readable plan and the runtime bytes that governance or an owner may submit.
 
-This contract owns executable plan-artifact identity, structural diff rules, forecast provenance, simulation boundaries, governance composition inputs, and materialized history classification. The DEOS Actors specification remains authoritative for semantics; runtime metadata and SCALE remain authoritative for concrete encoding.
+This contract owns executable contract-artifact identity, structural diff rules, forecast provenance, simulation boundaries, governance composition inputs, and materialized history classification. The DEOS Actors specification remains authoritative for semantics; runtime metadata and SCALE remain authoritative for concrete encoding.
 
 ## Canonical Executable Plan
 
@@ -14,7 +14,7 @@ A canonical executable plan is a chain-bound artifact with these required fields
 
 | Field | Encoding | Meaning |
 | --- | --- | --- |
-| `format` | UTF-8 literal | `deos.actor.plan` |
+| `format` | UTF-8 literal | `deos.actor.contract` |
 | `formatVersion` | unsigned integer | Control-plane envelope version; initially `1` |
 | `genesisHash` | `0x`-prefixed 32-byte hex | Target chain identity |
 | `specVersion` | unsigned integer | Runtime semantic compatibility marker |
@@ -22,30 +22,30 @@ A canonical executable plan is a chain-bound artifact with these required fields
 | `metadataHash` | `0x`-prefixed 32-byte hex | `blake2_256` of the exact runtime metadata bytes used for encoding |
 | `actorType` | `User` or `System` | Runtime `ActorType` admission context |
 | `mutability` | `Mutable` or `Immutable` | Runtime admission and `RetryLater` context |
-| `programScale` | `0x`-prefixed SCALE bytes | Concrete runtime `ProgramInput` value |
-| `planId` | `0x`-prefixed 32-byte hex | Deterministic artifact identity |
+| `contractScale` | `0x`-prefixed SCALE bytes | Concrete runtime `ContractInput` value |
+| `contractId` | `0x`-prefixed 32-byte hex | Deterministic artifact identity |
 
-`programScale` is the canonical program representation. JSON objects, form state, labels, comments, token symbols, decimal display amounts, and generated previews are projections only. They must never substitute for exact runtime types or enter `planId` implicitly.
+`contractScale` is the canonical program representation. JSON objects, form state, labels, comments, token symbols, decimal display amounts, and generated previews are projections only. They must never substitute for exact runtime types or enter `contractId` implicitly.
 
-`planId` is `blake2_256("deos:actor-plan:v1" || LE32(specVersion) || LE32(transactionVersion) || genesisHash || metadataHash || SCALE(actorType) || SCALE(mutability) || programScale)`. The enum bytes come from the identified metadata; integer components use fixed little-endian encoding, never host-language stringification.
+`contractId` is `blake2_256("deos:actor-contract:v1" || LE32(specVersion) || LE32(transactionVersion) || genesisHash || metadataHash || SCALE(actorType) || SCALE(mutability) || contractScale)`. The enum bytes come from the identified metadata; integer components use fixed little-endian encoding, never host-language stringification.
 
-A canonical artifact is executable only when live genesis hash, runtime versions, and metadata hash match the envelope. A mismatch requires explicit re-decode, revalidation, re-encoding, and a new `planId`; tooling must not silently rebind stale bytes.
+A canonical artifact is executable only when live genesis hash, runtime versions, and metadata hash match the envelope. A mismatch requires explicit re-decode, revalidation, re-encoding, and a new `contractId`; tooling must not silently rebind stale bytes.
 
 ## Configuration IR and Tokenomic Genome
 
-`deos.actor.configuration-ir` version `1` is the format-neutral typed authoring structure. It preserves actor type, mutability, completion policy, optional auto-close nonce, trigger/admission policy, exact observation feeds, cooldown and schedule window, funding policy, ordered linear steps, exact `ConditionSet`, task parameters, amount resolutions, and failure policy. Presentation-only step keys never enter the IR.
+`deos.actor.configuration-ir` version `1` is the format-neutral typed authoring structure. It preserves actor type, mutability, completion policy, optional auto-close nonce, trigger/admission policy, exact observation feeds, cooldown and schedule window, funding policy, ordered linear steps, canonical bounded DNF preconditions, explicit Opening/Current timing, task parameters, amount resolutions, and failure policy. Presentation-only step keys never enter the IR.
 
-JSON, TOML, and structured Markdown adapters preserve the same normalized IR. The TOML and Markdown forms store each top-level typed field as exact JSON data, so adapter grammar cannot reinterpret runtime concepts. Comments, surrounding Markdown prose, object-key order, whitespace, and file extension do not affect normalization, canonical lowering, SCALE bytes, or `planId`.
+JSON, TOML, and structured Markdown adapters preserve the same normalized IR. The TOML and Markdown forms store each top-level typed field as exact JSON data, so adapter grammar cannot reinterpret runtime concepts. Comments, surrounding Markdown prose, object-key order, whitespace, and file extension do not affect normalization, canonical lowering, SCALE bytes, or `contractId`.
 
 Normalization rejects unknown format versions, missing required fields, and unknown top-level fields. Diagnostics reuse canonical authoring validation; structural diff reports deterministic JSON-pointer paths. Acceptance requires `parse -> IR -> canonical authoring lower -> metadata decode/re-encode` equality. The IR is an off-chain convenience surface, not another runtime language, recipe engine, or consensus rule.
 
 ## Human Projection
 
-A human projection must decode `programScale` through the exact metadata identified by `metadataHash`. It must show every `ProgramInput`, trigger, schedule window, funding policy, step, exact `ConditionSet` mode, atomic condition, task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact `RetryLater.maxAttempts` payload within metadata-derived `1..=MaxRetryAttempts` without lossy defaults. `Always`, `All`, and `Any` remain distinct typed objects rather than an ambiguous raw array.
+A human projection must decode `contractScale` through the exact metadata identified by `metadataHash`. It must show every `ContractInput`, trigger, schedule window, funding policy, step, `Unconditional` or exact `AnyOf` clause topology, every predicate's Opening/Current timing, task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact `RetryLater.maxAttempts` payload within metadata-derived `1..=MaxRetryAttempts` without lossy defaults. Nested arrays remain typed bounded DNF rather than an ambiguous raw condition list.
 
 Balances and identifiers use full base-unit decimal strings in transport JSON. Accounts and opaque bytes use canonical hex. Ratios expose their integer `Perbill` parts as well as optional display percentages. Token symbols, labels, localized prose, and decimal formatting remain annotations resolved from an explicitly identified registry snapshot.
 
-Projection acceptance requires `decode(programScale) -> projection -> encode == programScale`. Unknown variants, missing fields, overflow, noncanonical numbers, or metadata lookup failure reject the artifact instead of producing a partial editable plan.
+Projection acceptance requires `decode(contractScale) -> projection -> encode == contractScale`. Unknown variants, missing fields, overflow, noncanonical numbers, or metadata lookup failure reject the artifact instead of producing a partial editable plan.
 
 Trigger projection preserves source and admission as independent typed dimensions. `Immediate` and `Cadenced::{Always, WhenSignalled}` remain explicit; Manual, AddressEvent, and `OnObservationChange { feed }` atoms stay in one bounded OR-only source set rather than becoming conditions or graph edges. Observation source projection preserves the complete typed feed identity and introduces no threshold, callback, amount, or revision promise. Typed authoring rejects `PercentageOfTrigger` under Manual, observation, cadence-only, or mixed readiness before encoding; AddressEvent-only plans additionally require every source asset filter to cover each authored snapshot surface, with `Any` required when an Unstake receipt asset cannot be derived locally. Authoring normalizes whitelist members and source atoms by canonical SCALE bytes, rejects semantic duplicates and empty/oversized source sets, and never lets Manual bypass a Cadenced gate.
 
@@ -77,9 +77,9 @@ The canonical authoring model is a typed ordered `Step[]`, not a graph or a gene
 
 Authoring follows `select trigger sources and admission → add/reorder step → select condition mode and atoms → select task → configure typed parameters → select error policy → validate → analyze → forecast/simulate → encode`. Mode changes preserve atoms only through an explicit lossless operation. Validation rejects empty groups and enforces actor and primitive bounds, bounded canonical trigger sources, Mutable-only retry with a nonzero `u32` attempt limit, System-only minting, bounded/unique split and allowlist values, canonical integer/ratio/address shapes, and active-plan cardinality before canonical encoding.
 
-`authoring.ts` lowers each typed field directly to the metadata-discovered `ProgramInput::Active(ActiveProgramInput)` shape, then delegates SCALE bytes and `planId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested program, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
+`authoring.ts` lowers each typed field directly to the metadata-discovered `ContractInput::Active(ActiveContractInput)` shape, then delegates SCALE bytes and `contractId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested program, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
 
-A high-level recipe may exist only when deterministic lowering reveals the complete editable ordered steps before artifact creation. Recipe labels never enter runtime bytes, governance semantics, or `planId` except through the exact lowered `ProgramInput` they produce.
+A high-level recipe may exist only when deterministic lowering reveals the complete editable ordered steps before artifact creation. Recipe labels never enter runtime bytes, governance semantics, or `contractId` except through the exact lowered `ContractInput` they produce.
 
 The canonical reactive-authoring fixture uses `OnObservationChange → All(ObservationBelow, BalanceAbove) → SwapIn → RetryLater`. The same explicit plan supports `Persistent` and `CloseAfterProductiveCycle`; every feed, threshold, asset, amount, slippage bound, freshness window, and retry limit remains authored policy rather than a runtime bucket default.
 
@@ -91,21 +91,21 @@ A structural diff compares decoded typed trees only when both artifacts share `g
 
 Artifacts with different metadata hashes are `IncompatibleUntilRebound`. A migration-aware tool may decode each side with its own metadata and present a named comparison, but it must not claim byte-level or dispatch compatibility.
 
-Version history is materialized truth. An indexer may correlate artifacts with actor calls and lifecycle events, but consensus stores no plan archive. Every history item records source transaction/block identity, observed finality, `planId`, target actor or creation intent, and whether artifact bytes were available or reconstructed.
+Version history is materialized truth. An indexer may correlate artifacts with actor calls and lifecycle events, but consensus stores no Actor Contract archive. Every history item records source transaction/block identity, observed finality, `contractId`, target actor or creation intent, and whether artifact bytes were available or reconstructed.
 
 ## Forecast and Dry-Run Provenance
 
-Every forecast records the canonical `planId`, block hash or state snapshot, metadata hash, and runtime API or local model version used. Results are advisory and become stale when any dependency changes.
+Every forecast records the canonical `contractId`, block hash or state snapshot, metadata hash, and runtime API or local model version used. Results are advisory and become stale when any dependency changes.
 
 Weight forecasts must preserve RefTime and ProofSize separately. Fee forecasts identify evaluation, execution upper bound, fee conversion, and lifecycle overhead rather than returning one unexplained number. Amount resolution identifies live balances, opening snapshots, minimum-balance constraints, fee reservation, and adapter quotes used by each step.
 
 Local simulation cannot claim runtime truth unless it executes the matching runtime Wasm against the identified state snapshot. Heuristic or adapter-local projections must carry a narrower provenance label and may not authorize submission automatically.
 
-A matching-runtime request binds `planId`, genesis, block hash and number, state root/source, runtime-code hash, metadata hash, runtime versions, and runtime API identity. The provider must echo the complete pin and return canonical SCALE result bytes. Client-side hash and echo validation prevents accidental identity drift; it does not prove that an untrusted provider executed the runtime, so the provider or verified executor remains an explicit evidence boundary.
+A matching-runtime request binds `contractId`, genesis, block hash and number, state root/source, runtime-code hash, metadata hash, runtime versions, and runtime API identity. The provider must echo the complete pin and return canonical SCALE result bytes. Client-side hash and echo validation prevents accidental identity drift; it does not prove that an untrusted provider executed the runtime, so the provider or verified executor remains an explicit evidence boundary.
 
 ## Static Program Analysis
 
-`ProgramStaticAnalysis` is a deterministic `StaticStructuralProjection` over one validated canonical artifact. It binds `planId`, genesis, metadata hash, runtime-model identity, weight-model identity, optional adapter-capability identity, and analyzer version. It decodes through the canonical plan codec and delegates cost aggregation to the existing forecast contract; it owns neither another SCALE implementation nor another weight calculator. The versioned semantic manifest is generated from the exhaustive package contract, covers every task and amount variant in SCALE order, and fails release validation when its committed client artifact becomes stale. The same quick/full release gate decodes canonical fixtures through TypeScript analysis and compares the complete classified task and amount contract, so package and control-plane evidence cannot pass independently while drifting.
+`ActorContractStaticAnalysis` is a deterministic `StaticStructuralProjection` over one validated canonical artifact. It binds `contractId`, genesis, metadata hash, runtime-model identity, weight-model identity, optional adapter-capability identity, and analyzer version. It decodes through the canonical Actor Contract codec and delegates cost aggregation to the existing forecast contract; it owns neither another SCALE implementation nor another weight calculator. The versioned semantic manifest is generated from the exhaustive package contract, covers every task and amount variant in SCALE order, and fails release validation when its committed client artifact becomes stale. The same quick/full release gate decodes canonical fixtures through TypeScript analysis and compares the complete classified task and amount contract, so package and control-plane evidence cannot pass independently while drifting.
 
 Trigger analysis reports `Immediate`, `CadencedAlways`, or `CadencedWhenSignalled`, exact cadence where present, source count, Manual/AddressEvent/ObservationChange source kinds, and exact observation feed projections. `ExternallySignalledAdmission` and `PeriodicAdmission` remain factual structural findings; they never claim scheduler position, signal presence, queue admission, or runtime execution. Analyzer version `9` retains `TriggerAmountCompatibilityViolation` and projects exact `Persistent | CloseAfterProductiveCycle` policy from metadata. Typed authoring rejects uncovered trigger-amount filters and unknown completion variants before encoding.
 
@@ -125,7 +125,7 @@ Findings remain factual and unscored: trigger admission shape, committed effects
 
 ## Closed-Loop Feedback Projection
 
-`ActorFeedbackModel` consumes identified `ProgramStaticAnalysis` results rather than decoding plans or recreating task semantics. It builds a deterministic bounded graph over actors, typed observation feeds, shared assets, exact actor-account signal recipients, and declared future parameter actuators. Observation-to-actor edges come only from exact trigger or condition feed identity; actor effects come from existing analyzed steps plus explicit typed effect matchers.
+`ActorFeedbackModel` consumes identified `ActorContractStaticAnalysis` results rather than decoding plans or recreating task semantics. It builds a deterministic bounded graph over actors, typed observation feeds, shared assets, exact actor-account signal recipients, and declared future parameter actuators. Observation-to-actor edges come only from exact trigger or condition feed identity; actor effects come from existing analyzed steps plus explicit typed effect matchers.
 
 Each observation is classified as `Endogenous`, `Exogenous`, or `Unknown`. Exogenous observations cannot declare actor-effect matchers, duplicate feed projections fail closed, and actuator controllers and targets must resolve exactly. Shared-asset edges show structural read/write coupling; they do not claim that one balance movement caused a later action. Parameter actuators remain explicit declared nodes rather than inferred runtime capabilities.
 
@@ -141,11 +141,11 @@ Resource identity uses the narrowest proven scope. A runtime-derived sovereign a
 
 Equal asset symbols under distinct accounts and equal asset pairs under distinct pool identities never merge. Shared-resource findings require multiple actors on one exact identity; pool, reserve, TMC, and asset coupling remain distinct. `PotentialResourceContention` additionally requires multiple writers. No resource edge participates in reactive SCC analysis.
 
-Sovereign accounts require runtime-derived evidence from one finalized state identity. Exact actor-signal edges carry the recipient account's state identity beside the sender plan identity. Declared accounts, duplicate accounts, and mixed finalized-state identities fail closed.
+Sovereign accounts require runtime-derived evidence from one finalized state identity. Exact actor-signal edges carry the recipient account's state identity beside the sender Actor Contract identity. Declared accounts, duplicate accounts, and mixed finalized-state identities fail closed.
 
 Reactive findings remain factual and unscored. Structural evidence may report endogenous feedback, self/cross-actor cycles, and shared-observation actuator contention. Timing and policy findings require one explicit evidence snapshot identifying runtime, weights, cadence, estimated delivery, hysteresis/persistence, declared gain, and reactive-ingress priority; absent or unknown evidence produces no claim.
 
-The static analyzer derives actor cooldown directly from canonical `ActiveProgramInput.schedule.cooldown_blocks`; dormant programs expose no cooldown. The current linear Condition language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the plan identity.
+The static analyzer derives actor cooldown directly from canonical `ActiveContractInput.schedule.cooldown_blocks`; dormant programs expose no cooldown. The current linear Condition language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the Actor Contract identity.
 
 Delivery and cadence require runtime-derived evidence, gain remains declared or unknown, and reactive-ingress priority remains runtime-derived or unknown. Wrong provenance, identity substitution, and known/unknown disagreement fail closed.
 
@@ -157,7 +157,7 @@ The falsification corpus covers price → swap → price, fee funding → downst
 
 ## Matching-Runtime Simulation Provider
 
-The first runtime provider simulates one attempt of an existing active actor whose stored `ProgramInput::Active`, `ActorType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement program, scheduler throughput, queue position, or future block timing.
+The first runtime provider simulates one attempt of an existing active actor whose stored `ContractInput::Active`, `ActorType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement program, scheduler throughput, queue position, or future block timing.
 
 The request carries `actor_id`, exact decoded program, actor type, mutability, and mode `FreshCurrentPlan | CurrentContinuation`. `FreshCurrentPlan` requires idle run state and starts at cursor `0` with the next cycle nonce. `CurrentContinuation` requires suspended run state and reuses the stored nonce, unresolved cursor, opening snapshot, and cumulative outcomes while incrementing the attempt exactly once.
 
@@ -177,9 +177,9 @@ Donation sensitivity classifies which resolved amounts can change when third par
 
 ## Governance Composition
 
-Governance composition consumes a validated canonical artifact and a separately selected target/action. It must show the exact runtime call, origin/domain requirement, encoded call bytes, preimage or payload hash when applicable, and the artifact `planId`.
+Governance composition consumes a validated canonical artifact and a separately selected target/action. It must show the exact runtime call, origin/domain requirement, encoded call bytes, preimage or payload hash when applicable, and the artifact `contractId`.
 
-The plan artifact does not contain a signature, signer, nonce, tip, proposal advocacy, or governance decision. Signing and submission remain explicit approval boundaries. A composed payload becomes stale under the same runtime identity rules as its source plan.
+The Actor Contract artifact does not contain a signature, signer, nonce, tip, proposal advocacy, or governance decision. Signing and submission remain explicit approval boundaries. A composed payload becomes stale under the same runtime identity rules as its source contract.
 
 ## Read-Model Boundary
 
@@ -217,7 +217,7 @@ The corpus authorizes no new primitive in `0.7.7`. Partial and unavailable rows 
 
 Control-plane implementations must cover:
 
-- Deterministic `planId` fixtures and rejection of malformed hex, overflow, stale metadata, and wrong-chain artifacts.
+- Deterministic `contractId` fixtures and rejection of malformed hex, overflow, stale metadata, and wrong-chain artifacts.
 - Exact SCALE decode/project/re-encode round trips for every current plan variant.
 - Ordered structural diffs, including incompatible-metadata classification.
 - Separate RefTime, ProofSize, fee, state-snapshot, and quote provenance.
