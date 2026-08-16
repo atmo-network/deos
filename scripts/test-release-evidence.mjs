@@ -228,6 +228,17 @@ function yamlSubjectPaths(workflow) {
   for (const line of lines.slice(marker + 1)) { if (!line.trim()) continue; if (line.search(/\S/) <= indentation) break; const prefix = '${{ env.RELEASE_DIR }}/'; const value = line.trim(); assert.ok(value.startsWith(prefix), `non-authoritative subject path: ${value}`); paths.push(value.slice(prefix.length)); }
   return paths;
 }
+test('every artifact consumer installs its directly owned validator before importing release evidence', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/release-candidate.yml', import.meta.url), 'utf8');
+  const network = workflow.slice(workflow.indexOf('  network:'), workflow.indexOf('  package-and-attest:'));
+  const packaging = workflow.slice(workflow.indexOf('  package-and-attest:'));
+  for (const [label, job] of [['network', network], ['package', packaging]]) {
+    const install = job.indexOf('npm ci --ignore-scripts --prefix scripts/release-tooling');
+    const consume = job.indexOf('node scripts/github-release-artifact.mjs');
+    assert.ok(install >= 0 && consume > install, `${label} validator installation order`);
+  }
+});
+
 test('final workflow has exact immutable provenance dependency, permissions, subjects, and no release mutation', async () => {
   const workflow = await readFile(new URL('../.github/workflows/release-candidate.yml', import.meta.url), 'utf8'); assert.doesNotMatch(workflow, /runner\.temp/, 'job-level env cannot use the runner context'); const packaging = workflow.slice(workflow.indexOf('  package-and-attest:')); assert.match(packaging, /needs: \[full, network\]/); assert.doesNotMatch(packaging, /03-build-runtime|export-papi-metadata|generate-(actors|ingress|observation)|network-assurance-local/); assert.match(workflow, /actions\/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be/); assert.doesNotMatch(workflow, /attest-build-provenance@(v|main|master)/); assert.doesNotMatch(workflow, /contents:\s*write|gh release|create-release|softprops\/action-gh-release/); assert.match(workflow, /package-and-attest:[\s\S]*actions: read[\s\S]*attestations: write[\s\S]*contents: read[\s\S]*id-token: write/); assert.match(workflow, /expected-artifact-id "\$\{\{ needs\.network\.outputs\.network-artifact-id \}\}"[\s\S]*expected-artifact-digest "\$\{\{ needs\.network\.outputs\.network-artifact-digest \}\}"/); assert.match(workflow, /retention-days: 90/); const subjects = yamlSubjectPaths(workflow); const expected = releaseInventoryNames('0.7.18'); assert.equal(subjects.length, 13); assert.equal(new Set(subjects).size, 13); assert.deepEqual([...subjects].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))), expected); assert.ok(subjects.every((entry) => !entry.includes('*')));
 });

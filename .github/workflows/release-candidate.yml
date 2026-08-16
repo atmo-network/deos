@@ -46,6 +46,9 @@ jobs:
         with:
           node-version-file: web-client/package.json
 
+      - name: Install pinned release validator
+        run: npm ci --ignore-scripts --prefix scripts/release-tooling
+
       - name: Verify API provenance, preflight, and extract exact candidate artifact
         id: candidate-download
         env:
@@ -134,6 +137,9 @@ jobs:
         with:
           node-version-file: web-client/package.json
 
+      - name: Install pinned release validator
+        run: npm ci --ignore-scripts --prefix scripts/release-tooling
+
       - name: Download exact candidate handoff
         env:
           GH_TOKEN: ${{ github.token }}
@@ -163,10 +169,8 @@ jobs:
             --expected-file-name "network-summary.json" --expected-file-sha256 "${{ needs.network.outputs.network-summary-sha256 }}" \
             --archive "$RUNNER_TEMP/network-summary.zip" --output "$NETWORK_SUMMARY_PATH" --github-output "$RUNNER_TEMP/network.outputs"
 
-      - name: Install pinned SPDX validator and schema
-        run: |
-          npm ci --ignore-scripts --prefix scripts/release-tooling
-          node scripts/install-release-tools.mjs install-schema --lock scripts/release-tools.v1.json --output "$SPDX_SCHEMA_PATH"
+      - name: Install pinned SPDX schema
+        run: node scripts/install-release-tools.mjs install-schema --lock scripts/release-tools.v1.json --output "$SPDX_SCHEMA_PATH"
 
       - name: Build deterministic final evidence bundle
         run: |
