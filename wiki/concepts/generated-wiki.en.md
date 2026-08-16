@@ -1,7 +1,7 @@
 ---
 type: concept
 title: Generated Wiki
-description: The DEOS wiki is a self-contained interpretation product derived from project truth and shaped as a dense domain graph for humans, agents, and the reference client.
+description: The DEOS wiki is a self-contained interpretation product derived from project truth and shaped as a dense domain graph for readers and the reference client.
 locale: en
 canonical_page_id: generated-wiki
 translation_status: source
@@ -12,7 +12,6 @@ sources:
   - resource: ../../docs/README.md
   - resource: ../../web-client/docs/architecture.en.md
   - resource: ../../web-client/README.md
-  - resource: ../../.agents/skills/wiki-sync/SKILL.md
   - resource: ../_meta/navigation.json
   - resource: ../_meta/state.json
   - resource: ../_meta/graph.json
@@ -29,7 +28,6 @@ related:
   - Domain Map
   - Reference Client
   - First Steps
-  - Agent Coordination
   - Core Terms
 last_compiled: 2026-07-20
 confidence: 0.9
@@ -102,5 +100,4 @@ When evolving the wiki, update the owner page first, replace duplicated explanat
 - [Domain Map](domain-map.en.md)
 - [Reference Client](../overview/reference-client.en.md)
 - [First Steps](../getting-started/first-steps.en.md)
-- [Agent Coordination](../usage/agent-coordination.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

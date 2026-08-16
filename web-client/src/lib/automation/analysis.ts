@@ -334,12 +334,12 @@ export type ActorContractStaticAnalysis = {
     minimumBalanceEvidenceBlockHash: ActorContractHex | null;
     analyzerVersion: typeof ACTORS_STATIC_ANALYZER_VERSION;
   };
-  contract: 'Dormant' | 'Active';
+  contract: 'Installed';
   actorType: ActorContractArtifact['actorType'];
   mutability: ActorContractArtifact['mutability'];
-  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
-  cooldownBlocks: number | null;
-  trigger: ActorStaticTriggerAnalysis | null;
+  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle';
+  cooldownBlocks: number;
+  trigger: ActorStaticTriggerAnalysis;
   steps: ActorStaticStepAnalysis[];
   economicSurface: ActorStaticStepAnalysis['economicSurface'];
   dataDependencies: ActorForwardDataDependency[];
@@ -882,7 +882,7 @@ function parseSteps(
   capabilities?: ActorAdapterCapabilityProfile,
 ) {
   const forecastInputs: ActorStepCostInput[] = [];
-  const steps = array(contractSteps, 'ContractInput.steps').map(
+  const steps = array(contractSteps, 'ActorContract.steps').map(
     (projectedStep, index): ActorStaticStepAnalysis => {
       const projectedStepRecord = record(projectedStep, `Step ${index}`);
       const projectedPrecondition = projectedStepRecord.precondition;
@@ -1136,10 +1136,9 @@ function aggregateEconomicSurface(steps: ActorStaticStepAnalysis[]) {
 function parseTrigger(
   value: ActorContractProjection,
 ): ActorStaticTriggerAnalysis {
-  const schedule = member(value, 'schedule', 'ContractInput.Active');
   const trigger = variant(
-    member(schedule, 'trigger', 'Schedule'),
-    'Schedule.trigger',
+    member(value, 'trigger', 'ActorContract'),
+    'ActorContract.trigger',
   );
   const parseSources = (projected: ActorContractProjection, label: string) => {
     const sourceKinds: ActorStaticTriggerAnalysis['sourceKinds'] = [];
@@ -1167,8 +1166,8 @@ function parseTrigger(
   };
   if (trigger.type === 'Immediate') {
     const sources = parseSources(
-      member(trigger.value, 'sources', 'TriggerPolicy.Immediate'),
-      'TriggerPolicy.Immediate.sources',
+      member(trigger.value, 'sources', 'Trigger.Immediate'),
+      'Trigger.Immediate.sources',
     );
     return {
       admission: 'Immediate',
@@ -1178,25 +1177,18 @@ function parseTrigger(
     };
   }
   if (trigger.type !== 'Cadenced') {
-    throw new Error(`Unsupported TriggerPolicy variant: ${trigger.type}`);
+    throw new Error(`Unsupported Trigger variant: ${trigger.type}`);
   }
-  const everyBlocks = member(
-    trigger.value,
-    'every_blocks',
-    'TriggerPolicy.Cadenced',
-  );
+  const everyBlocks = member(trigger.value, 'every_blocks', 'Trigger.Cadenced');
   const everyBlocksNumber = safeInteger(
     everyBlocks,
-    'TriggerPolicy.Cadenced.every_blocks',
+    'Trigger.Cadenced.every_blocks',
   );
   if (everyBlocksNumber < 1) {
-    throw new Error('TriggerPolicy.Cadenced.every_blocks must be positive');
+    throw new Error('Trigger.Cadenced.every_blocks must be positive');
   }
-  const mode = variant(
-    member(trigger.value, 'mode', 'TriggerPolicy.Cadenced'),
-    'TriggerPolicy.Cadenced.mode',
-  );
-  if (mode.type === 'Always') {
+  const sourceProjection = member(trigger.value, 'sources', 'Trigger.Cadenced');
+  if (isNoneProjection(sourceProjection)) {
     return {
       admission: 'CadencedAlways',
       everyBlocks: everyBlocksNumber,
@@ -1205,10 +1197,7 @@ function parseTrigger(
       observationFeeds: [],
     };
   }
-  if (mode.type !== 'WhenSignalled') {
-    throw new Error(`Unsupported CadenceMode variant: ${mode.type}`);
-  }
-  const sources = parseSources(mode.value, 'CadenceMode.WhenSignalled.sources');
+  const sources = parseSources(sourceProjection, 'Trigger.Cadenced.sources');
   return {
     admission: 'CadencedWhenSignalled',
     everyBlocks: everyBlocksNumber,
@@ -1481,40 +1470,32 @@ export function analyzeActorContract(input: {
       `Invalid canonical Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
-  const contract = variant(inspection.projection, 'ContractInput');
-  let trigger: ActorStaticTriggerAnalysis | null = null;
-  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null =
-    null;
-  let cooldownBlocks: number | null = null;
+  const contract = inspection.projection;
+  const trigger = parseTrigger(contract);
+  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle';
+  const cooldownBlocks = safeInteger(
+    member(contract, 'cooldown_blocks', 'ActorContract'),
+    'ActorContract.cooldown_blocks',
+  );
   let steps: ActorStaticStepAnalysis[] = [];
   let forecastInputs: ActorStepCostInput[] = [];
-  if (contract.type === 'Active') {
-    trigger = parseTrigger(contract.value);
-    const schedule = member(contract.value, 'schedule', 'ContractInput.Active');
-    cooldownBlocks = safeInteger(
-      member(schedule, 'cooldown_blocks', 'ContractInput.Active.schedule'),
-      'ContractInput.Active.schedule.cooldown_blocks',
-    );
-    const projectedPolicy = variant(
-      member(contract.value, 'completion', 'ContractInput.Active'),
-      'ContractInput.Active.completion',
-    );
-    if (
-      projectedPolicy.type !== 'Persistent' &&
-      projectedPolicy.type !== 'CloseAfterProductiveCycle'
-    ) {
-      throw new Error(`Unsupported completion policy: ${projectedPolicy.type}`);
-    }
-    completionPolicy = projectedPolicy.type;
-    ({ steps, forecastInputs } = parseSteps(
-      input.artifact,
-      member(contract.value, 'steps', 'ContractInput.Active'),
-      input.weightModel,
-      input.adapterCapabilities,
-    ));
-  } else if (contract.type !== 'Dormant') {
-    throw new Error(`Unsupported ContractInput variant: ${contract.type}`);
+  const projectedPolicy = variant(
+    member(contract, 'completion', 'ActorContract'),
+    'ActorContract.completion',
+  );
+  if (
+    projectedPolicy.type !== 'Persistent' &&
+    projectedPolicy.type !== 'CloseAfterProductiveCycle'
+  ) {
+    throw new Error(`Unsupported completion policy: ${projectedPolicy.type}`);
   }
+  completionPolicy = projectedPolicy.type;
+  ({ steps, forecastInputs } = parseSteps(
+    input.artifact,
+    member(contract, 'steps', 'ActorContract'),
+    input.weightModel,
+    input.adapterCapabilities,
+  ));
   const dependencies = forwardDependencies(steps);
   const envelopes = suffixEnvelopes(
     input.artifact,
@@ -1539,7 +1520,7 @@ export function analyzeActorContract(input: {
         input.minimumBalanceEvidence?.blockHash ?? null,
       analyzerVersion: ACTORS_STATIC_ANALYZER_VERSION,
     },
-    contract: contract.type,
+    contract: 'Installed',
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
     completionPolicy,

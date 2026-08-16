@@ -158,13 +158,12 @@ Use the smallest meaningful gate first. You do not need every gate for every cha
 | Path or change | Minimum validation |
 | --- | --- |
 | Understanding only | No command required |
-| Wiki/onboarding text | `npm --prefix web-client run validate:wiki` |
+| Wiki/onboarding text | Editorial review of sources, links, locale parity, and provenance |
 | Web client behavior | `npm --prefix web-client run validate` |
-| Web client boundaries | `npm --prefix web-client run validate:dag` |
 | Tokenomics/formulas | `node simulator/tests.js` |
 | TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-deos-tmc --locked` |
 | Broad runtime | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
-| Cross-domain change | Simulator, cargo tests, client validation, completion gate |
+| Cross-domain change | `./scripts/validate-local.sh heavy` |
 
 ## Related
 

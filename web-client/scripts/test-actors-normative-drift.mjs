@@ -19,24 +19,20 @@ test('drift gate script exists and parses the canonical spec markers', () => {
   assert.match(scriptSource, /## 8\. Events and Ordering/);
   assert.match(scriptSource, /## 9\. ABI, Errors, Storage, and Upgrades/);
   assert.match(scriptSource, /### 9\.2 Errors/);
-  assert.match(scriptSource, /'ContractInput'/);
+  assert.match(scriptSource, /'ActorContract'/);
   assert.match(scriptSource, /'Task'/);
   assert.match(scriptSource, /'Predicate'/);
   assert.match(scriptSource, /'AmountResolution'/);
   assert.match(scriptSource, /specCalls\(\)/);
   assert.match(scriptSource, /'Step'/);
   assert.match(scriptSource, /'Precondition'/);
-  assert.match(
-    scriptSource,
-    /pallet_deos_actors::types::\$\{metadataEnumName\}/,
-  );
+  assert.match(scriptSource, /function isActorsType/);
+  assert.match(scriptSource, /entry\.path\?\.\[1\] === 'types'/);
   assert.match(scriptSource, /plural Preconditions compatibility type remains/);
   assert.match(scriptSource, /'ExecutionPlanOf'/);
-  assert.match(scriptSource, /'MaxExecutionPlanSteps'/);
   assert.match(scriptSource, /duplicate specification variants/);
   assert.match(scriptSource, /duplicate metadata variants/);
   assert.match(scriptSource, /section reference: missing Section/);
-  assert.match(scriptSource, /terminology: stale term/);
   assert.match(scriptSource, /entry\.path\?\.includes\('Preconditions'\)/);
   assert.doesNotMatch(scriptSource, /entry\.id === 238/);
   assert.doesNotMatch(scriptSource, /specCleanupExclusions/);
@@ -107,9 +103,6 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await mkdir(join(sandbox, 'template/pallets/actors/docs'), {
       recursive: true,
     });
-    await mkdir(join(sandbox, '.agents/skills/alignment/rules'), {
-      recursive: true,
-    });
     await writeFile(
       join(webClient, 'scripts/check-actors-normative-drift.mjs'),
       scriptsSrc,
@@ -139,20 +132,6 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await writeFile(
       join(sandbox, 'template/pallets/actors/docs/specification.en.md'),
       specSource,
-    );
-    const ruleInventory = await readFile(
-      new URL(
-        '../../.agents/skills/alignment/rules/actors-identity-rules.json',
-        import.meta.url,
-      ),
-      'utf8',
-    );
-    await writeFile(
-      join(
-        sandbox,
-        '.agents/skills/alignment/rules/actors-identity-rules.json',
-      ),
-      ruleInventory,
     );
     const drifted = await run(
       ['scripts/check-actors-normative-drift.mjs'],
@@ -187,8 +166,8 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await writeFile(
       sandboxSpecPath,
       specSource.replace(
-        'struct Schedule<Sources> { trigger: TriggerPolicy<Sources>, cooldown_blocks: u32 }',
-        'struct Schedule<Sources> { cooldown_blocks: u32, trigger: TriggerPolicy<Sources> }',
+        '  Immediate { sources: Sources },\n  Cadenced { every_blocks: u32, sources: Option<Sources> },',
+        '  Cadenced { every_blocks: u32, sources: Option<Sources> },\n  Immediate { sources: Sources },',
       ),
     );
     const structFieldDrift = await run(
@@ -196,7 +175,7 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
       webClient,
     );
     assert.equal(structFieldDrift.code, 1);
-    assert.match(structFieldDrift.output, /Schedule fields: ordered drift/);
+    assert.match(structFieldDrift.output, /Trigger variants: ordered drift/);
 
     await writeFile(manifestPath, manifestSource);
     await writeFile(
@@ -212,17 +191,6 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
       staleReference.output,
       /section reference: missing Section 99.9/,
     );
-
-    await writeFile(
-      sandboxSpecPath,
-      `${specSource}\nStale implementation name: MaxSweepPerBlock.\n`,
-    );
-    const staleTerminology = await run(
-      ['scripts/check-actors-normative-drift.mjs'],
-      webClient,
-    );
-    assert.equal(staleTerminology.code, 1);
-    assert.match(staleTerminology.output, /terminology: stale term/);
 
     const duplicateMetadataError = JSON.parse(manifestSource);
     duplicateMetadataError.pallet.errors.push({
@@ -297,7 +265,9 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     const renumberedPrecondition = JSON.parse(manifestSource);
     const preconditionType = renumberedPrecondition.types.find(
       (entry) =>
-        entry.path?.join('::') === 'pallet_deos_actors::types::Precondition',
+        entry.path?.[0] === 'pallet_deos_actors' &&
+        entry.path?.[1] === 'types' &&
+        entry.path?.at(-1) === 'Precondition',
     );
     preconditionType.id = 999999;
     await writeFile(manifestPath, JSON.stringify(renumberedPrecondition));

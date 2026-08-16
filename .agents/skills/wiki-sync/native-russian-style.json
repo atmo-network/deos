@@ -2,81 +2,399 @@
   "schema_version": 2,
   "scope": "Russian Wiki display prose, localized manifest labels, and extracted WikiWidget Russian strings",
   "canonical_terms": [
-    "DEOS Router", "DEOS Governance", "DEOS Staking", "DEOS Oracle", "Liquidity Actor", "System Actor", "Burn Actor", "Polkadot SDK", "NativeSecurityMode", "RetryDisposition", "L2ParameterChange", "LpBackedSelection", "L2TreasurySpend", "L2SignalToL1", "L1RootAction", "TrustedSet", "Continuation", "RetryLater", "Fee Sink", "FailureClass", "SecurityEpoch", "Domain DAG", "Omni Node", "UI Kit", "AA-Актор", "TMCTOL", "Actors", "FRAME", "SCALE", "XYK", "XCM", "DEOS", "$NTVE", "$VETO", "$BLDR", "stNTVE", "stXXX", "TMC", "TOL", "LP"
+    "DEOS Router",
+    "DEOS Governance",
+    "DEOS Staking",
+    "DEOS Oracle",
+    "Liquidity Actor",
+    "System Actor",
+    "Burn Actor",
+    "Polkadot SDK",
+    "NativeSecurityMode",
+    "RetryDisposition",
+    "L2ParameterChange",
+    "LpBackedSelection",
+    "L2TreasurySpend",
+    "L2SignalToL1",
+    "L1RootAction",
+    "TrustedSet",
+    "Continuation",
+    "RetryLater",
+    "Fee Sink",
+    "FailureClass",
+    "SecurityEpoch",
+    "Domain DAG",
+    "Omni Node",
+    "UI Kit",
+    "AA-Актор",
+    "TMCTOL",
+    "DEOS Actors",
+    "FRAME",
+    "SCALE",
+    "XYK",
+    "XCM",
+    "DEOS",
+    "$NTVE",
+    "$VETO",
+    "$BLDR",
+    "stNTVE",
+    "stXXX",
+    "TMC",
+    "TOL",
+    "LP"
   ],
   "exact_field_terms": [
-    "Account Abstraction Actors", "Account Abstraction Actor", "Actor Contract", "Token Minting Curve", "Treasury-Owned Liquidity", "Gravity Well", "Elasticity Inversion"
+    "Actor Contract",
+    "Token Minting Curve",
+    "Treasury-Owned Liquidity",
+    "Gravity Well",
+    "Elasticity Inversion"
   ],
   "forbidden": [
-    { "pattern": "\\btrusted repo-local markdown\\b", "guidance": "Describe the trusted repository-local Markdown boundary in natural Russian.", "class": "English noun chain" },
-    { "pattern": "\\barchitecture graph\\b", "guidance": "Use «архитектурный граф» when the graph itself is meant.", "class": "English noun chain" },
-    { "pattern": "\\bAccount Abstraction Actors?\\b", "guidance": "Keep this canonical expansion only in a definition or exact lookup field; explain it once in Russian in ordinary prose.", "class": "canonical term without Russian explanation" },
-    { "pattern": "\\bPartner Pitch\\b", "guidance": "Use a natural contextual heading such as «Предложение для партнёров».", "class": "avoidable English heading" },
-    { "pattern": "\\bExecutive Summary\\b", "guidance": "Use «Краткое резюме» in ordinary Russian navigation prose.", "class": "avoidable English heading" },
-    { "pattern": "\\bGenerated Wiki\\b", "guidance": "Use «Собранная вики» outside exact lookup aliases.", "class": "avoidable English heading" },
-    { "pattern": "\\bsource documents?\\b", "guidance": "Use «исходные документы».", "class": "English noun chain" },
-    { "pattern": "\\bpower surfaces?\\b", "guidance": "Describe the concrete powers or authority boundaries in Russian.", "class": "English noun chain" },
-    { "pattern": "\\bexecution authority\\b", "guidance": "Use «полномочия на исполнение» or a context-specific equivalent.", "class": "English noun chain" },
-    { "pattern": "\\bruntime routing\\b", "guidance": "Use «маршрутизация в среде исполнения» or name the concrete runtime path.", "class": "English noun chain" },
-    { "pattern": "\\brelay-chain beacon\\b", "guidance": "Use «маяк ретрансляционной цепи», retaining an exact identifier only where lookup requires it.", "class": "English noun chain" },
-    { "pattern": "\\bproduct widgets?\\b", "guidance": "Use «продуктовые виджеты» or describe their concrete role.", "class": "English noun chain" },
-    { "pattern": "\\bowner surfaces?\\b", "guidance": "Name the owning components or responsibility boundaries in Russian.", "class": "English noun chain" },
-    { "pattern": "\\bfloor/ceiling thresholds?\\b", "guidance": "Use a contextual phrase for lower and upper thresholds.", "class": "English noun chain" },
-    { "pattern": "\\bclaim levels?\\b", "guidance": "Use «уровни утверждений».", "class": "English noun chain" },
-    { "pattern": "\\bmarket assumptions?\\b", "guidance": "Use «рыночные допущения».", "class": "English noun chain" },
-    { "pattern": "\\bproof surfaces?\\b", "guidance": "Use «контуры проверки» or «доказательная база» according to context.", "class": "English noun chain" },
-    { "pattern": "\\btoken laws?\\b", "guidance": "Use «правила обращения токена».", "class": "English noun chain" },
-    { "pattern": "\\beconomic flows?\\b", "guidance": "Use «экономические потоки».", "class": "English noun chain" },
-    { "pattern": "\\bprotocol liquidity\\b", "guidance": "Use «ликвидность протокола» where ownership is not asserted.", "class": "English noun chain" },
-    { "pattern": "\\bmarket liquidity\\b", "guidance": "Use «рыночная ликвидность».", "class": "English noun chain" },
-    { "pattern": "\\bfuture gates\\b", "guidance": "Name the concrete future prerequisites or conditions in Russian.", "class": "English noun chain" },
-    { "pattern": "\\bzero-warning hygiene\\b", "guidance": "Describe the zero-warning requirement directly in Russian.", "class": "English noun chain" },
-    { "pattern": "\\bweb[ -]client\\b", "guidance": "Use «веб-клиент» outside exact file or package names.", "class": "avoidable borrowing" },
-    { "pattern": "\\bwalkthroughs?\\b", "guidance": "Use «пошаговый разбор» or «сценарий» according to context.", "class": "avoidable borrowing" },
-    { "pattern": "\\bonboarding\\b", "guidance": "Use «знакомство с проектом», «введение» or a context-specific Russian phrase.", "class": "avoidable borrowing" },
-    { "pattern": "\\badoption\\b", "guidance": "Translate contextually as adoption, deployment, or uptake rather than applying one fixed substitute.", "class": "avoidable borrowing" },
-    { "pattern": "\\bdownstream\\b", "guidance": "Translate contextually as «производная экосистема» or «проект на базе DEOS».", "class": "avoidable borrowing" },
-    { "pattern": "\\bupstream\\b", "guidance": "Translate contextually as «исходный DEOS» or «вышестоящий проект».", "class": "avoidable borrowing" },
-    { "pattern": "\\bconfidence\\b", "guidance": "Use «степень обоснованности» for the displayed metadata meaning.", "class": "avoidable metadata borrowing" },
-    { "pattern": "\\bprovenance\\b", "guidance": "Use «происхождение сведений» or «источники» according to context.", "class": "avoidable metadata borrowing" },
-    { "pattern": "\\bread-model\\b", "guidance": "Use «проекция данных для чтения» or «данные для чтения» according to context.", "class": "avoidable architecture borrowing" },
-    { "pattern": "\\bon-chain\\b", "guidance": "Use «в блокчейне», «в состоянии блокчейна» or «непосредственно из блокчейна» according to meaning.", "class": "avoidable architecture borrowing" },
-    { "pattern": "\\bmaterialized\\b", "guidance": "Use «материализованное представление» when that architecture meaning is intended.", "class": "avoidable architecture borrowing" },
-    { "pattern": "\\bindexed\\b", "guidance": "Use a natural Russian description of indexed or externally indexed data.", "class": "avoidable architecture borrowing" },
-    { "pattern": "\\bphysics-first\\b", "guidance": "Explain the priority of Economic Physics in Russian outside exact lookup aliases.", "class": "avoidable English slogan" },
-    { "pattern": "\\bpolitics-first\\b", "guidance": "Explain the policy-first alternative in Russian outside exact lookup aliases.", "class": "avoidable English slogan" },
-    { "pattern": "\\bfull-text\\b", "guidance": "Use «полнотекстовый».", "class": "avoidable borrowing" },
-    { "pattern": "\\brepo-local\\b", "guidance": "Use «из репозитория» or «локальный для репозитория» according to context.", "class": "avoidable borrowing" },
-    { "pattern": "\\btreasury-owned liquidity\\b", "guidance": "In ordinary prose use «ликвидность, принадлежащая казне»; retain the canonical English expansion only in its defining field.", "class": "ownership-distorting borrowing" },
-    { "pattern": "\\bprotocol-owned liquidity\\b", "guidance": "Use «ликвидность во владении протокола».", "class": "ownership-distorting borrowing" },
-    { "pattern": "\\bmint-only\\b", "guidance": "Use «однонаправленная эмиссия» where the issuance contract is meant.", "class": "avoidable borrowing" },
-    { "pattern": "\\bbucketed policy\\b", "guidance": "Use «правила распределения по корзинам».", "class": "literal English phrase" },
-    { "pattern": "\\bshare-vault\\b", "guidance": "Use «пул с учётом долей».", "class": "meaning-distorting borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])runtime(?![\\p{L}\\p{N}_])", "guidance": "Use «среда исполнения» or name the exact runtime/code surface in a code span.", "class": "avoidable runtime borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])platform-паттерн(?:ы|ов|ами)?(?![\\p{L}\\p{N}_])", "guidance": "Use a natural Russian phrase for platform patterns.", "class": "mixed-language calque" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])substrate-привычк(?:а|и|ах|ами)?(?![\\p{L}\\p{N}_])", "guidance": "Describe the inherited Substrate conventions in Russian.", "class": "mixed-language calque" },
-    { "pattern": "\\bgovernance-cell\\b", "guidance": "Use «ячейка управления» or describe the typed governance unit contextually.", "class": "avoidable governance borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])subject(?![\\p{L}\\p{N}_])", "guidance": "Use «предмет управления» or the concrete governed object.", "class": "avoidable governance borrowing" },
-    { "pattern": "\\bpayload-famil(?:y|ies)\\b", "guidance": "Use «семейство полезных нагрузок» or name the typed proposal payloads.", "class": "avoidable governance borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])cadence(?![\\p{L}\\p{N}_])", "guidance": "Use «периодичность», «ритм» or the concrete schedule.", "class": "avoidable governance borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])validation(?![\\p{L}\\p{N}_])", "guidance": "Use «проверка» or name the exact validation command in a code span.", "class": "avoidable tooling borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])fallback(?![\\p{L}\\p{N}_])", "guidance": "Use «резервный вариант» or describe the fallback behavior directly.", "class": "avoidable systems borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])collators?(?![\\p{L}\\p{N}_])", "guidance": "Use «коллатор» or «коллаторы» in ordinary Russian prose.", "class": "avoidable systems borrowing" },
-    { "pattern": "\\blaunch-line\\b", "guidance": "Use a contextual Russian phrase for the launch or release boundary.", "class": "avoidable release borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])layout(?![\\p{L}\\p{N}_])", "guidance": "Use «компоновка» or describe the layout owner contextually.", "class": "avoidable frontend borrowing" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])feedback(?![\\p{L}\\p{N}_])", "guidance": "Use «обратная связь» or name the concrete execution feedback surface.", "class": "avoidable frontend borrowing" },
-    { "pattern": "акторы абстракции аккаунта", "guidance": "Use «акторы на основе абстракции учётной записи».", "class": "literal actor calque" },
-    { "pattern": "заблокированн(?:ая|ой) весом голов(?:а|ы)", "guidance": "Describe the first FIFO item and the insufficient-weight condition directly.", "class": "literal scheduler calque" },
-    { "pattern": "обычные очередь с пробуждениями", "guidance": "Use «тот же планировщик очереди и пробуждений».", "class": "ungrammatical scheduler calque" },
-    { "pattern": "грязн(?:ая|ой|ую) лент(?:а|ы|у)", "guidance": "Use «изменённый канал» for dirty-feed state.", "class": "literal state calque" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])(?:breaker|Weight|tombstones?)(?![\\p{L}\\p{N}_])", "guidance": "Translate ordinary prose contextually; preserve an exact identifier only in code spans.", "class": "avoidable systems borrowing" },
-    { "pattern": "каденц(?:ия|ии|ию|ией)|кулдаун(?:а|у|ом|е)?|бэк-офф(?:а|у|ом|е)?", "guidance": "Use «периодичность», «период ожидания» and «задержка повторов» contextually.", "class": "avoidable scheduling borrowing" },
-    { "pattern": "чистые владельцы", "guidance": "Name the reused calculation functions directly.", "class": "literal ownership calque" },
-    { "pattern": "находки о циклах", "guidance": "Use «подтверждённые признаки реактивного цикла».", "class": "literal analysis calque" },
-    { "pattern": "канонические поверхности среды исполнения|материализованн(?:ой|ыми) поверхност(?:ью|ями)|поверхност(?:ь|и)-владел(?:ец|ьца)|изменённ(?:ая|ой|ую) поверхност(?:ь|и)|доверительн(?:ая|ой|ую) границ(?:а|ы|у)|[Пп]родуктовая поверхность в браузере|поверхност(?:ь|ью) управления и заблокированных", "guidance": "Name the concrete data, owning component, changed system part, trust boundary, or browser interface section.", "class": "avoidable surface calque" },
-    { "pattern": "проверенн(?:ый|ого|ому|ым|ом) Markdown", "guidance": "Describe Markdown as repository content inside the trust boundary, not as semantically verified.", "class": "overstated trust wording" },
-    { "pattern": "Шаблоны среды исполнения|Контекст парачейна|Слой сценариев|Экономические правила или политические решения|Токеновые поверхности|Стратегия случайности|Состояние разработки|Создание проекта на базе", "guidance": "Use the exact current Russian page title from frontmatter.", "class": "stale localized page title" },
-    { "pattern": "получает связь(?: через вознаграждения)? от|служит ориентиром из|представлено в ориентире|дополняет в паре|получает границу статуса и выпуска из|служит источником сведений о статусе и выпуске после|указано как связанная подсистема в|показано как подсистема в|показано на схеме в", "guidance": "Use a directionally correct, agreement-neutral Russian relation label.", "class": "unnatural inverse relation" },
-    { "pattern": "(?<![\\p{L}\\p{N}_])(?:[A-Za-z][A-Za-z-]*[ \\t]+){1,3}[A-Za-z][A-Za-z-]*(?![\\p{L}\\p{N}_])", "guidance": "Rewrite this English noun chain as natural Russian unless it is an exact canonical identity, code span, path, or search alias.", "class": "English noun chain" }
+    {
+      "pattern": "\\btrusted repo-local markdown\\b",
+      "guidance": "Describe the trusted repository-local Markdown boundary in natural Russian.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\barchitecture graph\\b",
+      "guidance": "Use «архитектурный граф» when the graph itself is meant.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bPartner Pitch\\b",
+      "guidance": "Use a natural contextual heading such as «Предложение для партнёров».",
+      "class": "avoidable English heading"
+    },
+    {
+      "pattern": "\\bExecutive Summary\\b",
+      "guidance": "Use «Краткое резюме» in ordinary Russian navigation prose.",
+      "class": "avoidable English heading"
+    },
+    {
+      "pattern": "\\bGenerated Wiki\\b",
+      "guidance": "Use «Собранная вики» outside exact lookup aliases.",
+      "class": "avoidable English heading"
+    },
+    {
+      "pattern": "\\bsource documents?\\b",
+      "guidance": "Use «исходные документы».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bpower surfaces?\\b",
+      "guidance": "Describe the concrete powers or authority boundaries in Russian.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bexecution authority\\b",
+      "guidance": "Use «полномочия на исполнение» or a context-specific equivalent.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bruntime routing\\b",
+      "guidance": "Use «маршрутизация в среде исполнения» or name the concrete runtime path.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\brelay-chain beacon\\b",
+      "guidance": "Use «маяк ретрансляционной цепи», retaining an exact identifier only where lookup requires it.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bproduct widgets?\\b",
+      "guidance": "Use «продуктовые виджеты» or describe their concrete role.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bowner surfaces?\\b",
+      "guidance": "Name the owning components or responsibility boundaries in Russian.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bfloor/ceiling thresholds?\\b",
+      "guidance": "Use a contextual phrase for lower and upper thresholds.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bclaim levels?\\b",
+      "guidance": "Use «уровни утверждений».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bmarket assumptions?\\b",
+      "guidance": "Use «рыночные допущения».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bproof surfaces?\\b",
+      "guidance": "Use «контуры проверки» or «доказательная база» according to context.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\btoken laws?\\b",
+      "guidance": "Use «правила обращения токена».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\beconomic flows?\\b",
+      "guidance": "Use «экономические потоки».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bprotocol liquidity\\b",
+      "guidance": "Use «ликвидность протокола» where ownership is not asserted.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bmarket liquidity\\b",
+      "guidance": "Use «рыночная ликвидность».",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bfuture gates\\b",
+      "guidance": "Name the concrete future prerequisites or conditions in Russian.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bzero-warning hygiene\\b",
+      "guidance": "Describe the zero-warning requirement directly in Russian.",
+      "class": "English noun chain"
+    },
+    {
+      "pattern": "\\bweb[ -]client\\b",
+      "guidance": "Use «веб-клиент» outside exact file or package names.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bwalkthroughs?\\b",
+      "guidance": "Use «пошаговый разбор» or «сценарий» according to context.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bonboarding\\b",
+      "guidance": "Use «знакомство с проектом», «введение» or a context-specific Russian phrase.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\badoption\\b",
+      "guidance": "Translate contextually as adoption, deployment, or uptake rather than applying one fixed substitute.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bdownstream\\b",
+      "guidance": "Translate contextually as «производная экосистема» or «проект на базе DEOS».",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bupstream\\b",
+      "guidance": "Translate contextually as «исходный DEOS» or «вышестоящий проект».",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bconfidence\\b",
+      "guidance": "Use «степень обоснованности» for the displayed metadata meaning.",
+      "class": "avoidable metadata borrowing"
+    },
+    {
+      "pattern": "\\bprovenance\\b",
+      "guidance": "Use «происхождение сведений» or «источники» according to context.",
+      "class": "avoidable metadata borrowing"
+    },
+    {
+      "pattern": "\\bread-model\\b",
+      "guidance": "Use «проекция данных для чтения» or «данные для чтения» according to context.",
+      "class": "avoidable architecture borrowing"
+    },
+    {
+      "pattern": "\\bon-chain\\b",
+      "guidance": "Use «в блокчейне», «в состоянии блокчейна» or «непосредственно из блокчейна» according to meaning.",
+      "class": "avoidable architecture borrowing"
+    },
+    {
+      "pattern": "\\bmaterialized\\b",
+      "guidance": "Use «материализованное представление» when that architecture meaning is intended.",
+      "class": "avoidable architecture borrowing"
+    },
+    {
+      "pattern": "\\bindexed\\b",
+      "guidance": "Use a natural Russian description of indexed or externally indexed data.",
+      "class": "avoidable architecture borrowing"
+    },
+    {
+      "pattern": "\\bphysics-first\\b",
+      "guidance": "Explain the priority of Economic Physics in Russian outside exact lookup aliases.",
+      "class": "avoidable English slogan"
+    },
+    {
+      "pattern": "\\bpolitics-first\\b",
+      "guidance": "Explain the policy-first alternative in Russian outside exact lookup aliases.",
+      "class": "avoidable English slogan"
+    },
+    {
+      "pattern": "\\bfull-text\\b",
+      "guidance": "Use «полнотекстовый».",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\brepo-local\\b",
+      "guidance": "Use «из репозитория» or «локальный для репозитория» according to context.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\btreasury-owned liquidity\\b",
+      "guidance": "In ordinary prose use «ликвидность, принадлежащая казне»; retain the canonical English expansion only in its defining field.",
+      "class": "ownership-distorting borrowing"
+    },
+    {
+      "pattern": "\\bprotocol-owned liquidity\\b",
+      "guidance": "Use «ликвидность во владении протокола».",
+      "class": "ownership-distorting borrowing"
+    },
+    {
+      "pattern": "\\bmint-only\\b",
+      "guidance": "Use «однонаправленная эмиссия» where the issuance contract is meant.",
+      "class": "avoidable borrowing"
+    },
+    {
+      "pattern": "\\bbucketed policy\\b",
+      "guidance": "Use «правила распределения по корзинам».",
+      "class": "literal English phrase"
+    },
+    {
+      "pattern": "\\bshare-vault\\b",
+      "guidance": "Use «пул с учётом долей».",
+      "class": "meaning-distorting borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])runtime(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «среда исполнения» or name the exact runtime/code surface in a code span.",
+      "class": "avoidable runtime borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])platform-паттерн(?:ы|ов|ами)?(?![\\p{L}\\p{N}_])",
+      "guidance": "Use a natural Russian phrase for platform patterns.",
+      "class": "mixed-language calque"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])substrate-привычк(?:а|и|ах|ами)?(?![\\p{L}\\p{N}_])",
+      "guidance": "Describe the inherited Substrate conventions in Russian.",
+      "class": "mixed-language calque"
+    },
+    {
+      "pattern": "\\bgovernance-cell\\b",
+      "guidance": "Use «ячейка управления» or describe the typed governance unit contextually.",
+      "class": "avoidable governance borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])subject(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «предмет управления» or the concrete governed object.",
+      "class": "avoidable governance borrowing"
+    },
+    {
+      "pattern": "\\bpayload-famil(?:y|ies)\\b",
+      "guidance": "Use «семейство полезных нагрузок» or name the typed proposal payloads.",
+      "class": "avoidable governance borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])cadence(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «периодичность», «ритм» or the concrete schedule.",
+      "class": "avoidable governance borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])validation(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «проверка» or name the exact validation command in a code span.",
+      "class": "avoidable tooling borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])fallback(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «резервный вариант» or describe the fallback behavior directly.",
+      "class": "avoidable systems borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])collators?(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «коллатор» or «коллаторы» in ordinary Russian prose.",
+      "class": "avoidable systems borrowing"
+    },
+    {
+      "pattern": "\\blaunch-line\\b",
+      "guidance": "Use a contextual Russian phrase for the launch or release boundary.",
+      "class": "avoidable release borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])layout(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «компоновка» or describe the layout owner contextually.",
+      "class": "avoidable frontend borrowing"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])feedback(?![\\p{L}\\p{N}_])",
+      "guidance": "Use «обратная связь» or name the concrete execution feedback surface.",
+      "class": "avoidable frontend borrowing"
+    },
+    {
+      "pattern": "акторы абстракции аккаунта",
+      "guidance": "Use «акторы на основе абстракции учётной записи».",
+      "class": "literal actor calque"
+    },
+    {
+      "pattern": "заблокированн(?:ая|ой) весом голов(?:а|ы)",
+      "guidance": "Describe the first FIFO item and the insufficient-weight condition directly.",
+      "class": "literal scheduler calque"
+    },
+    {
+      "pattern": "обычные очередь с пробуждениями",
+      "guidance": "Use «тот же планировщик очереди и пробуждений».",
+      "class": "ungrammatical scheduler calque"
+    },
+    {
+      "pattern": "грязн(?:ая|ой|ую) лент(?:а|ы|у)",
+      "guidance": "Use «изменённый канал» for dirty-feed state.",
+      "class": "literal state calque"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:breaker|Weight|tombstones?)(?![\\p{L}\\p{N}_])",
+      "guidance": "Translate ordinary prose contextually; preserve an exact identifier only in code spans.",
+      "class": "avoidable systems borrowing"
+    },
+    {
+      "pattern": "каденц(?:ия|ии|ию|ией)|кулдаун(?:а|у|ом|е)?|бэк-офф(?:а|у|ом|е)?",
+      "guidance": "Use «периодичность», «период ожидания» and «задержка повторов» contextually.",
+      "class": "avoidable scheduling borrowing"
+    },
+    {
+      "pattern": "чистые владельцы",
+      "guidance": "Name the reused calculation functions directly.",
+      "class": "literal ownership calque"
+    },
+    {
+      "pattern": "находки о циклах",
+      "guidance": "Use «подтверждённые признаки реактивного цикла».",
+      "class": "literal analysis calque"
+    },
+    {
+      "pattern": "канонические поверхности среды исполнения|материализованн(?:ой|ыми) поверхност(?:ью|ями)|поверхност(?:ь|и)-владел(?:ец|ьца)|изменённ(?:ая|ой|ую) поверхност(?:ь|и)|доверительн(?:ая|ой|ую) границ(?:а|ы|у)|[Пп]родуктовая поверхность в браузере|поверхност(?:ь|ью) управления и заблокированных",
+      "guidance": "Name the concrete data, owning component, changed system part, trust boundary, or browser interface section.",
+      "class": "avoidable surface calque"
+    },
+    {
+      "pattern": "проверенн(?:ый|ого|ому|ым|ом) Markdown",
+      "guidance": "Describe Markdown as repository content inside the trust boundary, not as semantically verified.",
+      "class": "overstated trust wording"
+    },
+    {
+      "pattern": "Шаблоны среды исполнения|Контекст парачейна|Слой сценариев|Экономические правила или политические решения|Токеновые поверхности|Стратегия случайности|Состояние разработки|Создание проекта на базе",
+      "guidance": "Use the exact current Russian page title from frontmatter.",
+      "class": "stale localized page title"
+    },
+    {
+      "pattern": "получает связь(?: через вознаграждения)? от|служит ориентиром из|представлено в ориентире|дополняет в паре|получает границу статуса и выпуска из|служит источником сведений о статусе и выпуске после|указано как связанная подсистема в|показано как подсистема в|показано на схеме в",
+      "guidance": "Use a directionally correct, agreement-neutral Russian relation label.",
+      "class": "unnatural inverse relation"
+    },
+    {
+      "pattern": "(?<![\\p{L}\\p{N}_])(?:[A-Za-z][A-Za-z-]*[ \\t]+){1,3}[A-Za-z][A-Za-z-]*(?![\\p{L}\\p{N}_])",
+      "guidance": "Rewrite this English noun chain as natural Russian unless it is an exact canonical identity, code span, path, or search alias.",
+      "class": "English noun chain"
+    }
   ]
 }

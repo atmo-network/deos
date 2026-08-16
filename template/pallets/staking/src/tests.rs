@@ -275,10 +275,10 @@ fn native_security_readiness_is_mode_aware_and_fail_closed() {
       crate::NativeSecurityReadiness::LiquidityPoolMissing
     );
     set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
-    assert_eq!(
-      Staking::native_security_readiness(),
-      crate::NativeSecurityReadiness::Inactive
-    );
+    assert!(matches!(
+      Staking::native_security_view(),
+      Ok(crate::NativeSecurityView::TrustedSet { .. })
+    ));
   });
 }
 
@@ -307,14 +307,15 @@ fn native_security_view_signature_and_errors_are_compiler_exhaustive() {
 fn native_security_view_owns_mode_readiness_epoch_plan_and_obligation_truth() {
   new_test_ext().execute_with(|| {
     let view = Staking::native_security_view().expect("empty bounded view is valid");
-    assert_eq!(view.mode, crate::NativeSecurityMode::LpBackedSelection);
-    assert_eq!(
-      view.readiness,
-      crate::NativeSecurityReadiness::NativePoolMissing
-    );
-    assert_eq!(view.current_epoch, 0);
-    assert_eq!(view.planned_epoch, None);
-    assert!(!view.settlement_obligations_remain);
+    assert!(matches!(
+      view,
+      crate::NativeSecurityView::LpBackedSelection {
+        readiness: crate::NativeSecurityReadiness::NativePoolMissing,
+        current_epoch: 0,
+        planned_epoch: None,
+        settlement_obligations_remain: false,
+      }
+    ));
 
     crate::NativeSecurityRewardPots::<Test>::insert(
       1,
@@ -326,15 +327,27 @@ fn native_security_view_owns_mode_readiness_epoch_plan_and_obligation_truth() {
       },
     );
     let planned = Staking::native_security_view().expect("one planned epoch is valid");
-    assert_eq!(planned.planned_epoch, Some(1));
-    assert!(!planned.settlement_obligations_remain);
+    assert!(matches!(
+      planned,
+      crate::NativeSecurityView::LpBackedSelection {
+        planned_epoch: Some(1),
+        settlement_obligations_remain: false,
+        ..
+      }
+    ));
 
     crate::NativeSecurityRewardPots::<Test>::mutate(1, |pot| {
       pot.as_mut().expect("pot exists").status = crate::NativeSecurityRewardPotStatus::Open;
     });
     let open = Staking::native_security_view().expect("one open epoch is valid");
-    assert_eq!(open.planned_epoch, None);
-    assert!(open.settlement_obligations_remain);
+    assert!(matches!(
+      open,
+      crate::NativeSecurityView::LpBackedSelection {
+        planned_epoch: None,
+        settlement_obligations_remain: true,
+        ..
+      }
+    ));
 
     for epoch in [2, 3] {
       crate::NativeSecurityRewardPots::<Test>::insert(

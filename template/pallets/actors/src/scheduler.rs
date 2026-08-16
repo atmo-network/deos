@@ -282,7 +282,7 @@ impl<T: Config> Pallet<T> {
     if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
       return FifoStepResult::Blocked(BlockKind::Weight);
     }
-    let Some(contract) = ActorContract::<T>::get(entry.actor_id) else {
+    let Some(contract) = ActorContracts::<T>::get(entry.actor_id) else {
       cycle_meter.consume(program_probe_weight);
       if Self::paged_consume_head_at(position).is_err() {
         return FifoStepResult::Blocked(BlockKind::NonWeight);
@@ -1512,7 +1512,7 @@ impl<T: Config> Pallet<T> {
 
   fn window_expiry_wakeup(instance: &ActiveActorViewOf<T>) -> Option<BlockNumberFor<T>> {
     instance
-      .schedule_window
+      .window
       .map(|window| Self::window_terminal_at(&window))
   }
 
@@ -1610,7 +1610,7 @@ impl<T: Config> Pallet<T> {
     let identity =
       ActorIdentities::<T>::get(actor_id).expect("benchmark actor identity must exist");
     let contract =
-      ActorContract::<T>::get(actor_id).expect("benchmark actor contract state must exist");
+      ActorContracts::<T>::get(actor_id).expect("benchmark actor contract state must exist");
     core::hint::black_box(Self::derive_active_actor_view(identity, hot, contract));
   }
 
@@ -1754,18 +1754,18 @@ impl<T: Config> Pallet<T> {
       instance.schedule_anchor
     } else {
       cooldown_anchor
-        .checked_add(&instance.schedule.cooldown_blocks.into())
+        .checked_add(&instance.cooldown_blocks.into())
         .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?
     };
     let window_floor = instance
-      .schedule_window
+      .window
       .map(|window| window.start)
       .unwrap_or_else(Zero::zero);
     let mut lower = now.max(cooldown_eligible_at).max(window_floor);
     if !include_timer {
       return Ok(lower);
     }
-    let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger else {
+    let Trigger::Cadenced { every_blocks, .. } = instance.trigger else {
       return Ok(lower);
     };
     if let Some(last_cycle_block) = instance.last_cycle_block {
@@ -1791,7 +1791,7 @@ impl<T: Config> Pallet<T> {
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let continuation =
       ContinuationStateStore::<T>::get(actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
-    let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
+    let cooldown: BlockNumberFor<T> = instance.cooldown_blocks.into();
     let cursor_local_attempt = continuation
       .unsuccessful_attempts_at_cursor
       .saturating_sub(1);
@@ -1801,7 +1801,7 @@ impl<T: Config> Pallet<T> {
       .last_attempt_block
       .checked_add(&retry_delay)
       .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    if let Some(window) = instance.schedule_window {
+    if let Some(window) = instance.window {
       eligible_at = eligible_at.max(window.start);
     }
     Ok(eligible_at)
@@ -1820,12 +1820,8 @@ impl<T: Config> Pallet<T> {
     let eligible_at = if instance.cycle_state == CycleState::Suspended {
       Self::retry_eligible_at(actor_id, instance)?
     } else if instance.pending_signal {
-      Self::next_eligible_at(
-        instance,
-        now,
-        instance.schedule.trigger.cadence_blocks().is_some(),
-      )?
-    } else if matches!(instance.schedule.trigger, TriggerPolicy::Cadenced { .. }) {
+      Self::next_eligible_at(instance, now, instance.trigger.cadence_blocks().is_some())?
+    } else if matches!(instance.trigger, Trigger::Cadenced { .. }) {
       let exact_next_block = now
         .checked_add(&One::one())
         .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
@@ -1833,7 +1829,7 @@ impl<T: Config> Pallet<T> {
     } else {
       return Self::schedule_window_expiry(actor_id, instance);
     };
-    let wakeup_at = instance.schedule_window.map_or(eligible_at, |window| {
+    let wakeup_at = instance.window.map_or(eligible_at, |window| {
       eligible_at.min(Self::window_terminal_at(&window))
     });
     let exact_next_block = now
@@ -1864,7 +1860,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn is_window_expired(instance: &ActiveActorViewOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
     instance
-      .schedule_window
+      .window
       .map(|window| now > window.end)
       .unwrap_or(false)
   }
@@ -1930,7 +1926,7 @@ impl<T: Config> Pallet<T> {
     };
     match (
       ActorHot::<T>::get(actor_id),
-      ActorContract::<T>::get(actor_id),
+      ActorContracts::<T>::get(actor_id),
       ActorFunding::<T>::contains_key(actor_id),
     ) {
       (None, None, false) => Ok(None),
@@ -2009,16 +2005,16 @@ impl<T: Config> Pallet<T> {
       }
     } else {
       let now = frame_system::Pallet::<T>::block_number();
-      let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
+      let include_timer = instance.trigger.cadence_blocks().is_some();
       let eligible_at = Self::next_eligible_at(instance, now, include_timer)
         .map_err(|_| ActorClassificationError::ComputationOverflow)?;
       if eligible_at > now {
         ActorExecutionPhase::WaitingTemporal(eligible_at)
       } else if matches!(
-        instance.schedule.trigger,
-        TriggerPolicy::Immediate { .. }
-          | TriggerPolicy::Cadenced {
-            mode: CadenceMode::WhenSignalled(_),
+        instance.trigger,
+        Trigger::Immediate { .. }
+          | Trigger::Cadenced {
+            sources: Some(_),
             ..
           }
       ) && !instance.pending_signal
@@ -2148,67 +2144,24 @@ impl<T: Config> Pallet<T> {
     AdmissionDecision::Admit(cycle_weight_upper)
   }
 
-  /// One read-only eligibility projection (spec 7.3).
-  ///
-  /// Projects the canonical actor classifier so clients never reimplement
-  /// terminal precedence, cadence, cooldown, window, retry, breaker, pause, or
-  /// signal logic. `next_eligible_block` is `now` for `Ready`, the next temporal
-  /// gate for a waiting phase, or `None` when no future gate is computable.
+  /// Projects the canonical actor classifier without stripping temporal payloads.
   pub fn actor_eligibility(
     actor_id: ActorId,
-  ) -> Result<ActorEligibilityProjection<BlockNumberFor<T>>, ActorClassificationError> {
+  ) -> Result<ActorEligibility<BlockNumberFor<T>>, ActorClassificationError> {
     let Some(identity) = ActorIdentities::<T>::get(actor_id) else {
-      return Ok(ActorEligibilityProjection {
-        phase: ActorEligibilityPhase::NotRegistered,
-        next_eligible_block: None,
-      });
+      return Ok(ActorEligibility::NotRegistered);
     };
     let hot = ActorHot::<T>::get(actor_id);
-    let contract = ActorContract::<T>::get(actor_id);
+    let contract = ActorContracts::<T>::get(actor_id);
     let funding = ActorFunding::<T>::contains_key(actor_id);
     let instance = match (hot, contract, funding) {
-      (None, None, false) => {
-        return Ok(ActorEligibilityProjection {
-          phase: ActorEligibilityPhase::Dormant,
-          next_eligible_block: None,
-        });
-      }
+      (None, None, false) => return Ok(ActorEligibility::Dormant),
       (Some(hot), Some(contract), true) => Self::derive_active_actor_view(identity, hot, contract),
       _ => return Err(ActorClassificationError::ActorInvariant),
     };
-    let classification = Self::classify_actor(actor_id, &instance)?;
-    let (phase, next_eligible_block) = match classification.execution_phase {
-      ActorExecutionPhase::GlobalCircuitBreaker => {
-        (ActorEligibilityPhase::GlobalCircuitBreaker, None)
-      }
-      _ if classification.terminal_reason.is_some() => (
-        ActorEligibilityPhase::CloseDue(
-          classification
-            .terminal_reason
-            .expect("terminal branch has a close reason"),
-        ),
-        None,
-      ),
-      ActorExecutionPhase::Paused => (ActorEligibilityPhase::Paused, None),
-      ActorExecutionPhase::WaitingRetry(block) => {
-        (ActorEligibilityPhase::WaitingRetry, Some(block))
-      }
-      ActorExecutionPhase::WaitingTemporal(block) => {
-        (ActorEligibilityPhase::WaitingTemporal, Some(block))
-      }
-      ActorExecutionPhase::WaitingSignal => (
-        ActorEligibilityPhase::WaitingSignal,
-        Some(frame_system::Pallet::<T>::block_number()),
-      ),
-      ActorExecutionPhase::Ready => (
-        ActorEligibilityPhase::Ready,
-        Some(frame_system::Pallet::<T>::block_number()),
-      ),
-    };
-    Ok(ActorEligibilityProjection {
-      phase,
-      next_eligible_block,
-    })
+    Ok(ActorEligibility::Active(Self::classify_actor(
+      actor_id, &instance,
+    )?))
   }
 
   fn source_matches_filter(
@@ -2295,7 +2248,7 @@ impl<T: Config> Pallet<T> {
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> bool {
-    let Some(contract) = ActorContract::<T>::get(actor_id) else {
+    let Some(contract) = ActorContracts::<T>::get(actor_id) else {
       return false;
     };
     match &contract.funding {
@@ -2436,7 +2389,7 @@ impl<T: Config> Pallet<T> {
       return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
     }
     let mut signal_matched = false;
-    if apply_trigger && let Some(sources) = instance.schedule.trigger.sources() {
+    if apply_trigger && let Some(sources) = instance.trigger.sources() {
       for trigger_source in sources {
         if let TriggerSource::OnAddressEvent {
           source_filter,

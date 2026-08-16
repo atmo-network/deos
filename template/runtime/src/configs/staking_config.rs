@@ -45,7 +45,7 @@ impl pallet_staking::NativeOperatorValidator<AccountId> for RuntimeNativeOperato
     if pallet_collator_selection::Invulnerables::<Runtime>::get().contains(account) {
       return true;
     }
-    crate::Staking::native_security_candidate_selection_available()
+    crate::Staking::native_security_mode() == pallet_staking::NativeSecurityMode::LpBackedSelection
       && pallet_collator_selection::CandidateList::<Runtime>::get()
         .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
         .any(|candidate| &candidate.who == account)

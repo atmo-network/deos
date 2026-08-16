@@ -90,14 +90,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, fail-closed Error Narrowness discovery and typed witnesses, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
-
-The Error Narrowness evidence owner recursively checks the five pallet source roots, the complete runtime source root, and the client library root. It snapshots path/exclusion, source, public-result-boundary, exact result-expression, witness/test-file, and explicit-command identities, then verifies only typed-signature, public-root execution, exhaustive-classification, and conversion-edge witnesses. The completion gate executes every declared command and every cited executable anchor. It makes no inferred constructor, universal reachability, semantic-duplication, or closure claim:
-
-```bash
-node ./.agents/skills/alignment/scripts/audit-semantic-surface.mjs --check .agents/skills/alignment/semantic-surface.v1.json
-node ./.agents/skills/alignment/scripts/audit-semantic-surface.mjs --inventory
-```
+Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 

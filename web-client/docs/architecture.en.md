@@ -78,9 +78,9 @@ The automation widget reads known System actors from `Actors.ActorIdentities`, `
 
 Actors exposes no permanent cache epoch or generic revalidation progress surface. Weight-, adapter-, or envelope-affecting upgrades use their concrete migration contract and finite semantic Weight-class proof rather than client-visible per-actor cache repair state.
 
-The widget also consumes the read-only `ActorEligibilityApi::actor_eligibility` projection (`automation/eligibility.ts` plus the `actor-eligibility` blockchain adapter) for each actor: the scheduler-owned `phase`, optional `closeReason`, and `nextEligibleBlock` at the same finalized block. The browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch arithmetic; when the runtime API is unavailable the row shows `Unavailable` instead of guessing. The projection never promises service, because queue position and available Weight decide actual admission.
+The widget also consumes the read-only `ActorEligibilityApi::actor_eligibility` projection (`automation/eligibility.ts` plus the `actor-eligibility` blockchain adapter) for each actor: `NotRegistered`, `Dormant`, or the canonical Active classification with terminal reason and exact execution-phase payload at the same finalized block. The browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch arithmetic; when the runtime API is unavailable the row shows `Unavailable` instead of guessing. The projection never promises service, because queue position and available Weight decide actual admission.
 
-The automation domain validates metadata-bound Actor Contract artifacts. It discovers `ContractInput`, `ActiveContractInput`, `ActorType`, and `Mutability` from exact runtime metadata, requires SCALE decode/re-encode equality, derives deterministic `contractId`, produces lossless JSON-safe projections, and classifies cross-genesis or cross-metadata diffs as incompatible until explicit rebinding.
+The automation domain validates metadata-bound Actor Contract artifacts. It discovers `ActorContract`, `ActorType`, and `Mutability` from exact runtime metadata, requires SCALE decode/re-encode equality, derives deterministic `contractId`, produces lossless JSON-safe projections, and classifies cross-genesis or cross-metadata diffs as incompatible until explicit rebinding.
 
 Its static forecast mirrors pallet amount-resolution policy over an explicitly supplied state pin: fee reserve, minimum balance, User minimum balance, opening snapshot, last funding, and staking shares remain distinct inputs. Package-generated fee-envelope vectors constrain User/System fee policy, suffix arithmetic, reservation release, rollback pricing, and fee-native protected-minimum semantics before browser forecast use. Cost output keeps RefTime, ProofSize, evaluation fee, execution upper fee, and lifecycle overhead separate. `StaticAllStepsReached` does not simulate adapter quotes, mutations, failures, or early aborts.
 
@@ -112,7 +112,7 @@ Optional minimum-balance evidence carries its own identity and finalized block h
 
 Task adapters, assets, typed recipient surfaces, effects, availability, successful control, weight owner, bounded algorithm, amount roles, predicate read surfaces, and exact Predicate SCALE indices come from manifest format `2`; unknown versions, variants, or index drift fail closed. Each row preserves exact aggregate semantics and separate success/failure controls, including `StopCycle` cycle completion.
 
-`automation/authoring.ts` owns the typed linear draft and immutable add/replace/remove/reorder operations. It validates runtime bounds, trigger-source canonicality, class rules, and optional nonzero-u64 auto-close targets; lowers every trigger/predicate/task/amount/policy directly to metadata-shaped `ContractInput::Active(ActiveContractInput)`; and delegates exact SCALE and `contractId` production to `contract-artifact.ts`. Authoring-only row keys disappear during lowering; no graph, recipe identity, generic call, or successor field enters the artifact.
+`automation/authoring.ts` owns the typed linear draft and immutable add/replace/remove/reorder operations. It validates runtime bounds, trigger-source canonicality, class rules, and optional nonzero-u64 auto-close targets; lowers every trigger/predicate/task/amount/policy directly to metadata-shaped `ActorContract`; and delegates exact SCALE and `contractId` production to `contract-artifact.ts`. Authoring-only row keys disappear during lowering; no graph, recipe identity, generic call, or successor field enters the artifact.
 
 Observation predicates author the complete typed feed identity, raw `u128` threshold, and nonzero `max_age_blocks`. Static analysis labels their read as fresh-only and records unavailable, uninitialized, and stale states as ordinary false.
 
@@ -249,12 +249,7 @@ Current rules:
 
 `WikiWidget` renders generated repo-local wiki markdown from `/wiki`.
 
-This content is an isolated strict OKF v0.2 bundle and is treated as trusted reviewed repository content, not user input. Its reserved root `index.md` declares the bundle but remains outside localized navigation and graph nodes. The safety boundary lives at repository validation through:
-
-```sh
-cd web-client
-npm run validate:wiki
-```
+This content is an isolated strict OKF v0.2 bundle and is treated as trusted reviewed repository content, not user input. Its reserved root `index.md` declares the bundle but remains outside localized navigation and graph nodes. The independent Wiki Sync Skill owns validation before generated output is retained; the client does not invoke or depend on Skill internals.
 
 The widget consumes generated metadata:
 
@@ -275,33 +270,7 @@ cd web-client
 npm run validate
 ```
 
-That script runs formatting, Svelte checks, and the production build. For source-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
-
-```sh
-../scripts/validate-local.sh fast
-```
-
-From inside the client workspace, the same boundary gate is available directly:
-
-```sh
-npm run validate:dag
-```
-
-`validate:dag` resolves the validator through `DOMAIN_DAG_VALIDATOR`, `SKILL_DIR`, or the repo-local `.agents/skills/domain-dag` copy. It preserves the default web-client root when forwarding extra validator args, and the Domain DAG config includes `scripts/` so package launchers stay under the same source-boundary/header gate. Run `npm run validate:dag -- --help` for launcher options.
-
-For wiki-rendering/content changes, run:
-
-```sh
-npm run validate:wiki
-```
-
-`validate:wiki` runs strict OKF and trusted-markdown validation before the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
-
-To run every configured client-adjacent gate:
-
-```sh
-npm run validate:all
-```
+That script runs formatting, deterministic client regressions, Svelte checks, and the production build. Independent Domain DAG and Wiki Sync Skills may inspect this workspace, but neither Skill's validator is a client or project validation dependency.
 
 ## 11. Product Boundary Reminder
 

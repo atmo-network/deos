@@ -73,7 +73,6 @@ pub type SecurityEpoch = polkadot_sdk::sp_staking::SessionIndex;
   Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
 pub enum NativeSecurityReadiness {
-  Inactive,
   NativePoolMissing,
   StakedAssetMissing,
   LiquidityPoolMissing,
@@ -116,12 +115,18 @@ pub enum NativeSecurityViewError {
 #[derive(
   Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
-pub struct NativeSecurityView {
-  pub mode: NativeSecurityMode,
-  pub readiness: NativeSecurityReadiness,
-  pub current_epoch: SecurityEpoch,
-  pub planned_epoch: Option<SecurityEpoch>,
-  pub settlement_obligations_remain: bool,
+pub enum NativeSecurityView {
+  TrustedSet {
+    current_epoch: SecurityEpoch,
+    planned_epoch: Option<SecurityEpoch>,
+    settlement_obligations_remain: bool,
+  },
+  LpBackedSelection {
+    readiness: NativeSecurityReadiness,
+    current_epoch: SecurityEpoch,
+    planned_epoch: Option<SecurityEpoch>,
+    settlement_obligations_remain: bool,
+  },
 }
 
 #[derive(

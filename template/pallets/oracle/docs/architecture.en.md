@@ -32,14 +32,13 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 | Storage | Shape | Bound and role |
 | --- | --- | --- |
-| `FeedCount` | Scalar | Admitted-feed cardinality |
-| `FeedIds` | `BoundedVec<FeedId, MaxFeeds>` | Duplicate-free forward registry |
+| `FeedIds` | `BoundedVec<FeedId, MaxFeeds>` | Duplicate-free forward registry, capacity, and cardinality |
 | `Feeds` | Map by `FeedId` | Immutable semantics plus lifecycle |
 | `ProducerIds` | `BoundedVec<ProducerId, MaxFeeds>` | Duplicate-free producer registry |
 | `ProducerFeeds` | Map to `BoundedVec<FeedId, MaxFeedsPerProducer>` | Exact reverse producer ownership |
 | `Observations` | Map by `FeedId` | Optional current `{ value, updated_at, revision }` |
 
-Registration prevalidates duplicate identity, global capacity, scale, EMA half-life, and producer capacity. One transactional mutation updates forward and reverse registries, immutable configuration, count, and event. Deactivation retains identity and current truth; it never permits semantic ID reuse.
+Registration prevalidates duplicate identity, global capacity, scale, EMA half-life, and producer capacity. One transactional mutation updates forward and reverse registries, immutable configuration, and event. Deactivation retains identity and current truth; it never permits semantic ID reuse.
 
 Try-state walks only host-bounded registries. It reconciles cardinality, uniqueness, forward/reverse existence, producer equality, nonempty producer indexes, configured bounds, and nonzero initialized revisions.
 

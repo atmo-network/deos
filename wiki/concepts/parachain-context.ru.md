@@ -13,7 +13,6 @@ sources:
   - resource: ../../AGENTS.md
   - resource: ../../docs/core.architecture.en.md
   - resource: ../../template/pallets/asset-registry/docs/architecture.en.md
-  - resource: ../../docs/randomness.strategy.en.md
   - resource: ../../template/README.md
 status: stable
 audience: newcomer

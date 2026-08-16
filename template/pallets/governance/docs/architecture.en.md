@@ -246,7 +246,7 @@ Active proposer identity is also chain-native today through the bounded `Proposa
 - `ProposalUrgentAuthorizedAt[(domain, item_id)]`: written once when expeditable `Pass` crosses raw threshold
 - `ProposalPendingEnactmentAt[(domain, item_id)]`: approval scheduling state when enactment delay is positive
 - `PendingEnactmentBuckets[epoch]`: epoch-keyed bounded servicing for pending enactment attempts
-- `ActiveProposalCounts[domain]`: domain-local active cap tracking; shared terminal cleanup checked-subtracts once and fails closed on zero-count corruption
+- `ActiveProposalIdsByDomain[domain]`: bounded canonical active enumeration, domain-local cap/cardinality owner, and terminal-membership corruption boundary
 - `ActiveProposalIdsByDomain[domain]`: canonical bounded live list for active item ids in one domain; the same cleanup removes the id and author once before resolution, rejection, or veto cancellation commits
 - `ProposalMaturityBuckets[epoch]`: epoch-keyed auto-finalization schedule, no global active scan
 - `FinalizedProposals[(domain, item_id)]`: queryable temporary `FinalizedProposalRecord` owning the lifecycle outcome and optional typed execution success/failure detail together

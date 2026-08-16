@@ -26,7 +26,6 @@ import type {
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
   GovernanceProposalParameterChangeSurface,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalPrimaryTrackTally,
@@ -1167,7 +1166,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   async getProposalPayloadAvailability(
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPayloadAvailability | null> {
+  ): Promise<GovernancePayloadHashPreimageStatus | null> {
     const snapshot = await this.snapshot();
     const availability =
       await snapshot.typedApi.view.Governance.proposal_payload_availability(
@@ -1181,6 +1180,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     return {
       havePreimage: availability.have_preimage,
       preimageRequested: availability.preimage_requested,
+      byteLength: availability.payload_len ?? null,
     };
   }
 

@@ -7,12 +7,12 @@ Zone: Blockchain adapter capability; imports the automation eligibility contract
 import type { DeosTypedApi } from './deos.ts';
 
 import {
-  type ActorEligibilityProjection,
+  type ActorEligibilityView,
   projectActorEligibility,
 } from '../../automation/eligibility.ts';
 
 export type ActorEligibilityRead = {
-  projection: ActorEligibilityProjection | null;
+  projection: ActorEligibilityView | null;
   unavailableReason: string | null;
 };
 

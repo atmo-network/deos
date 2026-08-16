@@ -93,7 +93,7 @@ impl<T: Config> Pallet<T> {
       !ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalAlreadyActive
     );
-    let active_count = ActiveProposalCounts::<T>::get(domain);
+    let active_count = ActiveProposalIdsByDomain::<T>::decode_len(domain).unwrap_or(0) as u32;
     ensure!(
       active_count < policy.capacity_limit,
       Error::<T>::ActiveProposalCapReached
@@ -123,7 +123,6 @@ impl<T: Config> Pallet<T> {
     let current_epoch = T::EpochProvider::current_epoch();
     let maturity_epoch = admission.maturity_epoch;
     let active_count = admission.active_count_after;
-    ActiveProposalCounts::<T>::insert(domain, active_count);
     ActiveProposals::<T>::insert(
       domain,
       item_id,
@@ -304,15 +303,18 @@ impl<T: Config> Pallet<T> {
     })
   }
 
-  pub(crate) fn remove_active_proposal_id(domain: T::DomainId, item_id: T::WinningVoteItemId) {
-    ActiveProposalIdsByDomain::<T>::mutate(domain, |item_ids| {
-      if let Some(position) = item_ids
+  pub(crate) fn remove_active_proposal_id(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) -> Result<u32, DispatchError> {
+    ActiveProposalIdsByDomain::<T>::try_mutate(domain, |item_ids| {
+      let position = item_ids
         .iter() // deos-bypass: bounded-iter — MaxActiveProposalsPerDomain ids
         .position(|existing| *existing == item_id)
-      {
-        item_ids.remove(position);
-      }
-    });
+        .ok_or(Error::<T>::ActiveProposalCountUnderflow)?;
+      item_ids.remove(position);
+      Ok(item_ids.len() as u32)
+    })
   }
 
   pub fn requeue_active_proposal_for_auto_finalization(

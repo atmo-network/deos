@@ -22,7 +22,7 @@ A canonical Actor Contract artifact is chain-bound and has these required fields
 | `metadataHash` | `0x`-prefixed 32-byte hex | `blake2_256` of the exact runtime metadata bytes used for encoding |
 | `actorType` | `User` or `System` | Runtime `ActorType` admission context |
 | `mutability` | `Mutable` or `Immutable` | Runtime admission and `RetryLater` context |
-| `contractScale` | `0x`-prefixed SCALE bytes | Concrete runtime `ContractInput` value |
+| `contractScale` | `0x`-prefixed SCALE bytes | Concrete runtime `ActorContract` value |
 | `contractId` | `0x`-prefixed 32-byte hex | Deterministic artifact identity |
 
 `contractScale` is the canonical Actor Contract representation. JSON objects, form state, labels, comments, token symbols, decimal display amounts, and generated previews are projections only. They must never substitute for exact runtime types or enter `contractId` implicitly.
@@ -41,7 +41,7 @@ Normalization rejects unknown format versions, missing required fields, and unkn
 
 ## Human Projection
 
-A human projection must decode `contractScale` through the exact metadata identified by `metadataHash`. It must show every `ContractInput`, trigger, schedule window, funding policy, Step, absent or exact present `Precondition` clause topology, every Predicate's Opening/Current timing, Task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact `RetryLater.maxAttempts` payload within metadata-derived `2..=MaxRetryAttempts` without lossy defaults. Nested arrays remain typed bounded DNF rather than an ambiguous flat list.
+A human projection must decode `contractScale` through the exact metadata identified by `metadataHash`. It must show every `ActorContract` trigger, window, funding policy, Step, absent or exact present `Precondition` clause topology, every Predicate's Opening/Current timing, Task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact `RetryLater.maxAttempts` payload within metadata-derived `2..=MaxRetryAttempts` without lossy defaults. Nested arrays remain typed bounded DNF rather than an ambiguous flat list.
 
 Balances and identifiers use full base-unit decimal strings in transport JSON. Accounts and opaque bytes use canonical hex. Ratios expose their integer `Perbill` parts as well as optional display percentages. Token symbols, labels, localized prose, and decimal formatting remain annotations resolved from an explicitly identified registry snapshot.
 
@@ -77,9 +77,9 @@ The canonical authoring model is a typed ordered `Step[]`, not a graph or a gene
 
 Authoring follows `select trigger sources and admission → add/reorder Step → author an optional bounded-DNF Precondition with timed Predicates → select Task → configure typed parameters → select error policy → validate → analyze → forecast/simulate → encode`. Validation rejects an empty present Precondition and enforces actor and primitive bounds, bounded canonical trigger sources, Mutable-only retry within `2..=MaxRetryAttempts`, System-only minting, bounded/unique split and allowlist values, canonical integer/ratio/address shapes, and `ContractSteps` cardinality before canonical encoding.
 
-`authoring.ts` lowers each typed field directly to the metadata-discovered `ContractInput::Active(ActiveContractInput)` shape, then delegates SCALE bytes and `contractId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested Actor Contract, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
+`authoring.ts` lowers each typed field directly to the metadata-discovered `ActorContract` shape, then delegates SCALE bytes and `contractId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested Actor Contract, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
 
-A high-level recipe may exist only when deterministic lowering reveals the complete editable ordered steps before artifact creation. Recipe labels never enter runtime bytes, governance semantics, or `contractId` except through the exact lowered `ContractInput` they produce.
+A high-level recipe may exist only when deterministic lowering reveals the complete editable ordered steps before artifact creation. Recipe labels never enter runtime bytes, governance semantics, or `contractId` except through the exact lowered `ActorContract` they produce.
 
 The canonical reactive-authoring fixture uses `OnObservationChange → Precondition((ObservationBelow AND BalanceAbove)) → SwapIn → RetryLater`. The same explicit plan supports `Persistent` and `CloseAfterProductiveCycle`; every feed, threshold, asset, amount, slippage bound, freshness window, and retry limit remains authored policy rather than a runtime bucket default.
 
@@ -145,7 +145,7 @@ Sovereign accounts require runtime-derived evidence from one finalized state ide
 
 Reactive findings remain factual and unscored. Structural evidence may report endogenous feedback, self/cross-actor cycles, and shared-observation actuator contention. Timing and policy findings require one explicit evidence snapshot identifying runtime, weights, cadence, estimated delivery, hysteresis/persistence, declared gain, and reactive-ingress priority; absent or unknown evidence produces no claim.
 
-The static analyzer derives actor cooldown directly from canonical `ActiveContractInput.schedule.cooldown_blocks`; Dormant Actor Contracts expose no cooldown. The current linear Predicate language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the Actor Contract identity.
+The static analyzer derives actor cooldown directly from canonical `ActorContract.cooldown_blocks`; Dormant identities have no installed Actor Contract. The current linear Predicate language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the Actor Contract identity.
 
 Delivery and cadence require runtime-derived evidence, gain remains declared or unknown, and reactive-ingress priority remains runtime-derived or unknown. Wrong provenance, identity substitution, and known/unknown disagreement fail closed.
 
@@ -157,7 +157,7 @@ The falsification corpus covers price → swap → price, fee funding → downst
 
 ## Matching-Runtime Simulation Provider
 
-The first runtime provider simulates one attempt of an existing active actor whose stored `ContractInput::Active`, `ActorType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement Actor Contract, scheduler throughput, queue position, or future block timing.
+The first runtime provider simulates one attempt of an existing active actor whose stored `ActorContract`, `ActorType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement Actor Contract, scheduler throughput, queue position, or future block timing.
 
 The request carries `actor_id`, the exact decoded Actor Contract, actor type, mutability, and mode `FreshCurrentPlan | CurrentContinuation`. `FreshCurrentPlan` requires idle run state and starts at cursor `0` with the next cycle nonce. `CurrentContinuation` requires suspended run state and reuses the stored nonce, unresolved cursor, opening snapshot, and cumulative outcomes while preserving the stored retry position; chain block/event coordinates identify the simulated attempt without a stored ordinal.
 

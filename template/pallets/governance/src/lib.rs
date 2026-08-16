@@ -996,14 +996,6 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub struct ProposalPayloadAvailability {
-    pub have_preimage: bool,
-    pub preimage_requested: bool,
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
   pub struct PayloadHashPreimageStatus {
     pub have_preimage: bool,
     pub preimage_requested: bool,
@@ -1225,11 +1217,6 @@ pub mod pallet {
   #[pallet::getter(fn governance_lock)]
   pub type GovernanceLocks<T: Config> =
     StorageMap<_, Blake2_128Concat, T::AccountId, GovernanceLock<T::Epoch>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn active_proposal_count)]
-  pub type ActiveProposalCounts<T: Config> =
-    StorageMap<_, Blake2_128Concat, T::DomainId, u32, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn active_proposal_ids)]
@@ -1816,6 +1803,10 @@ pub mod pallet {
       Self::do_account_governance_power_view(domain, item_id, account)
     }
 
+    pub fn active_proposal_count(domain: T::DomainId) -> u32 {
+      ActiveProposalIdsByDomain::<T>::decode_len(domain).unwrap_or(0) as u32
+    }
+
     pub fn proposal_primary_track_tally(
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
@@ -1858,7 +1849,7 @@ pub mod pallet {
     pub fn proposal_payload_availability(
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
-    ) -> Option<ProposalPayloadAvailability> {
+    ) -> Option<PayloadHashPreimageStatus> {
       Self::do_proposal_payload_availability(domain, item_id)
     }
 

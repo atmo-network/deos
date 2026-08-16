@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.18`
+- **Release line**: `0.7.19`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions

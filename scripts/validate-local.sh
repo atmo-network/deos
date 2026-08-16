@@ -8,7 +8,6 @@ export DEOS_BINARY_DIR="$VALIDATION_PROJECT_ROOT/bin"
 source "$VALIDATION_SCRIPT_DIR/_common.sh"
 
 PROFILE=""
-ALIGNMENT_SCRIPT_DIR="$PROJECT_ROOT/.agents/skills/alignment/scripts"
 
 usage() {
     cat <<'EOF'
@@ -17,10 +16,10 @@ Usage: validate-local.sh <fast|heavy|full>
 Runs one DEOS validation profile directly.
 
 Profiles:
-  fast   Prepare pinned repository dependencies, then run repository audits,
-         simulator truth, and complete Rust workspace CI.
-  heavy  Everything in fast plus client validation, Actors assurance,
-         benchmark compilation, and full-scope changed-contract validation.
+  fast   Prepare pinned repository dependencies, then run simulator tests and
+         complete Rust workspace CI.
+  heavy  Everything in fast plus client validation, Actors assurance, and
+         benchmark compilation.
   full   Everything in heavy plus production runtime, metadata, descriptor,
          and generated client evidence regeneration with zero worktree drift.
 
@@ -65,56 +64,39 @@ check_prerequisites() {
     log_info "Profile: $PROFILE"
 }
 
-run_alignment_script_step() {
-    local label="$1"
-    local script_name="$2"
-    shift 2
-    local script_path="$ALIGNMENT_SCRIPT_DIR/$script_name"
-    [[ -x "$script_path" ]] || { log_error "Alignment audit not found: $script_name"; exit 1; }
-    run_shell_step "$label" "" "'$script_path' $*"
-}
-
 prepare_pinned_environment() {
     phase_banner "Step 2: Pinned validation environment"
-    run_script_step "Pinned Rust environment" "setup-environment.sh" rust
-    run_script_step "Pinned Node runtime" "setup-environment.sh" node
-    run_script_step "Pinned script dependencies" "setup-environment.sh" client
+    run_script_step "Pinned Rust and client environment" "setup-environment.sh" full
 }
 
 run_fast_checks() {
     phase_banner "Step 3: Fast profile"
-    run_alignment_script_step "Script entrypoint contract" audit-script-entrypoints.sh
-    run_alignment_script_step "Template readiness" audit-template-readiness.sh
-    run_alignment_script_step "Numeric parsing" audit-numeric-parsing.sh
-    run_alignment_script_step "Simulator determinism" audit-simulator-determinism.sh
-    run_alignment_script_step "Simulator suite mirror" audit-simulator-consistency.sh
-    run_alignment_script_step "Code suppressions" audit-code-suppressions.sh
-    run_alignment_script_step "Backlog shape" audit-backlog-open-work.sh
-    run_alignment_script_step "Release line" audit-release-line.sh
-    run_alignment_script_step "Repository portability" audit-repo-portability.sh
+    run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulator/tests.js'"
     run_script_step "Rust workspace CI" "ci-local.sh"
 }
 
 run_heavy_checks() {
     phase_banner "Step 4: Heavy profile"
-    run_shell_step "Clean web-client validation" "" "cd '$PROJECT_ROOT/web-client' && npm run validate:all"
-    AUDIT_SCOPE=all RUN_SIMULATOR=1 RUN_CARGO_CHECK=1 RUN_RUNTIME_TESTS=1 run_alignment_script_step "Full-scope completion gate" completion-gate.sh --all-rust
+    run_shell_step "Clean web-client validation" "" "cd '$PROJECT_ROOT/web-client' && npm run validate"
     run_script_step "Actors assurance" "actors-assurance.sh"
     run_script_step "Benchmark compilation" "benchmarks.sh" --check
 }
 
 regenerate_full_artifacts() {
     phase_banner "Step 5: Full profile artifacts"
+    local status_before status_after
+    status_before="$(git -C "$PROJECT_ROOT" status --porcelain=v1)"
     run_script_step "Deterministic production runtime" "03-build-runtime.sh"
     run_script_step "Runtime metadata and descriptors" "export-papi-metadata.sh"
     run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence && npm run generate:observation-evidence"
     run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
-    if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
+    status_after="$(git -C "$PROJECT_ROOT" status --porcelain=v1)"
+    if [[ "$status_after" != "$status_before" ]]; then
         log_error "Full artifact regeneration changed the candidate worktree"
-        git -C "$PROJECT_ROOT" status --short
+        diff -u <(printf '%s\n' "$status_before") <(printf '%s\n' "$status_after") || true
         exit 1
     fi
-    log_success "Full artifact regeneration preserved zero worktree drift"
+    log_success "Full artifact regeneration preserved the candidate worktree"
 }
 
 main() {

@@ -35,9 +35,12 @@ The architecture intentionally splits automation into two distinct classes to ma
 
 ### Atomic Scripts
 
-Numbered scripts perform specific leaf operations and do not orchestrate each other. They handle direct tasks such as:
+Numbered scripts perform specific leaf operations and do not orchestrate each other. Their contiguous order follows the local-network evidence ladder. They handle direct tasks such as:
 
+- `01-download-binaries.sh`: Download and checksum-verify the pinned Polkadot, Omni Node, and worker bundle
+- `02-install-tools.sh`: Install the required Cargo-based operator tools
 - `03-build-runtime.sh`: Compile the WASM artifact
+- `04-generate-chain-spec.sh`: Generate a verified ChainSpec directly from the complete runtime-owned preset
 - `05-spawn-zombienet.sh`: Launch the local network
 - `06-network-smoke.sh`: Observe bounded finalized relay and parachain progress
 - `07-network-e2e.sh`: Prove one signed finalized transfer against live event and storage truth

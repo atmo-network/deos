@@ -70,9 +70,6 @@ impl<T: Config> Pallet<T> {
     remove_pending_enactment: bool,
     remove_winning_option: bool,
   ) -> Result<(Option<T::AccountId>, u32), DispatchError> {
-    let active_count = ActiveProposalCounts::<T>::get(domain)
-      .checked_sub(1)
-      .ok_or(Error::<T>::ActiveProposalCountUnderflow)?;
     ActiveProposals::<T>::remove(domain, item_id);
     ProposalConfirmStartedAt::<T>::remove(domain, item_id);
     ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
@@ -83,9 +80,8 @@ impl<T: Config> Pallet<T> {
       ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
     }
     let proposer = ProposalAuthorsByItem::<T>::take(domain, item_id);
-    Self::remove_active_proposal_id(domain, item_id);
+    let active_count = Self::remove_active_proposal_id(domain, item_id)?;
     ProposalVotesByItem::<T>::remove(domain, item_id);
-    ActiveProposalCounts::<T>::insert(domain, active_count);
     Ok((proposer, active_count))
   }
 

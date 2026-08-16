@@ -21,7 +21,7 @@
 ## 1. Project Identity and Scope
 
 - `Repository Type`: DEOS is a specification and reference framework for deterministic protocol economies.
-- `DEOS`: The Deterministic Economic Operating System provides the runtime kernel, Account Abstraction Actors, routing, staking, governance, consensus integration, and bounded read surfaces.
+- `DEOS`: The Deterministic Economic Operating System provides the runtime kernel, DEOS Actors, routing, staking, governance, consensus integration, and bounded read surfaces.
 - `TMCTOL`: The Token Minting Curve plus Treasury-Owned Liquidity standard is the flagship economic configuration running on DEOS; it is not the only possible DEOS economy.
 - `Goal`: Provide a forkable foundation for launching ecosystems with explicit economic mechanisms, inspectable invariants, and production-oriented validation.
 - `Product Boundary`: This repository owns the framework and reference stack, not a finished branded ecosystem product.
@@ -116,6 +116,7 @@
 - `Protected Complexity`: Preserve complexity earned by real constraints and invariants; remove accidental complexity and speculative indirection.
 - `No Premature Optimization`: Prefer contract correctness and honest product flows over speculative loading, bundle, storage, or scheduler indirection.
 - `Pre-Fork Storage Lineage`: Through DEOS `0.x`, reset fresh-baseline storage versions and remove historical migration ceremony; the first downstream production genesis may occur only from `1.0` or later, after which each deployed fork owns monotonic versions and migrations.
+- `Genesis-Complete Runtime Presets`: Runtime code owns every genesis-state value for each declared profile, and its named preset must generate a complete, internally coherent, builder-verified ChainSpec without post-generation mutation. Operator scripts may select the runtime preset and outer ChainSpec metadata only; they must not duplicate or override economic policy, authorities, accounts, para identity, or other genesis truth. Do not expose a production-like profile before the runtime owns its complete production preset.
 - `Pre-Launch Contract Coherence`: Before any network launches and before a stability declaration, prefer one semantically ordered canonical SCALE/API contract over append-only compatibility, legacy aliases, or migration ceremony; group fields by domain meaning and hierarchy, then regenerate metadata, control-plane, client, tests, weights, and Wasm evidence together.
 
 ## 6. TMCTOL Economic Invariants
@@ -166,7 +167,8 @@
 
 ## 8. Engineering and Validation
 
-- `Validation Layers`: Mathematical truth lives in the simulator, behavioral truth in pallets/tests, and systemic truth in runtime integration tests/XCM.
+- `Validation Layers`: Mathematical truth lives in the simulator, behavioral truth in pallets/tests, systemic truth in runtime integration tests/XCM, client truth in `web-client`, project/release composition in root scripts and workflows, and agent-method validation inside its owning Skill.
+- `Validation Ownership`: Each validation and test stays with the surface whose truth it decides: package/domain checks with that package or project domain, client checks in `web-client`, CI checks in workflows/root scripts, development profiles in root scripts, and Skill-method checks inside the Skill. The project MUST expose one project-owned comprehensive validation entrypoint that may compose all project surfaces but never Skill internals; if it needs a check currently inside a Skill, move that check to the project owner rather than introducing the dependency.
 - `Validation Scope`: Run the smallest meaningful changed-scope check first and escalate only when the diff crosses boundaries.
 - `Stateful Tests`: Use realistic stateful mocks for AMM, TMC, and cross-component mechanism verification.
 - `Benchmark Metrics`: Measure both RefTime and ProofSize with explicit bounded components and worst-case setup.
@@ -220,12 +222,14 @@
 
 ## 11. Scripts, Skills, and Wiki
 
-- `Human-Callable Script Classes`: Root numbered scripts run independently from any working directory, document inputs/outputs/side effects, validate prerequisites, and perform one operation; numbering shows a common sequence, while named scripts provide deterministic compositions or admin utilities without agent judgment.
-- `Skill/Script Placement`: Skills own strategy, interpretation, coordination, and handoff; reusable deterministic project operations used by humans, GitHub Actions, CI, root compositions, or multiple skills belong in root `/scripts`, while capability validators, project audits, and agent-only leaves may remain co-located under one owning skill when consumers reference that public contract without duplicating implementation.
+- `Human-Callable Script Classes`: Root numbered scripts run independently from any working directory, document inputs/outputs/side effects, validate prerequisites, and perform one operation; contiguous numbering follows the local-network evidence ladder from pinned node binaries through Cargo tools, runtime, ChainSpec, network, liveness, basic mutation, temporal consensus, and composed economics, while named scripts provide deterministic compositions or admin utilities without agent judgment. Remove or insert an atom only by reconciling the whole sequence, callers, help, Wiki, and clean-machine bootstrap ownership.
+- `Script Language Boundary`: Use Bash for public root orchestration, process lifecycle, environment/toolchain control, and command composition; use JavaScript ES modules only for deterministic structural transformation or validation where JSON, metadata, graphs, exact integer handling, or testable data semantics would be unsafe or obscure in shell. Keep JavaScript support leaves behind the owning Bash or package entrypoint, never create a second orchestration layer, and do not add Python automation.
+- `Skill/Script Placement`: Skills own strategy, interpretation, coordination, handoff, and their private capability validation; reusable deterministic project operations used by humans, packages, GitHub Actions, CI, or root compositions belong in root `/scripts`. Skills may invoke public project scripts, but project code, packages, workflows, root validation, and independent skills must not depend on another skill's internal scripts.
+- `Skill Deletability`: Removing `/.agents/skills` must leave project build, tests, packages, CI, release validation, and runtime behavior unchanged; Skill checks support development only and never become project acceptance dependencies.
 - `Script Entrypoint Contract`: Full named/admin implementations follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`; every entrypoint exposes honest `--help`, and agent-specific leaves compose public root scripts when shared execution is required.
 - `Compact Command Output`: Shared script-harness steps suppress successful child-command output by default, report concise timing, and retain full failure logs while printing a bounded tail; `DEOS_VERBOSE=1` restores live full output for diagnosis.
 - `Canonical Validation Routing`: Owning skills declare the narrowest changed-scope route, exclusions, and escalation triggers through repository scripts; never default to full gates or build a shadow harness/raw command inventory, and extend the canonical route when it lacks precision.
-- `Audit Ownership`: Project-specific audit leaves live in the repo-local `alignment` skill; root scripts may orchestrate but should not duplicate audit knowledge.
+- `Audit Ownership`: Project-specific agent audits live in the repo-local `alignment` skill and run only through that Skill; code/test/release validation remains project-owned and does not orchestrate Skill audits.
 - `Skill Domain DAG`: Keep skills independently portable and acyclic: orchestration routes to documented capability contracts, never sibling internals; split only for a distinct owner, trigger, exclusion boundary, or reusable capability that reduces context/interface pressure, not for folder theater or file size.
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.

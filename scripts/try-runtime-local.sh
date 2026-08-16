@@ -92,6 +92,7 @@ parse_args() {
 prepare_prerequisites() {
     phase_banner "Step 1: Prepare local artifacts"
     export CHAIN_TYPE
+    run_script_step "Download node binaries" "01-download-binaries.sh"
     run_script_step "Install cargo tools" "02-install-tools.sh"
     run_script_step "Build runtime" "03-build-runtime.sh"
     run_script_step "Generate chain spec" "04-generate-chain-spec.sh"

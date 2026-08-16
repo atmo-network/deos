@@ -11,10 +11,10 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn derive_observation_feeds(
-    schedule: &ScheduleOf<T>,
+    trigger: &TriggerOf<T>,
   ) -> Result<ActorObservationFeedsOf<T>, DispatchError> {
     let mut feeds = alloc::vec::Vec::new();
-    if let Some(sources) = schedule.trigger.sources() {
+    if let Some(sources) = trigger.sources() {
       for source in sources {
         if let TriggerSource::OnObservationChange { feed } = source {
           feeds.push(*feed);
@@ -58,9 +58,9 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn preflight_observation_subscription_replace(
     actor_id: ActorId,
-    schedule: &ScheduleOf<T>,
+    trigger: &TriggerOf<T>,
   ) -> DispatchResult {
-    let new_feeds = Self::derive_observation_feeds(schedule)?;
+    let new_feeds = Self::derive_observation_feeds(trigger)?;
     let old_feeds = ActorObservationFeeds::<T>::get(actor_id).unwrap_or_default();
     if old_feeds == new_feeds {
       return Ok(());
@@ -398,10 +398,10 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn replace_observation_subscriptions(
     actor_id: ActorId,
-    schedule: &ScheduleOf<T>,
+    trigger: &TriggerOf<T>,
   ) -> DispatchResult {
-    Self::preflight_observation_subscription_replace(actor_id, schedule)?;
-    let new_feeds = Self::derive_observation_feeds(schedule)?;
+    Self::preflight_observation_subscription_replace(actor_id, trigger)?;
+    let new_feeds = Self::derive_observation_feeds(trigger)?;
     let old_feeds = ActorObservationFeeds::<T>::get(actor_id).unwrap_or_default();
     if old_feeds == new_feeds {
       return Ok(());

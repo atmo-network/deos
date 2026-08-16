@@ -79,7 +79,7 @@ fn registration_pins_typed_semantics_and_bounds_cardinality() {
     assert_eq!(config.provenance, 1);
     assert_eq!(config.scale, 12);
     assert_eq!(config.lifecycle, FeedLifecycle::Active);
-    assert_eq!(Oracle::feed_count(), 1);
+    assert_eq!(Oracle::feed_ids().len(), 1);
     assert_eq!(Oracle::producer_feeds(1).as_slice(), &[10]);
     assert_noop!(
       Oracle::register_feed(
@@ -171,7 +171,7 @@ fn invalid_feed_configuration_fails_before_mutation() {
       ),
       Error::<Test>::InvalidHalfLife
     );
-    assert_eq!(Oracle::feed_count(), 0);
+    assert!(Oracle::feed_ids().is_empty());
     assert!(Oracle::producer_feeds(1).is_empty());
   });
 }
@@ -352,7 +352,6 @@ fn scale_and_storage_contract_are_explicit() {
   assert_eq!(
     names,
     vec![
-      "FeedCount".to_owned(),
       "FeedIds".to_owned(),
       "Feeds".to_owned(),
       "ProducerIds".to_owned(),
@@ -368,7 +367,7 @@ fn try_state_reconciles_bounded_forward_and_reverse_indexes() {
   new_test_ext().execute_with(|| {
     register(1, 1, Aggregation::LastValue);
     assert_ok!(Oracle::do_try_state());
-    crate::FeedCount::<Test>::put(2);
+    crate::ProducerFeeds::<Test>::remove(1);
     assert!(Oracle::do_try_state().is_err());
   });
 }

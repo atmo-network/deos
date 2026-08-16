@@ -60,7 +60,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **What does deterministic mean?** Protocol-managed reactions are explicit and repeatable for the same chain state. It does not mean markets become predictable.
 
-**What is Actors versus an AA-Actor?** `Actors` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, Actor Contracts, actor accounts, and Step execution. An `AA-Actor` is one concrete runtime instance inside that system. See [Actors System](../overview/actor-system.en.md) and [AA-Actor](../overview/actor.en.md).
+**What is Actors versus an AA-Actor?** `DEOS Actors` is the whole runtime actor system: scheduler, lifecycle rules, Actor Contracts, actor accounts, and Step execution. An `AA-Actor` is one concrete runtime instance inside that system. See [Actors System](../overview/actor-system.en.md) and [AA-Actor](../overview/actor.en.md).
 
 **How does staking work?** Staking is a multi-asset share-vault domain. [Staking](../overview/staking.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
 

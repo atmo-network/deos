@@ -7,7 +7,6 @@ Zone: Staking public contract; safe for adapters, stores, and widgets to import.
 export type NativeSecurityMode = 'TrustedSet' | 'LpBackedSelection';
 
 export type NativeSecurityReadiness =
-  | 'Inactive'
   | 'NativePoolMissing'
   | 'StakedAssetMissing'
   | 'LiquidityPoolMissing'

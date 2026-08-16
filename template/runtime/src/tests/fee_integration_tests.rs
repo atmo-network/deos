@@ -69,10 +69,10 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
     assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
     assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor + 3);
-    let actor = Actors::active_actor_view(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
+    let actor = Actors::active_actor_state(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
       .expect("Fee Sink actor remains active");
-    assert_eq!(actor.cycle_nonce, 3);
-    assert_eq!(actor.unsuccessful_attempt_streak, 0);
+    assert_eq!(actor.identity.cycle_nonce, 3);
+    assert_eq!(actor.hot.unsuccessful_attempt_streak, 0);
   });
 }
 

@@ -15,16 +15,15 @@ Prepares one repository-pinned validation environment.
 Modes:
   rust    Install the Rust toolchain, components, and targets from template/rust-toolchain.toml.
   node    Verify the repository-pinned Node runtime.
-  client    Verify pinned Node, install pinned npm, clear generated SvelteKit state, and install locked client/wiki tooling.
-  full      Prepare Rust and client/wiki environments.
+  client    Verify pinned Node, install pinned npm, clear generated SvelteKit state, and install locked client tooling.
+  full      Prepare Rust and client environments.
 
 Inputs:
   template/rust-toolchain.toml
   web-client/package.json volta.node and packageManager
-  .agents/skills/wiki-sync/package-lock.json
 
 Outputs:
-  Installed Rust toolchain, clean web-client state, and locked wiki-sync node_modules.
+  Installed Rust toolchain and clean web-client state.
 
 Side effects:
   Downloads toolchains and dependencies through rustup and npm; client/full replaces generated web-client/.svelte-kit state. It does not run the optional OKF upstream freshness check.
@@ -119,9 +118,8 @@ setup_client() {
         exit 1
     fi
     rm -rf -- "$PROJECT_ROOT/web-client/.svelte-kit"
-    (cd "$PROJECT_ROOT/web-client" && npm ci)
-    (cd "$PROJECT_ROOT/.agents/skills/wiki-sync" && npm ci --ignore-scripts)
-    log_success "Pinned client and wiki environments prepared"
+    (cd "$PROJECT_ROOT/web-client" && npm ci --ignore-scripts)
+    log_success "Pinned client environment prepared"
 }
 
 main() {

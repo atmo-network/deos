@@ -159,13 +159,12 @@ node simulator/tests.js
 | Путь или изменение | Минимальная проверка |
 | --- | --- |
 | Только знакомство | Команды не требуются |
-| Текст вики или введения | `npm --prefix web-client run validate:wiki` |
+| Текст вики или введения | Редакторская проверка источников, ссылок, локалей и происхождения сведений |
 | Поведение веб-клиента | `npm --prefix web-client run validate` |
-| Границы веб-клиента | `npm --prefix web-client run validate:dag` |
 | Токеномика или формулы | `node simulator/tests.js` |
 | TMC в среде исполнения | `cargo test --manifest-path template/Cargo.toml -p pallet-deos-tmc --locked` |
 | Широкие изменения среды исполнения | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
-| Изменение нескольких доменов | Симулятор, тесты Cargo, проверка клиента и итоговая проверка репозитория |
+| Изменение нескольких доменов | `./scripts/validate-local.sh heavy` |
 
 ## Связанные страницы
 

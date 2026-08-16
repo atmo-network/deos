@@ -449,7 +449,7 @@
           "page_type": "overview",
           "summary": {
             "en": "One concrete bounded execution instance inside the broader Actors system.",
-            "ru": "Actors в DEOS — система `Account Abstraction Actors` (акторов на основе абстракции учётной записи), а AA-Актор — один конкретный ограниченный исполнитель. Каждый экземпляр следует типизированному `Actor Contract` с упорядоченными шагами."
+            "ru": "DEOS Actors — ограниченная система акторов среды исполнения, а AA-Актор — один конкретный исполнитель. Каждый экземпляр следует типизированному `Actor Contract` с упорядоченными шагами."
           }
         },
         {
@@ -717,22 +717,6 @@
           "summary": {
             "en": "What downstream teams change, preserve, validate, and contribute back when turning DEOS into a concrete ecosystem.",
             "ru": "Практическая карта решений, которые команда производной экосистемы должна изменить, сохранить и проверить, превращая DEOS в конкретный проект."
-          }
-        },
-        {
-          "id": "agent-coordination",
-          "title": {
-            "en": "Agent Coordination",
-            "ru": "Координация агентов"
-          },
-          "path": {
-            "en": "usage/agent-coordination.en.md",
-            "ru": "usage/agent-coordination.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "How repo-local skills, ABC context files, wiki sync, and changed-scope completion gates keep work aligned.",
-            "ru": "Как DEOS согласует работу людей и агентов с помощью локальных навыков, контекстных файлов ABC, синхронизации вики и проверок изменённой области."
           }
         }
       ]

@@ -70,7 +70,7 @@ This glossary is a lookup surface, not a second explanation layer. Each term sta
 
 ### Actors
 
-`Account Abstraction Actors`. In DEOS, this names the full runtime system: the pallet, scheduler, lifecycle rules, and execution environment.
+`DEOS Actors`. This names the full runtime system: the pallet, scheduler, lifecycle rules, and execution environment.
 
 ### AA-Actor
 

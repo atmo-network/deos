@@ -27,31 +27,14 @@ pub fn update_actor_contract_partial(
   actor_id: pallet_deos_actors::ActorId,
   replacement: impl ActorContractReplacement,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
-  let contract = pallet_deos_actors::ActorContract::<Runtime>::get(actor_id)
+  let mut contract = pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id)
     .ok_or(pallet_deos_actors::Error::<Runtime>::ActorNotFound)?;
-  let (schedule, schedule_window, steps, funding, completion) = replacement.apply(contract);
-  crate::Actors::update_contract(
-    origin,
-    actor_id,
-    schedule,
-    schedule_window,
-    steps,
-    funding,
-    completion,
-  )
+  replacement.apply(&mut contract);
+  crate::Actors::update_contract(origin, actor_id, contract)
 }
 
 pub trait ActorContractReplacement {
-  fn apply(
-    self,
-    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
-  ) -> (
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
-  );
+  fn apply(self, contract: &mut pallet_deos_actors::ActorContractOf<Runtime>);
 }
 
 impl ActorContractReplacement
@@ -60,70 +43,29 @@ impl ActorContractReplacement
     pallet_deos_actors::CompletionPolicy,
   )
 {
-  fn apply(
-    self,
-    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
-  ) -> (
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
-  ) {
-    (
-      contract.schedule,
-      contract.schedule_window,
-      self.0,
-      contract.funding,
-      self.1,
-    )
+  fn apply(self, contract: &mut pallet_deos_actors::ActorContractOf<Runtime>) {
+    contract.steps = self.0;
+    contract.completion = self.1;
   }
 }
 
 impl ActorContractReplacement for pallet_deos_actors::FundingSourcePolicyOf<Runtime> {
-  fn apply(
-    self,
-    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
-  ) -> (
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
-  ) {
-    (
-      contract.schedule,
-      contract.schedule_window,
-      contract.steps,
-      self,
-      contract.completion,
-    )
+  fn apply(self, contract: &mut pallet_deos_actors::ActorContractOf<Runtime>) {
+    contract.funding = self;
   }
 }
 
 impl ActorContractReplacement
   for (
-    pallet_deos_actors::ScheduleOf<Runtime>,
+    pallet_deos_actors::TriggerOf<Runtime>,
+    u32,
     Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
   )
 {
-  fn apply(
-    self,
-    contract: pallet_deos_actors::ActorContractStateOf<Runtime>,
-  ) -> (
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
-  ) {
-    (
-      self.0,
-      self.1,
-      contract.steps,
-      contract.funding,
-      contract.completion,
-    )
+  fn apply(self, contract: &mut pallet_deos_actors::ActorContractOf<Runtime>) {
+    contract.trigger = self.0;
+    contract.cooldown_blocks = self.1;
+    contract.window = self.2;
   }
 }
 

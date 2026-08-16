@@ -900,36 +900,26 @@ impl TmctolGenesisSystemActors {
 }
 
 impl
-  pallet_deos_actors::GenesisSystemActors<
-    AccountId,
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    pallet_deos_actors::ScheduleWindow<crate::BlockNumber>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-  > for TmctolGenesisSystemActors
+  pallet_deos_actors::GenesisSystemActors<AccountId, pallet_deos_actors::ActorContractOf<Runtime>>
+  for TmctolGenesisSystemActors
 {
   fn system_actors() -> alloc::vec::Vec<(
     pallet_deos_actors::ActorId,
     AccountId,
     pallet_deos_actors::Mutability,
-    pallet_deos_actors::ScheduleOf<Runtime>,
-    Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ContractSteps<Runtime>,
-    pallet_deos_actors::CompletionPolicy,
+    pallet_deos_actors::ActorContractOf<Runtime>,
   )> {
-    use pallet_deos_actors::{Mutability, Schedule, Trigger};
+    use pallet_deos_actors::{ActorContract, FundingSourcePolicy, Mutability, Trigger};
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     let governance: AccountId = ActorsPalletId::get().into_account_truncating();
 
     // --- Burn Actor (actor_id = 0) ---
     // Omnivorous intake: any verified inbound value signals one bounded pass that
     // swaps configured foreign balances to native and burns available native.
-    let burn_schedule = Schedule {
-      trigger: Trigger::immediate_manual_and_address_event(
-        pallet_deos_actors::SourceFilter::Any,
-        pallet_deos_actors::AssetFilter::Any,
-      ),
-      cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
-    };
+    let burn_trigger = Trigger::immediate_manual_and_address_event(
+      pallet_deos_actors::SourceFilter::Any,
+      pallet_deos_actors::AssetFilter::Any,
+    );
     let dust = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     // Genesis contract_steps: swap known foreign assets → native, then burn.
     // Governance replaces the canonical contract when adding steps for new foreign assets.
@@ -939,13 +929,10 @@ impl
     // --- Fee Sink (actor_id = 1) ---
     // Inbound-driven mode-aware fan-out distributes accumulated native fees/rewards
     // into certified security funding, staking-pool yield, and native LP-donation ingress.
-    let fee_sink_schedule = Schedule {
-      trigger: Trigger::immediate_manual_and_address_event(
-        pallet_deos_actors::SourceFilter::Any,
-        pallet_deos_actors::AssetFilter::Any,
-      ),
-      cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
-    };
+    let fee_sink_trigger = Trigger::immediate_manual_and_address_event(
+      pallet_deos_actors::SourceFilter::Any,
+      pallet_deos_actors::AssetFilter::Any,
+    );
     let fee_sink_contract_steps: pallet_deos_actors::ContractSteps<Runtime> =
       Self::build_fee_sink_contract_steps();
 
@@ -954,19 +941,29 @@ impl
         ecosystem::actor_ids::BURN_ACTOR_ID,
         governance.clone(),
         Mutability::Mutable,
-        burn_schedule,
-        None,
-        burn_contract_steps,
-        pallet_deos_actors::CompletionPolicy::Persistent,
+        ActorContract {
+          trigger: burn_trigger,
+          cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+          window: None,
+          steps: burn_contract_steps,
+          funding: FundingSourcePolicy::RuntimePolicy,
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
+        },
       ),
       (
         ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
         governance.clone(),
         Mutability::Mutable,
-        fee_sink_schedule,
-        None,
-        fee_sink_contract_steps,
-        pallet_deos_actors::CompletionPolicy::Persistent,
+        ActorContract {
+          trigger: fee_sink_trigger,
+          cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+          window: None,
+          steps: fee_sink_contract_steps,
+          funding: FundingSourcePolicy::RuntimePolicy,
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
+        },
       ),
       // --- BLDR Splitter (actor_id = 10) ---
       // Receives 66% of TMC-minted $BLDR, splits 50/50 to BLDR liquidity + treasury lanes.
@@ -974,19 +971,21 @@ impl
         ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
         governance,
         Mutability::Mutable,
-        Schedule {
+        ActorContract {
           trigger: Trigger::immediate_manual_and_address_event(
             pallet_deos_actors::SourceFilter::Any,
             pallet_deos_actors::AssetFilter::Any,
           ),
           cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+          window: None,
+          steps: Self::build_bldr_splitter_contract_steps(
+            AssetKind::Local(ecosystem::protocol_tokens::BLDR_ASSET_ID),
+            dust,
+          ),
+          funding: FundingSourcePolicy::RuntimePolicy,
+          completion: pallet_deos_actors::CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
         },
-        None,
-        Self::build_bldr_splitter_contract_steps(
-          AssetKind::Local(ecosystem::protocol_tokens::BLDR_ASSET_ID),
-          dust,
-        ),
-        pallet_deos_actors::CompletionPolicy::Persistent,
       ),
     ]
   }
@@ -1043,7 +1042,8 @@ impl TmctolGenesisSystemActors {
 
   pub fn build_fee_sink_contract_steps() -> pallet_deos_actors::ContractSteps<Runtime> {
     use pallet_deos_actors::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
-    let lp_backed = crate::Staking::native_security_reward_funding_available();
+    let lp_backed = crate::Staking::native_security_mode()
+      == pallet_staking::NativeSecurityMode::LpBackedSelection;
     let legs = if lp_backed {
       alloc::vec![
         SplitLeg {
@@ -1412,20 +1412,18 @@ impl TmctolGenesisSystemActors {
     crate::Actors::activate_actor(
       RuntimeOrigin::root(),
       ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
-      pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-        schedule: pallet_deos_actors::Schedule {
-          trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
-            pallet_deos_actors::SourceFilter::Any,
-            pallet_deos_actors::AssetFilter::Any,
-          ),
-          cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
-        },
-        schedule_window: None,
+      pallet_deos_actors::ActorContract {
+        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+          pallet_deos_actors::SourceFilter::Any,
+          pallet_deos_actors::AssetFilter::Any,
+        ),
+        cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+        window: None,
         steps: contract_steps,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
         funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
-      }),
+      },
     )
   }
 
@@ -1441,7 +1439,7 @@ impl TmctolGenesisSystemActors {
     pallet_staking::Pools::<Runtime>::get(native_asset_id)
       .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
     let actor_id = ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID;
-    if crate::Actors::active_actor_view(actor_id).is_none()
+    if crate::Actors::active_actor_state(actor_id).is_none()
       && crate::Actors::actor_identities(actor_id).is_none()
     {
       return Err(DispatchError::Other(

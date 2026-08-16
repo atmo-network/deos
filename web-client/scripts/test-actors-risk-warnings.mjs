@@ -110,22 +110,18 @@ function step({
 
 function activeContract(steps) {
   return {
-    type: 'Active',
-    value: {
-      schedule: {
-        trigger: {
-          type: 'Immediate',
-          value: {
-            sources: [{ type: 'Manual', value: undefined }],
-          },
-        },
-        cooldown_blocks: 5,
+    trigger: {
+      type: 'Immediate',
+      value: {
+        sources: [{ type: 'Manual', value: undefined }],
       },
-      schedule_window: undefined,
-      steps: steps,
-      completion: variant('Persistent'),
-      funding: variant('OwnerOnly'),
     },
+    cooldown_blocks: 5,
+    window: undefined,
+    steps,
+    completion: variant('Persistent'),
+    funding: variant('OwnerOnly'),
+    auto_close_at_cycle_nonce: undefined,
   };
 }
 

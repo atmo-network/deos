@@ -22,7 +22,7 @@ The crate assigns no economic roles, assets, recipients, routes, actor IDs, or c
 4. `Adapter isolation`: pallet never embeds DEX pricing logic or asset implementation specifics
 5. `Hot-state decomposition`: `ActorHot` carries only measured scheduler/admission facts needed to avoid cold contract or detailed funding decode; the retired synchronized readiness mirror must not return
 
-Canonical writes target `ActorIdentity`, `ActorHot`, `ActorContract`, and `ActorFunding` directly. `ActiveActorView` is the sole derived read/loaded context and has no write-back path. Scheduler probes load hot state before cold contract state; operations that require cross-partition semantics derive one view rather than introducing overlapping purpose-specific aggregates. Further context types would duplicate field ownership without a measured read or interface reduction.
+Canonical writes target `ActorIdentity`, `ActorHot`, `ActorContract`, and `ActorFunding` directly. A crate-private loaded context flattens only the fields required by execution and has no write-back path; the public `ActiveActorState` returns the canonical partitions plus optional Continuation without flattening. Scheduler probes load hot state before cold contract state, and no derived context owns authored equality or mutation.
 
 ### Host Composition Boundary
 
@@ -34,7 +34,7 @@ Actors executes declarative plans against host-provided adapters. Ledger, market
 
 | Module | Owned type families |
 | --- | --- |
-| `src/types/contract.rs` | Actor Contract inputs, schedule/triggers, Steps, tasks, predicates, funding policy, and certified address ingress |
+| `src/types/contract.rs` | Actor Contract, triggers, Steps, tasks, predicates, funding policy, and certified address ingress |
 | `src/types/lifecycle.rs` | Identity/class, lifecycle, Continuation, outcomes, classification, simulation, and active read views |
 | `src/types/scheduler.rs` | FIFO tickets/pages, wakeup topology, drain statistics, and starvation phase |
 | `src/types/observation.rs` | Subscriber pages, observation revisions, and dirty-fanout ownership |
@@ -71,7 +71,7 @@ The package stores each actor identity once and each active actor across three a
 
 `ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives eligibility from `schedule_anchor`, window start, and exact cadence. The typed lifecycle forbids contradictory pause state.
 
-Package consumers compose the split state explicitly. Scheduler, execution, lifecycle, liveness, wakeup, ingress, try-state, benchmarks, and tests combine `ActorIdentities + ActorHot + ActorContract` through private helpers or the public `active_actor_view` Rust query helper. No synchronized compatibility storage mirrors those values.
+Package internals combine `ActorIdentities + ActorHot + ActorContract` through one crate-private loaded context. External consumers use `active_actor_state`, which returns canonical identity, hot, Contract, funding, and optional Continuation partitions without flattening or synchronized mirrors.
 
 This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current package storage realization.
 
@@ -121,7 +121,7 @@ Task set in implementation:
 | Predicate | `BalanceAbove`, `BalanceBelow`, `BalanceEquals`, `BalanceNotEquals`, `BlockNumberAbove`, `BlockNumberBelow`, `ObservationAbove`, `ObservationBelow`, `ObservationEquals`, `ObservationNotEquals` | Active contract calls; `every_predicate_is_pure_and_bounded`, predicate evaluator and observation tests |
 | Task | `Transfer`, `SplitTransfer`, `SwapIn`, `SwapOut`, `AddLiquidity`, `RemoveLiquidity`, `Burn`, `Mint`, `Stake`, `DonateLiquidity`, `Unstake`, `StopCycle` | Active contract calls; `every_task_has_one_exhaustive_semantic_contract`, task tests, and independent runtime profiles |
 | Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`, `AllAvailable`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests and independent exact-output evidence |
-| Trigger | `Immediate`, `Cadenced`; `Always`, `WhenSignalled`; `Manual`, `OnAddressEvent`, `OnObservationChange`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Schedule constructors plus raw typed calls; manual, certified-ingress, observation-fanout, cadence, and embedding tests |
+| Trigger | `Immediate`, `Cadenced`; cadenced `sources: None` or `Some`; `Manual`, `OnAddressEvent`, `OnObservationChange`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Actor Contract constructors plus raw typed calls; manual, certified-ingress, observation-fanout, cadence, and embedding tests |
 | Funding | `OwnerOnly`, `SignedAllowlist`, `RuntimePolicy`, `AnyVerifiedIngress`; provenance `Signed`, `InternalProtocol`, `Xcm` | Active contract and certified producer constructors; funding-policy package tests and DEOS producer inventory |
 | Completion and step policy | `Persistent`, `CloseAfterProductiveCycle`; `AbortCycle`, `ContinueNextStep`, `RetryLater` | Active contract constructors; productive-close and exhaustive transition-matrix tests |
 | Attempt and step views | `AttemptDisposition::{Completed, Failed, Suspended, Closed}`; `StepOutcome::{Executed, Stopped, Skipped, FundingUnavailable, Failed}` | Shared production evaluator; production/simulation parity tests |
@@ -252,7 +252,7 @@ Deferral/terminal paths:
 
 Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_cycle_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims.
 
-Lifecycle lease-by-cycles is supported via `auto_close_at_cycle_nonce`: after a successful cycle reaches the configured target, actor closes with `AutoCloseNonceReached`. `set_auto_close_at_cycle_nonce` may set, shorten, extend, or clear the target, but every non-empty target must remain strictly ahead of current `cycle_nonce` and within `MaxAutoCloseNonceHorizon`; incrementing starts from the existing target or current nonce when unset, rejects zero/overflow, and revalidates the resulting current-relative horizon.
+Lifecycle lease-by-cycles is authored by `ActorContract.auto_close_at_cycle_nonce`: after a successful cycle reaches the configured target, the actor closes with `AutoCloseNonceReached`. Complete Mutable Contract replacement may set, shorten, extend, or clear the target; every non-empty target must remain strictly ahead of current `cycle_nonce` and within `MaxAutoCloseNonceHorizon`. No field-specific setter or increment call exists.
 
 ### Fee Collection Boundary
 
@@ -312,11 +312,11 @@ Cancellation emits `CycleCancelled` before one cumulative terminal `CycleSummary
 
 `actor_eligibility` is the read-only `ActorEligibilityApi` projection. It mirrors `apply_admission` and reuses the exact cadence, retry, window, failure-limit, breaker, and latch owners, so clients do not reproduce scheduler arithmetic.
 
-The projection reports one phase: `NotRegistered`, `Dormant`, `Ready`, `GlobalCircuitBreaker`, `CloseDue(CloseReason)`, `Paused`, `WaitingSignal`, `WaitingRetry`, or `WaitingTemporal`. `next_eligible_block` is `now` when ready, the next known temporal gate while waiting, or `None` when no future gate is computable.
+The projection is one algebra: `NotRegistered`, `Dormant`, or `Active(ActorClassification)`. Active eligibility preserves terminal reason and the exact `ActorExecutionPhase`, including carried `WaitingRetry(block)` and `WaitingTemporal(block)` payloads; no parallel phase or next-block field exists.
 
 The projection persists no state, emits no event, and promises no service. Queue position and available Weight still decide actual admission. Arithmetic overflow and malformed Continuation state return typed projection errors rather than an inferred phase.
 
-Code anchor: `src/scheduler.rs::actor_eligibility`; package tests prefixed `eligibility_projection_` falsify every phase and the `next_eligible_block` contract.
+Code anchor: `src/scheduler.rs::actor_eligibility`; package tests prefixed `eligibility_projection_` falsify absence, dormancy, every Active phase, terminal coexistence, and exact temporal payloads.
 
 ### Queue Execution Model (Monotonic Paged FIFO)
 
@@ -483,10 +483,10 @@ Created Dormant ⇄ Active → Ready → Admitted → Running ⇄ Suspended → 
 
 Lifecycle calls preserve the split-store boundary:
 
-- `activate_actor` accepts typed `ContractInput::Active(ActiveContractInput)` and validates schedule/window, Contract Steps, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorContract`, and `ActorFunding` entries for a Mutable identity; `ContractInput::Dormant` is rejected.
+- `activate_actor` accepts one typed `ActorContract` and validates trigger/cooldown/window, Contract Steps, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorContract`, and `ActorFunding` entries for a Mutable identity.
 - `deactivate_actor` clears queues, wakeups, pending signal, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances.
 
-Active and dormant creation normalize into one typed internal boundary. Every creation path consumes `ContractInput`; no lineage/reopen call or explicit actor-id creation path remains.
+Creation expresses dormancy by Contract absence: every creation path accepts `Option<ActorContract>`, while activation and simulation accept a direct Contract because their Dormant branch is impossible. No lineage/reopen call or explicit actor-id creation path remains.
 
 Package lifecycle interpretation:
 
@@ -496,7 +496,7 @@ Package lifecycle interpretation:
 
 Creation and mutability rules are explicit:
 
-- Lowest-free-slot and exact-slot User creation accept complete typed `ContractInput`: Active Actor Contracts carry one `ActiveContractInput` with schedule/window, Contract Steps, completion/funding policy, and optional auto-close target; Dormant identities carry no contract.
+- Lowest-free-slot and exact-slot User creation accept `Option<ActorContract>`: `Some` installs the complete authored Contract and `None` creates identity-only dormancy.
 - Fresh System creation allocates matching actor and custody-locator ids. `create_system_actor_at_sovereign_id` requires an allocated vacant locator, creates a fresh actor id with nonce zero, and accepts complete Active or Dormant input without inheriting lineage state.
 - Mutable actors may replace the authored contract through `update_contract`; Immutable actors fix it for actor lifetime.
 - User actors cannot admit a `Mint` Task in Contract Steps.
@@ -566,20 +566,19 @@ Actor discovery is intentionally split by use case:
 | `6` | `manual_trigger` | set flag and enqueue/schedule |
 | `7` | removed | retired separate funding mutation; `update_contract` owns authored replacement |
 | `8` | `close_actor` | prechecked pure destruction in place |
-| `9` | `update_contract` | mutable actors; atomically replace schedule, window, steps, funding, and completion |
+| `9` | `update_contract` | mutable actors; atomically replace the complete authored Actor Contract |
 | `10` | `set_global_circuit_breaker` | breaker control |
 | `11` | `permissionless_sweep` | liveness touchpoint, no normal cycle |
 | `12` | removed | retired separate steps/completion mutation; `update_contract` owns authored replacement |
 | `13` | `set_active_actor_limit` | governance operational cap tuning |
 | `14` | `permissionless_sweep_many` | bounded batch touchpoint, no direct enqueue |
-| `15` | `set_auto_close_at_cycle_nonce` | set/clear cycle lease with horizon checks |
-| `16` | `increment_auto_close_nonce` | extend cycle lease, checked and bounded |
+| `15..=16` | reserved | retired field-specific auto-close mutations; `update_contract` owns authored replacement |
 | `17` | removed | retired close-plan mutation |
-| `18..=20` | reserved | retired transitional dormant creation calls; canonical User/System creation accepts `ContractInput::Dormant` |
+| `18..=20` | reserved | retired transitional dormant creation calls; canonical User/System creation expresses dormancy as absent Contract |
 | `21` | `activate_actor` | typed Active Actor Contract with schedule, `ContractSteps`, funding policy, and admission validation |
 | `22` | `deactivate_actor` | remove contract/scheduler state while preserving identity and balances |
 
-Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, `21`, and `22` use the class-specific control authority: signed owner for User actors, signed owner or governance for System actors. Active-only calls reject dormant identities; `close_actor` handles either lifecycle.
+Calls `4`, `5`, `6`, `8`, `9`, `21`, and `22` use the class-specific control authority: signed owner for User actors, signed owner or governance for System actors. Active-only calls reject dormant identities; `close_actor` handles either lifecycle.
 
 ---
 

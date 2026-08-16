@@ -22,7 +22,7 @@ use crate::{
       classify_router_failure, validate_remove_liquidity_output,
     },
     address_event_ingress::AddressEventIngressExtension,
-    deos_router_config::market_execution_failure,
+    deos_router_config::{AssetConversionAdapter, market_execution_failure},
     pool_index::PoolIndexExtension,
   },
 };
@@ -30,15 +30,15 @@ use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
-  ActiveContractInput, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
-  AttemptDisposition, CloseReason, CompletionPolicy, ContractInput, ContractSteps, CycleResult,
-  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
-  IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass, Schedule,
-  ScheduleOf, ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg,
-  SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task,
-  TaskOf, Trigger, TriggerSource, WeightInfo,
+  ActorContract, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
+  AttemptDisposition, CloseReason, CompletionPolicy, ContractSteps, CycleResult, DexOps, Error,
+  Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
+  IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass,
+  ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf,
+  StakingOps, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task, TaskOf, Trigger,
+  TriggerSource, WeightInfo,
 };
-use pallet_deos_router::FeeRoutingAdapter;
+use pallet_deos_router::{AssetConversionApi, FeeRoutingAdapter};
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
   dispatch::{DispatchClass, GetDispatchInfo},
@@ -60,7 +60,12 @@ use polkadot_sdk::{
 };
 use primitives::AssetKind;
 
-type RuntimeSchedule = ScheduleOf<Runtime>;
+#[derive(Clone)]
+struct RuntimeSchedule {
+  trigger: pallet_deos_actors::TriggerOf<Runtime>,
+  cooldown_blocks: u32,
+}
+type Schedule = RuntimeSchedule;
 type RuntimeSourceFilter = SourceFilterOf<Runtime>;
 
 #[test]
@@ -324,14 +329,14 @@ fn inert_task() -> RuntimeTask {
 }
 
 fn manual_schedule() -> RuntimeSchedule {
-  Schedule {
+  RuntimeSchedule {
     trigger: Trigger::immediate_manual(),
     cooldown_blocks: 0,
   }
 }
 
 fn observation_schedule(feed: primitives::OracleFeedId) -> RuntimeSchedule {
-  Schedule {
+  RuntimeSchedule {
     trigger: Trigger::Immediate {
       sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
         .expect("one observation source fits"),
@@ -344,7 +349,7 @@ fn on_address_event_schedule(
   source_filter: RuntimeSourceFilter,
   asset_filter: RuntimeAssetFilter,
 ) -> RuntimeSchedule {
-  Schedule {
+  RuntimeSchedule {
     trigger: Trigger::immediate_manual_and_address_event(source_filter, asset_filter),
     cooldown_blocks: 0,
   }
@@ -365,12 +370,13 @@ fn transfer_contract_steps(
 
 fn user_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u32>>,
+  window: Option<ScheduleWindow<u32>>,
   steps: RuntimeContractSteps,
-) -> pallet_deos_actors::ContractInputOf<Runtime> {
-  pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-    schedule,
-    schedule_window,
+) -> Option<pallet_deos_actors::ActorContractOf<Runtime>> {
+  Some(ActorContract {
+    trigger: schedule.trigger,
+    cooldown_blocks: schedule.cooldown_blocks,
+    window,
     steps,
     completion: pallet_deos_actors::CompletionPolicy::Persistent,
     funding: pallet_deos_actors::FundingSourcePolicy::OwnerOnly,
@@ -380,12 +386,13 @@ fn user_active_contract(
 
 fn system_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<ScheduleWindow<u32>>,
+  window: Option<ScheduleWindow<u32>>,
   steps: RuntimeContractSteps,
-) -> pallet_deos_actors::ContractInputOf<Runtime> {
-  pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-    schedule,
-    schedule_window,
+) -> Option<pallet_deos_actors::ActorContractOf<Runtime>> {
+  Some(ActorContract {
+    trigger: schedule.trigger,
+    cooldown_blocks: schedule.cooldown_blocks,
+    window,
     steps,
     completion: pallet_deos_actors::CompletionPolicy::Persistent,
     funding: pallet_deos_actors::FundingSourcePolicy::RuntimePolicy,
@@ -446,8 +453,8 @@ fn actor_funding(actor_id: ActorId) -> pallet_deos_actors::ActorFundingStateOf<R
 }
 
 fn actor_account(actor_id: ActorId) -> crate::AccountId {
-  Actors::active_actor_view(actor_id)
-    .map(|instance| instance.sovereign_account)
+  Actors::active_actor_state(actor_id)
+    .map(|state| state.identity.sovereign_account)
     .expect("Actors must exist")
 }
 
@@ -557,8 +564,9 @@ fn deos_runtime_executes_unconditional_and_dnf_with_fixed_successors() {
     let _ = Actors::on_idle(1, Weight::MAX);
     assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(31));
     assert_eq!(
-      Actors::active_actor_view(actor_id)
+      Actors::active_actor_state(actor_id)
         .expect("actor remains active")
+        .identity
         .cycle_nonce,
       1
     );
@@ -573,7 +581,7 @@ fn genesis_anchor_buckets_are_custody_only_accounts() {
       primitives::ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
     ] {
       let sovereign = Actors::sovereign_account_id_system(actor_id);
-      assert!(Actors::active_actor_view(actor_id).is_none());
+      assert!(Actors::active_actor_state(actor_id).is_none());
       assert!(Actors::actor_identities(actor_id).is_none());
       assert!(Actors::sovereign_index(sovereign).is_none());
       let plan = transfer_contract_steps(BOB, AssetKind::Native, 1);
@@ -602,7 +610,7 @@ fn genesis_anchor_buckets_are_custody_only_accounts() {
 }
 
 fn fund_native_via_call(funder: crate::AccountId, actor_id: ActorId, amount: u128) {
-  let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
+  let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
   let provenance = pallet_deos_actors::FundingProvenance::Signed;
   assert_ok!(Actors::preflight_funding_event(
     actor_id,
@@ -613,7 +621,7 @@ fn fund_native_via_call(funder: crate::AccountId, actor_id: ActorId, amount: u12
   ));
   assert_ok!(<Balances as Currency<crate::AccountId>>::transfer(
     &funder,
-    &instance.sovereign_account,
+    &instance.identity.sovereign_account,
     amount,
     polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
   ));
@@ -712,9 +720,11 @@ fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
   let contract = Actors::scheduler_actor_contract_probe_weight_upper();
   let consume = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page());
-  let instance = Actors::active_actor_view(actor_id).expect("actor exists");
-  let cycle =
-    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
+  let instance = Actors::active_actor_state(actor_id).expect("actor exists");
+  let cycle = Actors::compute_cycle_weight_upper(
+    instance.identity.actor_class.actor_type(),
+    &instance.contract.steps,
+  );
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
@@ -728,8 +738,8 @@ fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
 fn run_idle_until_cycle_nonce(actor_id: ActorId, target_cycle_nonce: u64) {
   for _ in 0..20 {
     run_idle(Weight::MAX);
-    if Actors::active_actor_view(actor_id)
-      .map(|instance| instance.cycle_nonce >= target_cycle_nonce)
+    if Actors::active_actor_state(actor_id)
+      .map(|state| state.identity.cycle_nonce >= target_cycle_nonce)
       .unwrap_or(false)
     {
       return;
@@ -800,19 +810,21 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
     System::set_block_number(1);
     let amount = 5_000_000_000_000u128;
     let actor_id = Actors::next_actor_id();
-    let contract = ContractInput::Active(ActiveContractInput {
-      schedule: manual_schedule(),
-      schedule_window: None,
+    let schedule = manual_schedule();
+    let contract = ActorContract {
+      trigger: schedule.trigger,
+      cooldown_blocks: schedule.cooldown_blocks,
+      window: None,
       steps: transfer_contract_steps(BOB, AssetKind::Native, amount),
       completion: CompletionPolicy::CloseAfterProductiveCycle,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
-    });
+    };
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      contract.clone(),
+      Some(contract.clone()),
     ));
     let actor = Actors::sovereign_account_id_system(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
@@ -832,13 +844,13 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
       simulation.status,
       AttemptDisposition::Closed(CloseReason::ProductiveCycleCompleted)
     );
-    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert!(Actors::active_actor_state(actor_id).is_some());
     assert_eq!(native_balance(&BOB), bob_before);
     assert_eq!(native_balance(&actor), actor_before);
 
     run_idle(Weight::MAX);
 
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert!(Actors::active_actor_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
     assert_eq!(native_balance(&actor), actor_before.saturating_sub(amount));
     assert!(has_actor_event(|event| matches!(
@@ -886,12 +898,12 @@ fn native_staking_liquidity_actor_activation_requires_initialized_pool() {
       &BOB,
     ));
     assert_ok!(TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1));
-    let actor = Actors::active_actor_view(
+    let actor = Actors::active_actor_state(
       primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     )
     .expect("Native Staking Liquidity Actor must exist");
     assert!(matches!(
-      actor.steps.first().map(|step| &step.task),
+      actor.contract.steps.first().map(|step| &step.task),
       Some(Task::DonateLiquidity { .. })
     ));
   });
@@ -1277,9 +1289,9 @@ fn permissionless_sweep_many_batches_lifecycle_evaluation() {
       RuntimeOrigin::signed(CHARLIE),
       sweep_ids,
     ));
-    assert!(Actors::active_actor_view(user_a).is_none());
-    assert!(Actors::active_actor_view(user_b).is_none());
-    assert!(Actors::active_actor_view(system_alive).is_some());
+    assert!(Actors::active_actor_state(user_a).is_none());
+    assert!(Actors::active_actor_state(user_b).is_none());
+    assert!(Actors::active_actor_state(system_alive).is_some());
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -1512,7 +1524,7 @@ fn close_actor_emits_owner_initiated_reason() {
     let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
     let fee_sink_before = native_balance(&fee_sink);
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert!(Actors::active_actor_state(actor_id).is_none());
     assert_eq!(native_balance(&fee_sink), fee_sink_before);
     assert!(has_actor_event(|event| {
       matches!(
@@ -1562,9 +1574,9 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
       actor_id
     ));
     run_idle_until_cycle_nonce(actor_id, 3);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
     assert_eq!(
-      instance.lifecycle,
+      instance.hot.lifecycle,
       pallet_deos_actors::ActiveLifecycle::Active
     );
     fund_native_via_call(CHARLIE, actor_id, 8_000_000_000_000);
@@ -1633,7 +1645,7 @@ fn percentage_of_last_funding_keeps_user_actor_active_on_exhaustion() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert!(Actors::active_actor_state(actor_id).is_some());
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -1765,11 +1777,14 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
     )
     .expect("native exact-output route is quotable")
     .amount_in;
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    let fee_reserve =
-      Actors::attempt_fee_envelope(instance.actor_class.actor_type(), &instance.steps, 0)
-        .expect("admitted plan has a checked fee envelope")
-        .total;
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
+    let fee_reserve = Actors::attempt_fee_envelope(
+      instance.identity.actor_class.actor_type(),
+      &instance.contract.steps,
+      0,
+    )
+    .expect("admitted plan has a checked fee envelope")
+    .total;
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
     fund_native(
       actor_id,
@@ -1834,7 +1849,12 @@ fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
       if net_in == 0 {
         return None;
       }
-      crate::DeosRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
+      AssetConversionAdapter::quote_single_pool_exact_input(
+        AssetKind::Native,
+        AssetKind::Local(ASSET_A),
+        net_in,
+        true,
+      )
     };
     let mut high = 1u128;
     let mut found = false;
@@ -1978,7 +1998,12 @@ fn swap_out_fails_when_required_input_exceeds_actor_balance() {
       if net_in == 0 {
         return None;
       }
-      crate::DeosRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
+      AssetConversionAdapter::quote_single_pool_exact_input(
+        AssetKind::Native,
+        AssetKind::Local(ASSET_A),
+        net_in,
+        true,
+      )
     };
     let mut high = 1u128;
     let mut found = false;
@@ -2603,17 +2628,15 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       actor_id,
-      ContractInput::Active(ActiveContractInput {
-        schedule: Schedule {
-          trigger: Trigger::immediate_manual(),
-          cooldown_blocks: 0,
-        },
-        schedule_window: None,
+      ActorContract {
+        trigger: Trigger::immediate_manual(),
+        cooldown_blocks: 0,
+        window: None,
         steps: plan,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
-      }),
+      },
     ));
     publish_deos_router_observation(
       AssetKind::Native,
@@ -2747,8 +2770,9 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
       let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
       let burn_actor = super::common::burn_actor_account();
       let router_fee_before = native_balance(&burn_actor);
-      let burn_cycle_before = Actors::active_actor_view(burn_actor_id)
+      let burn_cycle_before = Actors::active_actor_state(burn_actor_id)
         .expect("Burn Actor exists")
+        .identity
         .cycle_nonce;
       let output_before = Assets::balance(ASSET_A, &actor);
       let pool_before =
@@ -2772,8 +2796,9 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
       assert!(input_after_failure < input_before);
       assert_eq!(native_balance(&burn_actor), router_fee_before);
       assert_eq!(
-        Actors::active_actor_view(burn_actor_id)
+        Actors::active_actor_state(burn_actor_id)
           .expect("Burn Actor remains active")
+          .identity
           .cycle_nonce,
         burn_cycle_before,
       );
@@ -2913,8 +2938,9 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
       let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
       let burn_actor = super::common::burn_actor_account();
       let burn_balance_before = native_balance(&burn_actor);
-      let burn_cycle_before = Actors::active_actor_view(burn_actor_id)
+      let burn_cycle_before = Actors::active_actor_state(burn_actor_id)
         .expect("Burn Actor exists")
+        .identity
         .cycle_nonce;
       let reward_liability_before = Staking::native_security_reward_liability();
       let reward_account = Staking::native_security_reward_account();
@@ -2947,8 +2973,9 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
       );
       assert_eq!(native_balance(&burn_actor), burn_balance_before);
       assert_eq!(
-        Actors::active_actor_view(burn_actor_id)
+        Actors::active_actor_state(burn_actor_id)
           .expect("Burn Actor remains active")
+          .identity
           .cycle_nonce,
         burn_cycle_before,
       );
@@ -3717,11 +3744,12 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
     );
     let sender_sovereign = actor_account(sender_id);
     let sender_whitelist = BoundedVec::try_from(vec![sender_sovereign]).expect("fits");
-    assert_ok!(update_actor_contract_partial!(
+    let schedule =
+      on_address_event_schedule(SourceFilter::Whitelist(sender_whitelist), AssetFilter::Any);
+    assert_ok!(update_actor_contract_partial(
       RuntimeOrigin::signed(ALICE),
       receiver_id,
-      on_address_event_schedule(SourceFilter::Whitelist(sender_whitelist), AssetFilter::Any),
-      None,
+      (schedule.trigger, schedule.cooldown_blocks, None),
     ));
     fund_native(sender_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -3731,8 +3759,9 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
     ));
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::active_actor_view(receiver_id)
+      Actors::active_actor_state(receiver_id)
         .expect("receiver exists")
+        .identity
         .cycle_nonce,
       0
     );
@@ -3767,8 +3796,9 @@ fn repeated_same_block_transfers_coalesce_to_one_actor_execution() {
     fund_native_via_call(ALICE, actor_id, 50_000_000_000_000);
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::active_actor_view(actor_id)
+      Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .cycle_nonce,
       1,
       "multiple same-block funding events must coalesce into one execution"
@@ -3879,8 +3909,9 @@ fn manual_signal_then_same_block_funding_coalesces_to_one_actor_execution() {
     fund_native_via_call(ALICE, actor_id, 50_000_000_000_000);
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::active_actor_view(actor_id)
+      Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .cycle_nonce,
       1,
       "manual and funding readiness must share one live queue membership"
@@ -3898,17 +3929,25 @@ fn runtime_rejects_self_transfer_before_contract_replacement() {
       None,
       BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
     );
-    let before = Actors::active_actor_view(actor_id).expect("actor exists");
+    let before = Actors::active_actor_state(actor_id).expect("actor exists");
+    let before_encoded = before.encode();
     assert_noop!(
       update_actor_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        transfer_contract_steps(before.sovereign_account.clone(), AssetKind::Native, 1_000,),
+        transfer_contract_steps(
+          before.identity.sovereign_account.clone(),
+          AssetKind::Native,
+          1_000,
+        ),
         CompletionPolicy::Persistent,
       ),
       Error::<Runtime>::SelfTransferNotAllowed
     );
-    assert_eq!(Actors::active_actor_view(actor_id), Some(before));
+    assert_eq!(
+      Actors::active_actor_state(actor_id).map(|state| state.encode()),
+      Some(before_encoded)
+    );
   });
 }
 
@@ -3952,14 +3991,16 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
     }
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::active_actor_view(actor_a)
+      Actors::active_actor_state(actor_a)
         .expect("actor A exists")
+        .identity
         .cycle_nonce,
       1
     );
     assert_eq!(
-      Actors::active_actor_view(actor_b)
+      Actors::active_actor_state(actor_b)
         .expect("actor B exists")
+        .identity
         .cycle_nonce,
       1
     );
@@ -3973,14 +4014,16 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
     System::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::active_actor_view(actor_a)
+      Actors::active_actor_state(actor_a)
         .expect("actor A exists")
+        .identity
         .cycle_nonce,
       2
     );
     assert_eq!(
-      Actors::active_actor_view(actor_b)
+      Actors::active_actor_state(actor_b)
         .expect("actor B exists")
+        .identity
         .cycle_nonce,
       1,
       "A-triggered recursive work for B must remain beyond the next block's cutoff"
@@ -4037,11 +4080,11 @@ fn router_fee_routing_notifies_burn_actor_via_runtime_ingress_adapter() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
-    assert_ok!(update_actor_contract_partial!(
+    let schedule = on_address_event_schedule(SourceFilter::Any, AssetFilter::Any);
+    assert_ok!(update_actor_contract_partial(
       RuntimeOrigin::root(),
       burn_actor_id,
-      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
-      None,
+      (schedule.trigger, schedule.cooldown_blocks, None),
     ));
     System::set_block_number(2);
     assert_ok!(update_actor_contract_partial!(
@@ -4172,12 +4215,15 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
         transfer_contract_steps(BOB, AssetKind::Native, 1),
       ),
     ));
-    let fresh = Actors::active_actor_view(fresh_id).expect("fresh Fee Sink identity");
+    let fresh = Actors::active_actor_state(fresh_id).expect("fresh Fee Sink identity");
     assert_ne!(fresh_id, fee_sink_id);
-    assert_eq!(fresh.sovereign_account, sovereign);
+    assert_eq!(fresh.identity.sovereign_account, sovereign);
     // Reattachment mints a fresh identity with a fresh nonce sequence (zero), never
     // inheriting the closed actor's nonce or run state.
-    assert_eq!(fresh.cycle_nonce, 0, "reattachment resets the nonce");
+    assert_eq!(
+      fresh.identity.cycle_nonce, 0,
+      "reattachment resets the nonce"
+    );
     assert_eq!(
       Balances::free_balance(&sovereign),
       preserved + original_sovereign_balance_before,
@@ -4266,9 +4312,9 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       target_id
     ));
     run_idle_until_cycle_nonce(target_id, 3);
-    let instance = Actors::active_actor_view(target_id).expect("Actors exists");
+    let instance = Actors::active_actor_state(target_id).expect("Actors exists");
     assert_eq!(
-      instance.lifecycle,
+      instance.hot.lifecycle,
       pallet_deos_actors::ActiveLifecycle::Active
     );
     let target_sovereign = actor_account(target_id);
@@ -4500,8 +4546,8 @@ fn xcm_mixed_ingress_single_deposit_triggers_single_cycle() {
     );
     run_idle(Weight::MAX);
     run_idle(Weight::MAX);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.cycle_nonce, 1);
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
+    assert_eq!(instance.identity.cycle_nonce, 1);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
   });
 }
@@ -4528,9 +4574,11 @@ fn cycle_does_not_execute_when_budget_is_too_small() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    let attempt_weight =
-      Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
+    let attempt_weight = Actors::compute_cycle_weight_upper(
+      instance.identity.actor_class.actor_type(),
+      &instance.contract.steps,
+    );
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
       true
@@ -4546,9 +4594,9 @@ fn cycle_does_not_execute_when_budget_is_too_small() {
       .saturating_add(attempt_weight)
       .saturating_sub(Weight::from_parts(1, 0));
     run_idle(target_weight);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.cycle_nonce, 0);
-    assert!(instance.pending_signal);
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
+    assert_eq!(instance.identity.cycle_nonce, 0);
+    assert!(instance.hot.pending_signal);
   });
 }
 
@@ -4582,7 +4630,7 @@ fn cycle_closes_with_balance_exhausted_before_the_smaller_weight_derived_fee() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert!(Actors::active_actor_state(actor_id).is_none());
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -4621,7 +4669,7 @@ fn fee_insufficiency_is_terminal_without_deferral_guard() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert!(Actors::active_actor_state(actor_id).is_none());
   });
 }
 
@@ -4725,21 +4773,21 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
     System::reset_events();
     run_idle(starvation_blocked_budget(head));
 
-    let head_inst = Actors::active_actor_view(head).expect("head survives deferral");
+    let head_inst = Actors::active_actor_state(head).expect("head survives deferral");
     assert_eq!(
-      head_inst.cycle_nonce, 0,
+      head_inst.identity.cycle_nonce, 0,
       "head attempt is deferred, not admitted"
     );
-    assert!(head_inst.pending_signal);
+    assert!(head_inst.hot.pending_signal);
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
         if *id == head
     )));
     for (id, ticket) in [(light_a, 1), (light_b, 2)] {
-      let inst = Actors::active_actor_view(id).expect("follower survives");
+      let inst = Actors::active_actor_state(id).expect("follower survives");
       assert_eq!(
-        inst.cycle_nonce, 0,
+        inst.identity.cycle_nonce, 0,
         "follower never admitted behind the head"
       );
       assert!(
@@ -4769,8 +4817,9 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
     assert_eq!(started, vec![head, light_a, light_b]);
     for id in [head, light_a, light_b] {
       assert_eq!(
-        Actors::active_actor_view(id)
+        Actors::active_actor_state(id)
           .expect("actor executed")
+          .identity
           .cycle_nonce,
         1
       );
@@ -5706,10 +5755,10 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_pure_cleanup() {
     let mut max_ref_time = (0u64, 0u64);
     let mut max_proof_size = (0u64, 0u64);
     for actor_id in pallet_deos_actors::ActorHot::<Runtime>::iter_keys() {
-      let instance = Actors::active_actor_view(actor_id).expect("split active actor exists");
+      let instance = Actors::active_actor_state(actor_id).expect("split active actor exists");
       let required = Actors::contract_steps_admission_weight_upper(
-        instance.actor_class.actor_type(),
-        &instance.steps,
+        instance.identity.actor_class.actor_type(),
+        &instance.contract.steps,
       );
       assert!(
         required.all_lte(reserve),
@@ -5884,14 +5933,14 @@ fn system_actor_count_is_not_limited_by_owner_slots() {
         None,
         transfer_contract_steps(BOB, AssetKind::Native, 1),
       );
-      let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
+      let inst = Actors::active_actor_state(actor_id).expect("Actors exists");
       assert_eq!(
-        inst.actor_class,
+        inst.identity.actor_class,
         pallet_deos_actors::ActorClass::System {
           sovereign_id: actor_id,
         }
       );
-      sovereign_accounts.push(inst.sovereign_account);
+      sovereign_accounts.push(inst.identity.sovereign_account);
     }
     assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
     for i in 0..sovereign_accounts.len() {
@@ -5921,7 +5970,7 @@ fn governance_can_update_active_actor_limit() {
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert!(Actors::active_actor_state(actor_id).is_some());
     assert_noop!(
       Actors::set_active_actor_limit(RuntimeOrigin::root(), 0),
       pallet_deos_actors::Error::<Runtime>::ActiveActorLimitTooLow
@@ -5949,13 +5998,15 @@ fn owner_slot_reuses_freed_slot_after_close() {
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    let slot0 = Actors::active_actor_view(id0)
+    let slot0 = Actors::active_actor_state(id0)
       .expect("id0 exists")
+      .identity
       .actor_class
       .owner_slot()
       .expect("User actor has an owner slot");
-    let slot1 = Actors::active_actor_view(id1)
+    let slot1 = Actors::active_actor_state(id1)
       .expect("id1 exists")
+      .identity
       .actor_class
       .owner_slot()
       .expect("User actor has an owner slot");
@@ -5968,8 +6019,9 @@ fn owner_slot_reuses_freed_slot_after_close() {
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    let slot2 = Actors::active_actor_view(id2)
+    let slot2 = Actors::active_actor_state(id2)
       .expect("id2 exists")
+      .identity
       .actor_class
       .owner_slot()
       .expect("User actor has an owner slot");
@@ -6012,10 +6064,14 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     );
     let sov = Actors::sovereign_account_id(&ALICE, 0);
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
-    let inst = Actors::active_actor_view(id).unwrap();
-    let per_cycle_fee = Actors::attempt_fee_envelope(inst.actor_class.actor_type(), &inst.steps, 0)
-      .expect("admitted plan has a checked fee envelope")
-      .total;
+    let inst = Actors::active_actor_state(id).unwrap();
+    let per_cycle_fee = Actors::attempt_fee_envelope(
+      inst.identity.actor_class.actor_type(),
+      &inst.contract.steps,
+      0,
+    )
+    .expect("admitted plan has a checked fee envelope")
+    .total;
     let native_funding = min_user_balance + (per_cycle_fee + swap_amount) * 3;
     let _ = <Balances as Currency<crate::AccountId>>::transfer(
       &ALICE,
@@ -6044,15 +6100,16 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     }
     assert!(max_nonce >= 2, "Should have executed at least 2 cycles");
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), id));
-    assert!(Actors::active_actor_view(id).is_none());
+    assert!(Actors::active_actor_state(id).is_none());
     let id_new = create_user(
       ALICE,
       manual_schedule(),
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    let slot_new = Actors::active_actor_view(id_new)
+    let slot_new = Actors::active_actor_state(id_new)
       .expect("id_new exists")
+      .identity
       .actor_class
       .owner_slot()
       .expect("User actor has an owner slot");
@@ -6063,7 +6120,7 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
 // --- Circular Transfer Chain Stress Tests ---
 
 /// Creates `n` System Actors with explicit StopCycle contracts for scheduler stress testing.
-fn inert_timer_contract() -> pallet_deos_actors::ContractInputOf<Runtime> {
+fn inert_timer_contract() -> Option<pallet_deos_actors::ActorContractOf<Runtime>> {
   system_active_contract(
     Schedule {
       trigger: Trigger::cadenced_always(1),
@@ -6129,8 +6186,9 @@ fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u6
       ));
     }
     age_fixture_control_clock(actor_id);
-    let sovereign = Actors::active_actor_view(actor_id)
+    let sovereign = Actors::active_actor_state(actor_id)
       .expect("mixed stress actor exists")
+      .identity
       .sovereign_account;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sovereign, initial_balance);
     actor_ids.push(actor_id);
@@ -6293,11 +6351,11 @@ fn assert_core_stability(actor_ids: &[u64], diag: &StressDiagnostics) {
     diag.total_failed_steps,
   );
   for &id in actor_ids {
-    let inst = Actors::active_actor_view(id).expect("actor must still exist");
+    let inst = Actors::active_actor_state(id).expect("actor must still exist");
     assert_eq!(
-      inst.unsuccessful_attempt_streak, 0,
+      inst.hot.unsuccessful_attempt_streak, 0,
       "Actor {} has unsuccessful-attempt streak {}",
-      id, inst.unsuccessful_attempt_streak,
+      id, inst.hot.unsuccessful_attempt_streak,
     );
   }
 }
@@ -6351,7 +6409,7 @@ fn circular_chain_under_capacity_preserves_progress_and_fairness() {
     // Fairness remains bounded despite measured Weight limiting each pass.
     let nonces: alloc::vec::Vec<u64> = actor_ids
       .iter()
-      .filter_map(|&id| Actors::active_actor_view(id).map(|i| i.cycle_nonce))
+      .filter_map(|&id| Actors::active_actor_state(id).map(|state| state.identity.cycle_nonce))
       .collect();
     let (min_n, max_n) = (*nonces.iter().min().unwrap(), *nonces.iter().max().unwrap());
     assert!(
@@ -6414,12 +6472,13 @@ fn diagnose_over_capacity_first_blocks() {
     // After 5 blocks, check nonce of zero actors
     println!("\n=== After 5 blocks ===");
     for id in 2006..=2010 {
-      if let Some(inst) = Actors::active_actor_view(id) {
+      if let Some(inst) = Actors::active_actor_state(id) {
         println!(
           "Actors {}: cycle_nonce={}, last_cycle_block={}",
           id,
-          inst.cycle_nonce,
+          inst.identity.cycle_nonce,
           inst
+            .hot
             .last_cycle_block
             .map(|b| b.to_string())
             .unwrap_or_else(|| String::from("None"))
@@ -6498,7 +6557,7 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
     // With identical periodic actors, the queue scheduler should keep nonce spread minimal (≤ 2).
     let nonces: alloc::vec::Vec<u64> = actor_ids
       .iter()
-      .filter_map(|&id| Actors::active_actor_view(id).map(|i| i.cycle_nonce))
+      .filter_map(|&id| Actors::active_actor_state(id).map(|state| state.identity.cycle_nonce))
       .collect();
     let min_nonce = *nonces.iter().min().unwrap();
     let max_nonce = *nonces.iter().max().unwrap();
@@ -6525,7 +6584,7 @@ fn clear_genesis_system_actors_for_stress_fixture() {
   let actors: alloc::vec::Vec<_> = pallet_deos_actors::ActorHot::<Runtime>::iter().collect();
   for (actor_id, _hot) in actors {
     pallet_deos_actors::ActorHot::<Runtime>::remove(actor_id);
-    pallet_deos_actors::ActorContract::<Runtime>::remove(actor_id);
+    pallet_deos_actors::ActorContracts::<Runtime>::remove(actor_id);
     pallet_deos_actors::ActorFunding::<Runtime>::remove(actor_id);
     let identity = Actors::actor_identities(actor_id).expect("actor identity exists");
     pallet_deos_actors::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
@@ -6779,10 +6838,10 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
         .all(|id| Actors::actor_hot(*id).is_some_and(|hot| hot.wakeup_pointer.is_none()));
       let closes_done = expired_ids
         .iter()
-        .all(|id| Actors::active_actor_view(*id).is_none());
-      let live_progress = retry_ids
-        .iter()
-        .all(|id| Actors::active_actor_view(*id).is_some_and(|actor| actor.cycle_nonce > 0));
+        .all(|id| Actors::active_actor_state(*id).is_none());
+      let live_progress = retry_ids.iter().all(|id| {
+        Actors::active_actor_state(*id).is_some_and(|state| state.identity.cycle_nonce > 0)
+      });
       if retries_done && closes_done && live_progress {
         break;
       }
@@ -6795,9 +6854,9 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
       "paged wakeups must converge"
     );
     assert!(
-      retry_ids
-        .iter()
-        .all(|id| Actors::active_actor_view(*id).is_some_and(|actor| actor.cycle_nonce > 0)),
+      retry_ids.iter().all(|id| {
+        Actors::active_actor_state(*id).is_some_and(|state| state.identity.cycle_nonce > 0)
+      }),
       "live actors must progress while cleanup converges"
     );
     let repair_batch = BoundedVec::try_from(expired_ids.clone()).expect("repair batch fits");
@@ -6808,7 +6867,7 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
     assert!(
       expired_ids
         .iter()
-        .all(|id| Actors::active_actor_view(*id).is_none()),
+        .all(|id| Actors::active_actor_state(*id).is_none()),
       "explicit bounded repair must close externally stranded actors"
     );
     assert_eq!(
@@ -7048,11 +7107,11 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
     // Dormant and custody identities own no executable contract.
     for id in [2, 4, 5, 6, 7, 8, 9, 11, 13, 14] {
       assert!(Actors::actor_identities(id).is_some());
-      assert!(Actors::active_actor_view(id).is_none());
+      assert!(Actors::active_actor_state(id).is_none());
     }
     for id in [3, 12] {
       assert!(Actors::actor_identities(id).is_none());
-      assert!(Actors::active_actor_view(id).is_none());
+      assert!(Actors::active_actor_state(id).is_none());
     }
     // Create a fresh actor at the current high end to extend the sparse space.
     let fresh_id = crate::Actors::next_actor_id();
@@ -7235,12 +7294,15 @@ fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = transfer_contract_steps(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
-    let expected_contract = system_active_contract(manual_schedule(), None, steps.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, steps.clone())
+      .expect("system actor contract exists");
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000 * crate::EXISTENTIAL_DEPOSIT);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
-    let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
-    let actor_balance_before = Balances::free_balance(&actor_before.sovereign_account);
+    let actor_before = Actors::active_actor_state(actor_id)
+      .expect("actor exists")
+      .encode();
+    let actor_balance_before = Balances::free_balance(&actor_account(actor_id));
     let bob_before = Balances::free_balance(BOB);
     let events_before = System::event_count();
 
@@ -7257,7 +7319,10 @@ fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
     assert_eq!(result.cycle_nonce, 1);
     assert_eq!(result.steps.len(), 1);
     assert_eq!(result.steps[0].outcome, StepOutcome::Executed);
-    assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
+    assert_eq!(
+      Actors::active_actor_state(actor_id).map(|state| state.encode()),
+      Some(actor_before)
+    );
     assert_eq!(Balances::free_balance(BOB), bob_before);
     assert_eq!(
       Balances::free_balance(&actor_account(actor_id)),
@@ -7400,8 +7465,8 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
     let progressed = actor_ids
       .iter()
       .filter(|id| {
-        Actors::active_actor_view(**id)
-          .map(|inst| inst.cycle_nonce > 0)
+        Actors::active_actor_state(**id)
+          .map(|state| state.identity.cycle_nonce > 0)
           .unwrap_or(true)
       })
       .count();
@@ -7449,10 +7514,10 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
     ));
     let amount = crate::EXISTENTIAL_DEPOSIT.saturating_mul(3);
     let payer = BOB;
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
+    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
     assert_ok!(<Balances as Currency<crate::AccountId>>::transfer(
       &payer,
-      &instance.sovereign_account,
+      &instance.identity.sovereign_account,
       amount,
       polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
     ));
@@ -7536,25 +7601,25 @@ fn eligibility_projection_binds_genesis_actors_and_signal_readiness() {
 
     let missing = Actors::actor_eligibility(primitives::ecosystem::actor_ids::BURN_ACTOR_ID + 1000)
       .expect("projection computes");
-    assert_eq!(
-      missing.phase,
-      pallet_deos_actors::ActorEligibilityPhase::NotRegistered
-    );
-    assert_eq!(missing.next_eligible_block, None);
+    assert_eq!(missing, pallet_deos_actors::ActorEligibility::NotRegistered);
 
     let idle = Actors::actor_eligibility(fee_sink_id).expect("projection computes");
-    assert_eq!(
-      idle.phase,
-      pallet_deos_actors::ActorEligibilityPhase::WaitingSignal
-    );
-    assert_eq!(idle.next_eligible_block, Some(1));
+    assert!(matches!(
+      idle,
+      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActorClassification {
+        terminal_reason: None,
+        execution_phase: pallet_deos_actors::ActorExecutionPhase::WaitingSignal,
+      })
+    ));
 
     fund_native_via_call(BOB, fee_sink_id, 1_000);
     let latched = Actors::actor_eligibility(fee_sink_id).expect("projection computes");
-    assert_eq!(
-      latched.phase,
-      pallet_deos_actors::ActorEligibilityPhase::Ready
-    );
-    assert_eq!(latched.next_eligible_block, Some(1));
+    assert!(matches!(
+      latched,
+      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActorClassification {
+        terminal_reason: None,
+        execution_phase: pallet_deos_actors::ActorExecutionPhase::Ready,
+      })
+    ));
   });
 }

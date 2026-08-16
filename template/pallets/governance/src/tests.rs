@@ -1,6 +1,6 @@
 use crate::proposal_resolution::CoreResolutionOutcome;
 use crate::{
-  ActiveProposalCounts, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
+  ActiveProposalIdsByDomain, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
   FinalizedProposalOutcome, FinalizedProposals, ProposalCadenceMode, ProposalExecutionAuthority,
   ProposalMetadata, ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt,
   ProposalPreimageAdmissionError, ProposalRejectionReason, ProposalTiming,
@@ -13,6 +13,17 @@ use polkadot_sdk::sp_core::H256;
 use polkadot_sdk::sp_runtime::FixedU128;
 
 const DEFAULT_PROPOSER: u64 = 99;
+
+fn active_proposal_count(domain: u32) -> u32 {
+  Governance::active_proposal_ids(domain).len() as u32
+}
+
+fn set_active_proposal_count(domain: u32, count: u32) {
+  ActiveProposalIdsByDomain::<Test>::insert(
+    domain,
+    BoundedVec::try_from((0..count).collect::<Vec<_>>()).expect("test active-id capacity fits"),
+  );
+}
 
 #[test]
 fn preimage_admission_error_core_maps_exhaustively_to_dispatch() {
@@ -210,7 +221,7 @@ fn participation_coefficient_rotates_a_read_only_copy() {
 fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
   new_test_ext().execute_with(|| {
     assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 1);
+    assert_eq!(active_proposal_count(7), 1);
     assert!(ActiveProposals::<Test>::contains_key(7, 100));
     assert_eq!(Governance::active_proposal_ids(7).into_inner(), vec![100]);
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalSubmitted {
@@ -231,7 +242,7 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
       100,
       winners,
     ));
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 0);
+    assert_eq!(active_proposal_count(7), 0);
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     assert!(Governance::active_proposal_ids(7).is_empty());
     assert_eq!(
@@ -261,10 +272,10 @@ fn proposal_submit_resolve_and_reject_follow_active_lifecycle() {
 }
 
 #[test]
-fn terminal_cleanup_fails_closed_when_active_count_is_corrupt() {
+fn terminal_cleanup_fails_closed_when_active_index_is_corrupt() {
   new_test_ext().execute_with(|| {
     assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
-    ActiveProposalCounts::<Test>::insert(7, 0);
+    ActiveProposalIdsByDomain::<Test>::remove(7);
     let ids_before = Governance::active_proposal_ids(7);
     assert_noop!(
       Governance::reject_proposal(RuntimeOrigin::root(), 7, 100),
@@ -449,7 +460,7 @@ fn general_proposal_cap_preserves_the_strategic_reserve() {
       submit_test_proposal(7, 15, 115),
       Error::<Test>::ActiveProposalCapReached
     );
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 15);
+    assert_eq!(active_proposal_count(7), 15);
   });
 }
 
@@ -462,21 +473,21 @@ fn author_cap_prevents_monopoly_and_terminal_release_restores_capacity() {
       }
       assert_ok!(submit_test_proposal(7, item_id, DEFAULT_PROPOSER));
     }
-    let count_before_rejection = ActiveProposalCounts::<Test>::get(7);
+    let count_before_rejection = active_proposal_count(7);
     let ids_before_rejection = Governance::active_proposal_ids(7);
     assert_noop!(
       submit_test_proposal(7, 8, DEFAULT_PROPOSER),
       Error::<Test>::ActiveProposalAuthorCapReached
     );
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), count_before_rejection);
+    assert_eq!(active_proposal_count(7), count_before_rejection);
     assert_eq!(Governance::active_proposal_ids(7), ids_before_rejection);
     assert!(!ActiveProposals::<Test>::contains_key(7, 8));
 
     assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 0));
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 7);
+    assert_eq!(active_proposal_count(7), 7);
     System::set_block_number(System::block_number().saturating_add(1));
     assert_ok!(submit_test_proposal(7, 8, DEFAULT_PROPOSER));
-    assert_eq!(ActiveProposalCounts::<Test>::get(7), 8);
+    assert_eq!(active_proposal_count(7), 8);
   });
 }
 
@@ -520,7 +531,7 @@ fn full_general_capacity_cannot_block_protocol_l1_root_action() {
       ProposalPayloadKind::L1RootAction,
       polkadot_sdk::sp_core::H256::repeat_byte(100),
     ));
-    assert_eq!(ActiveProposalCounts::<Test>::get(42), 16);
+    assert_eq!(active_proposal_count(42), 16);
     assert_noop!(
       Governance::submit_proposal(
         RuntimeOrigin::root(),
@@ -837,7 +848,7 @@ fn metadata_aware_submission_persists_payload_kind_and_hash() {
 }
 
 #[test]
-fn proposal_payload_availability_reflects_provider_state() {
+fn proposal_payload_availability_uses_canonical_preimage_status() {
   new_test_ext().execute_with(|| {
     let payload_hash = polkadot_sdk::sp_core::H256::repeat_byte(9);
     set_payload_preimage_state(payload_hash, true, true);
@@ -852,9 +863,10 @@ fn proposal_payload_availability_reflects_provider_state() {
     ));
     assert_eq!(
       Governance::proposal_payload_availability(7, 100),
-      Some(crate::ProposalPayloadAvailability {
+      Some(crate::PayloadHashPreimageStatus {
         have_preimage: true,
         preimage_requested: true,
+        payload_len: Some(32),
       })
     );
   });
@@ -1602,7 +1614,7 @@ fn full_maturity_bucket_rejects_signed_submission_before_fee_or_state() {
       recipient_before
     );
     assert_eq!(System::events(), events_before);
-    assert_eq!(ActiveProposalCounts::<Test>::get(44), 0);
+    assert_eq!(active_proposal_count(44), 0);
     assert!(!ActiveProposals::<Test>::contains_key(44, 105));
     assert_eq!(Governance::proposal_author(44, 105), None);
   });
@@ -1613,7 +1625,7 @@ fn signed_preimage_failures_precede_capacity_fee_events_and_state() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
     let payload_hash = H256::repeat_byte(90);
-    ActiveProposalCounts::<Test>::insert(44, 15);
+    set_active_proposal_count(44, 15);
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     let events_before = System::events();
@@ -1634,7 +1646,7 @@ fn signed_preimage_failures_precede_capacity_fee_events_and_state() {
       recipient_before
     );
     assert_eq!(System::events(), events_before);
-    assert_eq!(ActiveProposalCounts::<Test>::get(44), 15);
+    assert_eq!(active_proposal_count(44), 15);
     assert!(!ActiveProposals::<Test>::contains_key(44, 105));
 
     set_payload_preimage_state_with_len(payload_hash, true, false, Some(257));
@@ -1655,7 +1667,7 @@ fn signed_preimage_failures_precede_capacity_fee_events_and_state() {
       recipient_before
     );
     assert_eq!(System::events(), events_before);
-    assert_eq!(ActiveProposalCounts::<Test>::get(44), 15);
+    assert_eq!(active_proposal_count(44), 15);
   });
 }
 
@@ -1757,7 +1769,7 @@ fn primary_eligible_submission_rolls_back_fee_at_active_capacity() {
     let proposer = 10u64;
     set_vote_weight(proposer, 1);
     set_payload_preimage_state(H256::default(), true, false);
-    ActiveProposalCounts::<Test>::insert(42, 16);
+    set_active_proposal_count(42, 16);
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     let events_before = System::events();
@@ -1839,7 +1851,7 @@ fn signed_admission_rejection_precedence_is_authority_then_eligibility_then_dupl
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
     ActiveProposals::<Test>::insert(7, 106, crate::ActiveProposal { submitted_epoch: 1 });
-    ActiveProposalCounts::<Test>::insert(7, 16);
+    set_active_proposal_count(7, 16);
     assert_noop!(
       Governance::submit_signed_proposal(
         RuntimeOrigin::signed(proposer),
@@ -1853,7 +1865,7 @@ fn signed_admission_rejection_precedence_is_authority_then_eligibility_then_dupl
     );
 
     ActiveProposals::<Test>::insert(42, 106, crate::ActiveProposal { submitted_epoch: 1 });
-    ActiveProposalCounts::<Test>::insert(42, 16);
+    set_active_proposal_count(42, 16);
     assert_noop!(
       Governance::submit_signed_proposal(
         RuntimeOrigin::signed(proposer),

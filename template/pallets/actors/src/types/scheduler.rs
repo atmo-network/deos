@@ -1,4 +1,4 @@
-use crate::lifecycle_types::ActorId;
+use super::lifecycle::ActorId;
 use frame::prelude::*;
 
 pub type QueueTicket = u64;
@@ -20,7 +20,6 @@ pub type WakeupCursorIndex = u32;
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub enum IdleStarvationPhase {
   #[default]
   Healthy,
@@ -35,7 +34,6 @@ pub enum IdleStarvationPhase {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub struct WakeupPointer<BlockNumber> {
   pub block: BlockNumber,
   pub page_id: WakeupPageId,
@@ -45,7 +43,6 @@ pub struct WakeupPointer<BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub struct WakeupEntry {
   pub actor_id: ActorId,
 }
@@ -53,7 +50,6 @@ pub struct WakeupEntry {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub struct WakeupPage<Entries> {
   pub entries: Entries,
   pub live_entries: u32,
@@ -65,7 +61,6 @@ pub struct WakeupPage<Entries> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub struct WakeupBucketState {
   pub head_page: WakeupPageId,
   pub tail_page: WakeupPageId,
@@ -77,7 +72,6 @@ pub struct WakeupBucketState {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("scheduler_types", "types"))]
 pub struct QueueEntry {
   pub ticket: QueueTicket,
   pub actor_id: ActorId,

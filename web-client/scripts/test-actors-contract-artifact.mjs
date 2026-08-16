@@ -24,77 +24,69 @@ const runtime = {
   transactionVersion: 1,
 };
 
-function dormantArtifact() {
+function canonicalArtifact() {
   return createActorContractArtifact({
     metadataBytes,
     runtime,
     actorType: 'User',
     mutability: 'Mutable',
-    contractScale: '0x00',
-  });
-}
-
-test('canonical dormant artifact is deterministic and round-trips exact SCALE', () => {
-  const artifact = dormantArtifact();
-  assert.equal(
-    artifact.contractId,
-    '0xd7cedd4d61a78d58f46b0c062bc09cea1db605d52bb9a36cc2e26387a4c4b415',
-  );
-  const inspection = inspectActorContractArtifact(
-    artifact,
-    metadataBytes,
-    runtime,
-  );
-  assert.equal(inspection.valid, true);
-  if (inspection.valid) {
-    assert.deepEqual(inspection.projection, {
-      type: 'Dormant',
-      value: { $none: true },
-    });
-  }
-});
-
-test('active ContractInput encodes and projects every nested value losslessly', () => {
-  const contractScale = encodeActorContractValue(metadataBytes, {
-    type: 'Active',
-    value: {
-      schedule: {
-        trigger: {
-          type: 'Immediate',
-          value: {
-            sources: [{ type: 'Manual', value: undefined }],
-          },
-        },
-        cooldown_blocks: 5,
+    contractScale: encodeActorContractValue(metadataBytes, {
+      trigger: {
+        type: 'Immediate',
+        value: { sources: [{ type: 'Manual', value: undefined }] },
       },
-      schedule_window: undefined,
+      cooldown_blocks: 0,
+      window: undefined,
       steps: [
         {
-          precondition: [
-            [
-              {
-                timing: { type: 'Current', value: undefined },
-                predicate: {
-                  type: 'BlockNumberAbove',
-                  value: { threshold: 1 },
-                },
-              },
-            ],
-          ],
-          task: {
-            type: 'Transfer',
-            value: {
-              to: '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT',
-              asset: { type: 'Native', value: undefined },
-              amount: { type: 'Fixed', value: 10n },
-            },
-          },
+          precondition: undefined,
+          task: { type: 'StopCycle', value: undefined },
           on_error: { type: 'AbortCycle', value: undefined },
         },
       ],
       completion: { type: 'Persistent', value: undefined },
       funding: { type: 'OwnerOnly', value: undefined },
+      auto_close_at_cycle_nonce: undefined,
+    }),
+  });
+}
+
+test('ActorContract encodes and projects every nested value losslessly', () => {
+  const contractScale = encodeActorContractValue(metadataBytes, {
+    trigger: {
+      type: 'Immediate',
+      value: {
+        sources: [{ type: 'Manual', value: undefined }],
+      },
     },
+    cooldown_blocks: 5,
+    window: undefined,
+    steps: [
+      {
+        precondition: [
+          [
+            {
+              timing: { type: 'Current', value: undefined },
+              predicate: {
+                type: 'BlockNumberAbove',
+                value: { threshold: 1 },
+              },
+            },
+          ],
+        ],
+        task: {
+          type: 'Transfer',
+          value: {
+            to: '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT',
+            asset: { type: 'Native', value: undefined },
+            amount: { type: 'Fixed', value: 10n },
+          },
+        },
+        on_error: { type: 'AbortCycle', value: undefined },
+      },
+    ],
+    completion: { type: 'Persistent', value: undefined },
+    funding: { type: 'OwnerOnly', value: undefined },
   });
   const artifact = createActorContractArtifact({
     metadataBytes,
@@ -110,10 +102,10 @@ test('active ContractInput encodes and projects every nested value losslessly', 
   );
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
-    assert.deepEqual(
-      inspection.projection.value.steps[0].task.value.amount.value,
-      { $integer: '10', $runtimeType: 'bigint' },
-    );
+    assert.deepEqual(inspection.projection.steps[0].task.value.amount.value, {
+      $integer: '10',
+      $runtimeType: 'bigint',
+    });
   }
 });
 
@@ -142,28 +134,23 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
       actorType: 'User',
       mutability: 'Mutable',
       contractScale: encodeActorContractValue(metadataBytes, {
-        type: 'Active',
-        value: {
-          schedule: {
-            trigger: {
-              type: 'Immediate',
-              value: {
-                sources: [{ type: 'Manual', value: undefined }],
-              },
-            },
-            cooldown_blocks: 0,
+        trigger: {
+          type: 'Immediate',
+          value: {
+            sources: [{ type: 'Manual', value: undefined }],
           },
-          schedule_window: undefined,
-          steps: [
-            {
-              precondition,
-              task: { type: 'StopCycle', value: undefined },
-              on_error: { type: 'AbortCycle', value: undefined },
-            },
-          ],
-          completion: { type: 'Persistent', value: undefined },
-          funding: { type: 'OwnerOnly', value: undefined },
         },
+        cooldown_blocks: 0,
+        window: undefined,
+        steps: [
+          {
+            precondition,
+            task: { type: 'StopCycle', value: undefined },
+            on_error: { type: 'AbortCycle', value: undefined },
+          },
+        ],
+        completion: { type: 'Persistent', value: undefined },
+        funding: { type: 'OwnerOnly', value: undefined },
       }),
     });
   };
@@ -179,10 +166,7 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
     );
     assert.equal(inspection.valid, true);
     if (!inspection.valid) throw new Error('fixture must inspect');
-    assert.equal(
-      inspection.projection.value.steps[0].precondition.length > 0,
-      true,
-    );
+    assert.equal(inspection.projection.steps[0].precondition.length > 0, true);
     return inspection;
   });
   assert.equal(
@@ -212,20 +196,18 @@ test('trigger admission diff stays inside the trigger tree and never invents con
       actorType: 'User',
       mutability: 'Mutable',
       contractScale: encodeActorContractValue(metadataBytes, {
-        type: 'Active',
-        value: {
-          schedule: { trigger, cooldown_blocks: 0 },
-          schedule_window: undefined,
-          steps: [
-            {
-              precondition: undefined,
-              task: { type: 'StopCycle', value: undefined },
-              on_error: { type: 'AbortCycle', value: undefined },
-            },
-          ],
-          completion: { type: 'Persistent', value: undefined },
-          funding: { type: 'OwnerOnly', value: undefined },
-        },
+        trigger,
+        cooldown_blocks: 0,
+        window: undefined,
+        steps: [
+          {
+            precondition: undefined,
+            task: { type: 'StopCycle', value: undefined },
+            on_error: { type: 'AbortCycle', value: undefined },
+          },
+        ],
+        completion: { type: 'Persistent', value: undefined },
+        funding: { type: 'OwnerOnly', value: undefined },
       }),
     });
     const inspection = inspectActorContractArtifact(
@@ -264,8 +246,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
       ],
     },
   });
-  const observationSource =
-    observation.projection.value.schedule.trigger.value.sources[0];
+  const observationSource = observation.projection.trigger.value.sources[0];
   assert.equal(observationSource.type, 'OnObservationChange');
   assert.deepEqual(Object.keys(observationSource.value), ['feed']);
   assert.equal(observationSource.value.feed.aggregation.type, 'Ema');
@@ -279,9 +260,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
   if (observationDiff.compatible) {
     assert(
       observationDiff.changes.every((change) =>
-        ('path' in change ? change.path : change.from).startsWith(
-          '/value/schedule/trigger',
-        ),
+        ('path' in change ? change.path : change.from).startsWith('/trigger'),
       ),
     );
   }
@@ -289,7 +268,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
     type: 'Cadenced',
     value: {
       every_blocks: 10,
-      mode: { type: 'WhenSignalled', value: manual },
+      sources: manual,
     },
   });
   const diff = diffActorContractArtifacts(immediate, cadenced);
@@ -298,16 +277,14 @@ test('trigger admission diff stays inside the trigger tree and never invents con
     assert(diff.changes.length > 0);
     assert(
       diff.changes.every((change) =>
-        ('path' in change ? change.path : change.from).startsWith(
-          '/value/schedule/trigger',
-        ),
+        ('path' in change ? change.path : change.from).startsWith('/trigger'),
       ),
     );
     assert(
       diff.changes.some(
         (change) =>
           change.kind === 'replace' &&
-          change.path === '/value/schedule/trigger/type' &&
+          change.path === '/trigger/type' &&
           change.before === 'Immediate' &&
           change.after === 'Cadenced',
       ),
@@ -316,7 +293,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
 });
 
 test('artifact inspection rejects identity drift and noncanonical bytes', () => {
-  const artifact = dormantArtifact();
+  const artifact = canonicalArtifact();
   const stale = inspectActorContractArtifact(artifact, metadataBytes, {
     ...runtime,
     specVersion: 2,
@@ -356,7 +333,7 @@ test('artifact inspection rejects identity drift and noncanonical bytes', () => 
 });
 
 test('ordered structural diff distinguishes moves, insertion, and metadata incompatibility', () => {
-  const artifact = dormantArtifact();
+  const artifact = canonicalArtifact();
   const taskA = { task: 'A' };
   const taskB = { task: 'B' };
   const taskX = { task: 'X' };

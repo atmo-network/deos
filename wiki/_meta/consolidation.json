@@ -1,10 +1,8 @@
 {
-  "updated_at": "2026-06-13",
-  "mode": "0.6.2 consolidation audit",
+  "updated_at": "2026-08-16",
+  "mode": "consolidation",
   "goal": "Keep the generated wiki compact by identifying weak leaflets, merge candidates, and third-page consolidation opportunities before new pages multiply.",
   "guard": {
-    "entrypoint": "cd web-client && npm run validate:wiki",
-    "script": ".agents/skills/wiki-sync/scripts/audit-wiki-consolidation.sh",
     "hard_failures": [
       "Missing locale suffix on human-facing wiki markdown",
       "Missing required page metadata",

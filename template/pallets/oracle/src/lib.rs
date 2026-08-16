@@ -141,10 +141,6 @@ pub mod pallet {
   const STORAGE_VERSION: StorageVersion = StorageVersion::new(0);
 
   #[pallet::storage]
-  #[pallet::getter(fn feed_count)]
-  pub type FeedCount<T> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
   #[pallet::getter(fn feed_ids)]
   pub type FeedIds<T: Config> = StorageValue<_, BoundedVec<T::FeedId, T::MaxFeeds>, ValueQuery>;
 
@@ -260,7 +256,7 @@ pub mod pallet {
         Error::<T>::FeedAlreadyExists
       );
       ensure!(
-        FeedCount::<T>::get() < T::MaxFeeds::get(),
+        (FeedIds::<T>::decode_len().unwrap_or(0) as u32) < T::MaxFeeds::get(),
         Error::<T>::FeedCapacityReached
       );
       ensure!(scale <= T::MaxScale::get(), Error::<T>::InvalidScale);
@@ -308,7 +304,6 @@ pub mod pallet {
           lifecycle,
         },
       );
-      FeedCount::<T>::mutate(|count| *count = count.saturating_add(1));
       Self::deposit_event(Event::FeedRegistered { feed, producer });
       Ok(())
     }
@@ -484,9 +479,7 @@ pub mod pallet {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
 
       let feed_ids = FeedIds::<T>::get();
-      if feed_ids.len() as u32 != FeedCount::<T>::get() {
-        return Err(TryRuntimeError::Other("FeedCount does not match FeedIds"));
-      }
+      let feed_count = feed_ids.len() as u32;
       let mut seen_feeds = BTreeSet::new();
       for feed in feed_ids.into_iter() {
         if !seen_feeds.insert(feed) {
@@ -528,7 +521,7 @@ pub mod pallet {
           }
         }
       }
-      if indexed_feeds != FeedCount::<T>::get() {
+      if indexed_feeds != feed_count {
         return Err(TryRuntimeError::Other(
           "Producer reverse-index cardinality mismatch",
         ));

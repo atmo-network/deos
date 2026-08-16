@@ -52,7 +52,6 @@ mod benches {
         lifecycle,
       },
     );
-    FeedCount::<T>::mutate(|count| *count = count.saturating_add(1));
   }
 
   #[benchmark]

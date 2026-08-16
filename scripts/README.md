@@ -1,6 +1,6 @@
 # Scripts Layer
 
-This directory is the operator/developer automation layer of the DEOS reference stack. In the current repository topology it supports `/docs`, `/template`, and `/web-client`; it is not the primary conceptual control plane.
+This directory is the deterministic operator/developer automation layer of the DEOS reference stack. It supports testing, validation, benchmarking, generation, build, deployment preparation, local-network operation, release work, and repeatable coordination across `/docs`, `/template`, and `/web-client`; it is not the primary conceptual control plane.
 
 This directory contains deterministic command surfaces, not agent strategy:
 
@@ -8,8 +8,15 @@ This directory contains deterministic command surfaces, not agent strategy:
 - `Named implementations` are deterministic operator utilities or compositions whose mode and outcome need no agent interpretation.
 - `Shared implementations` stay here whenever humans, GitHub Actions, CI, root compositions, or multiple skills invoke them.
 - `Agent-owned workflows` live under `/.agents/skills/<domain>` when they require scope selection, coordination, evidence interpretation, knowledge synchronization, or handoff judgment; they call public root scripts for shared execution.
+- `Validation entrypoints` distinguish focused domain/package tests, development profiles, CI checks, and release/full validation while retaining one comprehensive project-owned route. They compose only project-owned surfaces; a required check found inside a Skill must move here or to its package owner rather than be invoked across the boundary.
 - `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`.
 - `All entrypoints` expose `--help` and keep declared environment/behavior contracts honest.
+
+## Language Boundary
+
+Public root orchestration uses Bash for process lifecycle, environment and toolchain control, filesystem operations, signal-safe cleanup, and composition of existing commands. JavaScript ES modules are support leaves for deterministic structural transformation or validation when JSON, metadata, graph traversal, exact integer handling, or testable data semantics would be unsafe or obscure in shell. They remain behind an owning Bash or package entrypoint and must not grow into a parallel orchestration layer.
+
+The split follows workload semantics rather than directory or product language: Bash controls actions, while JavaScript understands structured data. Do not replace a clear shell composition with Node merely to unify extensions, and do not encode structural programs as `sed`/`awk`/`jq` pipelines merely to keep a `.sh` suffix. A root JavaScript support leaf must have a concrete structural owner that cannot be represented safely by the runtime, package, or an existing native tool; `04-generate-chain-spec.sh`, for example, consumes the complete runtime-owned preset directly instead of maintaining a second JavaScript genesis projection. Do not add Python automation.
 
 ## Executable Ownership Inventory
 
@@ -19,16 +26,18 @@ Path classes provide the inventory without duplicating the per-command map below
 | --- | --- | --- |
 | `/scripts/[0-9][0-9]-*.sh` | Shared human-callable atoms; root scripts layer | Humans, CI, workflows, and skills call the owning file directly |
 | `/scripts/<name>.sh` | Shared deterministic compositions/admin utilities; root scripts layer | Shared consumers call one canonical implementation; `_common.sh` remains support-only |
-| `/.agents/skills/alignment/scripts/*` | Project audit and completion capability; `alignment` | Root validation and agents may call the public audit contract; no audit implementation belongs in `/scripts` |
-| `/.agents/skills/domain-dag/scripts/*` | Portable graph-validator capability; `domain-dag` | Package bridges and agents call the owning validator rather than copy its rules |
-| `/.agents/skills/wiki-sync/scripts/*` | Portable wiki trust/consolidation capability; `wiki-sync` | Package bridges and agents call the owning validator rather than copy its rules |
+| `/.agents/skills/alignment/scripts/*` | Agent-only project audit and completion capability | The Alignment Skill invokes its own leaves; project validation does not depend on them |
+| `/.agents/skills/domain-dag/scripts/*` | Independent graph-validator capability | The Domain DAG Skill invokes its own validator; project packages and scripts do not depend on it |
 | `/web-client/scripts/*.mjs` | Client-package entrypoints or thin capability bridges; web client | npm owns invocation; bridges contain no duplicated validator semantics |
 
 GitHub workflows invoke root shared implementations only. Skills never call sibling skill internals, support files are not public entrypoints, and a consumer references the canonical owner rather than maintaining a second executable copy.
 
 ## Human-Callable Atomic Scripts
 
-Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers show the common local-network sequence only; they do not create a hidden requirement to run earlier scripts.
+Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers form the logical local-network evidence ladder—binary prerequisites, Cargo tools, runtime, ChainSpec, network, liveness, basic mutation, temporal consensus, then composed economics—without making an atom depend implicitly on earlier scripts.
+
+- [01-download-binaries.sh](./01-download-binaries.sh)
+  Download the pinned Polkadot SDK `stable2606-1` relay node, Omni Node, and preparation/execution workers for the supported host, verify repository-recorded SHA-256 digests before publishing the complete bundle under ignored `/bin`, and reject unsupported platforms rather than selecting an approximate asset.
 
 - [02-install-tools.sh](./02-install-tools.sh)
   Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).
@@ -37,7 +46,7 @@ Each numbered command is independently callable by a human or CI from any workin
   Stage the template at one fixed fail-closed physical build root, build the current `deos-runtime` Wasm from the locked graph and pinned Rust toolchain with the existing fat-LTO/single-codegen-unit production profile, remap source/Cargo/Rustup roots to canonical virtual prefixes, atomically publish only the successful artifact, then report its size and SHA-256 digest.
 
 - [04-generate-chain-spec.sh](./04-generate-chain-spec.sh)
-  Generate and patch a selected chain-spec output from a selected DEOS runtime Wasm, including the current local economic bootstrap state. Isolated temporary generation prevents an alternate baseline artifact from overwriting `template/chain_spec.json` before successful output selection; the JavaScript patch owner preserves exact large integer literals without Python automation.
+  Generate and verify a selected chain-spec output directly from the complete runtime-owned Development or Local preset in the selected DEOS runtime Wasm. Isolated temporary generation prevents a failed candidate from overwriting `template/chain_spec.json`; the script supplies only outer ChainSpec metadata, rejects a para ID that disagrees with the reference preset, and exposes no pseudo-Live profile or second economic-policy projection.
 
 - [05-spawn-zombienet.sh](./05-spawn-zombienet.sh)
   Spawn the local Zombienet network from a selected work directory, topology, and matching chain spec. Defaults remain the current `template` candidate; deployed downstream runtimes may select an explicit persisted work directory and matching upgrade artifact after `1.0`.
@@ -57,7 +66,7 @@ Each numbered command is independently callable by a human or CI from any workin
 ## Deterministic Compositions
 
 - [setup-environment.sh](./setup-environment.sh)
-  Prepare the repository-pinned Rust environment, or clear generated SvelteKit state and install the pinned Node/npm client plus wiki-sync tooling from their lockfiles; full mode prepares both environments. Setup remains offline with respect to the OKF standard itself: before OKF schema work, run `npm run okf:check --prefix .agents/skills/wiki-sync`, whose owner and explicit reviewed-sync contract live in the wiki-sync Skill.
+  Prepare the repository-pinned Rust environment, or clear generated SvelteKit state and install the pinned Node/npm client from its lockfile; full mode prepares both environments. Wiki projection and OKF tooling remain owned and prepared by the `wiki-sync` Skill rather than project validation.
 
 - [network-assurance-local.sh](./network-assurance-local.sh)
   Prepare pinned tools/artifacts, spawn the canonical two-validator/two-collator topology, verify both collators prepare blocks, pause one collator while the other preserves finality, restart the second collator from its existing base path, and execute signed finalized transfers before and after restart. `SESSION_TRANSITION=1` adds the multi-hour finalized session check, while `COMPOSED_PATH=1` adds the mutating Router/Oracle/Burn Actor check. The command terminates and verifies every owned process unless `--keep-network` is selected. It makes no tag-bound, runtime-upgrade, or publication claim.
@@ -66,16 +75,10 @@ Each numbered command is independently callable by a human or CI from any workin
   Run the local bootstrap chain: tools -> runtime build -> chain spec -> Zombienet, using Polkadot and Omni Node binaries already available in `PATH` or `./bin`. Start the web client directly from `web-client` with `npm run dev`.
 
 - [validate-local.sh](./validate-local.sh)
-  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns routine audits and workspace CI; heavy adds client, Actors, benchmark, and full-scope checks; full adds production runtime and generated-artifact regeneration with zero worktree drift. No cache, evidence authority, hidden mode, GitHub provenance lookup, network run, or release action is involved.
+  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns simulator tests and workspace CI; heavy adds client, Actors, and benchmark checks; full adds production runtime and generated-artifact regeneration with zero worktree drift. No Skill audit, cache, hidden authority, network run, or release action is involved.
 
 - [actors-assurance.sh](./actors-assurance.sh)
-  Shared Actors proof contract for 0.7.17 golden equivalence, semantic-manifest and fee-envelope-vector freshness, cross-language semantics, scheduler stress, capacity, and independent-runtime embedding. Quick mode checks the pinned oracle; heavy release validation executes both historical and current corpora plus the required occupancy profile. The alignment completion route owns evidence interpretation and handoff without creating another public release gate.
-
-- [actors-golden-equivalence.sh](./actors-golden-equivalence.sh)
-  Validate the commit- and hash-pinned 0.7.17 reactive and semantic oracle. `--execute` materializes the historical implementation in a temporary detached worktree, runs both implementations against the retained corpora and explicit vocabulary-only anchor mappings, compares independently generated semantic manifests, and cleans up without changing the candidate tree.
-
-- [reactive-operations-corpus.sh](./reactive-operations-corpus.sh)
-  Validate all or one family of the machine-readable Actors reactive-operations corpus. `--execute` runs every selected Rust anchor, with optional `--release`; validation alone checks composition but does not execute tests. The contract enforces runtime identity, invariants, ordered checkpoints, rollback/weight ownership, deterministic seeds, and live anchors. Failures emit selected seed/initial-state evidence under `${TMPDIR:-/tmp}`.
+  Shared current-tree Actors proof contract for semantic-manifest and fee-envelope-vector freshness, cross-language semantics, scheduler stress, capacity, and independent-runtime embedding. Historical transition replay is release history rather than a routine validation dependency.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.

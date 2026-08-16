@@ -35,12 +35,19 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-    Ok(NativeSecurityView {
-      mode: Self::native_security_mode(),
-      readiness: Self::native_security_readiness(),
-      current_epoch: Self::current_security_epoch(),
-      planned_epoch,
-      settlement_obligations_remain,
+    let current_epoch = Self::current_security_epoch();
+    Ok(match Self::native_security_mode() {
+      crate::NativeSecurityMode::TrustedSet => NativeSecurityView::TrustedSet {
+        current_epoch,
+        planned_epoch,
+        settlement_obligations_remain,
+      },
+      crate::NativeSecurityMode::LpBackedSelection => NativeSecurityView::LpBackedSelection {
+        readiness: Self::native_security_readiness(),
+        current_epoch,
+        planned_epoch,
+        settlement_obligations_remain,
+      },
     })
   }
 

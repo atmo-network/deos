@@ -1,6 +1,6 @@
-use crate::{
-  contract_types::{OpeningSurface, PredicateError, ScheduleWindow},
-  scheduler_types::WakeupPointer,
+use super::{
+  contract::{OpeningSurface, PredicateError, ScheduleWindow},
+  scheduler::WakeupPointer,
 };
 use frame::prelude::*;
 
@@ -9,7 +9,6 @@ pub type ActorId = u64;
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum ActorType {
   User,
   System,
@@ -20,7 +19,6 @@ pub enum ActorType {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum InitialLifecycle {
   Dormant,
   Active,
@@ -31,7 +29,6 @@ pub type SystemSovereignId = u64;
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum SystemSovereignState {
   Vacant,
   Occupied(ActorId),
@@ -40,7 +37,6 @@ pub enum SystemSovereignState {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum ActorClass {
   User { owner_slot: u8 },
   System { sovereign_id: SystemSovereignId },
@@ -82,7 +78,6 @@ impl ActorClass {
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum Mutability {
   #[default]
   Mutable,
@@ -92,7 +87,6 @@ pub enum Mutability {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum ActiveLifecycle {
   Active,
   Paused,
@@ -107,7 +101,6 @@ impl ActiveLifecycle {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum CloseReason {
   OwnerInitiated,
   BalanceExhausted,
@@ -133,7 +126,6 @@ pub enum CloseReason {
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum CompletionPolicy {
   #[default]
   Persistent,
@@ -143,7 +135,6 @@ pub enum CompletionPolicy {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum StepErrorPolicy {
   AbortCycle,
   ContinueNextStep,
@@ -162,7 +153,6 @@ impl StepErrorPolicy {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum SuspensionReason {
   FundingUnavailable,
   Temporary,
@@ -171,7 +161,6 @@ pub enum SuspensionReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum CycleResult {
   Completed,
   Failed,
@@ -181,13 +170,9 @@ pub enum CycleResult {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum CancellationReason {
   Explicit,
-  StepsChanged,
-  CompletionChanged,
-  FundingChanged,
-  ScheduleChanged,
+  ContractReplaced,
   Deactivated,
   Closing(CloseReason),
 }
@@ -195,7 +180,6 @@ pub enum CancellationReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum StepSkippedReason {
   PreconditionFalse,
   ResolutionSkipped,
@@ -205,7 +189,6 @@ pub enum StepSkippedReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum SimulationMode {
   FreshCurrentPlan,
   CurrentContinuation,
@@ -215,7 +198,6 @@ pub enum SimulationMode {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum AttemptDisposition {
   Completed,
   Failed,
@@ -227,7 +209,6 @@ pub enum AttemptDisposition {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum StepOutcome {
   Executed,
   Stopped,
@@ -239,7 +220,6 @@ pub enum StepOutcome {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub struct SimulationStepRecord {
   pub step_index: u32,
   pub outcome: StepOutcome,
@@ -248,7 +228,6 @@ pub struct SimulationStepRecord {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum SimulationError {
   TransactionDepthExceeded,
   Classification(ActorClassificationError),
@@ -263,12 +242,6 @@ pub enum SimulationError {
   FeeCollectionFailed,
 }
 
-impl From<polkadot_sdk::sp_runtime::DispatchError> for SimulationError {
-  fn from(_: polkadot_sdk::sp_runtime::DispatchError) -> Self {
-    Self::TransactionDepthExceeded
-  }
-}
-
 #[derive(
   polkadot_sdk::frame_support::CloneNoBound,
   polkadot_sdk::frame_support::DebugNoBound,
@@ -279,7 +252,6 @@ impl From<polkadot_sdk::sp_runtime::DispatchError> for SimulationError {
   Encode,
   TypeInfo,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 #[scale_info(skip_type_params(MaxContractSteps))]
 pub struct SimulationResult<MaxContractSteps: Get<u32>> {
   pub status: AttemptDisposition,
@@ -295,7 +267,6 @@ pub struct SimulationResult<MaxContractSteps: Get<u32>> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum ActorExecutionPhase<BlockNumber> {
   GlobalCircuitBreaker,
   Paused,
@@ -309,7 +280,6 @@ pub enum ActorExecutionPhase<BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub struct ActorClassification<BlockNumber> {
   pub terminal_reason: Option<CloseReason>,
   pub execution_phase: ActorExecutionPhase<BlockNumber>,
@@ -318,51 +288,21 @@ pub struct ActorClassification<BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum ActorClassificationError {
   ActorInvariant,
   ContinuationInvariant,
   ComputationOverflow,
 }
 
-/// Read-only scheduler-owned readiness phase for the eligibility projection
-/// (spec 7.3). Clients read one runtime API instead of reimplementing cadence
-/// phase, cooldown, window floor, retry backoff, breaker, and latch arithmetic.
+/// One read-only eligibility algebra. Active actors expose the canonical
+/// classification directly, retaining every retry and temporal block payload.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
-pub enum ActorEligibilityPhase {
-  /// No identity is registered under the id.
+pub enum ActorEligibility<BlockNumber> {
   NotRegistered,
-  /// A dormant identity exists without an Active Actor Contract.
   Dormant,
-  /// The actor is temporally and trigger-ready for scheduler admission now.
-  Ready,
-  /// Manual pause blocks execution.
-  Paused,
-  /// The global circuit breaker blocks all execution.
-  GlobalCircuitBreaker,
-  /// Classification found terminal liveness or configured closure due.
-  CloseDue(CloseReason),
-  /// The temporal gate is open but the pending-signal latch is absent.
-  WaitingSignal,
-  /// A suspended run waits for retry backoff or cooldown before the next attempt.
-  WaitingRetry,
-  /// Cooldown, window floor, or cadence has not yet opened the temporal gate.
-  WaitingTemporal,
-}
-
-/// One read-only eligibility projection (spec 7.3). `phase` owns the scheduler
-/// verdict; `next_eligible_block` is the next block at which temporal eligibility
-/// opens (`now` when ready), or `None` when no future temporal gate is computable.
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
-pub struct ActorEligibilityProjection<BlockNumber> {
-  pub phase: ActorEligibilityPhase,
-  pub next_eligible_block: Option<BlockNumber>,
+  Active(ActorClassification<BlockNumber>),
 }
 
 #[derive(
@@ -378,7 +318,6 @@ pub struct ActorEligibilityProjection<BlockNumber> {
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub enum CycleState {
   #[default]
   Idle,
@@ -398,7 +337,6 @@ pub enum CycleState {
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub struct OutcomeTotals {
   pub executed_steps: u32,
   pub committed_effectful_tasks: u32,
@@ -409,7 +347,6 @@ pub struct OutcomeTotals {
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 #[scale_info(skip_type_params(
   MaxSnapshotEntries,
   MaxFundingTrackedAssets,
@@ -436,7 +373,6 @@ pub struct ContinuationState<
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub struct ActorIdentity<AccountId, BlockNumber> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
@@ -449,11 +385,9 @@ pub struct ActorIdentity<AccountId, BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
 pub struct ActorHotState<BlockNumber> {
   pub lifecycle: ActiveLifecycle,
   pub cycle_state: CycleState,
-  pub auto_close_at_cycle_nonce: Option<u64>,
   pub unsuccessful_attempt_streak: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
@@ -466,16 +400,27 @@ pub struct ActorHotState<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("lifecycle_types", "types"))]
-pub struct ActiveActorView<AccountId, BlockNumber, Schedule, Steps> {
+pub struct ActiveActorState<Identity, Hot, Contract, Funding, Continuation> {
+  pub identity: Identity,
+  pub hot: Hot,
+  pub contract: Contract,
+  pub funding: Funding,
+  pub continuation: Option<Continuation>,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub(crate) struct ActiveActorView<AccountId, BlockNumber, Trigger, Steps> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub lifecycle: ActiveLifecycle,
   pub cycle_state: CycleState,
-  pub schedule: Schedule,
-  pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
+  pub trigger: Trigger,
+  pub cooldown_blocks: u32,
+  pub window: Option<ScheduleWindow<BlockNumber>>,
   pub steps: Steps,
   pub completion: CompletionPolicy,
   pub cycle_nonce: u64,

@@ -145,12 +145,6 @@ impl AdapterFailure {
   }
 }
 
-impl From<DispatchError> for AdapterFailure {
-  fn from(error: DispatchError) -> Self {
-    Self::unknown(error)
-  }
-}
-
 pub enum ExecutionError<T: Config> {
   Router(Error<T>),
   Adapter(AdapterFailure),
@@ -212,6 +206,13 @@ impl<T: Config> ExecutionError<T> {
   }
 }
 
+#[cfg(test)]
+impl From<DispatchError> for AdapterFailure {
+  fn from(error: DispatchError) -> Self {
+    Self::unknown(error)
+  }
+}
+
 impl<T: Config> From<Error<T>> for ExecutionError<T> {
   fn from(error: Error<T>) -> Self {
     Self::Router(error)
@@ -224,6 +225,8 @@ impl<T: Config> From<AdapterFailure> for ExecutionError<T> {
   }
 }
 
+// Required only by FRAME's transactional boundary; ordinary Router and adapter
+// failures enter through their typed conversions above.
 impl<T: Config> From<DispatchError> for ExecutionError<T> {
   fn from(error: DispatchError) -> Self {
     Self::Adapter(AdapterFailure::unknown(error))
@@ -1100,31 +1103,6 @@ pub mod pallet {
       who == &Self::account_id()
         || who == &T::BurnActorAccount::get()
         || who == &T::LiquidityActorAccount::get()
-    }
-
-    /// Get quote for swapping from asset_from to asset_to with amount_in
-    /// Raw XYK quote for `amount_in` of `asset_from` -> `asset_to`, without the
-    /// router fee. For a caller-aware preview that mirrors actual swap execution
-    /// (including the router fee and optimal mechanism), use `quote_exact_input`.
-    pub fn quote_price(
-      asset_from: AssetKind,
-      asset_to: AssetKind,
-      amount_in: Balance,
-    ) -> Result<Balance, DispatchError> {
-      if asset_from == asset_to {
-        return Err(Error::<T>::IdenticalAssets.into());
-      }
-      if amount_in.is_zero() {
-        return Err(Error::<T>::ZeroAmount.into());
-      }
-      // Get quote from asset conversion pallet
-      T::AssetConversion::quote_single_pool_exact_input(asset_from, asset_to, amount_in, true)
-        .ok_or_else(|| Error::<T>::NoRouteFound.into())
-    }
-
-    /// Get oracle price for asset pair
-    pub fn get_oracle_price(asset_from: AssetKind, asset_to: AssetKind) -> Option<Balance> {
-      T::PriceOracle::get_ema_price(asset_from, asset_to)
     }
 
     /// Advanced route selection with TMC integration

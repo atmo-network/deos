@@ -4,16 +4,19 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 
 | Skill | Owns | Explicitly excludes | Public route |
 | --- | --- | --- | --- |
-| `alignment` | Changed-scope validation routing, DEOS audits, completion gate, durable failure memory | Subsystem implementation policy; release publication | `alignment/SKILL.md`; `alignment/scripts/completion-gate.sh` |
-| `actors-delivery` | DEOS Actors validation profile selection, stress/occupancy evidence policy, benchmark handoff | Actors runtime semantics; shared gate execution | `actors-delivery/SKILL.md`; shared `scripts/actors-assurance.sh` implementation |
-| `domain-dag` | Generic ownership/DAG review and validator | DEOS subsystem policy; workflow-specific delivery gates | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
-| `governance-delivery` | Governance contract-to-runtime/client delivery, bounded evidence, and release handoff | Political decisions; proposal advocacy; signing; upgrade execution | `governance-delivery/SKILL.md`; owning governance and shared validation routes |
-| `indexer-delivery` | Materialized ingestion, finality/replay, schema/provider, client provenance, and operational handoff | Consensus history; generic analytics; credentials; live deployment | `indexer-delivery/SKILL.md`; owning read-model and provider validation routes |
-| `oracle` | Mature typed-observation feature entry across the Oracle package, producers, reactive Actors, client inspection, bounded evidence, and support | Sample generation policy; subscriber execution; history ownership; external networks | `oracle/SKILL.md`; owning Oracle/Actors/Router contracts and shared validation routes |
-| `router-delivery` | Router route-truth sequencing, bounded preparation, atomic execution evidence, and release handoff | Router semantics; arbitrary graph routing; release publication | `router-delivery/SKILL.md`; owning Router specification, package, and shared validation routes |
-| `benchmarking` | Benchmark design, evidence classification, interpretation, and integration; currently FRAME runtime measurement | Runtime semantics; shared command execution; scheduler stress; release publication; frontend benchmarking without an adopted route | `benchmarking/SKILL.md`; shared `scripts/benchmarks.sh` and `scripts/03-build-runtime.sh` implementations |
-| `staking-delivery` | Native-staking bootstrap sequence, readiness interpretation, authority boundary, and activation handoff | Staking/Actors semantics; signing; funds; shared commands | `staking-delivery/SKILL.md`; shared `scripts/bootstrap-native-staking-local.sh` implementation |
-| `wiki-sync` | Generated wiki projection, provenance, trust, and consolidation workflow | Source specification ownership; browser implementation | `wiki-sync/SKILL.md` and its documented scripts |
+| `alignment` | Changed-scope DEOS audits, completion judgement, and durable failure memory | Project CI/release validation; subsystem implementation policy | `alignment/SKILL.md`; `alignment/scripts/completion-gate.sh` |
+| `benchmarking` | Benchmark design, evidence classification, interpretation, and integration | Runtime semantics; shared command execution; release publication | `benchmarking/SKILL.md`; project-owned benchmark/build scripts |
+| `domain-dag` | Independent generic ownership/DAG review and validator | DEOS subsystem policy; project acceptance | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
+| `wiki-sync` | Independent generated Wiki projection, provenance, trust, localization, and consolidation | Source specification ownership; browser implementation; project acceptance | `wiki-sync/SKILL.md` and its private scripts |
+
+## Validation Ownership
+
+- `Package validation` lives with the package or workspace it verifies and may be composed by project validation.
+- `Project validation` lives in root scripts and workflows and separates CI, development, domain, integration, artifact, and release checks while retaining one project-owned comprehensive entrypoint.
+- `Skill validation` lives inside its owning Skill only when it verifies that Skill's method or agent-facing evidence contract. Any code/domain/project check needed by project acceptance must move to the owning project surface rather than being invoked inside the Skill.
+- Evidence may flow upward: a Skill may invoke public package or project validation and interpret its result. Execution dependencies never flow downward from project or package surfaces into Skills.
+- Independent Skills neither invoke nor validate each other. A coordinator may run them separately and integrate their evidence without creating a combined executable gate.
+- Keep narrow owner-specific gates and one comprehensive project gate. The comprehensive gate composes only lower project-owned surfaces; it never turns independent Skill checks into project dependencies.
 
 ## Cognitive Scaffolding
 

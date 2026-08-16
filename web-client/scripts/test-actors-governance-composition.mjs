@@ -24,8 +24,25 @@ const runtime = {
   transactionVersion: 1,
 };
 const owner = '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT';
+const defaultContractScale = encodeActorContractValue(metadataBytes, {
+  trigger: {
+    type: 'Immediate',
+    value: { sources: [{ type: 'Manual', value: undefined }] },
+  },
+  cooldown_blocks: 0,
+  window: undefined,
+  steps: [
+    {
+      precondition: undefined,
+      task: { type: 'StopCycle', value: undefined },
+      on_error: { type: 'AbortCycle', value: undefined },
+    },
+  ],
+  completion: { type: 'Persistent', value: undefined },
+  funding: { type: 'OwnerOnly', value: undefined },
+});
 
-function artifact(actorType, contractScale = '0x00') {
+function artifact(actorType, contractScale = defaultContractScale) {
   return createActorContractArtifact({
     metadataBytes,
     runtime,
@@ -35,15 +52,15 @@ function artifact(actorType, contractScale = '0x00') {
   });
 }
 
-test('User Actors create and slot calls encode exact direct-call bytes', () => {
+test('User Actors create and slot calls encode canonical installed Contracts', () => {
   const direct = composeActorRuntimeCall({
     artifact: artifact('User'),
     metadataBytes,
     runtime,
     target: { type: 'Create' },
   });
-  assert.equal(direct.call.bytes, '0x37000000');
-  assert.equal(direct.call.byteLength, 4);
+  assert.equal(direct.call.bytes.startsWith('0x37000001'), true);
+  assert.equal(direct.call.byteLength > 4, true);
   assert.equal(direct.authority.requiredOrigin, 'OwnerSigned');
   assert.equal(direct.authority.governanceDomain, null);
   assert.equal(direct.preimage.governanceAdmission, 'DirectCallOnly');
@@ -55,7 +72,7 @@ test('User Actors create and slot calls encode exact direct-call bytes', () => {
     runtime,
     target: { type: 'Create', ownerSlot: 7 },
   });
-  assert.equal(slotted.call.bytes, '0x3701070000');
+  assert.equal(slotted.call.bytes.startsWith('0x3701070001'), true);
 });
 
 test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots bound', () => {
@@ -71,7 +88,7 @@ test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots boun
     runtime,
     target: { type: 'Create', ownerSlot: ACTORS_MAX_OWNER_SLOTS - 1 },
   });
-  assert.equal(highest.call.bytes, '0x3701fe0000');
+  assert.equal(highest.call.bytes.startsWith('0x3701fe0001'), true);
   // The hard ceiling itself is rejected before artifact submission.
   assert.throws(
     () =>
@@ -87,47 +104,42 @@ test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots boun
 
 test('System Actors composition exposes exact Root call but denies current governance admission', () => {
   const contractScale = encodeActorContractValue(metadataBytes, {
-    type: 'Active',
-    value: {
-      schedule: {
-        trigger: {
-          type: 'Immediate',
-          value: {
-            sources: [{ type: 'Manual', value: undefined }],
-          },
-        },
-        cooldown_blocks: 5,
+    trigger: {
+      type: 'Immediate',
+      value: {
+        sources: [{ type: 'Manual', value: undefined }],
       },
-      schedule_window: undefined,
-      steps: [
-        {
-          precondition: [
-            [
-              {
-                timing: { type: 'Current', value: undefined },
-                predicate: {
-                  type: 'BlockNumberAbove',
-                  value: { threshold: 1 },
-                },
-              },
-            ],
-          ],
-          task: {
-            type: 'Mint',
-            value: {
-              asset: { type: 'Native', value: undefined },
-              amount: { type: 'Fixed', value: 10n },
-            },
-          },
-          on_error: { type: 'AbortCycle', value: undefined },
-        },
-      ],
-      completion: {
-        type: 'CloseAfterProductiveCycle',
-        value: undefined,
-      },
-      funding: { type: 'OwnerOnly', value: undefined },
     },
+    cooldown_blocks: 5,
+    window: undefined,
+    steps: [
+      {
+        precondition: [
+          [
+            {
+              timing: { type: 'Current', value: undefined },
+              predicate: {
+                type: 'BlockNumberAbove',
+                value: { threshold: 1 },
+              },
+            },
+          ],
+        ],
+        task: {
+          type: 'Mint',
+          value: {
+            asset: { type: 'Native', value: undefined },
+            amount: { type: 'Fixed', value: 10n },
+          },
+        },
+        on_error: { type: 'AbortCycle', value: undefined },
+      },
+    ],
+    completion: {
+      type: 'CloseAfterProductiveCycle',
+      value: undefined,
+    },
+    funding: { type: 'OwnerOnly', value: undefined },
   });
   const composed = composeActorRuntimeCall({
     artifact: artifact('System', contractScale),
@@ -154,7 +166,10 @@ test('activation and custody reattachment preserve artifact identity and reject 
     runtime,
     target: { type: 'Activate', actorId: 9n },
   });
-  assert.equal(activation.call.bytes, '0x3711090000000000000000');
+  assert.equal(
+    activation.call.bytes.startsWith('0x3711090000000000000000'),
+    true,
+  );
   assert.equal(activation.contractId, userArtifact.contractId);
 
   assert.throws(

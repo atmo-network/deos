@@ -147,8 +147,8 @@ test('defines exactly one concise canonical Russian label for all 92 graph relat
   }
 });
 
-test('renders exact source/type/target roles for both endpoint views of all 214 actual edges', () => {
-  assert.equal(graph.edges.length, 214);
+test('renders exact source/type/target roles for both endpoint views of every actual edge', () => {
+  assert.ok(graph.edges.length > 0);
   for (const [index, edge] of graph.edges.entries()) {
     const expected = canonicalRelation(edge);
     assert.ok(

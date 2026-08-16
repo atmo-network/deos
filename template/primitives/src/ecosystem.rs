@@ -168,7 +168,7 @@ pub mod protocol_tokens {
 /// All addresses below are for SS58 prefix 42
 /// Convention: lowercase ASCII, exactly 8 bytes, no legacy `py/` prefix
 pub mod pallet_ids {
-  /// Actors (Account Abstraction Actors) pallet ID
+  /// DEOS Actors pallet ID
   ///
   /// Pallet account (SS58 prefix 42):
   ///   hex:  `0x6d6f646c6163746f727330300000000000000000000000000000000000000000`

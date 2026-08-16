@@ -109,7 +109,7 @@ impl TmcInterface<AccountId, Balance> for HostTmc {
     _token: AssetKind,
     _amount: Balance,
   ) -> Result<Balance, AdapterFailure> {
-    Err(DispatchError::Other("NoCurve").into())
+    Err(AdapterFailure::unknown(DispatchError::Other("NoCurve")))
   }
   fn mint_with_distribution(
     _who: &AccountId,
@@ -118,7 +118,7 @@ impl TmcInterface<AccountId, Balance> for HostTmc {
     _collateral: AssetKind,
     _amount: Balance,
   ) -> Result<Balance, AdapterFailure> {
-    Err(DispatchError::Other("NoCurve").into())
+    Err(AdapterFailure::unknown(DispatchError::Other("NoCurve")))
   }
 }
 
@@ -155,7 +155,7 @@ impl AssetConversionApi<AccountId, Balance> for HostXyk {
     _recipient: AccountId,
     _keep_alive: bool,
   ) -> Result<Balance, AdapterFailure> {
-    Err(DispatchError::Other("NoPool").into())
+    Err(AdapterFailure::unknown(DispatchError::Other("NoPool")))
   }
   fn execute_single_pool_exact_output(
     _who: AccountId,
@@ -166,7 +166,7 @@ impl AssetConversionApi<AccountId, Balance> for HostXyk {
     _recipient: AccountId,
     _keep_alive: bool,
   ) -> Result<ExactOutputExecution, AdapterFailure> {
-    Err(DispatchError::Other("NoPool").into())
+    Err(AdapterFailure::unknown(DispatchError::Other("NoPool")))
   }
 }
 

@@ -324,7 +324,7 @@ export class BlockchainStakingActions {
     const view = await snapshot.typedApi.view.Staking.native_security_view({
       at: snapshot.at,
     });
-    if (!view.success || view.value.mode.type !== 'LpBackedSelection') {
+    if (!view.success || view.value.type !== 'LpBackedSelection') {
       throw new Error(`${action} is inactive in the current security mode`);
     }
   }

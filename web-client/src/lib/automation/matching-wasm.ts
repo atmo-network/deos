@@ -102,7 +102,7 @@ export async function runActorMatchingWasmSimulation(input: {
       `Invalid Actors Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
-  const maxSteps = activeContractStepsLength(inspection.runtimeValue);
+  const maxSteps = contractStepsLength(inspection.runtimeValue);
   if (input.actorId < 0n) {
     throw new Error('actorId must be non-negative');
   }
@@ -180,15 +180,11 @@ export async function runActorMatchingWasmSimulation(input: {
   return response;
 }
 
-function activeContractStepsLength(runtimeValue: unknown) {
+function contractStepsLength(runtimeValue: unknown) {
   if (runtimeValue == null || typeof runtimeValue !== 'object') {
-    throw new Error('Runtime simulation requires an Active ContractInput');
+    throw new Error('Runtime simulation requires an ActorContract');
   }
-  const contract = runtimeValue as Record<string, unknown>;
-  if (contract.type !== 'Active' || contract.value == null) {
-    throw new Error('Runtime simulation requires an Active ContractInput');
-  }
-  const value = contract.value as Record<string, unknown>;
+  const value = runtimeValue as Record<string, unknown>;
   if (!Array.isArray(value.steps) || value.steps.length === 0) {
     throw new Error('Runtime simulation requires non-empty Contract Steps');
   }

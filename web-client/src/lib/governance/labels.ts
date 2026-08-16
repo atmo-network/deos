@@ -10,7 +10,6 @@ import type {
   GovernancePayloadHashPreimageStatus,
   GovernancePayloadPreimageNoteCost,
   GovernanceProposalExecutionDetail,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackTally,
   GovernanceRetainedFinalizedProposal,
@@ -219,10 +218,13 @@ export function primaryTrackPositiveWeightLabel(
 
 export function payloadAvailabilityLabel(
   payloadKind?: string | null,
-  availability?: GovernanceProposalPayloadAvailability | null,
+  availability?: GovernancePayloadHashPreimageStatus | null,
 ) {
   if (!availability) return 'Unavailable';
-  if (availability.havePreimage) return 'Ready';
+  if (availability.havePreimage)
+    return availability.byteLength == null
+      ? 'Ready'
+      : `Ready · ${availability.byteLength} bytes`;
   if (availability.preimageRequested) return 'Requested';
   if (payloadKind === 'Intent' || payloadKind === 'L2SignalToL1')
     return 'Hash only';

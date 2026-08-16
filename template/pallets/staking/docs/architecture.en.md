@@ -82,11 +82,13 @@ Public SCALE-bearing models remain declared in `src/lib.rs`, so internal module 
 
 ### Native security mode
 
-The runtime owns one immutable code-level `NativeSecurityMode::{TrustedSet, LpBackedSelection}` decision, exposed with readiness and epoch state through `native_security_view()`. One internal operation-availability classifier derives nomination, redelegation, candidate selection, certified funding, compound, and Trusted contraction semantics; liquid claims and custody exits are mode-independent.
+The runtime owns one immutable code-level `NativeSecurityMode::{TrustedSet, LpBackedSelection}` decision, exposed through a mode-shaped `native_security_view()`: Trusted Set carries epoch/settlement state, while LP-backed selection additionally carries readiness. One internal operation-availability classifier derives nomination, redelegation, candidate selection, certified funding, compound, and Trusted contraction semantics; liquid claims and custody exits are mode-independent.
 
 Calls, readiness, session management, and runtime adapters consume the classifier directly. Clients derive mode-dependent action availability from the canonical mode instead of a duplicated seven-boolean capability view.
 
-`native_security_view()` fail-closed classifies mode, pool, receipt, LP, reserve, issuance, valuation, bounded-index, positively backed candidate-operator, and duplicate-candidate state. It also projects current and uniquely Planned epoch identity plus whether any Open/Finalized pot or nonzero liability leaves settlement obligations. The pot scan reads at most the hard retention bound plus one and rejects excess retention or multiple Planned epochs. Candidate deposits cannot satisfy operator readiness; none of these surfaces is mutable policy storage.
+For LP-backed mode, `native_security_view()` fail-closed classifies pool, receipt, LP, reserve, issuance, valuation, bounded-index, positively backed candidate-operator, and duplicate-candidate state; Trusted Set has no impossible readiness field.
+
+The view also projects current and uniquely Planned epoch identity plus whether any Open/Finalized pot or nonzero liability leaves settlement obligations. The pot scan reads at most the hard retention bound plus one and rejects excess retention or multiple Planned epochs. Candidate deposits cannot satisfy operator readiness; none of these surfaces is mutable policy storage.
 
 The reward architecture is mode-aware. `TrustedSet` uses permissioned collators, collects transaction, Actor-execution, governance-opening, and XCM-execution fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. DEOS Router trading fees remain on the Burn Actor path.
 

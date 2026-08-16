@@ -243,6 +243,7 @@ The agent MUST ensure:
 - All human-facing wiki markdown files use a locale suffix such as `.<locale>.md`
 - The current default locale is `en` unless the repository states otherwise
 - Non-default locale pages mirror the same page ids and relative path topology as the default locale
+- Locale audits derive their complete expected page set from the canonical locale manifest; never freeze page counts in validators or reviewer instructions
 - Localized internal links point to localized wiki pages when those mirrors exist
 - Localized metadata with user-facing strings or locale-specific paths is stored inside shared JSON manifests through language-keyed objects such as `title: { en: ..., ru: ... }`
 - A locale manifest such as `_meta/locales.json` exists when the repository needs an explicit supported-locale map
@@ -308,7 +309,7 @@ The agent SHOULD assume that page titles, summaries, tags, related links, and pa
 
 Wiki frontmatter is parsed as YAML under the strict OKF validator. Use canonical `description` for the one-line preview and structured `sources` mappings. Keep scalar descriptions concise and quote them whenever YAML punctuation could change their meaning.
 
-If the repository renders wiki markdown directly in the browser as trusted repo-local content, the agent SHOULD also keep the emitted markdown inside that trust contract by avoiding raw HTML blocks, dangerous URL schemes, and inline DOM event-handler attributes so repo-level validation (e.g. via `scripts/validate-wiki-trust.sh`) can stay the primary safety boundary.
+If the repository renders wiki markdown directly in the browser as trusted repo-local content, the agent SHOULD also keep the emitted markdown inside that trust contract by avoiding raw HTML blocks, dangerous URL schemes, and inline DOM event-handler attributes so repo-level validation (e.g. via the Skill-owned trust validator) can stay the primary safety boundary.
 
 ## Onboarding Requirement
 

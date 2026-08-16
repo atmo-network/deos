@@ -10,7 +10,13 @@ const manifest = JSON.parse(
 );
 
 function graphNode(path) {
-  return manifest.types.find((node) => node.path.join('::') === path);
+  const typeName = path.split('::').at(-1);
+  return manifest.types.find(
+    (node) =>
+      node.path[0] === 'pallet_deos_actors' &&
+      node.path[1] === 'types' &&
+      node.path.at(-1) === typeName,
+  );
 }
 
 test('metadata exposes the current eight-step execution-plan baseline', () => {
@@ -60,26 +66,16 @@ test('fresh System reattachment accepts a custody locator rather than an actor i
   );
 });
 
-test('ContractInput delegates one canonical ActiveContractInput shape', () => {
-  const contractInput = graphNode('pallet_deos_actors::types::ContractInput');
-  const activeContract = graphNode(
-    'pallet_deos_actors::types::ActiveContractInput',
-  );
-  assert(contractInput, 'ContractInput must remain public Actors metadata');
-  assert(
-    activeContract,
-    'ActiveContractInput must remain public Actors metadata',
-  );
-  const active = contractInput.def.value.find(
-    (variant) => variant.name === 'Active',
-  );
-  assert.equal(active?.fields.length, 1);
-  assert.equal(active?.fields[0]?.type, activeContract.id);
+test('ActorContract owns the complete authored shape', () => {
+  const actorContract = graphNode('pallet_deos_actors::types::ActorContract');
+  assert(actorContract, 'ActorContract must remain public Actors metadata');
+  assert.equal(actorContract.def.tag, 'composite');
   assert.deepEqual(
-    activeContract.def.value.map((field) => field.name),
+    actorContract.def.value.map((field) => field.name),
     [
-      'schedule',
-      'schedule_window',
+      'trigger',
+      'cooldown_blocks',
+      'window',
       'steps',
       'funding',
       'completion',

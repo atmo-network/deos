@@ -68,67 +68,46 @@ test('runtime metadata binds the canonical eligibility API signature', () => {
   eligibilityMethod();
 });
 
-test('projectActorEligibility projects a ready result with next block', () => {
+test('projectActorEligibility projects canonical active classification', () => {
   const decoded = encodeProjection({
     success: true,
     value: {
-      phase: { type: 'Ready' },
-      next_eligible_block: 42,
-    },
-  });
-  assert.deepEqual(projectActorEligibility(decoded), {
-    phase: 'Ready',
-    closeReason: null,
-    nextEligibleBlock: 42,
-  });
-});
-
-test('projectActorEligibility projects an absent next block as null', () => {
-  const decoded = encodeProjection({
-    success: true,
-    value: {
-      phase: { type: 'WaitingTemporal' },
-    },
-  });
-  assert.deepEqual(projectActorEligibility(decoded), {
-    phase: 'WaitingTemporal',
-    closeReason: null,
-    nextEligibleBlock: null,
-  });
-});
-
-test('projectActorEligibility maps every phase variant through metadata', () => {
-  const phases = [
-    'NotRegistered',
-    'Dormant',
-    'Ready',
-    'Paused',
-    'GlobalCircuitBreaker',
-    'WaitingSignal',
-    'WaitingRetry',
-    'WaitingTemporal',
-  ];
-  for (const phase of phases) {
-    const decoded = encodeProjection({
-      success: true,
-      value: { phase: { type: phase } },
-    });
-    const projected = projectActorEligibility(decoded);
-    assert.equal(projected.phase, phase);
-  }
-  const closeDue = encodeProjection({
-    success: true,
-    value: {
-      phase: {
-        type: 'CloseDue',
-        value: { type: 'WindowExpired', value: undefined },
+      type: 'Active',
+      value: {
+        terminal_reason: undefined,
+        execution_phase: { type: 'WaitingTemporal', value: 42 },
       },
     },
   });
-  assert.deepEqual(projectActorEligibility(closeDue), {
-    phase: 'CloseDue',
-    closeReason: 'WindowExpired',
-    nextEligibleBlock: null,
+  assert.deepEqual(projectActorEligibility(decoded), {
+    type: 'Active',
+    terminalReason: null,
+    executionPhase: { type: 'WaitingTemporal', block: 42 },
+  });
+});
+
+test('projectActorEligibility preserves absence, dormancy, terminal reason, and execution phase', () => {
+  for (const type of ['NotRegistered', 'Dormant']) {
+    const decoded = encodeProjection({
+      success: true,
+      value: { type, value: undefined },
+    });
+    assert.deepEqual(projectActorEligibility(decoded), { type });
+  }
+  const active = encodeProjection({
+    success: true,
+    value: {
+      type: 'Active',
+      value: {
+        terminal_reason: { type: 'WindowExpired', value: undefined },
+        execution_phase: { type: 'GlobalCircuitBreaker', value: undefined },
+      },
+    },
+  });
+  assert.deepEqual(projectActorEligibility(active), {
+    type: 'Active',
+    terminalReason: 'WindowExpired',
+    executionPhase: { type: 'GlobalCircuitBreaker' },
   });
 });
 
@@ -143,14 +122,14 @@ test('projectActorEligibility rejects a typed runtime failure honestly', () => {
   );
 });
 
-test('projectActorEligibility rejects unknown phases and malformed results', () => {
+test('projectActorEligibility rejects unknown eligibility and malformed results', () => {
   assert.throws(
     () =>
       projectActorEligibility({
         success: true,
-        value: { phase: { type: 'Mystery' } },
+        value: { type: 'Mystery' },
       }),
-    /Unsupported runtime eligibility phase Mystery/,
+    /Unsupported runtime eligibility Mystery/,
   );
   assert.throws(
     () => projectActorEligibility({ success: 'maybe' }),

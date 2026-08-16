@@ -188,14 +188,14 @@ test('one metadata-aligned eight-step baseline applies to both actor classes', (
 
 test('completion policy lowers exactly and rejects unknown lifecycle values', () => {
   const persistent = lowerActorAuthoringContract(contract());
-  assert.deepEqual(persistent.value.completion, {
+  assert.deepEqual(persistent.completion, {
     type: 'Persistent',
     value: undefined,
   });
   const oneShot = lowerActorAuthoringContract(
     contract(undefined, { completionPolicy: 'CloseAfterProductiveCycle' }),
   );
-  assert.deepEqual(oneShot.value.completion, {
+  assert.deepEqual(oneShot.completion, {
     type: 'CloseAfterProductiveCycle',
     value: undefined,
   });
@@ -213,7 +213,7 @@ test('optional auto-close target lowers exactly and rejects invalid u64 values',
   const target = lowerActorAuthoringContract(
     contract(undefined, { autoCloseAtCycleNonce: 7n }),
   );
-  assert.equal(target.value.auto_close_at_cycle_nonce, 7n);
+  assert.equal(target.auto_close_at_cycle_nonce, 7n);
   assert.match(automationWidgetSource, /Auto-close cycle \(optional\)/);
   assert.match(automationWidgetSource, /logical-cycle nonce completes/);
   for (const autoCloseAtCycleNonce of [0n, -1n, 1n << 64n]) {
@@ -308,7 +308,7 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
   });
   assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
   const lowered = lowerActorAuthoringContract(observationOnly);
-  assert.deepEqual(lowered.value.schedule.trigger.value.sources[0], {
+  assert.deepEqual(lowered.trigger.value.sources[0], {
     type: 'OnObservationChange',
     value: {
       feed: {
@@ -370,24 +370,18 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   );
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
-    assert.equal(inspection.projection.value.steps.length, 2);
+    assert.equal(inspection.projection.steps.length, 2);
     assert.equal(
-      inspection.projection.value.completion.type,
+      inspection.projection.completion.type,
       'CloseAfterProductiveCycle',
     );
-    assert.deepEqual(
-      inspection.projection.value.steps[0].task.value.input_limit,
-      {
-        type: 'Absolute',
-        value: { $runtimeType: 'bigint', $integer: '100' },
-      },
-    );
+    assert.deepEqual(inspection.projection.steps[0].task.value.input_limit, {
+      type: 'Absolute',
+      value: { $runtimeType: 'bigint', $integer: '100' },
+    });
+    assert.equal(inspection.projection.steps[1].on_error.type, 'RetryLater');
     assert.equal(
-      inspection.projection.value.steps[1].on_error.type,
-      'RetryLater',
-    );
-    assert.equal(
-      inspection.projection.value.steps[1].on_error.value.max_attempts.$integer,
+      inspection.projection.steps[1].on_error.value.max_attempts.$integer,
       '3',
     );
   }
@@ -531,7 +525,7 @@ test('Unconditional and bounded DNF lower exactly and empty forms fail before en
       contract([authoringStep('only', transferTask(), { precondition })]),
     );
     assert.equal(
-      lowered.value.steps[0].precondition === undefined,
+      lowered.steps[0].precondition === undefined,
       precondition === null,
     );
   }
@@ -592,8 +586,8 @@ test('every Predicate and AmountResolution lowers without changing step topology
         }),
       ]),
     );
-    assert.equal(lowered.value.steps.length, 1);
-    const loweredPredicate = lowered.value.steps[0].precondition[0][0];
+    assert.equal(lowered.steps.length, 1);
+    const loweredPredicate = lowered.steps[0].precondition[0][0];
     assert.equal(loweredPredicate.timing.type, 'Current');
     assert.equal(loweredPredicate.predicate.type, current.type);
     if (current.type.startsWith('Observation')) {
@@ -624,7 +618,7 @@ test('every Predicate and AmountResolution lowers without changing step topology
     const lowered = lowerActorAuthoringContract(
       contract([authoringStep('only', transferTask(amount))]),
     );
-    assert.equal(lowered.value.steps[0].task.value.amount.type, amount.type);
+    assert.equal(lowered.steps[0].task.value.amount.type, amount.type);
   }
 });
 
@@ -944,7 +938,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   assert.equal(ACTORS_AUTHORING_TASK_TYPES.includes('Rebalance'), false);
 });
 
-test('trigger, completion, and funding policy variants lower as typed ContractInput fields', () => {
+test('trigger, completion, and funding policy variants lower as typed ActorContract fields', () => {
   const drafts = [
     contract(undefined, {
       trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
@@ -999,7 +993,7 @@ test('trigger, completion, and funding policy variants lower as typed ContractIn
     );
   }
   const lowered = lowerActorAuthoringContract(drafts[2]);
-  const sources = lowered.value.schedule.trigger.value.sources;
+  const sources = lowered.trigger.value.sources;
   assert.deepEqual(
     sources.map((source) => source.type),
     ['Manual', 'OnAddressEvent'],

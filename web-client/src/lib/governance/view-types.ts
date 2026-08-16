@@ -11,11 +11,11 @@ import type {
   GovernanceAccountPowerView,
   GovernanceAuthorizedRuntimeUpgrade,
   GovernanceGovXpCounters,
+  GovernancePayloadHashPreimageStatus,
   GovernancePrimaryTrackOption,
   GovernanceProposalExecutionAuthority,
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalPrimaryTrackTally,
@@ -35,7 +35,7 @@ export type GovernanceProposalDescriptor = {
   executionAuthority: GovernanceProposalExecutionAuthority | null;
   submissionAuthority: GovernanceProposalSubmissionAuthority | null;
   openingFee: GovernanceProposalOpeningFee | null;
-  payloadAvailability: GovernanceProposalPayloadAvailability | null;
+  payloadAvailability: GovernancePayloadHashPreimageStatus | null;
   primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
   urgentEligibility: boolean | null;
 };

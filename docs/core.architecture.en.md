@@ -225,6 +225,12 @@ The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridg
 - `Sibling Recognition`: `ForeignAssetsFromSibling` filter ensures that assets originating from sibling parachains are recognized as valid reserve assets, enabling seamless cross-chain swaps.
 - `Controller Separation`: XCMP queue control remains Root-only on the current line even though relay/sibling/account-style XCM origins can still be converted for other executor/controller plumbing; origin conversion does not itself widen queue-control authority.
 
+### 5.4 Randomness and Collator Gate
+
+The current runtime owns no local VRF, entropy membership, reveal committee, or randomness reward economy. During the trusted invulnerable-collator phase, consumers that need bounded sampling may use the previous block hash without claiming same-block fairness; Actors itself exposes deterministic cadence and no probabilistic trigger.
+
+Permissionless collators and a stronger randomness contract remain gated on a production-ready, parachain-consumable per-block relay/protocol beacon. Existing epoch-scale relay randomness does not satisfy that gate. If a qualifying beacon appears, the preferred integration is a weight-accounted consensus hook that materializes one compact per-block snapshot while retaining the existing consensus rule; local threshold randomness is reconsidered only if the relay path cannot meet the contract.
+
 ## 6. Economic Guarantees
 
 ### 6.1 The Price Corridor
