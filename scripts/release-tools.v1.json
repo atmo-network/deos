@@ -1,0 +1,54 @@
+{
+  "schema": "deos-release-tools/v2",
+  "platform": "linux-x64",
+  "tools": [
+    {
+      "name": "chain-spec-builder",
+      "version": "19.0.0",
+      "source": "https://github.com/paritytech/polkadot-sdk/tree/8ae9775dc43c0d8cdd0f6d87700596e14278b1e1",
+      "url": "https://github.com/paritytech/polkadot-sdk/releases/download/polkadot-stable2606-1/chain-spec-builder",
+      "sha256": "bea49182895b58032ff96160b0a9f7f394da449a3ececdc174b56758055b56e6",
+      "versionArgs": ["--version"],
+      "versionOutput": "staging-chain-spec-builder 19.0.0",
+      "cargoPackage": {
+        "name": "staging-chain-spec-builder",
+        "version": "19.0.0",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "checksum": "2d0eaaa88ded7ea3d7257bbcd0e96bd70c030680ef2ca93874a21915d94af9fd"
+      }
+    },
+    {
+      "name": "polkadot",
+      "version": "1.24.1-8ae9775dc43",
+      "source": "https://github.com/paritytech/polkadot-sdk/tree/8ae9775dc43c0d8cdd0f6d87700596e14278b1e1",
+      "url": "https://github.com/paritytech/polkadot-sdk/releases/download/polkadot-stable2606-1/polkadot",
+      "sha256": "53c9f450f619d680578dbeed6685de102a9632db7b134631650450b84ea83567",
+      "versionArgs": ["--version"],
+      "versionOutput": "polkadot 1.24.1-8ae9775dc43"
+    },
+    {
+      "name": "polkadot-omni-node",
+      "version": "1.24.1-8ae9775dc43",
+      "source": "https://github.com/paritytech/polkadot-sdk/tree/8ae9775dc43c0d8cdd0f6d87700596e14278b1e1",
+      "url": "https://github.com/paritytech/polkadot-sdk/releases/download/polkadot-stable2606-1/polkadot-omni-node",
+      "sha256": "ff8e5253e8a3e30b421c83d938a3245bdc5de222d807aaf3648575ae029faece",
+      "versionArgs": ["--version"],
+      "versionOutput": "polkadot-omni-node 1.24.1-8ae9775dc43"
+    },
+    {
+      "name": "zombienet",
+      "version": "1.3.138",
+      "source": "https://github.com/paritytech/zombienet/tree/83dd3ab5a58ce833c8a6a99f91ce1a2c58f41136",
+      "url": "https://github.com/paritytech/zombienet/releases/download/v1.3.138/zombienet-linux-x64",
+      "sha256": "07f793dfabd012d7908581f9ff558e9a59a8eaf0d2a283a3831ce2fad0c8bbee",
+      "versionArgs": ["version"],
+      "versionOutput": "1.3.138"
+    }
+  ],
+  "spdxSchema": {
+    "version": "2.3",
+    "source": "https://github.com/spdx/spdx-spec/blob/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json",
+    "url": "https://raw.githubusercontent.com/spdx/spdx-spec/aadf3b0b8dbbabdb4d880b0fc714255fea436ff7/schemas/spdx-schema.json",
+    "sha256": "239208b7ac287b3cf5d9a9af23f9d69863971102a5e1587a27a398b43490b89b"
+  }
+}

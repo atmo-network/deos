@@ -4,6 +4,7 @@ bin/
 # Build artifacts
 target/
 template/target/
+node_modules/
 
 # Legacy binaries in template (remove after migration)
 template/polkadot

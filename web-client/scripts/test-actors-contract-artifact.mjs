@@ -38,7 +38,7 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   const artifact = dormantArtifact();
   assert.equal(
     artifact.contractId,
-    '0x7be5d17ce09332bbb771c2dbb378db5e422be5c3a95741898af928ce82312639',
+    '0xd7cedd4d61a78d58f46b0c062bc09cea1db605d52bb9a36cc2e26387a4c4b415',
   );
   const inspection = inspectActorContractArtifact(
     artifact,
@@ -70,20 +70,17 @@ test('active ContractInput encodes and projects every nested value losslessly', 
       schedule_window: undefined,
       steps: [
         {
-          preconditions: {
-            type: 'AnyOf',
-            value: [
-              [
-                {
-                  timing: { type: 'Current', value: undefined },
-                  predicate: {
-                    type: 'BlockNumberAbove',
-                    value: { threshold: 1 },
-                  },
+          precondition: [
+            [
+              {
+                timing: { type: 'Current', value: undefined },
+                predicate: {
+                  type: 'BlockNumberAbove',
+                  value: { threshold: 1 },
                 },
-              ],
+              },
             ],
-          },
+          ],
           task: {
             type: 'Transfer',
             value: {
@@ -136,10 +133,9 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
         value: { threshold: 10 },
       },
     };
-    const preconditions = {
-      type: 'AnyOf',
-      value: separateClauses ? [[predicate], [second]] : [[predicate, second]],
-    };
+    const precondition = separateClauses
+      ? [[predicate], [second]]
+      : [[predicate, second]];
     return createActorContractArtifact({
       metadataBytes,
       runtime,
@@ -160,7 +156,7 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
           schedule_window: undefined,
           steps: [
             {
-              preconditions,
+              precondition,
               task: { type: 'StopCycle', value: undefined },
               on_error: { type: 'AbortCycle', value: undefined },
             },
@@ -184,8 +180,8 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
     assert.equal(inspection.valid, true);
     if (!inspection.valid) throw new Error('fixture must inspect');
     assert.equal(
-      inspection.projection.value.steps[0].preconditions.type,
-      'AnyOf',
+      inspection.projection.value.steps[0].precondition.length > 0,
+      true,
     );
     return inspection;
   });
@@ -200,7 +196,7 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
       changedMode.changes.some(
         (change) =>
           change.kind === 'replace' &&
-          change.path.includes('/preconditions/value/0/0/timing/type') &&
+          change.path.includes('/precondition/0/0/timing/type') &&
           change.before === 'Opening' &&
           change.after === 'Current',
       ),
@@ -222,7 +218,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
           schedule_window: undefined,
           steps: [
             {
-              preconditions: { type: 'Unconditional', value: undefined },
+              precondition: undefined,
               task: { type: 'StopCycle', value: undefined },
               on_error: { type: 'AbortCycle', value: undefined },
             },

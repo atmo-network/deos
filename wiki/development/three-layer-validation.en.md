@@ -1,7 +1,7 @@
 ---
-page_type: process
+type: process
 title: Three-Layer Validation
-summary: The required testing strategy for validating protocol and economic changes in DEOS.
+description: The required testing strategy for validating protocol and economic changes in DEOS.
 locale: en
 canonical_page_id: three-layer-validation
 translation_status: source
@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-status: active
+  - resource: ../../AGENTS.md
+status: stable
 audience: developer
 tags:
   - development

@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Asset Identity
-summary: The asset registry is DEOS's foreign-asset identity layer. It turns XCM locations into stable runtime asset identities, preserves that mapping across XCM-version changes, and keeps foreign assets inside a dedicated namespace so the rest of the runtime can treat them as first-class economic inputs.
+description: The asset registry is DEOS's foreign-asset identity layer. It turns XCM locations into stable runtime asset identities, preserves that mapping across XCM-version changes, and keeps foreign assets inside a dedicated namespace so the rest of the runtime can treat them as first-class economic inputs.
 locale: en
 canonical_page_id: asset-identity
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/asset-registry/docs/architecture.en.md
-  - ../../docs/core.architecture.en.md
-status: active
+  - resource: ../../template/pallets/asset-registry/docs/architecture.en.md
+  - resource: ../../docs/core.architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

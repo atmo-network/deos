@@ -25,7 +25,7 @@ pub trait WeightInfo {
   fn observation_fanout_page() -> Weight;
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
-  fn predicate_set_evaluation(preconditions: u32) -> Weight;
+  fn predicate_set_evaluation(predicates: u32) -> Weight;
   fn cycle_orchestration() -> Weight;
   fn step_orchestration(steps: u32) -> Weight;
   fn task_transfer() -> Weight;
@@ -161,11 +161,11 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
-  fn predicate_set_evaluation(preconditions: u32) -> Weight {
-    if preconditions == 0 {
+  fn predicate_set_evaluation(predicates: u32) -> Weight {
+    if predicates == 0 {
       return Weight::zero();
     }
-    let bounded = u64::from(preconditions.min(4));
+    let bounded = u64::from(predicates.min(4));
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
@@ -458,11 +458,11 @@ impl WeightInfo for TestWeightInfo {
   fn observation_fanout_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
   fn close_actor() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
-  fn predicate_set_evaluation(preconditions: u32) -> Weight {
-    if preconditions == 0 {
+  fn predicate_set_evaluation(predicates: u32) -> Weight {
+    if predicates == 0 {
       return Weight::zero();
     }
-    let bounded = u64::from(preconditions.min(4));
+    let bounded = u64::from(predicates.min(4));
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
 

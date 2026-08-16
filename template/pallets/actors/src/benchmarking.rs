@@ -27,9 +27,9 @@ mod benches {
   fn prefund_user_sovereign<T: Config>(
     owner: &T::AccountId,
     slot: u8,
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
   ) {
-    let envelope = Pallet::<T>::attempt_fee_envelope(ActorType::User, execution_plan, 0)
+    let envelope = Pallet::<T>::attempt_fee_envelope(ActorType::User, contract_steps, 0)
       .expect("benchmark execution plan has a checked fee envelope");
     let required = T::MinUserBalance::get().saturating_add(envelope.total);
     let sovereign = Pallet::<T>::sovereign_account_id(owner, slot);
@@ -38,11 +38,11 @@ mod benches {
 
   fn prefund_active_user_creation<T: Config>(
     owner: &T::AccountId,
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
   ) {
     let slot =
       Pallet::<T>::available_owner_slot(owner, None).expect("benchmark owner has a free User slot");
-    prefund_user_sovereign::<T>(owner, slot, execution_plan);
+    prefund_user_sovereign::<T>(owner, slot, contract_steps);
   }
 
   fn deplete_user_sovereign<T: Config>(actor_id: ActorId) {
@@ -61,12 +61,12 @@ mod benches {
 
   fn user_contract<T: Config>(
     schedule: ScheduleOf<T>,
-    execution_plan: ExecutionPlanOf<T>,
+    contract_steps: ContractSteps<T>,
   ) -> ContractInputOf<T> {
     ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window: None,
-      steps: execution_plan,
+      steps: contract_steps,
       completion: CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::OwnerOnly,
       auto_close_at_cycle_nonce: None,
@@ -75,27 +75,27 @@ mod benches {
 
   fn system_contract<T: Config>(
     schedule: ScheduleOf<T>,
-    execution_plan: ExecutionPlanOf<T>,
+    contract_steps: ContractSteps<T>,
   ) -> ContractInputOf<T> {
     ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window: None,
-      steps: execution_plan,
+      steps: contract_steps,
       completion: CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
     })
   }
 
-  fn full_attempt_fee<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
-    Pallet::<T>::attempt_fee_envelope(ActorType::User, execution_plan, 0)
+  fn full_attempt_fee<T: Config>(contract_steps: &ContractSteps<T>) -> T::Balance {
+    Pallet::<T>::attempt_fee_envelope(ActorType::User, contract_steps, 0)
       .expect("benchmark execution plan has a checked fee envelope")
       .total
   }
 
   fn current_all<T: Config>(
     predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
-  ) -> PreconditionsOf<T> {
+  ) -> PreconditionOf<T> {
     let clause = BoundedVec::try_from(
       predicates
         .into_iter()
@@ -106,12 +106,14 @@ mod benches {
         .collect::<alloc::vec::Vec<_>>(),
     )
     .expect("benchmark predicates fit");
-    Preconditions::AnyOf(BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"))
+    Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"),
+    }
   }
 
   fn current_any<T: Config>(
     predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
-  ) -> PreconditionsOf<T> {
+  ) -> PreconditionOf<T> {
     let clauses = predicates
       .into_iter()
       .map(|predicate| {
@@ -122,12 +124,14 @@ mod benches {
         .expect("benchmark predicate fits")
       })
       .collect::<alloc::vec::Vec<_>>();
-    Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
+    Precondition {
+      clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
+    }
   }
 
-  fn make_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
+  fn make_contract_steps<T: Config>(recipient: T::AccountId) -> ContractSteps<T> {
     let step = Step {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
@@ -135,12 +139,12 @@ mod benches {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+    BoundedVec::try_from(vec![step]).expect("single-step contract_steps must fit")
   }
 
-  fn make_tracked_funding_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
+  fn make_tracked_funding_contract_steps<T: Config>(recipient: T::AccountId) -> ContractSteps<T> {
     BoundedVec::try_from(vec![Step {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
@@ -151,14 +155,14 @@ mod benches {
     .expect("single-step tracked funding plan must fit")
   }
 
-  fn make_remove_liquidity_execution_plan<T: Config>(
+  fn make_remove_liquidity_contract_steps<T: Config>(
     lp_asset: T::AssetId,
     asset_a: T::AssetId,
     asset_b: T::AssetId,
     amount: T::Balance,
-  ) -> ExecutionPlanOf<T> {
+  ) -> ContractSteps<T> {
     let step = Step {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: ActorTask::RemoveLiquidity {
         lp_asset,
         asset_a,
@@ -169,7 +173,7 @@ mod benches {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+    BoundedVec::try_from(vec![step]).expect("single-step contract_steps must fit")
   }
 
   fn prefill_owner_slots_for_worst_case<T: Config>(owner: &T::AccountId) -> u8 {
@@ -203,8 +207,8 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let execution_plan = make_execution_plan::<T>(recipient);
-    prefund_active_user_creation::<T>(&caller, &execution_plan);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_active_user_creation::<T>(&caller, &contract_steps);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -212,7 +216,7 @@ mod benches {
     Pallet::<T>::create_user_actor(
       RawOrigin::Signed(caller).into(),
       Mutability::Mutable,
-      user_contract::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, contract_steps),
     )
     .expect("create_user_actor must succeed in benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -228,8 +232,8 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let execution_plan = make_execution_plan::<T>(recipient);
-    prefund_user_sovereign::<T>(&caller, expected_slot, &execution_plan);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -238,7 +242,7 @@ mod benches {
     create_user_actor(
       RawOrigin::Signed(caller),
       Mutability::Mutable,
-      user_contract::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, contract_steps),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst =
@@ -254,8 +258,8 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let execution_plan = make_execution_plan::<T>(recipient);
-    prefund_user_sovereign::<T>(&caller, requested_slot, &execution_plan);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, requested_slot, &contract_steps);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -265,7 +269,7 @@ mod benches {
       RawOrigin::Signed(caller),
       requested_slot,
       Mutability::Mutable,
-      user_contract::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, contract_steps),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst = Pallet::<T>::active_actor_view(actor_id)
@@ -279,7 +283,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let execution_plan = make_execution_plan::<T>(recipient);
+    let contract_steps = make_contract_steps::<T>(recipient);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 100,
@@ -289,7 +293,7 @@ mod benches {
       RawOrigin::Root,
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, contract_steps),
     );
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let inst = Pallet::<T>::active_actor_view(actor_id)
@@ -308,7 +312,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let execution_plan = make_execution_plan::<T>(recipient.clone());
+    let contract_steps = make_contract_steps::<T>(recipient.clone());
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 100,
@@ -317,7 +321,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_contract::<T>(schedule.clone(), execution_plan.clone()),
+      system_contract::<T>(schedule.clone(), contract_steps.clone()),
     )
     .expect("create_system_actor must succeed in benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -330,7 +334,7 @@ mod benches {
       actor_id,
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, contract_steps),
     );
     assert!(Pallet::<T>::active_actor_exists(fresh_id));
   }
@@ -370,7 +374,7 @@ mod benches {
         trigger: Trigger::immediate_manual(),
         cooldown_blocks: 100,
       },
-      make_execution_plan::<T>(recipient),
+      make_contract_steps::<T>(recipient),
     );
     #[extrinsic_call]
     activate_actor(RawOrigin::Signed(owner), actor_id, contract);
@@ -382,7 +386,7 @@ mod benches {
   fn deactivate_actor() {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("deactivate-recipient", 0, 0);
-    let execution_plan = make_execution_plan::<T>(recipient);
+    let contract_steps = make_contract_steps::<T>(recipient);
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
       owner.clone(),
@@ -392,7 +396,7 @@ mod benches {
           trigger: Trigger::immediate_manual(),
           cooldown_blocks: 100,
         },
-        execution_plan,
+        contract_steps,
       ),
     )
     .expect("System Actors creation must succeed");
@@ -451,13 +455,13 @@ mod benches {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 1,
     };
-    let execution_plan = make_execution_plan::<T>(recipient);
-    prefund_user_sovereign::<T>(&owner, owner_slot, &execution_plan);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
     Pallet::<T>::create_user_actor_at_slot(
       RawOrigin::Signed(owner.clone()).into(),
       owner_slot,
       Mutability::Mutable,
-      user_contract::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, contract_steps),
     )
     .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -480,7 +484,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, make_execution_plan::<T>(recipient)),
+      system_contract::<T>(schedule, make_contract_steps::<T>(recipient)),
     )
     .expect("create_system_actor must succeed in System close benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -514,7 +518,7 @@ mod benches {
       }
     });
     let recipient = account("recipient", 0, 0);
-    let replacement = make_execution_plan::<T>(recipient);
+    let replacement = make_contract_steps::<T>(recipient);
     let new_schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 20,
@@ -586,12 +590,12 @@ mod benches {
       let owner: T::AccountId = account("sweep-owner", i, 0);
       let recipient: T::AccountId = account("sweep-recipient", i, 0);
       ensure_creation_balance::<T>(&owner);
-      let execution_plan = make_execution_plan::<T>(recipient);
-      prefund_active_user_creation::<T>(&owner, &execution_plan);
+      let contract_steps = make_contract_steps::<T>(recipient);
+      prefund_active_user_creation::<T>(&owner, &contract_steps);
       Pallet::<T>::create_user_actor(
         RawOrigin::Signed(owner).into(),
         Mutability::Mutable,
-        user_contract::<T>(schedule.clone(), execution_plan),
+        user_contract::<T>(schedule.clone(), contract_steps),
       )
       .expect("create_user_actor must succeed in permissionless_sweep_many setup");
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -623,7 +627,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_contract_steps::<T>()),
     )
     .expect("fee-collection benchmark sink must be created");
     let fee_sink_id = NextActorId::<T>::get().saturating_sub(1);
@@ -689,15 +693,15 @@ mod benches {
   }
 
   #[benchmark]
-  fn preconditions_all_max() {
+  fn precondition_all_max() {
     let actor: T::AccountId = account("condition-all", 0, 0);
-    let max_conditions = T::MaxConditionsPerStep::get();
-    let assets = T::BenchmarkHelper::setup_condition_assets(&actor, max_conditions)
-      .expect("condition benchmark assets must be available");
-    assert!(assets.len() >= max_conditions as usize);
+    let max_predicates = T::MaxPredicatesPerStep::get();
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, max_predicates)
+      .expect("predicate benchmark assets must be available");
+    assert!(assets.len() >= max_predicates as usize);
     let predicates = assets
       .into_iter()
-      .take(max_conditions as usize)
+      .take(max_predicates as usize)
       .map(|asset| {
         T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
           .expect("condition benchmark asset must be funded");
@@ -707,20 +711,20 @@ mod benches {
         }
       })
       .collect::<alloc::vec::Vec<_>>();
-    let preconditions = current_all::<T>(predicates);
+    let precondition = current_all::<T>(predicates);
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero()),
+        Pallet::<T>::evaluate_precondition(&precondition, &actor, T::Balance::zero()),
         Ok(true)
       );
     }
   }
 
   #[benchmark]
-  fn preconditions_observation(c: Linear<1, 4>) {
+  fn precondition_observation(c: Linear<1, 4>) {
     let actor: T::AccountId = account("condition-observation", 0, 0);
-    let bounded = c.min(T::MaxConditionsPerStep::get());
+    let bounded = c.min(T::MaxPredicatesPerStep::get());
     let feeds = T::BenchmarkHelper::setup_observation_feeds(bounded)
       .expect("observation benchmark feeds must be available");
     assert!(feeds.len() >= bounded as usize);
@@ -733,19 +737,19 @@ mod benches {
         max_age_blocks: 100,
       })
       .collect::<alloc::vec::Vec<_>>();
-    let preconditions = current_all::<T>(predicates);
+    let precondition = current_all::<T>(predicates);
     #[block]
     {
-      let _ = Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero());
+      let _ = Pallet::<T>::evaluate_precondition(&precondition, &actor, T::Balance::zero());
     }
   }
 
   #[benchmark]
   fn predicate_set_evaluation(c: Linear<1, 4>) {
     let actor: T::AccountId = account("condition-any", 0, 0);
-    let bounded = c.min(T::MaxConditionsPerStep::get());
-    let assets = T::BenchmarkHelper::setup_condition_assets(&actor, bounded)
-      .expect("condition benchmark assets must be available");
+    let bounded = c.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, bounded)
+      .expect("predicate benchmark assets must be available");
     assert!(assets.len() >= bounded as usize);
     let predicates = assets
       .into_iter()
@@ -759,11 +763,11 @@ mod benches {
         }
       })
       .collect::<alloc::vec::Vec<_>>();
-    let preconditions = current_any::<T>(predicates);
+    let precondition = current_any::<T>(predicates);
     #[block]
     {
       assert_eq!(
-        Pallet::<T>::evaluate_predicate_set(&preconditions, &actor, T::Balance::zero()),
+        Pallet::<T>::evaluate_precondition(&precondition, &actor, T::Balance::zero()),
         Ok(true)
       );
     }
@@ -941,13 +945,13 @@ mod benches {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
-    let execution_plan =
-      make_remove_liquidity_execution_plan::<T>(lp_asset, asset_a, asset_b, lp_amount);
-    prefund_active_user_creation::<T>(&caller, &execution_plan);
+    let contract_steps =
+      make_remove_liquidity_contract_steps::<T>(lp_asset, asset_a, asset_b, lp_amount);
+    prefund_active_user_creation::<T>(&caller, &contract_steps);
     Pallet::<T>::create_user_actor(
       RawOrigin::Signed(caller.clone()).into(),
       Mutability::Mutable,
-      user_contract::<T>(schedule, execution_plan),
+      user_contract::<T>(schedule, contract_steps),
     )
     .expect("create_user_actor must succeed in setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -967,34 +971,34 @@ mod benches {
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("actor must survive benchmark cycle");
     assert_eq!(inst.cycle_nonce, 1);
-    assert_eq!(inst.consecutive_failures, 0);
+    assert_eq!(inst.unsuccessful_attempt_streak, 0);
   }
 
-  fn make_inert_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
+  fn make_inert_contract_steps<T: Config>() -> ContractSteps<T> {
     let step = Step {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: ActorTask::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     };
-    BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+    BoundedVec::try_from(vec![step]).expect("single-step contract_steps must fit")
   }
 
-  fn inert_execution_plan_of_len<T: Config>(steps: u32) -> ExecutionPlanOf<T> {
-    let bounded = steps.min(T::MaxExecutionPlanSteps::get());
+  fn inert_contract_steps_of_len<T: Config>(steps: u32) -> ContractSteps<T> {
+    let bounded = steps.min(T::MaxContractSteps::get());
     let mut plan = alloc::vec::Vec::new();
     for _ in 0..bounded {
       plan.push(Step {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: ActorTask::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       });
     }
-    BoundedVec::try_from(plan).expect("benchmark inert execution_plan must fit")
+    BoundedVec::try_from(plan).expect("benchmark inert contract_steps must fit")
   }
 
   fn bench_create_system_with_plan<T: Config>(
     seed: u32,
-    execution_plan: ExecutionPlanOf<T>,
+    contract_steps: ContractSteps<T>,
   ) -> ActorId {
     let owner: T::AccountId = account("cycle_owner", seed, 0);
     let schedule = Schedule {
@@ -1005,7 +1009,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, contract_steps),
     )
     .expect("create_system_actor must succeed in cycle benchmark setup");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1026,7 +1030,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_contract_steps::<T>()),
     )
     .expect("observation benchmark actor creation must succeed");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1038,12 +1042,12 @@ mod benches {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 0,
     };
-    let execution_plan = make_inert_execution_plan::<T>();
+    let contract_steps = make_inert_contract_steps::<T>();
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, execution_plan),
+      system_contract::<T>(schedule, contract_steps),
     )
     .expect("create_system_actor must succeed in wakeup benchmark setup");
     NextActorId::<T>::get().saturating_sub(1)
@@ -1097,7 +1101,6 @@ mod benches {
       actor_id,
       ContinuationState {
         cursor: 0,
-        attempt: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1u32.into(),
         opening_snapshot,
@@ -1239,7 +1242,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_contract::<T>(schedule, make_tracked_funding_execution_plan::<T>(owner)),
+      system_contract::<T>(schedule, make_tracked_funding_contract_steps::<T>(owner)),
     )
     .expect("create_system_actor must succeed in ingress benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -1274,7 +1277,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      system_contract::<T>(schedule, make_inert_execution_plan::<T>()),
+      system_contract::<T>(schedule, make_inert_contract_steps::<T>()),
     )
     .expect("System timer creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -1379,7 +1382,7 @@ mod benches {
   /// head consumption are separate scheduler classes.
   #[benchmark]
   fn cycle_orchestration() {
-    let actor_id = bench_create_system_with_plan::<T>(3_100, make_inert_execution_plan::<T>());
+    let actor_id = bench_create_system_with_plan::<T>(3_100, make_inert_contract_steps::<T>());
     let now: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     let instance = Pallet::<T>::active_actor_view(actor_id).expect("cycle actor exists");
@@ -1396,7 +1399,7 @@ mod benches {
   /// admission composition uses for arbitrary plans.
   #[benchmark]
   fn step_orchestration(n: Linear<1, 8>) {
-    let actor_id = bench_create_system_with_plan::<T>(3_200, inert_execution_plan_of_len::<T>(n));
+    let actor_id = bench_create_system_with_plan::<T>(3_200, inert_contract_steps_of_len::<T>(n));
     let now: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     let instance = Pallet::<T>::active_actor_view(actor_id).expect("cycle actor exists");
@@ -2148,8 +2151,8 @@ mod benches {
     assert_eq!(
       ContinuationStateStore::<T>::get(actor_id)
         .expect("benchmark continuation remains")
-        .attempt,
-      1
+        .last_attempt_block,
+      2u32.into()
     );
   }
 
@@ -2186,13 +2189,13 @@ mod benches {
 
   #[benchmark]
   fn continuation_suffix_admission(n: Linear<1, 10>) {
-    let bounded = n.min(T::MaxExecutionPlanSteps::get());
+    let bounded = n.min(T::MaxContractSteps::get());
     let recipient: T::AccountId = account("continuation_suffix_recipient", 0, 0);
-    let mut plan = ExecutionPlanOf::<T>::default();
+    let mut plan = ContractSteps::<T>::default();
     for _ in 0..bounded {
       plan
         .try_push(Step {
-          preconditions: Preconditions::Unconditional,
+          precondition: None,
           task: ActorTask::Transfer {
             to: recipient.clone(),
             asset: T::FeeNativeAssetId::get(),
@@ -2210,7 +2213,10 @@ mod benches {
         total = total
           .saturating_add(Pallet::<T>::weight_upper_bound(&step.task))
           .saturating_add(Weight::from_parts(
-            step.preconditions.predicate_count() as u64,
+            step
+              .precondition
+              .as_ref()
+              .map_or(0, Precondition::predicate_count) as u64,
             0,
           ));
       }
@@ -2416,12 +2422,12 @@ mod benches {
     let mut actor_ids: alloc::vec::Vec<ActorId> = alloc::vec::Vec::with_capacity(n as usize);
     for i in 0..n {
       let owner: T::AccountId = account("owner", i, 0);
-      let temp_execution_plan = make_inert_execution_plan::<T>();
+      let temp_contract_steps = make_inert_contract_steps::<T>();
       Pallet::<T>::create_system_actor(
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        system_contract::<T>(schedule.clone(), temp_execution_plan),
+        system_contract::<T>(schedule.clone(), temp_contract_steps),
       )
       .expect("create_system_actor must succeed");
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -2432,8 +2438,8 @@ mod benches {
     }
     for (i, actor_id) in actor_ids.iter().enumerate() {
       let next_sov = sovereigns[(i + 1) % sovereigns.len()].clone();
-      let transfer_execution_plan: ExecutionPlanOf<T> = BoundedVec::try_from(alloc::vec![Step {
-        preconditions: Preconditions::Unconditional,
+      let transfer_contract_steps: ContractSteps<T> = BoundedVec::try_from(alloc::vec![Step {
+        precondition: None,
         task: ActorTask::Transfer {
           to: next_sov,
           asset: native,
@@ -2441,14 +2447,14 @@ mod benches {
         },
         on_error: StepErrorPolicy::AbortCycle,
       }])
-      .expect("transfer execution_plan fits");
+      .expect("transfer contract_steps fits");
       let contract = ActorContract::<T>::get(*actor_id).expect("Actor Contract exists");
       Pallet::<T>::update_contract(
         RawOrigin::Root.into(),
         *actor_id,
         contract.schedule,
         contract.schedule_window,
-        transfer_execution_plan,
+        transfer_contract_steps,
         contract.funding,
         CompletionPolicy::Persistent,
       )

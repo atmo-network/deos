@@ -12,6 +12,40 @@ use polkadot_sdk::frame_support::{
 };
 use polkadot_sdk::sp_runtime::FixedU128;
 
+fn approved_governance_outcome(
+  approved_epoch: u32,
+  winner_count: u32,
+) -> pallet_governance::FinalizedProposalOutcome<u32> {
+  pallet_governance::FinalizedProposalOutcome::Approved {
+    approval: pallet_governance::ProposalApproval {
+      approved_epoch,
+      winner_count,
+    },
+    enactment: pallet_governance::ProposalEnactmentOutcome::NotAttempted,
+  }
+}
+
+fn rejected_governance_outcome(
+  finalized_epoch: u32,
+  reason: pallet_governance::ProposalRejectionReason,
+) -> pallet_governance::FinalizedProposalOutcome<u32> {
+  pallet_governance::FinalizedProposalOutcome::Rejected {
+    finalized_epoch,
+    reason,
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+fn veto_cancelled_governance_outcome(
+  finalized_epoch: u32,
+  veto_weight: u64,
+) -> pallet_governance::FinalizedProposalOutcome<u32> {
+  pallet_governance::FinalizedProposalOutcome::VetoCancelled {
+    finalized_epoch,
+    veto_weight,
+  }
+}
+
 fn advance_to_block(target: crate::BlockNumber) {
   while System::block_number() < target {
     let current = System::block_number();
@@ -26,7 +60,7 @@ fn advance_to_block(target: crate::BlockNumber) {
 
 #[cfg(feature = "runtime-benchmarks")]
 #[test]
-fn lp_backed_security_path_composes_sessions_funding_claim_expiry_and_cleanup() {
+fn lp_backed_security_path_composes_sessions_funding_claim_and_atomic_expiry() {
   use polkadot_sdk::frame_support::traits::Currency;
   use polkadot_sdk::pallet_collator_selection::CandidateInfo;
   use polkadot_sdk::pallet_session::SessionManager;
@@ -122,20 +156,16 @@ fn lp_backed_security_path_composes_sessions_funding_claim_expiry_and_cleanup() 
       .saturating_add(crate::configs::staking_config::SecurityRewardClaimHorizon::get())
       .saturating_add(1);
     polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(expiry_epoch);
-    assert_ok!(Staking::expire_native_security_reward(
-      RuntimeOrigin::signed(CHARLIE),
-      1,
-    ));
-    assert_eq!(
-      Staking::native_security_reward_pot(1)
-        .expect("expired pot retained for bounded cleanup")
-        .status,
-      pallet_staking::NativeSecurityRewardPotStatus::Expired
-    );
-    assert_ok!(Staking::cleanup_expired_native_security_reward(
-      RuntimeOrigin::signed(CHARLIE),
-      1,
-    ));
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(expiry_epoch);
+    assert!(Staking::native_security_epoch_snapshot(0).is_none());
+    assert!(Staking::native_security_epoch_snapshot(1).is_some());
+    let next_expiry_epoch = expiry_epoch.saturating_add(1);
+    polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(next_expiry_epoch);
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(next_expiry_epoch);
     assert!(Staking::native_security_epoch_snapshot(1).is_none());
     assert!(Staking::native_security_reward_pot(1).is_none());
   });
@@ -365,8 +395,9 @@ fn setup_native_staking_lp_nomination(
   use polkadot_sdk::pallet_asset_conversion::PoolLocator;
   let native_asset_id = 0;
   assert_ok!(mint_tokens(native_asset_id, &ALICE, &owner, 1_000));
-  assert_ok!(Staking::stake_native(
+  assert_ok!(Staking::stake(
     RuntimeOrigin::signed(owner.clone()),
+    native_asset_id,
     500
   ));
   let staked_asset_id = Staking::staked_asset_id(native_asset_id).expect("stNTVE must resolve");
@@ -439,9 +470,6 @@ fn setup_native_staking_lp_nomination(
     *total = total.saturating_add(amount);
   });
   pallet_staking::AccountNativeLpLocked::<crate::Runtime>::mutate(&owner, |total| {
-    *total = total.saturating_add(amount);
-  });
-  pallet_staking::AccountNativeCollatorLpLocked::<crate::Runtime>::mutate(&owner, |total| {
     *total = total.saturating_add(amount);
   });
   pallet_staking::TotalNativeLpLocked::<crate::Runtime>::mutate(|total| {
@@ -603,10 +631,7 @@ fn runtime_governance_proposal_resolution_feeds_reward_memory() {
     assert!(Governance::active_proposal_ids(ASSET_A).is_empty());
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 100),
-      Some(pallet_governance::FinalizedProposalOutcome::Resolved {
-        epoch: 1,
-        winner_count: 2,
-      })
+      Some(approved_governance_outcome(1, 2))
     );
     assert_eq!(
       Staking::governance_participation_coefficient(ASSET_A, &BOB),
@@ -631,34 +656,36 @@ fn runtime_governance_recent_finalized_proposals_are_queryable() {
     advance_to_block(3);
     submit_governance_proposal(ASSET_B, 200);
     reject_governance_proposal(ASSET_B, 200);
+    let asset_a = Governance::recent_finalized_proposals(ASSET_A).into_inner();
     assert_eq!(
-      Governance::recent_finalized_proposals(ASSET_A).into_inner(),
-      alloc::vec![
-        pallet_governance::RecentFinalizedProposal {
-          item_id: 101,
-          outcome: pallet_governance::FinalizedProposalOutcome::Rejected {
-            epoch: 2,
-            reason: pallet_governance::ProposalRejectionReason::AdminRejected,
-          },
-        },
-        pallet_governance::RecentFinalizedProposal {
-          item_id: 100,
-          outcome: pallet_governance::FinalizedProposalOutcome::Resolved {
-            epoch: 1,
-            winner_count: 1,
-          },
-        },
-      ]
+      asset_a
+        .iter()
+        .map(|proposal| proposal.identity.item_id)
+        .collect::<alloc::vec::Vec<_>>(),
+      alloc::vec![101, 100]
     );
     assert_eq!(
-      Governance::recent_finalized_proposals(ASSET_B).into_inner(),
-      alloc::vec![pallet_governance::RecentFinalizedProposal {
-        item_id: 200,
-        outcome: pallet_governance::FinalizedProposalOutcome::Rejected {
-          epoch: 3,
-          reason: pallet_governance::ProposalRejectionReason::AdminRejected,
-        },
-      }]
+      asset_a
+        .iter()
+        .map(|proposal| proposal.finalization.outcome.clone())
+        .collect::<alloc::vec::Vec<_>>(),
+      alloc::vec![
+        rejected_governance_outcome(2, pallet_governance::ProposalRejectionReason::AdminRejected,),
+        approved_governance_outcome(1, 1),
+      ]
+    );
+    assert!(
+      asset_a
+        .iter()
+        .all(|proposal| proposal.identity.domain == ASSET_A)
+    );
+    let asset_b = Governance::recent_finalized_proposals(ASSET_B).into_inner();
+    assert_eq!(asset_b.len(), 1);
+    assert_eq!(asset_b[0].identity.domain, ASSET_B);
+    assert_eq!(asset_b[0].identity.item_id, 200);
+    assert_eq!(
+      asset_b[0].finalization.outcome,
+      rejected_governance_outcome(3, pallet_governance::ProposalRejectionReason::AdminRejected,)
     );
   });
 }
@@ -765,10 +792,7 @@ fn runtime_governance_immediate_veto_cancels_proposal_without_reward_credit() {
     );
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 150),
-      Some(pallet_governance::FinalizedProposalOutcome::VetoCancelled {
-        epoch: 1,
-        veto_weight: 420,
-      })
+      Some(veto_cancelled_governance_outcome(1, 420))
     );
     assert_eq!(
       Staking::governance_participation_coefficient(ASSET_A, &BOB),
@@ -805,10 +829,7 @@ fn runtime_governance_sub_percent_veto_does_not_block_main_track_resolution() {
     service_governance_epoch(maturity_epoch);
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 153),
-      Some(pallet_governance::FinalizedProposalOutcome::Resolved {
-        epoch: maturity_epoch,
-        winner_count: 1,
-      })
+      Some(approved_governance_outcome(maturity_epoch, 1))
     );
     assert_eq!(
       Staking::governance_participation_coefficient(ASSET_A, &BOB),
@@ -865,10 +886,7 @@ fn runtime_governance_rejects_protection_vote_after_protection_window_close() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 154),
-      Some(pallet_governance::FinalizedProposalOutcome::Resolved {
-        epoch: maturity_epoch,
-        winner_count: 1,
-      })
+      Some(approved_governance_outcome(maturity_epoch, 1))
     );
   });
 }
@@ -906,10 +924,7 @@ fn runtime_governance_pass_can_replace_prior_veto_vote() {
     service_governance_epoch(maturity_epoch);
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 151),
-      Some(pallet_governance::FinalizedProposalOutcome::Resolved {
-        epoch: maturity_epoch,
-        winner_count: 1,
-      })
+      Some(approved_governance_outcome(maturity_epoch, 1))
     );
   });
 }
@@ -1113,23 +1128,13 @@ fn trusted_security_path_composes_liquid_receipt_donation_governance_and_exit() 
       Staking::native_security_mode(),
       pallet_staking::NativeSecurityMode::TrustedSet
     );
-    assert_eq!(
-      Staking::native_security_capabilities(),
-      pallet_staking::NativeSecurityCapabilities {
-        new_nominations: false,
-        redelegation: false,
-        candidate_selection: false,
-        reward_funding: false,
-        reward_claims: false,
-        reward_compound: false,
-        custody_exit: true,
-      }
-    );
+    assert!(!Staking::native_security_candidate_selection_available());
+    assert!(!Staking::native_security_reward_funding_available());
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &CHARLIE, 200));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("stNTVE must resolve");
     assert_ok!(Assets::transfer(
       RuntimeOrigin::signed(BOB),
@@ -1224,7 +1229,10 @@ fn trusted_security_path_composes_liquid_receipt_donation_governance_and_exit() 
       shares_before - 10
     );
     assert!(<Assets as Inspect<_>>::balance(0, &BOB) > native_before);
-    assert_eq!(Staking::account_native_collator_lp_locked(BOB), 0);
+    assert_eq!(
+      Staking::native_locked_lp_position(BOB).collator_locked_lp,
+      0
+    );
     assert_eq!(Staking::operator_native_lp_locked(ALICE), 0);
     assert_eq!(
       Staking::native_security_readiness(),
@@ -1248,7 +1256,7 @@ fn runtime_governance_standalone_lp_lock_feeds_native_vote_power() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("stNTVE must resolve");
     let base_asset = crate::configs::AssetKind::Local(0);
     let staked_asset = crate::configs::AssetKind::Local(staked_asset_id);
@@ -1281,7 +1289,10 @@ fn runtime_governance_standalone_lp_lock_feeds_native_vote_power() {
       20,
     ));
     assert_eq!(Staking::account_native_lp_locked(BOB), 20);
-    assert_eq!(Staking::account_native_collator_lp_locked(BOB), 0);
+    assert_eq!(
+      Staking::native_locked_lp_position(BOB).collator_locked_lp,
+      0
+    );
     submit_governance_proposal(bldr_id, 163);
     cast_governance_vote_kind(BOB, bldr_id, 163, pallet_governance::ProposalVoteKind::Pass);
     let tally = Governance::proposal_vote_tally(bldr_id, 163).expect("proposal must stay active");
@@ -1307,7 +1318,7 @@ fn runtime_governance_native_and_stntve_locks_feed_native_vote_power() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 100));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 100));
     let staked_asset_id = Staking::staked_asset_id(0).expect("stNTVE must resolve");
     assert_ok!(Staking::lock_native_asset_for_governance(
       RuntimeOrigin::signed(BOB),
@@ -1373,10 +1384,7 @@ fn runtime_governance_bldr_native_protection_track_can_cancel_immediately() {
     cast_governance_vote_kind(BOB, bldr_id, 162, pallet_governance::ProposalVoteKind::Veto);
     assert_eq!(
       Governance::finalized_proposal_outcome(bldr_id, 162),
-      Some(pallet_governance::FinalizedProposalOutcome::VetoCancelled {
-        epoch: 1,
-        veto_weight: 420,
-      })
+      Some(veto_cancelled_governance_outcome(1, 420))
     );
   });
 }
@@ -1472,10 +1480,7 @@ fn runtime_governance_pass_can_unblock_main_track_resolution() {
     service_governance_epoch(maturity_epoch);
     assert_eq!(
       Governance::finalized_proposal_outcome(ASSET_A, 152),
-      Some(pallet_governance::FinalizedProposalOutcome::Resolved {
-        epoch: maturity_epoch,
-        winner_count: 1,
-      })
+      Some(approved_governance_outcome(maturity_epoch, 1))
     );
     assert_eq!(
       Staking::governance_participation_coefficient(ASSET_A, &BOB),
@@ -1742,7 +1747,7 @@ fn ntve_stntve_pool_direct_balanced_donation_increases_lp_value_without_minting_
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
     let base_asset = crate::configs::AssetKind::Local(0);
     let staked_asset = crate::configs::AssetKind::Local(staked_asset_id);
@@ -1849,7 +1854,7 @@ fn trusted_mode_rejects_new_collator_lp_nomination_without_custody_mutation() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
     let base_asset = crate::configs::AssetKind::Local(0);
     let staked_asset = crate::configs::AssetKind::Local(staked_asset_id);
@@ -1893,23 +1898,16 @@ fn trusted_mode_rejects_new_collator_lp_nomination_without_custody_mutation() {
     );
     assert!(Staking::native_lp_lock(BOB, ALICE).is_none());
     assert_eq!(Staking::operator_native_lp_locked(ALICE), 0);
-    assert_eq!(Staking::account_native_collator_lp_locked(BOB), 0);
+    assert_eq!(
+      Staking::native_locked_lp_position(BOB).collator_locked_lp,
+      0
+    );
     assert_eq!(
       Staking::native_security_readiness(),
       pallet_staking::NativeSecurityReadiness::Inactive
     );
-    assert_eq!(
-      Staking::native_security_capabilities(),
-      pallet_staking::NativeSecurityCapabilities {
-        new_nominations: false,
-        redelegation: false,
-        candidate_selection: false,
-        reward_funding: false,
-        reward_claims: false,
-        reward_compound: false,
-        custody_exit: true,
-      }
-    );
+    assert!(!Staking::native_security_candidate_selection_available());
+    assert!(!Staking::native_security_reward_funding_available());
   });
 }
 
@@ -2072,7 +2070,7 @@ fn governance_can_recover_unowned_prefunded_runtime_pool() {
 }
 
 #[test]
-fn runtime_native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
+fn runtime_generic_stake_value_tracks_transferable_native_receipts() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     use polkadot_sdk::frame_support::BoundedVec;
@@ -2083,8 +2081,8 @@ fn runtime_native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &CHARLIE, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 400));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(CHARLIE), 300));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 400));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(CHARLIE), 0, 300));
     let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
     assert_ok!(Assets::transfer(
       RuntimeOrigin::signed(CHARLIE),
@@ -2092,24 +2090,9 @@ fn runtime_native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
       DAVE.into(),
       120,
     ));
-    assert_eq!(Staking::native_stake_value(&BOB), Some(400));
-    assert_eq!(Staking::passive_native_stake_value(&BOB), Some(400));
-    assert_eq!(Staking::delegated_native_stake_value(&BOB), None);
-    assert_eq!(
-      Staking::stake_exposure(0, &BOB),
-      Some(pallet_staking::StakeExposure {
-        total_value: 400,
-        passive_value: 400,
-        delegated_value: 0,
-        delegated_operator: None,
-      })
-    );
-    assert_eq!(Staking::native_stake_value(&CHARLIE), Some(180));
-    assert_eq!(Staking::passive_native_stake_value(&CHARLIE), Some(180));
-    assert_eq!(Staking::delegated_native_stake_value(&CHARLIE), None);
-    assert_eq!(Staking::native_stake_value(&DAVE), Some(120));
-    assert_eq!(Staking::passive_native_stake_value(&DAVE), Some(120));
-    assert_eq!(Staking::delegated_native_stake_value(&DAVE), None);
+    assert_eq!(Staking::stake_value(0, &BOB), Some(400));
+    assert_eq!(Staking::stake_value(0, &CHARLIE), Some(180));
+    assert_eq!(Staking::stake_value(0, &DAVE), Some(120));
   });
 }
 
@@ -2136,38 +2119,6 @@ fn runtime_stake_value_follows_receipt_transfer_for_local_asset() {
 }
 
 #[test]
-fn runtime_non_native_stake_exposure_stays_passive() {
-  let mut ext = seeded_test_ext();
-  ext.execute_with(|| {
-    use polkadot_sdk::frame_support::BoundedVec;
-    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
-      BoundedVec::try_from(alloc::vec![ALICE]).expect("single invulnerable must fit"),
-    );
-    assert_ok!(create_test_asset(0, &ALICE));
-    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
-    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::register_staking_asset(
-      RuntimeOrigin::root(),
-      ASSET_A
-    ));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 400));
-    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 250));
-    assert_eq!(Staking::passive_stake_value(ASSET_A, &BOB), Some(250));
-    assert_eq!(Staking::delegated_stake_value(ASSET_A, &BOB), None);
-    assert_eq!(
-      Staking::stake_exposure(ASSET_A, &BOB),
-      Some(pallet_staking::StakeExposure {
-        total_value: 250,
-        passive_value: 250,
-        delegated_value: 0,
-        delegated_operator: None,
-      })
-    );
-  });
-}
-
-#[test]
 fn non_native_staking_is_ignored_by_native_security_queries() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
@@ -2182,11 +2133,9 @@ fn non_native_staking_is_ignored_by_native_security_queries() {
       RuntimeOrigin::root(),
       ASSET_A
     ));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 200));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 200));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(CHARLIE), ASSET_A, 900));
-    assert_eq!(Staking::native_stake_value(&CHARLIE), None);
-    assert_eq!(Staking::passive_native_stake_value(&CHARLIE), None);
-    assert_eq!(Staking::delegated_native_stake_value(&CHARLIE), None);
+    assert_eq!(Staking::stake_value(0, &CHARLIE), None);
   });
 }
 
@@ -2204,8 +2153,8 @@ fn stntve_transfer_no_longer_changes_session_ranking_after_lp_cutover() {
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 400));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(EVE), 300));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 400));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(EVE), 0, 300));
     let _ = Staking::on_idle(System::block_number(), Weight::MAX);
     let initial_ranked =
       crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
@@ -2334,7 +2283,9 @@ fn security_epoch_identity_is_shared_by_runtime_planning_funding_and_claim_views
 
     let diagnostic = pallet_staking::NativeSecurityBoundaryDiagnostic {
       planned_epoch: provider_epoch,
-      readiness: pallet_staking::NativeSecurityReadiness::Inactive,
+      outcome: pallet_staking::NativeSecurityBoundaryOutcome::NotReady(
+        pallet_staking::NativeSecurityReadiness::Inactive,
+      ),
     };
     pallet_staking::LastNativeSecurityBoundaryDiagnostic::<crate::Runtime>::put(diagnostic);
     assert_eq!(
@@ -2346,6 +2297,171 @@ fn security_epoch_identity_is_shared_by_runtime_planning_funding_and_claim_views
 
     System::set_block_number(999);
     assert_eq!(Staking::current_security_epoch(), provider_epoch);
+  });
+}
+
+#[test]
+fn trusted_security_mode_session_boundary_settles_retained_reward_obligations() {
+  use polkadot_sdk::frame_support::traits::Currency;
+  use polkadot_sdk::pallet_session::SessionManager;
+
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    let epoch = 0;
+    pallet_staking::NativeSecurityEpochSnapshots::<crate::Runtime>::insert(
+      epoch,
+      pallet_staking::NativeSecurityEpochSnapshot {
+        epoch,
+        participants: Default::default(),
+        eligible_operators: Default::default(),
+        total_reward_weight: 1,
+      },
+    );
+    pallet_staking::NativeSecurityRewardPots::<crate::Runtime>::insert(
+      epoch,
+      pallet_staking::NativeSecurityRewardPot {
+        total_reward_weight: 1,
+        credited: 10,
+        claimed: 0,
+        status: pallet_staking::NativeSecurityRewardPotStatus::Finalized,
+      },
+    );
+    pallet_staking::NativeSecurityRewardLiability::<crate::Runtime>::put(10);
+    let reward_account = Staking::native_security_reward_account();
+    let _ = crate::Balances::deposit_creating(&reward_account, 10);
+    let source = crate::configs::staking_config::SecurityRewardFundingSource::get();
+    let source_before = crate::Balances::free_balance(&source);
+    let boundary = crate::configs::staking_config::SecurityRewardClaimHorizon::get() + 1;
+    polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(boundary);
+
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(boundary);
+
+    assert!(Staking::native_security_epoch_snapshot(epoch).is_none());
+    assert!(Staking::native_security_reward_pot(epoch).is_none());
+    assert_eq!(Staking::native_security_reward_liability(), 0);
+    assert_eq!(crate::Balances::free_balance(source), source_before + 10);
+  });
+}
+
+#[test]
+fn trusted_session_boundary_finalizes_open_state_and_removes_unactivated_planning() {
+  use polkadot_sdk::pallet_session::SessionManager;
+
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    let active_epoch = 0;
+    let boundary = 1;
+    let active = pallet_staking::NativeSecurityEpochSnapshot {
+      epoch: active_epoch,
+      participants: Default::default(),
+      eligible_operators: Default::default(),
+      total_reward_weight: 0,
+    };
+    pallet_staking::ActiveNativeSecurityEpochSnapshot::<crate::Runtime>::put(&active);
+    pallet_staking::NativeSecurityEpochSnapshots::<crate::Runtime>::insert(active_epoch, active);
+    pallet_staking::NativeSecurityRewardPots::<crate::Runtime>::insert(
+      active_epoch,
+      pallet_staking::NativeSecurityRewardPot {
+        total_reward_weight: 0,
+        credited: 0,
+        claimed: 0,
+        status: pallet_staking::NativeSecurityRewardPotStatus::Open,
+      },
+    );
+    pallet_staking::NativeSecurityEpochSnapshots::<crate::Runtime>::insert(
+      boundary,
+      pallet_staking::NativeSecurityEpochSnapshot {
+        epoch: boundary,
+        participants: Default::default(),
+        eligible_operators: Default::default(),
+        total_reward_weight: 0,
+      },
+    );
+    pallet_staking::NativeSecurityRewardPots::<crate::Runtime>::insert(
+      boundary,
+      pallet_staking::NativeSecurityRewardPot {
+        total_reward_weight: 0,
+        credited: 0,
+        claimed: 0,
+        status: pallet_staking::NativeSecurityRewardPotStatus::Planned,
+      },
+    );
+    polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(boundary);
+
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(boundary);
+
+    assert!(Staking::active_native_security_epoch_snapshot().is_none());
+    assert_eq!(
+      Staking::native_security_reward_pot(active_epoch)
+        .expect("active obligation must remain claimable")
+        .status,
+      pallet_staking::NativeSecurityRewardPotStatus::Finalized
+    );
+    assert!(Staking::native_security_reward_pot(boundary).is_none());
+  });
+}
+
+#[test]
+fn failed_session_retention_cancels_the_plan_and_recovers_the_oldest_due_epoch() {
+  use polkadot_sdk::frame_support::traits::Currency;
+  use polkadot_sdk::pallet_session::SessionManager;
+
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    let due_epoch = 0;
+    let boundary = crate::configs::staking_config::SecurityRewardClaimHorizon::get() + 1;
+    for (epoch, status, credited) in [
+      (
+        due_epoch,
+        pallet_staking::NativeSecurityRewardPotStatus::Finalized,
+        10,
+      ),
+      (
+        boundary,
+        pallet_staking::NativeSecurityRewardPotStatus::Planned,
+        0,
+      ),
+    ] {
+      pallet_staking::NativeSecurityEpochSnapshots::<crate::Runtime>::insert(
+        epoch,
+        pallet_staking::NativeSecurityEpochSnapshot {
+          epoch,
+          participants: Default::default(),
+          eligible_operators: Default::default(),
+          total_reward_weight: 1,
+        },
+      );
+      pallet_staking::NativeSecurityRewardPots::<crate::Runtime>::insert(
+        epoch,
+        pallet_staking::NativeSecurityRewardPot {
+          total_reward_weight: 1,
+          credited,
+          claimed: 0,
+          status,
+        },
+      );
+    }
+    pallet_staking::NativeSecurityRewardLiability::<crate::Runtime>::put(10);
+    polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(boundary);
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(boundary);
+    assert!(Staking::native_security_reward_pot(due_epoch).is_some());
+    assert!(Staking::native_security_reward_pot(boundary).is_none());
+
+    let reward_account = Staking::native_security_reward_account();
+    let _ = crate::Balances::deposit_creating(&reward_account, 10);
+    let recovery_boundary = boundary + 1;
+    polkadot_sdk::pallet_session::CurrentIndex::<crate::Runtime>::put(recovery_boundary);
+    <crate::configs::DelegationWeightedCollatorSessionManager as SessionManager<
+      crate::AccountId,
+    >>::start_session(recovery_boundary);
+    assert!(Staking::native_security_reward_pot(due_epoch).is_none());
+    assert_eq!(Staking::native_security_reward_liability(), 0);
   });
 }
 
@@ -2409,10 +2525,10 @@ fn session_manager_ranks_larger_candidate_set_by_backing_then_account() {
     assert_ok!(mint_tokens(0, &ALICE, &grace, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &heidi, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(EVE), 500));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(grace), 300));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(heidi), 300));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(EVE), 0, 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(grace), 0, 300));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(heidi), 0, 300));
     let _ = Staking::on_idle(System::block_number(), Weight::MAX);
     let ranked =
       crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
@@ -2478,10 +2594,10 @@ fn session_manager_top_n_boundary_prefers_account_order_on_equal_backing() {
     assert_ok!(mint_tokens(0, &ALICE, &heidi, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &ivan, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(faythe), 200));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(grace), 200));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(heidi), 200));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(ivan), 200));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(faythe), 0, 200));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(grace), 0, 200));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(heidi), 0, 200));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(ivan), 0, 200));
     let _ = Staking::on_idle(System::block_number(), Weight::MAX);
     let ranked =
       crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
@@ -2530,7 +2646,7 @@ fn ranking_probe_stays_candidate_bound_with_many_stntve_holders() {
     for seed in 6u8..30u8 {
       let delegator = crate::AccountId::new([seed; 32]);
       assert_ok!(mint_tokens(0, &ALICE, &delegator, 101));
-      assert_ok!(Staking::stake_native(RuntimeOrigin::signed(delegator), 100));
+      assert_ok!(Staking::stake(RuntimeOrigin::signed(delegator), 0, 100));
     }
     let _ = Staking::on_idle(System::block_number(), Weight::MAX);
     crate::configs::DelegationWeightedCollatorSessionManager::reset_ranking_backing_lookup_probe();
@@ -2577,8 +2693,8 @@ fn session_manager_never_uses_candidate_deposit_as_security_backing() {
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 400));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(EVE), 400));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 400));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(EVE), 0, 400));
     let _ = Staking::on_idle(System::block_number(), Weight::MAX);
     let ranked =
       crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![

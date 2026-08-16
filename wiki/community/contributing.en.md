@@ -1,7 +1,7 @@
 ---
-page_type: process
+type: process
 title: Contributing Guidelines
-summary: How to contribute to DEOS by choosing the right domain, preserving physics-first constraints, and running the correct validation layer.
+description: How to contribute to DEOS by choosing the right domain, preserving physics-first constraints, and running the correct validation layer.
 locale: en
 canonical_page_id: contributing
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/README.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/README.md
+status: stable
 audience: developer
 tags:
   - community

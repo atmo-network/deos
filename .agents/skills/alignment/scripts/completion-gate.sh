@@ -142,11 +142,57 @@ should_run_runtime_composition_dag_audit() {
 }
 
 should_run_protocol_coherence_regression_audit() {
-    has_changed_path '^template/pallets/(governance|staking|actors|router|oracle)/' || \
-        has_changed_path '^template/runtime/src/configs/(actor|deos_router|governance|oracle|staking)_config\.rs$' || \
-        has_changed_path '^web-client/src/' || \
+    has_changed_path '^template/(pallets|primitives)/' || \
+        has_changed_path '^template/runtime/src/' || \
+        has_changed_path '^docs/' || \
+        has_changed_path '^simulator/' || \
+        has_changed_path '^web-client/(src|docs|scripts)/' || \
+        has_changed_path '^wiki/' || \
         has_changed_path '^scripts/' || \
         has_changed_path '^\.agents/skills/alignment/(rules/actors-identity-rules\.json|scripts/audit-(actors-identity|protocol-coherence-regressions)\.sh)$'
+}
+
+semantic_surface_anchor_changed() {
+    local manifest="$PROJECT_ROOT/.agents/skills/alignment/semantic-surface.v1.json"
+    local status
+    if node -e '
+        const fs = require("node:fs");
+        try {
+          const [manifestPath, ...changed] = process.argv.slice(1);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          if (manifest.schema !== "deos-error-narrowness-evidence/v2") {
+            throw new Error(`unsupported semantic manifest schema: ${manifest.schema}`);
+          }
+          if (!Array.isArray(manifest.typedWitnesses)) {
+            throw new Error("semantic manifest lacks typedWitnesses");
+          }
+          const anchors = new Set(manifest.typedWitnesses.flatMap((witness) =>
+            (witness.anchors ?? []).map((anchor) => anchor.path),
+          ));
+          process.exit(changed.some((path) => anchors.has(path)) ? 0 : 1);
+        } catch (error) {
+          console.error(`Unable to derive semantic witness paths: ${error.message}`);
+          process.exit(2);
+        }
+      ' "$manifest" "${CHANGED_PATHS[@]}"; then
+        return 0
+    else
+        status=$?
+        [[ "$status" -eq 1 ]] && return 1
+        return 0
+    fi
+}
+
+should_run_protocol_coherence_mutation_tests() {
+    has_changed_path '^\.agents/skills/alignment/scripts/audit-protocol-coherence-regressions\.sh$'
+}
+
+should_run_semantic_surface_audit() {
+    has_changed_path '^template/pallets/(governance|staking|actors|router|oracle)/src/' || \
+        has_changed_path '^template/runtime/src/' || \
+        has_changed_path '^web-client/src/lib/' || \
+        semantic_surface_anchor_changed || \
+        has_changed_path '^\.agents/skills/alignment/(semantic-surface\.v1\.json|scripts/audit-semantic-surface\.mjs)$'
 }
 
 should_run_cargo_check() {
@@ -171,6 +217,12 @@ should_run_runtime_tests() {
 
 should_run_shell_syntax_check() {
     [[ ${#CHANGED_SHELL_PATHS[@]} -gt 0 ]]
+}
+
+should_run_validation_evidence_tests() {
+    has_changed_path '^scripts/(validate-local\.sh|validation-(authority\.v1\.json|evidence\.mjs|ci-evidence\.mjs)|github-release-artifact\.mjs|release-evidence\.mjs|release-tools\.v1\.json|install-release-tools\.mjs|patch-chain-spec\.mjs|network-assurance-local\.sh|04-generate-chain-spec\.sh|test-(validation-(evidence|ci-evidence)|release-evidence)\.mjs|release-tooling/(package(-lock)?\.json|validate-spdx\.mjs))$' || \
+        has_changed_path '^\.github/workflows/' || \
+        has_changed_path '^\.agents/skills/alignment/(SKILL\.md|scripts/completion-gate\.sh)$'
 }
 
 should_run_markdown_table_audit() {
@@ -217,11 +269,13 @@ plan() {
     log_info "Layer 1: Changed shell syntax"
     log_info "Layer 2: Mathematical truth"
     log_info "Layer 3: Behavioral truth"
-    log_info "Layer 4: Markdown quality"
+    log_info "Layer 4: Validation evidence and workflow trust"
+    log_info "Layer 5: Markdown quality"
     log_info "Layer 5: Wiki trust"
     log_info "Layer 6: Economic claim integrity"
     log_info "Layer 7: Strategic governance ingress"
     log_info "Layer 8: Protocol coherence regressions"
+    log_info "Layer 9: Error Narrowness identities and executable witnesses"
     log_info "Layer 9: Release-line consistency"
     log_info "Layer 10: Backlog open-work shape"
     log_info "Layer 11: Knowledge sync"
@@ -300,6 +354,19 @@ run_behavior_validation() {
         fi
     else
         log_warning "Skipping runtime unit tests because no runtime source files changed"
+    fi
+}
+
+run_validation_evidence_validation() {
+    phase_banner "Validation evidence and workflow trust"
+    if ! should_run_validation_evidence_tests; then
+        log_warning "Skipping validation evidence tests because their authority surfaces did not change"
+        return 0
+    fi
+    require_commands node
+    if ! run_shell_step "Validation evidence tests" "" "cd \"$PROJECT_ROOT\" && node --test scripts/test-validation-evidence.mjs scripts/test-validation-ci-evidence.mjs scripts/test-release-evidence.mjs"; then
+        log_error "Validation evidence and workflow trust validation failed"
+        exit 1
     fi
 }
 
@@ -404,8 +471,29 @@ run_protocol_coherence_regression_validation() {
         log_warning "Skipping protocol coherence regression audit because its semantic-owner surfaces did not change"
         return 0
     fi
+    if should_run_protocol_coherence_mutation_tests; then
+        if ! "$SCRIPT_DIR/audit-protocol-coherence-regressions.sh" --self-test; then
+            log_error "Protocol coherence repository-behavior mutation tests failed"
+            exit 1
+        fi
+    fi
     if ! "$SCRIPT_DIR/audit-protocol-coherence-regressions.sh"; then
         log_error "Protocol coherence regression validation failed"
+        exit 1
+    fi
+}
+
+run_semantic_surface_validation() {
+    phase_banner "Step 9: Error Narrowness evidence"
+    if ! should_run_semantic_surface_audit; then
+        log_warning "Skipping Error Narrowness audit because its checked source roots did not change"
+        return 0
+    fi
+    require_commands node
+    if ! node "$SCRIPT_DIR/audit-semantic-surface.mjs" \
+        --check .agents/skills/alignment/semantic-surface.v1.json \
+        --run-witnesses; then
+        log_error "Error Narrowness evidence validation failed"
         exit 1
     fi
 }
@@ -460,6 +548,7 @@ main() {
     run_shell_syntax_validation
     run_simulator_validation
     run_behavior_validation
+    run_validation_evidence_validation
     run_markdown_table_validation
     run_wiki_trust_validation
     run_economic_claim_validation
@@ -468,6 +557,7 @@ main() {
     run_governance_structural_liveness_validation
     run_runtime_composition_dag_validation
     run_protocol_coherence_regression_validation
+    run_semantic_surface_validation
     run_release_line_validation
     run_backlog_validation
     run_knowledge_sync

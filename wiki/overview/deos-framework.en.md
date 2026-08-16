@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: DEOS Framework Overview
-summary: DEOS is a forkable economic runtime framework for sovereign ecosystems. It supplies deterministic economic services such as minting, routing, automation, staking, governance, and read-model discipline, while TMCTOL is the current standard running on top of it.
+description: DEOS is a forkable economic runtime framework for sovereign ecosystems. It supplies deterministic economic services such as minting, routing, automation, staking, governance, and read-model discipline, while TMCTOL is the current standard running on top of it.
 locale: en
 canonical_page_id: deos-framework
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../docs/core.architecture.en.md
-  - ../../docs/framework-instance.contract.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../docs/framework-instance.contract.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

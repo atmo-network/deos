@@ -1,19 +1,20 @@
 use crate::{
-  ActiveContractInput, ActiveLifecycle, ActorClass, ActorContract, ActorEligibilityError,
+  ActiveContractInput, ActiveLifecycle, ActorClass, ActorClassificationError, ActorContract,
   ActorEligibilityPhase, ActorEligibilityProjection, ActorExecutionPhase, ActorFunding, ActorHot,
-  ActorId, ActorIdentities, ActorType, AmountResolution, AssetFilter, AssetFilterOf, CadenceMode,
-  CancellationReason, CloseReason, ContinuationStateStore, ContractInput, CycleResult, CycleState,
-  Error, Event, FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy,
-  GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit,
-  Mutability, NextActorId, ObservationSubscriberPageList, ObservationTiming, OpeningSurface,
-  OutcomeTotals, OwnerSlotBitmaps, Preconditions, Predicate, QueueEntry, QueueHead, QueueOccupancy,
-  QueuePages, QueueTail, RetryClass, Schedule, ScheduleWindow, SimulationError, SimulationMode,
-  SimulationStatus, SimulationStepOutcome, SimulationStepRecord, SourceFilter, SourceFilterOf,
-  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason,
-  SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf, TimedPredicate, Trigger,
-  TriggerPolicy, TriggerSource, WakeupBucketState, WakeupBuckets, WakeupEntry, WakeupPage,
-  WakeupPages, WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope,
-  fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
+  ActorId, ActorIdentities, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
+  AttemptDisposition, CadenceMode, CancellationReason, CloseReason, ContinuationStateStore,
+  ContractInput, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
+  FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
+  IdleStarvationState, InitialLifecycle, InputLimit, Mutability, NextActorId,
+  ObservationSubscriberPageList, ObservationTiming, OpeningSurface, OutcomeTotals,
+  OwnerSlotBitmaps, Precondition, Predicate, QueueEntry, QueueHead, QueueOccupancy, QueuePages,
+  QueueTail, RetryClass, Schedule, ScheduleWindow, SimulationError, SimulationMode,
+  SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
+  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
+  SystemSovereignState, Task, TaskFailure, TaskOf, TimedPredicate, Trigger, TriggerPolicy,
+  TriggerSource, WakeupBucketState, WakeupBuckets, WakeupEntry, WakeupPage, WakeupPages,
+  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
+  mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -24,7 +25,7 @@ fn update_contract_parts(
 ) -> (
   crate::ScheduleOf<crate::mock::Test>,
   Option<crate::ScheduleWindow<u64>>,
-  crate::ExecutionPlanOf<crate::mock::Test>,
+  crate::ContractSteps<crate::mock::Test>,
   crate::FundingSourcePolicyOf<Test>,
   crate::CompletionPolicy,
 ) {
@@ -60,12 +61,12 @@ macro_rules! update_contract_partial {
         self,
         schedule: crate::ScheduleOf<crate::mock::Test>,
         schedule_window: Option<crate::ScheduleWindow<u64>>,
-        steps: crate::ExecutionPlanOf<crate::mock::Test>,
+        steps: crate::ContractSteps<crate::mock::Test>,
         completion: crate::CompletionPolicy,
       ) -> (
         crate::ScheduleOf<crate::mock::Test>,
         Option<crate::ScheduleWindow<u64>>,
-        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::ContractSteps<crate::mock::Test>,
         crate::CompletionPolicy,
       );
     }
@@ -79,12 +80,12 @@ macro_rules! update_contract_partial {
         self,
         _: crate::ScheduleOf<crate::mock::Test>,
         _: Option<crate::ScheduleWindow<u64>>,
-        steps: crate::ExecutionPlanOf<crate::mock::Test>,
+        steps: crate::ContractSteps<crate::mock::Test>,
         completion: crate::CompletionPolicy,
       ) -> (
         crate::ScheduleOf<crate::mock::Test>,
         Option<crate::ScheduleWindow<u64>>,
-        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::ContractSteps<crate::mock::Test>,
         crate::CompletionPolicy,
       ) {
         (self.0, self.1, steps, completion)
@@ -92,7 +93,7 @@ macro_rules! update_contract_partial {
     }
     impl PartialContractUpdate
       for (
-        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::ContractSteps<crate::mock::Test>,
         crate::CompletionPolicy,
       )
     {
@@ -100,12 +101,12 @@ macro_rules! update_contract_partial {
         self,
         schedule: crate::ScheduleOf<crate::mock::Test>,
         schedule_window: Option<crate::ScheduleWindow<u64>>,
-        _: crate::ExecutionPlanOf<crate::mock::Test>,
+        _: crate::ContractSteps<crate::mock::Test>,
         _: crate::CompletionPolicy,
       ) -> (
         crate::ScheduleOf<crate::mock::Test>,
         Option<crate::ScheduleWindow<u64>>,
-        crate::ExecutionPlanOf<crate::mock::Test>,
+        crate::ContractSteps<crate::mock::Test>,
         crate::CompletionPolicy,
       ) {
         (schedule, schedule_window, self.0, self.1)
@@ -227,6 +228,14 @@ fn assert_map_storage_types<K: TypeInfo + 'static, V: TypeInfo + 'static>(
 /// Names-and-order contract for SCALE variant types. Numeric indices are metadata-derived and
 /// owned by the generated ABI manifest plus PAPI descriptors; this guard only prevents silent
 /// variant renames or reorderings that would break the semantic surface.
+fn variant_count<T: TypeInfo>() -> usize {
+  let info = T::type_info();
+  let TypeDef::Variant(definition) = info.type_def else {
+    panic!("contract type must be a SCALE variant");
+  };
+  definition.variants.len()
+}
+
 fn assert_variant_names<T: TypeInfo>(expected: &[&str]) {
   let info = T::type_info();
   let TypeDef::Variant(definition) = info.type_def else {
@@ -319,7 +328,7 @@ fn trigger_policy_grammar_is_bounded_and_non_nested() {
 fn percentage_at_opening_is_independent_from_trigger_kind_and_payload() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = execution_plan_with_step(make_step(Task::Transfer {
+    let plan = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
@@ -347,7 +356,7 @@ fn percentage_at_opening_is_independent_from_trigger_kind_and_payload() {
 fn observation_only_sources_admit_non_trigger_amount_resolutions() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = execution_plan_with_step(make_step(Task::Transfer {
+    let plan = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
@@ -367,7 +376,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
       Mutability::Mutable,
       observation_schedule(vec![1, 2]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
     assert_eq!(
@@ -405,7 +414,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
       crate::CompletionPolicy::Persistent,
     ));
     assert_eq!(
@@ -428,7 +437,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
       ContractInput::Active(ActiveContractInput {
         schedule: observation_schedule(vec![4]),
         schedule_window: None,
-        steps: inert_execution_plan(),
+        steps: inert_contract_steps(),
         completion: crate::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::OwnerOnly,
         auto_close_at_cycle_nonce: None,
@@ -456,7 +465,7 @@ fn observation_occupied_page_list_follows_live_pages_after_fragmentation() {
         ALICE,
         observation_schedule(vec![17]),
         None,
-        inert_execution_plan(),
+        inert_contract_steps(),
       ));
     }
 
@@ -527,7 +536,7 @@ fn duplicate_observation_subscriptions_fail_before_actor_mutation() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, inert_execution_plan()),
+        user_active_contract(schedule, None, inert_contract_steps()),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -546,7 +555,7 @@ fn observation_provider_mutation_without_certified_ingress_has_no_actor_effect()
       ALICE,
       observation_schedule(vec![feed]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
 
     set_observation(
@@ -572,7 +581,7 @@ fn stale_observation_subscriber_page_fails_closed_without_losing_dirty_state() {
       ALICE,
       observation_schedule(vec![19]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
     let page_size: u32 = <Test as crate::Config>::ObservationPageSize::get();
@@ -612,7 +621,7 @@ fn observation_change_ingress_coalesces_latest_revision_without_subscriber_work(
       ALICE,
       observation_schedule(vec![1]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(1, 1));
     assert_eq!(Actors::observation_ingress_revision(1), Some(1));
@@ -668,13 +677,13 @@ fn last_subscription_cleanup_unlinks_exact_dirty_feed() {
       ALICE,
       observation_schedule(vec![7]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let second = create_system_with(
       ALICE,
       observation_schedule(vec![7]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(7, 1));
     assert_ok!(Actors::deactivate_actor(
@@ -697,7 +706,7 @@ fn last_subscription_cleanup_unlinks_exact_dirty_feed() {
       ALICE,
       observation_schedule(vec![8]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(8, 4));
     assert_eq!(Actors::dirty_observation_list().head, Some(8));
@@ -721,14 +730,14 @@ fn same_block_wakeup_precedes_fanout_in_ticket_order() {
       ALICE,
       timer_schedule(3),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(wakeup_id, 1_000);
     let subscriber_id = create_system_with(
       ALICE,
       observation_schedule(vec![7]),
       None,
-      transfer_execution_plan(CHARLIE, 10),
+      transfer_contract_steps(CHARLIE, 10),
     );
     fund_native(subscriber_id, 1_000);
     // The timer's first wakeup fires at block 4 (anchor 1 + 3); the observation change
@@ -774,7 +783,7 @@ fn subscription_cleanup_failure_rolls_back_actor_deactivation() {
       ALICE,
       observation_schedule(vec![18]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(18, 1));
     crate::DirtyObservationListState::<Test>::mutate(|list| list.tail = None);
@@ -814,7 +823,7 @@ fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
         ALICE,
         observation_schedule(vec![feed]),
         None,
-        inert_execution_plan(),
+        inert_contract_steps(),
       )
     });
     for feed in [1u32, 2, 3] {
@@ -880,7 +889,7 @@ fn multiple_dense_dirty_feeds_receive_round_robin_service() {
               ALICE,
               observation_schedule(vec![feed]),
               None,
-              inert_execution_plan(),
+              inert_contract_steps(),
             )
           })
           .collect::<Vec<_>>()
@@ -938,7 +947,7 @@ fn dirty_feed_capacity_failure_rolls_back_list_insertion() {
       ALICE,
       observation_schedule(vec![9]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let active_actor_maximum: u32 = <Test as crate::Config>::MaxActiveActors::get();
     let trigger_source_maximum: u32 = <Test as crate::Config>::MaxTriggerSources::get();
@@ -964,7 +973,7 @@ fn fanout_requires_complete_ref_time_and_proof_size_before_mutation() {
       ALICE,
       observation_schedule(vec![10]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(10, 1));
     let before = Actors::dirty_observation_feeds(10).expect("dirty feed");
@@ -998,7 +1007,7 @@ fn one_fanout_page_sets_existing_latches_and_scheduler_membership() {
           ALICE,
           observation_schedule(vec![11]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1032,7 +1041,7 @@ fn saturated_queue_retains_the_fanout_page_until_admission_recovers() {
       ALICE,
       observation_schedule(vec![16]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let page_size: u32 = <Test as crate::Config>::QueuePageSize::get();
     let capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
@@ -1094,7 +1103,7 @@ fn on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution() {
       ALICE,
       observation_schedule(vec![14]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(14, 1));
     assert_eq!(
@@ -1130,7 +1139,7 @@ fn newer_revision_during_fanout_restarts_from_the_first_subscriber_page() {
           ALICE,
           observation_schedule(vec![12]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1181,7 +1190,7 @@ fn latest_revision_fanout_model_converges_across_seeded_races() {
           ALICE,
           observation_schedule(vec![15]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1266,7 +1275,7 @@ fn partial_fanout_page_then_deactivation_reconciles_dirty_feed() {
           ALICE,
           observation_schedule(vec![30]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1315,7 +1324,7 @@ fn subscriber_mutation_during_fanout_reconciles_without_invariant_errors() {
           ALICE,
           observation_schedule(vec![31]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1351,7 +1360,7 @@ fn subscriber_mutation_during_fanout_reconciles_without_invariant_errors() {
       ALICE,
       observation_schedule(vec![31]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert!(!Actors::pending_signal(late_subscriber));
 
@@ -1397,7 +1406,7 @@ fn maximum_density_fanout_converges_without_duplicate_queue_membership() {
           ALICE,
           observation_schedule(vec![13]),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         )
       })
       .collect::<Vec<_>>();
@@ -1429,7 +1438,7 @@ fn maximum_observation_subscription_density_is_paged_and_bounded() {
         ALICE,
         observation_schedule(feeds.clone()),
         None,
-        inert_execution_plan(),
+        inert_contract_steps(),
       );
     }
     assert_eq!(Actors::active_actor_count(), actor_count);
@@ -1461,7 +1470,7 @@ fn try_state_rejects_dirty_observation_list_drift() {
       ALICE,
       observation_schedule(vec![6]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::note_observation_changed(6, 1));
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -1483,7 +1492,7 @@ fn try_state_rejects_subscription_reverse_index_drift() {
       ALICE,
       observation_schedule(vec![7]),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(crate::Pallet::<Test>::do_try_state());
     crate::ActorObservationFeeds::<Test>::remove(actor_id);
@@ -1498,14 +1507,14 @@ fn actor_step_metadata_is_a_closed_linear_control_surface() {
     panic!("Step must remain a SCALE composite");
   };
   assert_eq!(definition.fields.len(), 3);
-  assert_eq!(definition.fields[0].name, Some("preconditions"));
+  assert_eq!(definition.fields[0].name, Some("precondition"));
   assert_eq!(definition.fields[1].name, Some("task"));
   assert_eq!(definition.fields[2].name, Some("on_error"));
   assert!(
     definition.fields[0]
       .type_name
       .unwrap_or_default()
-      .contains("Preconditions")
+      .contains("Option")
   );
   assert!(
     definition.fields[1]
@@ -1580,7 +1589,41 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 }
 
 #[test]
-fn actor_scale_variant_names_are_stable() {
+fn public_api_error_signatures_use_shared_typed_cores() {
+  let _: fn(ActorId) -> Result<ActorEligibilityProjection<u64>, ActorClassificationError> =
+    Actors::actor_eligibility;
+  let _: fn(
+    ActorId,
+    ActorType,
+    Mutability,
+    RuntimeContractInput,
+    SimulationMode,
+  ) -> Result<crate::SimulationResultOf<Test>, SimulationError> = Actors::simulate_current_contract;
+
+  let classification_cases = [
+    (
+      ActorClassificationError::ActorInvariant,
+      Error::<Test>::ActorInvariant,
+    ),
+    (
+      ActorClassificationError::ContinuationInvariant,
+      Error::<Test>::ContinuationInvariant,
+    ),
+    (
+      ActorClassificationError::ComputationOverflow,
+      Error::<Test>::ComputationOverflow,
+    ),
+  ];
+  for (core, dispatch) in classification_cases {
+    assert_eq!(
+      Actors::classification_dispatch_error(core).encode(),
+      dispatch.encode()
+    );
+  }
+}
+
+#[test]
+fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<RuntimeTask>(&[
     "Transfer",
     "SplitTransfer",
@@ -1615,9 +1658,8 @@ fn actor_scale_variant_names_are_stable() {
     "ObservationEquals",
     "ObservationNotEquals",
   ]);
-  assert_variant_names::<crate::PreconditionsOf<Test>>(&["Unconditional", "AnyOf"]);
   assert_variant_names::<ObservationTiming>(&["Opening", "Current"]);
-  assert_variant_names::<crate::PredicateEvaluation>(&["True", "False", "Invalid"]);
+  assert_variant_names::<crate::PredicateError>(&["InvalidObservation"]);
   assert_variant_names::<RuntimeSourceFilter>(&["Any", "OwnerOnly", "Whitelist"]);
   assert_variant_names::<RuntimeAssetFilter>(&["Any", "Whitelist"]);
   assert_variant_names::<RuntimeTriggerSource>(&[
@@ -1642,13 +1684,13 @@ fn actor_scale_variant_names_are_stable() {
   assert_variant_names::<RuntimeContractInput>(&["Dormant", "Active"]);
   assert_variant_names::<ActiveLifecycle>(&["Active", "Paused"]);
   assert_variant_names::<CycleState>(&["Idle", "Suspended"]);
-  assert_variant_names::<SimulationStatus>(&["Completed", "Failed", "Suspended", "Closed"]);
-  assert_variant_names::<SimulationStepOutcome>(&[
+  assert_variant_names::<AttemptDisposition>(&["Completed", "Failed", "Suspended", "Closed"]);
+  assert_variant_names::<StepOutcome>(&[
     "Executed",
-    "Skipped",
-    "Failed",
-    "Suspended",
     "Stopped",
+    "Skipped",
+    "FundingUnavailable",
+    "Failed",
   ]);
   assert_variant_names::<OpeningSurface<TestAsset>>(&[
     "PreservableAsset",
@@ -1676,10 +1718,9 @@ fn actor_scale_variant_names_are_stable() {
     "ScheduleChanged",
     "Deactivated",
     "Closing",
-    "RuntimeUpgrade",
   ]);
   assert_variant_names::<StepSkippedReason>(&[
-    "ConditionsNotMet",
+    "PreconditionFalse",
     "ResolutionSkipped",
     "FundingUnavailable",
   ]);
@@ -1691,6 +1732,39 @@ fn actor_scale_variant_names_are_stable() {
       "AnyVerifiedIngress",
     ],
   );
+  assert_variant_names::<crate::FundingProvenance>(&["Signed", "InternalProtocol", "Xcm"]);
+  assert_variant_names::<RetryClass>(&["Permanent", "Temporary"]);
+  assert_variant_names::<crate::ScalarObservationState<u64>>(&[
+    "Unavailable",
+    "Uninitialized",
+    "Fresh",
+    "Stale",
+  ]);
+  assert_variant_names::<ActorEligibilityPhase>(&[
+    "NotRegistered",
+    "Dormant",
+    "Ready",
+    "Paused",
+    "GlobalCircuitBreaker",
+    "CloseDue",
+    "WaitingSignal",
+    "WaitingRetry",
+    "WaitingTemporal",
+  ]);
+  assert_variant_names::<SimulationMode>(&["FreshCurrentPlan", "CurrentContinuation"]);
+  assert_variant_names::<SimulationError>(&[
+    "TransactionDepthExceeded",
+    "Classification",
+    "ActorNotFound",
+    "TypeMismatch",
+    "MutabilityMismatch",
+    "ContractMismatch",
+    "ModeCycleStateMismatch",
+    "GlobalCircuitBreaker",
+    "Paused",
+    "NotReady",
+    "FeeCollectionFailed",
+  ]);
 }
 
 #[test]
@@ -1743,7 +1817,7 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
 
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
@@ -1798,7 +1872,7 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
 fn wakeup_replacement_rolls_back_when_existing_cursor_is_corrupt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").cursor_index = Some(1);
@@ -1818,7 +1892,7 @@ fn wakeup_replacement_rolls_back_when_existing_cursor_is_corrupt() {
 fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     WakeupPages::<Test>::remove((10, 0));
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -1831,7 +1905,7 @@ fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
       maybe_hot
@@ -1855,7 +1929,7 @@ fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
 fn wakeup_replacement_rolls_back_on_live_count_underflow() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").live_entries = 0;
@@ -1879,7 +1953,7 @@ fn wakeup_cursor_capacity_overflow_fails_closed_and_preserves_existing_path() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     let pointer = Actors::actor_hot(actor_id)
@@ -1930,7 +2004,7 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     // Seed a bucket whose next_page_id is at the u64 ceiling; appending a new page
     // cannot advance the monotonic page index and must fail closed as
@@ -1945,7 +2019,7 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
         BOB,
         manual_schedule(),
         None,
-        transfer_execution_plan(CHARLIE, 1),
+        transfer_contract_steps(CHARLIE, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(extra, block));
     }
@@ -1963,7 +2037,7 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
       BOB,
       manual_schedule(),
       None,
-      transfer_execution_plan(CHARLIE, 1),
+      transfer_contract_steps(CHARLIE, 1),
     );
     assert!(matches!(
       crate::Pallet::<Test>::try_wakeup_substrate_schedule_inner(new_actor, block),
@@ -1985,7 +2059,7 @@ fn wakeup_bucket_corruption_fails_closed_as_corrupted_topology() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let block = 10u64;
     assert!(Actors::wakeup_substrate_schedule(actor_id, block));
@@ -2011,7 +2085,7 @@ fn wakeup_bucket_corruption_fails_closed_as_corrupted_topology() {
       BOB,
       manual_schedule(),
       None,
-      transfer_execution_plan(CHARLIE, 1),
+      transfer_contract_steps(CHARLIE, 1),
     );
     assert!(matches!(
       crate::Pallet::<Test>::try_wakeup_substrate_schedule_inner(new_actor, target),
@@ -2032,7 +2106,7 @@ fn saturated_enqueue_falls_back_to_exact_next_block_wakeup_not_silent_loss() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     // Saturate the canonical FIFO so ticket placement is impossible.
     seed_saturated_tombstone_queue();
@@ -2062,7 +2136,7 @@ fn saturated_enqueue_fails_closed_when_wakeup_fallback_also_fails() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     // Saturate the FIFO so enqueue falls back to the next-block wakeup, then
     // corrupt the target wakeup bucket so that fallback placement also fails.
@@ -2098,7 +2172,7 @@ fn manual_trigger_fails_closed_when_wakeup_fallback_cannot_preserve_readiness() 
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     // Saturate the FIFO so any ticket placement falls back to the next-block
     // wakeup, then corrupt that target bucket so the fallback also fails.
@@ -2155,7 +2229,7 @@ fn paged_wakeup_substrate_invalidation_rolls_back_on_cursor_mismatch() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     let pointer = Actors::actor_hot(actor_id)
@@ -2197,7 +2271,7 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
       actors.push(actor_id);
@@ -2267,7 +2341,7 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
       actors.push(actor_id);
@@ -2328,7 +2402,7 @@ fn paged_wakeup_drain_discards_stale_only_bucket() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
       ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
@@ -2365,13 +2439,13 @@ fn cursor_wakeup_drain_recovers_sparse_overdue_blocks_without_scanning_gaps() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let future = create_system_with(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(due, 10));
     assert!(Actors::wakeup_substrate_schedule(future, 1_000_000));
@@ -2419,7 +2493,7 @@ fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
       actors.push(actor_id);
@@ -2462,7 +2536,7 @@ fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     let required =
@@ -2504,7 +2578,7 @@ fn assert_on_idle_wakeup_insufficiency_preserves_state(wakeup_budget: Weight) {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     GlobalCircuitBreaker::<Test>::put(true);
@@ -2558,7 +2632,7 @@ fn wakeup_materialization_rolls_back_when_queue_ticket_is_exhausted() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     let hot_before = Actors::actor_hot(actor_id).expect("actor before wakeup materialization");
@@ -2581,7 +2655,7 @@ fn wakeup_materialization_rolls_back_when_queue_ticket_is_exhausted() {
 fn wakeup_materialization_rolls_back_on_fifo_topology_corruption() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     QueueTail::<Test>::put(1);
     QueueOccupancy::<Test>::put(0);
@@ -2617,7 +2691,7 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       assert!(Actors::wakeup_substrate_schedule(actor_id, block));
       assert!(Actors::wakeup_cursor_insert(block));
@@ -2900,9 +2974,9 @@ fn fresh_genesis_baseline_carries_no_migration_ceremony() {
 }
 
 #[test]
-fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
+fn continuation_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
   new_test_ext().execute_with(|| {
-    let mut execution_plan = BoundedVec::try_from(vec![
+    let mut contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -2914,8 +2988,8 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
       }),
     ])
     .expect("two-step plan fits");
-    execution_plan[0].on_error = RETRY_LATER;
-    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, execution_plan);
+    contract_steps[0].on_error = RETRY_LATER;
+    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
     let mut opening_snapshot: BoundedBTreeMap<
       OpeningSurface<TestAsset>,
       Balance,
@@ -2929,7 +3003,6 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
       .expect("staking snapshot fits");
     let continuation = RuntimeContinuationState {
       cursor: 0,
-      attempt: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
       opening_snapshot,
@@ -2944,7 +3017,6 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
     let decoded =
       RuntimeContinuationState::decode(&mut &encoded[..]).expect("continuation decodes");
     assert_eq!(decoded.cursor, 0);
-    assert_eq!(decoded.attempt, 0);
     assert_eq!(decoded.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(decoded.last_attempt_block, 1);
     assert_eq!(decoded.opening_snapshot.len(), 2);
@@ -2960,16 +3032,7 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("continuation exists")
-        .attempt,
-      0
-    );
-    ContinuationStateStore::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("continuation exists").attempt = 1;
-    });
-    assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("continuation exists")
-        .attempt,
+        .unsuccessful_attempts_at_cursor,
       1
     );
     #[cfg(feature = "try-runtime")]
@@ -2985,7 +3048,7 @@ fn ordinary_one_attempt_run_keeps_continuation_sparse() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_eq!(
       Actors::actor_hot(actor_id)
@@ -3020,7 +3083,7 @@ fn owner_slot_bitmap_try_state_rejects_invalid_and_orphaned_bits() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_ok!(crate::Pallet::<Test>::do_try_state());
     OwnerSlotBitmaps::<Test>::mutate(ALICE, |bitmap| bitmap[31] |= 0b1000_0000);
@@ -3036,14 +3099,13 @@ fn owner_slot_bitmap_try_state_rejects_invalid_and_orphaned_bits() {
 #[test]
 fn continuation_try_state_rejects_marker_and_cursor_drift() {
   new_test_ext().execute_with(|| {
-    let mut plan = transfer_execution_plan(BOB, 1);
+    let mut plan = transfer_contract_steps(BOB, 1);
     plan[0].on_error = RETRY_LATER;
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
     ContinuationStateStore::<Test>::insert(
       actor_id,
       RuntimeContinuationState {
         cursor: 0,
-        attempt: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
         opening_snapshot: Default::default(),
@@ -3155,7 +3217,7 @@ fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
 fn timed_all_conditions(
   timing: ObservationTiming,
   predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
-) -> crate::PreconditionsOf<Test> {
+) -> Option<crate::PreconditionOf<Test>> {
   let clause = BoundedVec::try_from(
     predicates
       .into_iter()
@@ -3163,18 +3225,20 @@ fn timed_all_conditions(
       .collect::<Vec<_>>(),
   )
   .expect("predicates fit");
-  Preconditions::AnyOf(BoundedVec::try_from(vec![clause]).expect("clause fits"))
+  Some(Precondition {
+    clauses: BoundedVec::try_from(vec![clause]).expect("clause fits"),
+  })
 }
 
 fn all_conditions(
   predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
-) -> crate::PreconditionsOf<Test> {
+) -> Option<crate::PreconditionOf<Test>> {
   timed_all_conditions(ObservationTiming::Current, predicates)
 }
 
 fn any_conditions(
   predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
-) -> crate::PreconditionsOf<Test> {
+) -> Option<crate::PreconditionOf<Test>> {
   let clauses = predicates
     .into_iter()
     .map(|predicate| {
@@ -3185,34 +3249,36 @@ fn any_conditions(
       .expect("predicate fits")
     })
     .collect::<Vec<_>>();
-  Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
+  Some(Precondition {
+    clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
+  })
 }
 
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Test> {
-    preconditions: Preconditions::Unconditional,
+    precondition: None,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
 }
 
-fn inert_execution_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
-  execution_plan_with_step(StepOf::<Test> {
-    preconditions: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
+fn inert_contract_steps() -> crate::ContractSteps<crate::mock::Test> {
+  contract_steps_with_step(StepOf::<Test> {
+    precondition: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
     task: Task::StopCycle,
     on_error: StepErrorPolicy::AbortCycle,
   })
 }
 
-fn execution_plan_with_step(step: RuntimeStep) -> crate::ExecutionPlanOf<crate::mock::Test> {
-  BoundedVec::try_from(vec![step]).expect("execution_plan must fit")
+fn contract_steps_with_step(step: RuntimeStep) -> crate::ContractSteps<crate::mock::Test> {
+  BoundedVec::try_from(vec![step]).expect("contract_steps must fit")
 }
 
-fn transfer_execution_plan(
+fn transfer_contract_steps(
   to: AccountId,
   amount: Balance,
-) -> crate::ExecutionPlanOf<crate::mock::Test> {
-  execution_plan_with_step(make_step(Task::Transfer {
+) -> crate::ContractSteps<crate::mock::Test> {
+  contract_steps_with_step(make_step(Task::Transfer {
     to,
     asset: TestAsset::Native,
     amount: AmountResolution::Fixed(amount),
@@ -3222,12 +3288,12 @@ fn transfer_execution_plan(
 fn user_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> crate::ContractInputOf<Test> {
   ContractInput::Active(ActiveContractInput {
     schedule,
     schedule_window,
-    steps: execution_plan,
+    steps: contract_steps,
     completion: crate::CompletionPolicy::Persistent,
     funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
@@ -3239,14 +3305,14 @@ fn create_user_with(
   mutability: Mutability,
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> u64 {
-  prefund_active_user_creation(owner, &execution_plan);
+  prefund_active_user_creation(owner, &contract_steps);
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_user_actor(
     RuntimeOrigin::signed(owner),
     mutability,
-    user_active_contract(schedule, schedule_window, execution_plan),
+    user_active_contract(schedule, schedule_window, contract_steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -3258,15 +3324,15 @@ fn create_user_with_slot(
   mutability: Mutability,
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> u64 {
-  prefund_user_sovereign(owner, owner_slot, &execution_plan);
+  prefund_user_sovereign(owner, owner_slot, &contract_steps);
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_user_actor_at_slot(
     RuntimeOrigin::signed(owner),
     owner_slot,
     mutability,
-    user_active_contract(schedule, schedule_window, execution_plan),
+    user_active_contract(schedule, schedule_window, contract_steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -3276,14 +3342,14 @@ fn create_system_with(
   owner: AccountId,
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> u64 {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
     RuntimeOrigin::root(),
     owner,
     Mutability::Mutable,
-    system_active_contract(schedule, schedule_window, execution_plan),
+    system_active_contract(schedule, schedule_window, contract_steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -3294,14 +3360,14 @@ fn create_system_with_mutability(
   mutability: Mutability,
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> u64 {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
     RuntimeOrigin::root(),
     owner,
     mutability,
-    system_active_contract(schedule, schedule_window, execution_plan),
+    system_active_contract(schedule, schedule_window, contract_steps),
   ));
   age_fixture_control_clock(id);
   id
@@ -3324,12 +3390,12 @@ fn age_fixture_control_clock(actor_id: ActorId) {
 fn system_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
 ) -> crate::ContractInputOf<Test> {
   system_active_contract_with_completion(
     schedule,
     schedule_window,
-    execution_plan,
+    contract_steps,
     crate::CompletionPolicy::Persistent,
   )
 }
@@ -3337,13 +3403,13 @@ fn system_active_contract(
 fn system_active_contract_with_completion(
   schedule: RuntimeSchedule,
   schedule_window: Option<crate::ScheduleWindow<u64>>,
-  execution_plan: crate::ExecutionPlanOf<crate::mock::Test>,
+  contract_steps: crate::ContractSteps<crate::mock::Test>,
   completion_policy: crate::CompletionPolicy,
 ) -> crate::ContractInputOf<Test> {
   ContractInput::Active(ActiveContractInput {
     schedule,
     schedule_window,
-    steps: execution_plan,
+    steps: contract_steps,
     completion: completion_policy,
     funding: FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
@@ -3390,9 +3456,9 @@ fn setup_pool(asset_a: TestAsset, asset_b: TestAsset, reserve_a: Balance, reserv
   crate::mock::set_pool_reserves(asset_a, asset_b, reserve_a, reserve_b);
 }
 
-fn temporary_retry_swap_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
+fn temporary_retry_swap_plan() -> crate::ContractSteps<crate::mock::Test> {
   BoundedVec::try_from(vec![StepOf::<Test> {
-    preconditions: Preconditions::Unconditional,
+    precondition: None,
     task: Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(77),
@@ -3436,7 +3502,7 @@ fn fund_native_raw(who: &AccountId, amount: Balance) {
 }
 
 /// User Active prefunding requirement: `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`.
-fn user_prefunding_requirement(plan: &crate::ExecutionPlanOf<crate::mock::Test>) -> Balance {
+fn user_prefunding_requirement(plan: &crate::ContractSteps<crate::mock::Test>) -> Balance {
   <Test as crate::Config>::MinUserBalance::get().saturating_add(
     Actors::attempt_fee_envelope(ActorType::User, plan, 0)
       .expect("fixture plan has a checked fee envelope")
@@ -3449,7 +3515,7 @@ fn user_prefunding_requirement(plan: &crate::ExecutionPlanOf<crate::mock::Test>)
 fn prefund_user_sovereign(
   owner: AccountId,
   slot: u8,
-  plan: &crate::ExecutionPlanOf<crate::mock::Test>,
+  plan: &crate::ContractSteps<crate::mock::Test>,
 ) {
   fund_native_raw(
     &Actors::sovereign_account_id(&owner, slot),
@@ -3458,10 +3524,7 @@ fn prefund_user_sovereign(
 }
 
 /// Pre-funds the next automatically allocated User slot for a direct Active creation fixture.
-fn prefund_active_user_creation(
-  owner: AccountId,
-  plan: &crate::ExecutionPlanOf<crate::mock::Test>,
-) {
+fn prefund_active_user_creation(owner: AccountId, plan: &crate::ContractSteps<crate::mock::Test>) {
   let slot = Actors::available_owner_slot(&owner, None).expect("fixture owner has a free slot");
   prefund_user_sovereign(owner, slot, plan);
 }
@@ -3542,7 +3605,7 @@ fn create_user_charges_creation_fee_and_emits_event() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let inst = Actors::active_actor_view(actor_id).expect("Actors must exist");
     assert_eq!(inst.actor_class, ActorClass::User { owner_slot: 0 });
@@ -3615,7 +3678,7 @@ fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InsufficientBalance
     );
@@ -3641,7 +3704,7 @@ fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
 fn user_active_creation_prefunding_boundary_is_exact_floor_plus_envelope() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = transfer_execution_plan(BOB, 1);
+    let plan = transfer_contract_steps(BOB, 1);
     let requirement = user_prefunding_requirement(&plan);
     // requirement - 1 still fails closed before any opening-fee mutation.
     fund_native_raw(
@@ -3681,7 +3744,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
       ContractInput::Dormant,
     ));
     let actor_id = Actors::next_actor_id() - 1;
-    let plan = transfer_execution_plan(BOB, 1);
+    let plan = transfer_contract_steps(BOB, 1);
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_noop!(
       Actors::activate_actor(
@@ -3719,7 +3782,7 @@ fn create_system_does_not_charge_creation_fee() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_eq!(native_balance(&ALICE), owner_before);
   });
@@ -3796,7 +3859,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
         actor_id,
         ContractInput::Dormant,
       ),
-      Error::<Test>::EmptyExecutionPlan
+      Error::<Test>::EmptyContractSteps
     );
     assert!(Actors::actor_identities(actor_id).is_some());
     assert_eq!(Actors::active_actor_count(), 0);
@@ -3807,7 +3870,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
         ContractInput::Active(ActiveContractInput {
           schedule: manual_schedule(),
           schedule_window: None,
-          steps: execution_plan_with_step(make_step(Task::Mint {
+          steps: contract_steps_with_step(make_step(Task::Mint {
             asset: TestAsset::Native,
             amount: AmountResolution::Fixed(1),
           })),
@@ -3827,7 +3890,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       ContractInput::Active(ActiveContractInput {
         schedule: manual_schedule(),
         schedule_window: None,
-        steps: transfer_execution_plan(BOB, 10),
+        steps: transfer_contract_steps(BOB, 10),
         completion: crate::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
@@ -3871,9 +3934,9 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
-    let system_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     fund_native(user_id, 1_000_000_000_000);
     fund_native(system_id, 100);
     for actor_id in [user_id, system_id] {
@@ -3913,17 +3976,17 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       user_id,
-      user_active_contract(manual_schedule(), None, inert_execution_plan()),
+      user_active_contract(manual_schedule(), None, inert_contract_steps()),
     ));
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       system_id,
-      system_active_contract(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_contract_steps()),
     ));
     for actor_id in [user_id, system_id] {
       let active = Actors::active_actor_view(actor_id).expect("reactivated actor");
       assert_eq!(active.cycle_nonce, 1);
-      assert_eq!(active.consecutive_failures, 0);
+      assert_eq!(active.unsuccessful_attempt_streak, 0);
       assert!(!active.pending_signal);
       assert!(actor_funding(actor_id).funding_accumulated.is_empty());
     }
@@ -3963,7 +4026,7 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
       ALICE,
       schedule.clone(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     // First run: nonce 0 -> 1, last_cycle_block = Some(1).
@@ -3994,7 +4057,7 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      system_active_contract(schedule, None, transfer_execution_plan(BOB, 10)),
+      system_active_contract(schedule, None, transfer_contract_steps(BOB, 10)),
     ));
     let instance = Actors::active_actor_view(actor_id).expect("reactivated");
     assert_eq!(instance.cycle_nonce, 1);
@@ -4199,19 +4262,19 @@ fn guaranteed_actor_service_rejects_housekeeping_underflow_in_each_dimension() {
 #[test]
 fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
   new_test_ext().execute_with(|| {
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let required = Actors::execution_plan_admission_weight_upper(ActorType::User, &execution_plan);
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let required = Actors::contract_steps_admission_weight_upper(ActorType::User, &contract_steps);
     let fixed = <TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1))
       .saturating_add(TestWakeupWeightLimit::get())
       .saturating_add(TestObservationFanoutWeightLimit::get());
     let gross_required = required.saturating_add(fixed);
     set_guaranteed_on_idle_weight(gross_required);
-    prefund_active_user_creation(ALICE, &execution_plan);
+    prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_contract(manual_schedule(), None, execution_plan.clone()),
+      user_active_contract(manual_schedule(), None, contract_steps.clone()),
     ));
     let owner_before = native_balance(&BOB);
     set_guaranteed_on_idle_weight(Weight::from_parts(
@@ -4222,9 +4285,9 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(BOB),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
-      Error::<Test>::ExecutionPlanExceedsOnIdleBudget
+      Error::<Test>::ContractStepsExceedOnIdleBudget
     );
     assert_eq!(native_balance(&BOB), owner_before);
   });
@@ -4234,7 +4297,7 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
 fn on_idle_never_consumes_above_the_runtime_reserve() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -4262,11 +4325,11 @@ fn plan_updates_reject_a_prospective_run_above_the_idle_budget() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let before = Actors::active_actor_view(actor_id).expect("Actors exists");
-    let replacement = transfer_execution_plan(BOB, 10);
-    let required = Actors::execution_plan_admission_weight_upper(ActorType::User, &replacement);
+    let replacement = transfer_contract_steps(BOB, 10);
+    let required = Actors::contract_steps_admission_weight_upper(ActorType::User, &replacement);
     set_guaranteed_on_idle_weight(Weight::from_parts(
       required.ref_time(),
       required.proof_size().saturating_sub(1),
@@ -4278,7 +4341,7 @@ fn plan_updates_reject_a_prospective_run_above_the_idle_budget() {
         replacement,
         crate::CompletionPolicy::Persistent,
       ),
-      Error::<Test>::ExecutionPlanExceedsOnIdleBudget
+      Error::<Test>::ContractStepsExceedOnIdleBudget
     );
     assert_eq!(Actors::active_actor_view(actor_id), Some(before));
   });
@@ -4412,9 +4475,9 @@ fn transfer_burn_and_mint_use_independent_weight_classes() {
 #[test]
 fn user_cycle_weight_includes_one_fee_collection_per_step() {
   new_test_ext().execute_with(|| {
-    let execution_plan = inert_execution_plan();
-    let system_weight = Actors::compute_cycle_weight_upper(ActorType::System, &execution_plan);
-    let user_weight = Actors::compute_cycle_weight_upper(ActorType::User, &execution_plan);
+    let contract_steps = inert_contract_steps();
+    let system_weight = Actors::compute_cycle_weight_upper(ActorType::System, &contract_steps);
+    let user_weight = Actors::compute_cycle_weight_upper(ActorType::User, &contract_steps);
     assert_eq!(
       user_weight,
       system_weight.saturating_add(<TestWeightInfo as crate::WeightInfo>::fee_collection())
@@ -4451,7 +4514,7 @@ fn generated_continuation_weights_cover_distinct_storage_paths() {
 }
 
 #[test]
-fn generated_condition_weight_scales_by_atomic_count_and_covers_both_modes() {
+fn generated_predicate_weight_scales_and_chunks_opening_plus_step_visits() {
   use crate::WeightInfo;
 
   let zero = <Test as crate::Config>::WeightInfo::predicate_set_evaluation(0);
@@ -4461,6 +4524,10 @@ fn generated_condition_weight_scales_by_atomic_count_and_covers_both_modes() {
   assert!(one.ref_time() > 0 && one.proof_size() > 0);
   assert!(maximum.ref_time() >= one.ref_time());
   assert!(maximum.proof_size() >= one.proof_size());
+  let doubled = Actors::predicate_evaluation_weight(8);
+  assert_eq!(doubled, maximum.saturating_mul(2));
+  assert!(doubled.ref_time() > maximum.ref_time());
+  assert!(doubled.proof_size() > maximum.proof_size());
   assert!(maximum.ref_time() >= 41_068_000);
   assert!(maximum.proof_size() >= 9_045);
 }
@@ -4474,7 +4541,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let initial = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(initial.actor_class.actor_type(), ActorType::User);
@@ -4542,14 +4609,14 @@ fn owner_slot_capacity_is_enforced() {
         Mutability::Mutable,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
     }
     assert_noop!(
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::OwnerSlotCapacityExceeded
     );
@@ -4565,14 +4632,14 @@ fn active_actor_capacity_is_enforced() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::create_system_actor(
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -4591,7 +4658,7 @@ fn active_contract_input_installs_and_validates_auto_close_target() {
       ContractInput::Active(ActiveContractInput {
         schedule: manual_schedule(),
         schedule_window: None,
-        steps: inert_execution_plan(),
+        steps: inert_contract_steps(),
         completion: crate::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: Some(2),
@@ -4613,7 +4680,7 @@ fn active_contract_input_installs_and_validates_auto_close_target() {
         ContractInput::Active(ActiveContractInput {
           schedule: manual_schedule(),
           schedule_window: None,
-          steps: inert_execution_plan(),
+          steps: inert_contract_steps(),
           completion: crate::CompletionPolicy::Persistent,
           funding: FundingSourcePolicy::RuntimePolicy,
           auto_close_at_cycle_nonce: Some(0),
@@ -4636,7 +4703,7 @@ fn system_actor_count_is_not_limited_by_owner_slots() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
       let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
       assert_eq!(
@@ -4665,7 +4732,7 @@ fn actor_class_separates_user_slots_from_system_actors() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_eq!(
       Actors::active_actor_view(user_id)
@@ -4678,7 +4745,7 @@ fn actor_class_separates_user_slots_from_system_actors() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let system = Actors::active_actor_view(system_id).expect("system Actors exists");
     assert_eq!(
@@ -4713,7 +4780,7 @@ fn system_sovereign_reattachment_creates_fresh_identity_with_same_custody() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let original_sovereign = sovereign_account(first_id);
     let _ = Balances::deposit_creating(&original_sovereign, 777);
@@ -4729,7 +4796,7 @@ fn system_sovereign_reattachment_creates_fresh_identity_with_same_custody() {
       first_id,
       ALICE,
       Mutability::Mutable,
-      system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+      system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
     ));
     let fresh = Actors::active_actor_view(fresh_id).expect("fresh System identity exists");
     assert_ne!(fresh_id, first_id);
@@ -4757,7 +4824,7 @@ fn system_sovereign_reattachment_accepts_dormant_contract_input() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let sovereign = sovereign_account(first_id);
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), first_id));
@@ -4790,7 +4857,7 @@ fn system_sovereign_reattachment_requires_allocated_vacant_locator() {
         42,
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::SystemSovereignUnknown
     );
@@ -4798,7 +4865,7 @@ fn system_sovereign_reattachment_requires_allocated_vacant_locator() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::create_system_actor_at_sovereign_id(
@@ -4806,7 +4873,7 @@ fn system_sovereign_reattachment_requires_allocated_vacant_locator() {
         occupied_id,
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::SystemSovereignOccupied
     );
@@ -4824,7 +4891,7 @@ fn fresh_system_creation_cannot_capture_a_vacant_locator() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), first_id));
     assert_eq!(
@@ -4836,7 +4903,7 @@ fn fresh_system_creation_cannot_capture_a_vacant_locator() {
       BOB,
       manual_schedule(),
       None,
-      transfer_execution_plan(CHARLIE, 1),
+      transfer_contract_steps(CHARLIE, 1),
     );
     assert_eq!(fresh_id, next_before);
     assert_ne!(fresh_id, first_id);
@@ -4890,14 +4957,14 @@ fn owner_slot_reused_after_close() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let id1 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let slot0 = Actors::active_actor_view(id0)
       .expect("id0 exists")
@@ -4917,7 +4984,7 @@ fn owner_slot_reused_after_close() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let slot2 = Actors::active_actor_view(id2)
       .expect("id2 exists")
@@ -4940,7 +5007,7 @@ fn create_user_at_slot_reuses_same_sovereign_after_close() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let first = Actors::active_actor_view(first_id).expect("first Actors exists");
     assert_eq!(first.actor_class.owner_slot(), Some(target_slot));
@@ -4955,7 +5022,7 @@ fn create_user_at_slot_reuses_same_sovereign_after_close() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let second = Actors::active_actor_view(second_id).expect("second Actors exists");
     assert_eq!(second.actor_class.owner_slot(), Some(target_slot));
@@ -4974,14 +5041,14 @@ fn create_user_at_slot_fails_when_requested_slot_is_occupied() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::create_user_actor_at_slot(
         RuntimeOrigin::signed(ALICE),
         target_slot,
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::OwnerSlotOccupied
     );
@@ -4998,7 +5065,7 @@ fn create_user_at_slot_fails_when_requested_slot_is_out_of_range() {
         RuntimeOrigin::signed(ALICE),
         invalid_slot,
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidOwnerSlot
     );
@@ -5016,7 +5083,7 @@ fn owner_slot_bitmap_covers_byte_boundaries_highest_slot_and_reuse() {
         Mutability::Mutable,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, 1),
+        transfer_contract_steps(BOB, 1),
       );
     }
     let highest = create_user_with_slot(
@@ -5025,7 +5092,7 @@ fn owner_slot_bitmap_covers_byte_boundaries_highest_slot_and_reuse() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let bitmap = Actors::owner_slot_bitmap(ALICE);
     assert_eq!(bitmap[0], 0b1000_0000);
@@ -5044,7 +5111,7 @@ fn owner_slot_bitmap_covers_byte_boundaries_highest_slot_and_reuse() {
         RuntimeOrigin::signed(ALICE),
         255,
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidOwnerSlot
     );
@@ -5059,7 +5126,7 @@ fn owner_slot_bitmap_covers_byte_boundaries_highest_slot_and_reuse() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_eq!(
       Actors::active_actor_view(replacement)
@@ -5080,7 +5147,7 @@ fn close_actor_emits_owner_initiated_reason() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_eq!(Actors::active_actor_count(), active_before + 1);
     frame_system::Pallet::<Test>::reset_events();
@@ -5115,14 +5182,14 @@ fn create_atomicity_checkpoint_failure_rolls_back_all_state() {
     let expected_sovereign = Actors::sovereign_account_id(&ALICE, 0);
     let owner_before = native_balance(&ALICE);
     let sink_before = native_balance(&TestFeeSink::get());
-    prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 1));
+    prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
     let events_before = System::events();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_noop!(
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
@@ -5147,18 +5214,18 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     crate::NextQueueTicket::<Test>::put(u64::MAX);
-    prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 1));
+    prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(0), Some(2));
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(1), Some(2));
   });
@@ -5172,12 +5239,12 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     ));
     let actor_id = Actors::next_actor_id() - 1;
     crate::NextQueueTicket::<Test>::put(u64::MAX);
-    prefund_user_sovereign(ALICE, 0, &transfer_execution_plan(BOB, 1));
+    prefund_user_sovereign(ALICE, 0, &transfer_contract_steps(BOB, 1));
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1)),
     ));
     assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
   });
@@ -5205,7 +5272,7 @@ fn address_ingress_reuses_existing_transaction_and_fails_closed_at_depth_limit()
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let available_depth =
       u32::from(polkadot_sdk::frame_support::storage::transactional::TRANSACTIONAL_LIMIT);
@@ -5220,7 +5287,7 @@ fn address_ingress_reuses_existing_transaction_and_fails_closed_at_depth_limit()
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let events_before = System::events();
@@ -5249,7 +5316,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -5275,7 +5342,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("failed actor remains below cutoff")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       1
     );
     assert!(has_actor_event(|event| matches!(
@@ -5297,7 +5364,7 @@ fn post_attempt_placement_failure_rolls_back_provisional_tasks_and_events() {
       ALICE,
       timer_schedule(1),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 100);
     crate::NextQueueTicket::<Test>::put(u64::MAX);
@@ -5345,7 +5412,7 @@ fn control_transition_reuses_existing_transaction_at_depth_limit() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
 
     assert_ok!(run_nested(
@@ -5362,7 +5429,7 @@ fn control_transition_reuses_existing_transaction_at_depth_limit() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let events_before = System::events();
@@ -5425,7 +5492,7 @@ fn continuation_control_placement_failures_roll_back_exactly() {
       update_contract_partial!(
         RuntimeOrigin::root(),
         actor_id,
-        inert_execution_plan(),
+        inert_contract_steps(),
         crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::QueueTicketExhausted
@@ -5470,7 +5537,7 @@ fn control_placement_failures_roll_back_state_and_events() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     crate::NextQueueTicket::<Test>::put(u64::MAX);
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -5499,7 +5566,7 @@ fn control_placement_failures_roll_back_state_and_events() {
       Mutability::Mutable,
       timer_schedule(1),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(Actors::wakeup_substrate_invalidate(actor_id).is_some());
@@ -5516,7 +5583,7 @@ fn control_placement_failures_roll_back_state_and_events() {
       Mutability::Mutable,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_invalidate(actor_id).is_some());
     crate::WakeupCursorLen::<Test>::put(
@@ -5549,7 +5616,7 @@ fn control_placement_failures_roll_back_state_and_events() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     crate::NextQueueTicket::<Test>::put(u64::MAX);
     assert_ok!(update_contract_partial!(
@@ -5579,7 +5646,7 @@ fn creation_subscription_failures_roll_back_exactly() {
       } else {
         Error::<Test>::ObservationSubscriptionCapacityExceeded
       };
-      prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 1));
+      prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
       let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       let events_before = System::events();
 
@@ -5590,7 +5657,7 @@ fn creation_subscription_failures_roll_back_exactly() {
           user_active_contract(
             observation_schedule(vec![1]),
             None,
-            transfer_execution_plan(BOB, 1),
+            transfer_contract_steps(BOB, 1),
           ),
         ),
         expected_error
@@ -5617,7 +5684,7 @@ fn creation_wakeup_failures_roll_back_exactly() {
         <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
       );
       let schedule = timer_schedule(if saturate_queue { 1 } else { 10 });
-      prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 1));
+      prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
       let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       let events_before = System::events();
 
@@ -5625,7 +5692,7 @@ fn creation_wakeup_failures_roll_back_exactly() {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           Mutability::Mutable,
-          user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+          user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
         ),
         Error::<Test>::SchedulerIndexExhausted
       );
@@ -5648,7 +5715,7 @@ fn deactivation_checkpoint_failure_rolls_back_state_and_event() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let events_before = System::events();
@@ -5685,7 +5752,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
         .as_ref()
         .expect("dormant identity exists")
         .sovereign_account,
-      user_prefunding_requirement(&transfer_execution_plan(BOB, 1)),
+      user_prefunding_requirement(&transfer_contract_steps(BOB, 1)),
     );
     let events_before = System::events();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -5695,7 +5762,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
@@ -5718,12 +5785,12 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
     let active_before = Actors::active_actor_count();
     let owner_before = native_balance(&ALICE);
     set_fail_fee_sink_transfer(true);
-    prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 1));
+    prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
     assert_noop!(
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InsufficientFee
     );
@@ -5763,7 +5830,7 @@ fn create_rejects_duplicate_trigger_sources() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5782,7 +5849,7 @@ fn create_rejects_empty_whitelist_filter() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5823,7 +5890,7 @@ fn create_rejects_empty_asset_whitelist_filter() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5845,7 +5912,7 @@ fn create_rejects_zero_cadence() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -5862,7 +5929,7 @@ fn create_rejects_timer_delay_above_max() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_execution_plan(BOB, 1)),
+        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::ExecutionDelayTooLong
     );
@@ -5884,7 +5951,7 @@ fn split_transfer_rejects_share_sum_above_one() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(100),
       legs,
@@ -5893,7 +5960,7 @@ fn split_transfer_rejects_share_sum_above_one() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::InvalidSplitTransfer
     );
@@ -5915,7 +5982,7 @@ fn split_transfer_rejects_duplicate_recipients() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(100),
       legs,
@@ -5924,7 +5991,7 @@ fn split_transfer_rejects_duplicate_recipients() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::InvalidSplitTransfer
     );
@@ -5969,12 +6036,12 @@ fn split_transfer_executes_and_remainder_is_retained() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(total),
       legs,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 1_000);
     let actor = sovereign_account(actor_id);
     let actor_before = native_balance(&actor);
@@ -6030,8 +6097,8 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       legs,
     });
     step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 1_000);
     let actor_before = asset_balance(&actor, asset);
@@ -6104,12 +6171,12 @@ fn split_transfer_late_leg_failure_rolls_back_every_leg() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(100),
       legs,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 1_000);
     let actor = sovereign_account(actor_id);
     let actor_before = native_balance(&actor);
@@ -6149,12 +6216,12 @@ fn all_zero_split_transfer_total_is_an_explicit_resolution_skip() {
       },
     ])
     .expect("legs fit");
-    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
       legs,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     let actor_before = native_balance(&actor);
     let bob_before = native_balance(&BOB);
@@ -6186,7 +6253,7 @@ fn split_transfer_rounding_skips_zero_distribution_and_allows_one_effective_leg(
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let make_plan = |amount, first_share, second_share| {
-      execution_plan_with_step(make_step(Task::SplitTransfer {
+      contract_steps_with_step(make_step(Task::SplitTransfer {
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(amount),
         legs: BoundedVec::try_from(vec![
@@ -6262,7 +6329,7 @@ fn on_address_event_owner_filter_is_enforced() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     let bob_before = native_balance(&BOB);
@@ -6297,7 +6364,7 @@ fn on_address_event_asset_filter_is_enforced() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     let bob_before = native_balance(&BOB);
@@ -6330,7 +6397,7 @@ fn on_address_event_without_source_is_ignored_for_owner_filter() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     let bob_before = native_balance(&BOB);
@@ -6353,7 +6420,7 @@ fn manual_trigger_clears_when_cycle_starts() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -6390,7 +6457,7 @@ fn manual_trigger_persists_across_pause_resume() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -6426,7 +6493,7 @@ fn user_pause_resume_churn_is_limited_to_one_queue_mutation_per_block() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -6468,7 +6535,7 @@ fn user_pause_resume_churn_is_limited_to_one_queue_mutation_per_block() {
 #[test]
 fn system_pause_resume_churn_is_limited_for_governance_and_owner_origins() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     frame_system::Pallet::<Test>::set_block_number(1);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -6510,7 +6577,7 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -6540,7 +6607,7 @@ fn checkpoint_a_s4_paused_head_uses_hot_only_admission() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -6577,7 +6644,7 @@ fn manual_trigger_rejects_address_and_observation_only_policies() {
         Mutability::Mutable,
         schedule,
         None,
-        transfer_execution_plan(BOB, 10),
+        transfer_contract_steps(BOB, 10),
       );
       assert_noop!(
         Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
@@ -6603,7 +6670,7 @@ fn manual_trigger_waits_through_cooldown_without_second_signal() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 2_000);
     assert_ok!(Actors::manual_trigger(
@@ -6649,7 +6716,7 @@ fn manual_trigger_waits_for_schedule_window_without_second_signal() {
         start: 10,
         end: 110,
       }),
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -6687,7 +6754,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 2_000);
     assert_ok!(Actors::notify_address_event(
@@ -6733,7 +6800,7 @@ fn manual_trigger_is_preserved_on_weight_defer() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -6763,7 +6830,7 @@ fn manual_trigger_is_preserved_on_proof_size_defer() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(task)),
+      contract_steps_with_step(make_step(task)),
     );
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
@@ -6792,7 +6859,7 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -6838,7 +6905,7 @@ fn weight_deferral_is_silent_when_both_dimensions_are_exhausted() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
@@ -6875,7 +6942,7 @@ fn weight_deferral_is_silent_when_both_dimensions_are_exhausted() {
 fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -6907,13 +6974,13 @@ fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
 fn cycle_closes_with_fee_budget_exhausted_when_unfunded() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 10));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, TestMinUserBalance::get());
@@ -6939,13 +7006,13 @@ fn cycle_closes_with_fee_budget_exhausted_when_unfunded() {
 fn balance_exhausted_takes_precedence_over_fee_budget_exhausted() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 10));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, TestMinUserBalance::get() - 1);
@@ -6971,13 +7038,13 @@ fn balance_exhausted_takes_precedence_over_fee_budget_exhausted() {
 fn fee_insufficiency_is_terminal_without_deferral_guard() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 10));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, TestMinUserBalance::get());
@@ -6995,7 +7062,7 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
       }]),
@@ -7011,7 +7078,7 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 1_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -7056,7 +7123,7 @@ fn combined_step_fee_route_failure_aborts_before_task_execution() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(task.clone())),
+      contract_steps_with_step(make_step(task.clone())),
     );
     fund_native(actor_id, 1_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -7091,9 +7158,12 @@ fn combined_step_fee_route_failure_aborts_before_task_execution() {
 fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     ActorHot::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("active actor").consecutive_failures = 1;
+      maybe
+        .as_mut()
+        .expect("active actor")
+        .unsuccessful_attempt_streak = 1;
     });
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -7103,7 +7173,7 @@ fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("completed actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
   });
@@ -7111,8 +7181,8 @@ fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -7132,7 +7202,7 @@ fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("failed actor remains below cutoff")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       1
     );
   });
@@ -7142,19 +7212,19 @@ fn completed_failed_and_suspended_attempts_update_failure_streak_once() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("suspended actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       1
     );
   });
 }
 
 #[test]
-fn consecutive_failures_close_actor_at_inclusive_threshold() {
+fn unsuccessful_attempt_streak_closes_actor_at_inclusive_threshold() {
   new_test_ext().execute_with(|| {
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -7167,7 +7237,7 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(failing_step),
+      contract_steps_with_step(failing_step),
     );
     fund_native(actor_id, 100);
     for cycle in 1..=threshold {
@@ -7178,7 +7248,7 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
       run_idle(Weight::MAX);
       if cycle < threshold {
         let inst = Actors::active_actor_view(actor_id).expect("actor remains before threshold");
-        assert_eq!(inst.consecutive_failures, cycle);
+        assert_eq!(inst.unsuccessful_attempt_streak, cycle);
         frame_system::Pallet::<Test>::set_block_number((cycle + 1) as u64);
       }
     }
@@ -7237,7 +7307,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -7254,7 +7324,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
       system_active_contract(
         timer_schedule(1),
         None,
-        execution_plan_with_step(failing_step)
+        contract_steps_with_step(failing_step)
       ),
     ));
     assert_noop!(
@@ -7270,7 +7340,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
         assert_eq!(
           Actors::active_actor_view(actor_id)
             .expect("actor remains before threshold")
-            .consecutive_failures,
+            .unsuccessful_attempt_streak,
           cycle
         );
       }
@@ -7291,7 +7361,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
       actor_id,
       ALICE,
       Mutability::Mutable,
-      system_active_contract(timer_schedule(1), None, transfer_execution_plan(BOB, 1)),
+      system_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1)),
     ));
     assert!(Actors::active_actor_view(fresh_id).is_some());
     assert!(has_actor_event(|event| {
@@ -7307,7 +7377,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
 }
 
 #[test]
-fn system_class_not_starved_by_many_user_actors() {
+fn global_fifo_eventually_services_system_actor_after_many_users() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let user_count = 32u32;
@@ -7322,11 +7392,11 @@ fn system_class_not_starved_by_many_user_actors() {
         Mutability::Mutable,
         timer_schedule(1),
         None,
-        inert_execution_plan(),
+        inert_contract_steps(),
       );
       fund_native(user_id, 1_000);
     }
-    let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_execution_plan());
+    let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     // With MaxExecutionsPerBlock=3 and mixed User/System contention,
     // run enough blocks for the bounded queue to service the System actor.
     for block in 2..=20 {
@@ -7343,10 +7413,10 @@ fn system_class_not_starved_by_many_user_actors() {
 }
 
 #[test]
-fn scheduler_falls_back_to_non_empty_class_when_preferred_queue_is_empty() {
+fn global_fifo_services_system_actor_when_it_is_the_only_ready_work() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_execution_plan());
+    let system_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     for block in 2..=4 {
       frame_system::Pallet::<Test>::set_block_number(block);
       run_idle(Weight::MAX);
@@ -7364,7 +7434,7 @@ fn execute_cycle_respects_max_executions_per_block() {
     let total = max_exec + 2;
     let mut ids = Vec::new();
     for _ in 0..total {
-      let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       ids.push(id);
       assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
     }
@@ -7405,7 +7475,7 @@ fn wakeup_drain_respects_max_wakeups_per_block() {
     let total = max_wakeups + 5;
     let mut ids = Vec::new();
     for _ in 0..total {
-      let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       ids.push(id);
     }
     for actor_id in ids {
@@ -7423,7 +7493,7 @@ fn wakeup_drain_respects_max_wakeups_per_block() {
 fn wakeup_worker_stops_at_its_own_weight_envelope_without_lending() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 1));
     // The shared on_idle meter has far more than the wakeup worker's dedicated envelope; the
     // worker must stop at its own ceiling and leave the surplus for actor service (spec 8.4.5).
@@ -7454,7 +7524,7 @@ fn wakeup_worker_stops_at_its_own_weight_envelope_without_lending() {
 fn wakeup_drain_preserves_bucket_when_proof_budget_cannot_admit_it() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 1));
     run_idle(Weight::from_parts(u64::MAX, 300));
     assert_eq!(
@@ -7472,7 +7542,7 @@ fn wakeup_drain_preserves_bucket_when_proof_budget_cannot_admit_it() {
 fn wakeup_drain_stops_at_the_sparse_future_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(10_000);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 1_000_000));
     run_idle(Weight::MAX);
     assert_eq!(Actors::wakeup_cursor_peek(), Some(1_000_000));
@@ -7486,7 +7556,7 @@ fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let total = <<Test as crate::Config>::QueuePageSize as Get<u32>>::get() + 7;
     for _ in 0..total {
-      let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
     }
     assert_eq!(
@@ -7501,7 +7571,7 @@ fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
 fn tombstone_drain_rolls_back_on_occupancy_underflow() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(actor_id));
     assert_eq!(Actors::paged_invalidate(actor_id), Some(0));
     QueueOccupancy::<Test>::put(0);
@@ -7522,7 +7592,7 @@ fn tombstone_drain_rolls_back_on_cross_page_corruption() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let page_size = <Test as crate::Config>::QueuePageSize::get();
     for _ in 0..=page_size {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       assert!(Actors::paged_invalidate(actor_id).is_some());
     }
@@ -7546,7 +7616,7 @@ fn tombstone_drain_rolls_back_on_cross_page_corruption() {
 fn tombstone_drain_missing_current_page_is_blocked_without_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(actor_id));
     assert!(Actors::paged_invalidate(actor_id).is_some());
     QueuePages::<Test>::remove(0);
@@ -7564,7 +7634,7 @@ fn tombstone_drain_missing_current_page_is_blocked_without_mutation() {
 fn enqueue_rolls_back_on_span_occupancy_mismatch() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     QueueTail::<Test>::put(1);
     QueueOccupancy::<Test>::put(0);
     let events_before = System::events();
@@ -7590,11 +7660,11 @@ fn enqueue_rolls_back_on_missing_or_malformed_tail_page() {
       frame_system::Pallet::<Test>::set_block_number(1);
       let mut actors = Vec::new();
       for _ in 0..33 {
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
         assert!(Actors::paged_enqueue(actor_id));
         actors.push(actor_id);
       }
-      let candidate = create_system_with(BOB, manual_schedule(), None, inert_execution_plan());
+      let candidate = create_system_with(BOB, manual_schedule(), None, inert_contract_steps());
       if malformed {
         QueuePages::<Test>::mutate(1, |maybe_page| {
           maybe_page
@@ -7632,7 +7702,7 @@ fn live_head_consume_rolls_back_on_occupancy_or_span_corruption() {
   for (tail, occupancy) in [(1u64, 0u32), (2u64, 1u32)] {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       QueueTail::<Test>::put(tail);
       QueueOccupancy::<Test>::put(occupancy);
@@ -7662,7 +7732,7 @@ fn live_head_consume_rolls_back_on_missing_or_malformed_head_page() {
   for malformed in [false, true] {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       if malformed {
         QueuePages::<Test>::insert(0, BoundedVec::default());
@@ -7696,7 +7766,7 @@ fn physical_occupancy_counts_tombstones_until_drained() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut actors = Vec::new();
     for _ in 0..5 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       actors.push(actor_id);
     }
@@ -7728,7 +7798,7 @@ fn physical_occupancy_counts_tombstones_until_drained() {
 fn paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
 
     assert!(Actors::paged_enqueue(actor_id));
     assert!(Actors::paged_enqueue(actor_id));
@@ -7790,7 +7860,7 @@ fn paged_queue_crosses_and_reclaims_page_boundaries_without_prefix_rewrites() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut actors = Vec::new();
     for _ in 0..33 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       actors.push(actor_id);
     }
@@ -7834,8 +7904,8 @@ fn paged_queue_crosses_and_reclaims_page_boundaries_without_prefix_rewrites() {
 fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let actor_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_a = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let actor_b = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(actor_a));
     assert_eq!(Actors::paged_invalidate(actor_a), Some(0));
     assert!(Actors::paged_enqueue(actor_b));
@@ -7893,7 +7963,7 @@ fn paged_tombstone_drain_is_scan_bounded_and_reclaims_multiple_pages() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut actors = Vec::new();
     for _ in 0..65 {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(actor_id));
       actors.push(actor_id);
     }
@@ -7928,7 +7998,7 @@ fn paged_tombstone_drain_is_scan_bounded_and_reclaims_multiple_pages() {
 fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_work() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let page_size = <<Test as crate::Config>::QueuePageSize as Get<u32>>::get();
     let capacity = <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get();
     for page_id in 0..capacity.div_ceil(page_size) {
@@ -8001,7 +8071,7 @@ fn queue_ticket_exhaustion_fails_closed_through_the_public_error() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     // Monotonic ticket namespace at the ceiling: the next enqueue must fail closed
@@ -8024,7 +8094,7 @@ fn scheduler_index_exhaustion_fails_closed_when_tail_cannot_advance() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     // Tail at the u64 ceiling: the next placement cannot advance the monotonic
@@ -8051,7 +8121,7 @@ fn system_locator_corruption_surfaces_one_invariant_error_on_close() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     // Corrupt the locator truth: the live actor's entry no longer points at it.
     crate::SystemSovereigns::<Test>::insert(actor_id, SystemSovereignState::Vacant);
@@ -8070,7 +8140,7 @@ fn typed_ingress_preflight_and_notify_classify_exhaustion_as_permanent() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let sovereign = sovereign_account(actor_id);
     let event = crate::AddressEvent {
@@ -8116,7 +8186,7 @@ fn typed_ingress_notify_classifies_wakeup_capacity_as_temporary() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let sovereign = sovereign_account(actor_id);
     let event = crate::AddressEvent {
@@ -8157,7 +8227,7 @@ fn typed_ingress_zero_movement_creates_no_ingress() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let sovereign = sovereign_account(actor_id);
     let event = crate::AddressEvent {
@@ -8211,7 +8281,7 @@ fn stale_close_entry_drains_as_tombstone_before_recreated_slot_runs() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(first, 1_000_000_000_000_000);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), first));
@@ -8232,7 +8302,7 @@ fn stale_close_entry_drains_as_tombstone_before_recreated_slot_runs() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(second, 1_000_000_000_000_000);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), second));
@@ -8272,10 +8342,10 @@ fn stale_close_entry_drains_as_tombstone_before_recreated_slot_runs() {
 fn paged_tombstone_drain_stops_at_live_head_and_honors_cutoff() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let stale = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let live = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let stale = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let live = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let appended_after_cutoff =
-      create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(stale));
     assert!(Actors::paged_enqueue(live));
     let cutoff = Actors::queue_tail();
@@ -8314,7 +8384,7 @@ fn paged_scheduler_preserves_the_unexecuted_fifo_suffix() {
     let total = max_exec + 2;
     let mut ids = Vec::new();
     for _ in 0..total {
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       ids.push(actor_id);
       assert_ok!(Actors::manual_trigger(
         RuntimeOrigin::signed(ALICE),
@@ -8354,14 +8424,14 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(light_a, 10_000);
     let light_b = create_system_with(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(light_b, 10_000);
     for actor_id in [head, light_a, light_b] {
@@ -8447,7 +8517,7 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
 fn paged_wakeup_uses_the_exact_requested_block_without_spillover() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     seed_saturated_tombstone_queue();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -8472,7 +8542,7 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000_000_000_000_000);
     // Two manual triggers in the same block latch one pending_signal and one FIFO ticket;
@@ -8524,7 +8594,7 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
 fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     seed_saturated_tombstone_queue();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -8549,14 +8619,11 @@ fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
 fn schedule_anchor_is_the_canonical_initial_timer_anchor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(7);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(instance.schedule_anchor, 7);
     assert_eq!(instance.last_cycle_block, None);
-    assert_eq!(
-      scheduled_wakeup_block(actor_id),
-      Some(7 + Actors::cadence_phase_blocks(actor_id, 20)),
-    );
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(27));
   });
 }
 
@@ -8578,20 +8645,17 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
       ContractInput::Active(ActiveContractInput {
         schedule: timer_schedule(20),
         schedule_window: None,
-        steps: inert_execution_plan(),
+        steps: inert_contract_steps(),
         completion: crate::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       }),
     ));
     let instance = Actors::active_actor_view(actor_id).expect("active Actors exists");
-    // Activation anchors the fresh epoch at block 10; phase shifts the cadence grid once.
+    // Activation anchors the fresh epoch at block 10; the first gate is one exact cadence later.
     assert_eq!(instance.schedule_anchor, 10);
     assert_eq!(instance.last_cycle_block, None);
-    assert_eq!(
-      scheduled_wakeup_block(actor_id),
-      Some(10 + Actors::cadence_phase_blocks(actor_id, 20)),
-    );
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(30));
   });
 }
 
@@ -8599,7 +8663,7 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
 fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let initial_block = scheduled_wakeup_block(actor_id).expect("timer wakeup should be scheduled");
     assert_eq!(scheduled_wakeup_block(actor_id), Some(initial_block));
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -8620,7 +8684,7 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
 fn cadence_update_rolls_back_exactly_when_existing_wakeup_cursor_is_corrupt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let initial_block = scheduled_wakeup_block(actor_id).expect("initial wakeup");
     WakeupBuckets::<Test>::mutate(initial_block, |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").cursor_index = None;
@@ -8658,7 +8722,7 @@ fn ticket_and_terminal_window_wakeup_coexist_under_one_pointer() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -8702,7 +8766,7 @@ fn temporal_membership_try_state_rejects_terminal_at_drift() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(
       Actors::actor_hot(actor_id).expect("hot").terminal_at,
@@ -8743,7 +8807,7 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     #[cfg(feature = "try-runtime")]
@@ -8778,8 +8842,8 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
 fn temporal_membership_try_state_rejects_page_slot_pointing_at_different_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let other = create_system_with(BOB, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let other = create_system_with(BOB, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     assert!(Actors::wakeup_substrate_schedule(other, 10));
     // A physical slot whose entry addresses an actor that owns a different pointer is
@@ -8800,7 +8864,7 @@ fn temporal_membership_try_state_rejects_page_slot_pointing_at_different_actor()
 fn temporal_membership_try_state_accepts_lazy_wakeup_tombstones() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let scheduled_block = scheduled_wakeup_block(actor_id).expect("timer wakeup scheduled");
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
     // Lazy terminal cleanup leaves a stale physical wakeup entry behind; the entry carries no
@@ -8828,7 +8892,7 @@ fn temporal_membership_try_state_accepts_earlier_due_ordinary_pointer() {
       ALICE,
       timer_schedule(20),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let hot = Actors::actor_hot(actor_id).expect("hot");
     let pointer = hot.wakeup_pointer.expect("cadence wakeup");
@@ -8850,7 +8914,7 @@ fn temporal_membership_try_state_accepts_live_ticket_with_forward_pointer() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -8891,7 +8955,7 @@ fn terminal_membership_rolls_back_atomically_with_failed_schedule_replacement() 
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     // Corrupt the existing wakeup cursor so the replacement placement must roll back; the
     // terminal membership update and the whole control transaction revert together.
@@ -8929,7 +8993,7 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     seed_saturated_tombstone_queue();
@@ -8956,7 +9020,7 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
 fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let scheduled_block =
       scheduled_wakeup_block(actor_id).expect("timer wakeup should be scheduled");
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -8983,7 +9047,7 @@ fn repeated_timer_close_churn_converges_lazy_wakeup_tombstones() {
     let mut actors = Vec::new();
     let mut latest_wakeup = 1u64;
     for _ in 0..total {
-      let actor_id = create_system_with(ALICE, timer_schedule(4_000), None, inert_execution_plan());
+      let actor_id = create_system_with(ALICE, timer_schedule(4_000), None, inert_contract_steps());
       let wakeup = scheduled_wakeup_block(actor_id).expect("timer wakeup must be scheduled");
       latest_wakeup = latest_wakeup.max(wakeup);
       actors.push(actor_id);
@@ -9021,7 +9085,7 @@ fn window_expiry_wakeup_closes_inactive_actor_without_identity_scan() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     NextActorId::<Test>::put(10_000_000);
@@ -9128,7 +9192,7 @@ fn paused_actor_retains_direct_window_expiry_wakeup() {
       Mutability::Mutable,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -9147,7 +9211,7 @@ fn absent_schedule_window_never_expires() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     frame_system::Pallet::<Test>::set_block_number(u64::MAX);
     let instance = Actors::active_actor_view(actor_id).expect("actor remains live");
@@ -9165,7 +9229,7 @@ fn expired_ingress_remains_balance_only_and_closes_inline() {
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       Some(window),
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -9204,7 +9268,7 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
       Mutability::Mutable,
       manual_schedule(),
       Some(window),
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::permissionless_sweep(
@@ -9228,7 +9292,7 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
 fn retry_later_is_mutable_only_at_creation_and_update() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let mut retry_plan = transfer_execution_plan(BOB, 1);
+    let mut retry_plan = transfer_contract_steps(BOB, 1);
     retry_plan[0].on_error = RETRY_LATER;
 
     assert_noop!(
@@ -9261,7 +9325,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
       Mutability::Immutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(ALICE, 1),
+      transfer_contract_steps(ALICE, 1),
     );
     assert_noop!(
       update_contract_partial!(
@@ -9279,7 +9343,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
 fn retry_later_enforces_the_protocol_fixed_attempt_range() {
   new_test_ext().execute_with(|| {
     for max_attempts in [0, 1, 11] {
-      let mut plan = transfer_execution_plan(BOB, 1);
+      let mut plan = transfer_contract_steps(BOB, 1);
       plan[0].on_error = StepErrorPolicy::RetryLater { max_attempts };
       assert_noop!(
         Actors::create_user_actor(
@@ -9291,7 +9355,7 @@ fn retry_later_enforces_the_protocol_fixed_attempt_range() {
       );
     }
     for max_attempts in [2, 10] {
-      let mut valid_plan = transfer_execution_plan(BOB, 1);
+      let mut valid_plan = transfer_contract_steps(BOB, 1);
       valid_plan[0].on_error = StepErrorPolicy::RetryLater { max_attempts };
       prefund_active_user_creation(ALICE, &valid_plan);
       assert_ok!(Actors::create_user_actor(
@@ -9308,7 +9372,7 @@ fn retry_later_aborts_permanent_failure_without_executing_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9339,7 +9403,7 @@ fn retry_later_aborts_permanent_failure_without_executing_suffix() {
 
     let instance = Actors::active_actor_view(actor_id).expect("actor remains active");
     assert_eq!(instance.cycle_nonce, 1);
-    assert_eq!(instance.consecutive_failures, 1);
+    assert_eq!(instance.unsuccessful_attempt_streak, 1);
     assert_eq!(instance.cycle_state, CycleState::Idle);
     assert!(Actors::continuation_state(actor_id).is_none());
     assert_eq!(native_balance(&CHARLIE), charlie_before);
@@ -9363,7 +9427,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9372,7 +9436,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       },
       on_error: RETRY_LATER,
     };
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9386,7 +9450,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       }),
     ])
     .expect("three steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
@@ -9402,9 +9466,9 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     let first_continuation = Actors::continuation_state(actor_id).expect("continuation exists");
     assert_eq!(first.cycle_state, CycleState::Suspended);
     assert_eq!(first.cycle_nonce, 1);
-    assert_eq!(first.consecutive_failures, 1);
+    assert_eq!(first.unsuccessful_attempt_streak, 1);
     assert_eq!(first_continuation.cursor, 1);
-    assert_eq!(first_continuation.attempt, 0);
+    assert_eq!(first_continuation.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(first_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(first_continuation.cumulative_outcomes.failed_steps, 1);
     assert_eq!(native_balance(&BOB), bob_before + 10);
@@ -9420,7 +9484,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     run_idle(Weight::MAX);
     let second_continuation = Actors::continuation_state(actor_id).expect("continuation remains");
     assert_eq!(second_continuation.cursor, 1);
-    assert_eq!(second_continuation.attempt, 1);
+    assert_eq!(second_continuation.unsuccessful_attempts_at_cursor, 2);
     assert_eq!(second_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(second_continuation.cumulative_outcomes.failed_steps, 2);
     assert_eq!(native_balance(&BOB), bob_before + 10);
@@ -9433,7 +9497,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     let completed = Actors::active_actor_view(actor_id).expect("completed actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
     assert_eq!(completed.cycle_nonce, 1);
-    assert_eq!(completed.consecutive_failures, 0);
+    assert_eq!(completed.unsuccessful_attempt_streak, 0);
     assert!(Actors::continuation_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 5);
@@ -9465,14 +9529,14 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
 fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::StopCycle,
         on_error: RETRY_LATER,
       },
@@ -9483,7 +9547,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
       }),
     ])
     .expect("three steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
@@ -9497,7 +9561,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
     let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
     assert_eq!(actor.cycle_state, CycleState::Idle);
     assert_eq!(actor.cycle_nonce, 1);
-    assert_eq!(actor.consecutive_failures, 0);
+    assert_eq!(actor.unsuccessful_attempt_streak, 0);
     assert!(Actors::continuation_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
@@ -9525,14 +9589,14 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let stop = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1_000,
       }]),
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       stop,
       make_step(Task::Transfer {
         to: BOB,
@@ -9541,7 +9605,7 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
       }),
     ])
     .expect("two steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
 
@@ -9560,7 +9624,7 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
       event,
       Event::CycleSummary {
         actor_id: id,
-        outcomes: OutcomeTotals { executed_steps: 1, skipped_conditions: 1, failed_steps: 0, .. },
+        outcomes: OutcomeTotals { executed_steps: 1, precondition_skips: 1, failed_steps: 0, .. },
         ..
       } if *id == actor_id
     )));
@@ -9572,7 +9636,7 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -9591,7 +9655,7 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
       system_active_contract_with_completion(
         timer_schedule(1),
         None,
-        execution_plan_with_step(step),
+        contract_steps_with_step(step),
         crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
@@ -9655,7 +9719,7 @@ fn close_after_productive_cycle_rechecks_latest_observation_before_execution() {
       },
     );
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::ObservationBelow {
+      precondition: all_conditions(vec![Predicate::ObservationBelow {
         feed,
         threshold: 100,
         max_age_blocks: 10,
@@ -9675,7 +9739,7 @@ fn close_after_productive_cycle_rechecks_latest_observation_before_execution() {
       system_active_contract_with_completion(
         observation_schedule(vec![feed]),
         None,
-        execution_plan_with_step(step),
+        contract_steps_with_step(step),
         crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
@@ -9724,7 +9788,7 @@ fn close_after_productive_cycle_does_not_treat_stop_cycle_as_effectful() {
       system_active_contract_with_completion(
         manual_schedule(),
         None,
-        execution_plan_with_step(make_step(Task::StopCycle)),
+        contract_steps_with_step(make_step(Task::StopCycle)),
         crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
@@ -9806,7 +9870,7 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let retry_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -9823,7 +9887,7 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
       system_active_contract_with_completion(
         manual_schedule(),
         None,
-        execution_plan_with_step(retry_step),
+        contract_steps_with_step(retry_step),
         crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
     ));
@@ -9865,7 +9929,7 @@ fn stop_cycle_runs_normal_auto_close_after_the_summary() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::StopCycle)),
+      contract_steps_with_step(make_step(Task::StopCycle)),
     );
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::root(),
@@ -9910,7 +9974,7 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::StopCycle)),
+      contract_steps_with_step(make_step(Task::StopCycle)),
     );
     fund_native(actor_id, 100_000);
     let sink_before = native_balance(&TestFeeSink::get());
@@ -9933,7 +9997,7 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains active")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
@@ -9967,7 +10031,7 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("successful actor remains active")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
   });
@@ -9977,7 +10041,7 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
 fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::StopCycle),
       make_step(Task::Transfer {
         to: BOB,
@@ -9986,8 +10050,8 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
       }),
     ])
     .expect("two steps fit");
-    let contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -10004,13 +10068,13 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
     )
     .expect("ready current plan simulates");
 
-    assert_eq!(result.status, SimulationStatus::Completed);
+    assert_eq!(result.status, AttemptDisposition::Completed);
     assert_eq!(result.cumulative_outcomes.executed_steps, 1);
     assert_eq!(
       result.steps,
       vec![SimulationStepRecord {
         step_index: 0,
-        outcome: SimulationStepOutcome::Stopped,
+        outcome: StepOutcome::Stopped,
       }]
     );
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
@@ -10023,15 +10087,15 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
 fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let contract = user_active_contract(manual_schedule(), None, execution_plan.clone());
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone());
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     assert_ok!(Actors::manual_trigger(
@@ -10063,7 +10127,7 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
     .expect("terminal viability projects as a closed simulation");
     assert_eq!(
       result.status,
-      SimulationStatus::Closed(CloseReason::FeeBudgetExhausted)
+      AttemptDisposition::Closed(CloseReason::FeeBudgetExhausted)
     );
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
     assert_eq!(System::events(), events_before);
@@ -10084,14 +10148,14 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
 fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let contract = user_active_contract(manual_schedule(), None, execution_plan.clone());
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone());
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     fund_native(actor_id, 100_000);
     assert_ok!(Actors::manual_trigger(
@@ -10127,14 +10191,14 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -10151,7 +10215,7 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
       }),
     ])
     .expect("four steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
@@ -10176,7 +10240,7 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
 
     let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
     assert_eq!(actor.cycle_state, CycleState::Idle);
-    assert_eq!(actor.consecutive_failures, 0);
+    assert_eq!(actor.unsuccessful_attempt_streak, 0);
     assert!(Actors::continuation_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
@@ -10206,7 +10270,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10241,7 +10305,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
 
     let completed = Actors::active_actor_view(actor_id).expect("actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
-    assert_eq!(completed.consecutive_failures, 0);
+    assert_eq!(completed.unsuccessful_attempt_streak, 0);
     assert!(Actors::continuation_state(actor_id).is_none());
     assert_eq!(native_balance(&CHARLIE), charlie_before + 1);
     assert!(has_actor_event(|event| {
@@ -10261,9 +10325,9 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
 fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let mut execution_plan = transfer_execution_plan(BOB, 50);
-    execution_plan[0].on_error = RETRY_LATER;
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let mut contract_steps = transfer_contract_steps(BOB, 50);
+    contract_steps[0].on_error = RETRY_LATER;
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     let bob_before = native_balance(&BOB);
 
@@ -10274,12 +10338,11 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
     run_idle(Weight::MAX);
     let suspended = Actors::continuation_state(actor_id).expect("funding retry persists");
     assert_eq!(suspended.cursor, 0);
-    assert_eq!(suspended.attempt, 0);
     assert_eq!(suspended.cumulative_outcomes.failed_steps, 0);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       1
     );
 
@@ -10302,7 +10365,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10384,7 +10447,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
     setup_temporary_retry_pool();
     let plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -10394,7 +10457,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       },
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(77),
           asset_b: TestAsset::Local(88),
@@ -10428,7 +10491,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     let advanced = Actors::continuation_state(actor_id).expect("later cursor suspends");
-    assert_eq!((advanced.cursor, advanced.attempt), (1, 1));
+    assert_eq!(advanced.cursor, 1);
     assert_eq!(advanced.unsuccessful_attempts_at_cursor, 1);
   });
 }
@@ -10439,8 +10502,8 @@ fn global_failure_limit_can_close_before_retry_later_local_limit() {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_max_consecutive_failures(1);
     setup_temporary_retry_pool();
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10487,7 +10550,10 @@ fn reached_global_failure_cutoff_closes_before_another_attempt() {
     fund_native(actor_id, 100);
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     ActorHot::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("active actor").consecutive_failures = threshold;
+      maybe
+        .as_mut()
+        .expect("active actor")
+        .unsuccessful_attempt_streak = threshold;
     });
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -10514,8 +10580,8 @@ fn global_failure_limit_can_close_before_local_retry_limit() {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_max_consecutive_failures(1);
     setup_temporary_retry_pool();
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -10567,8 +10633,8 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("suspended")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
 
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -10576,8 +10642,8 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("still suspended")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
 
     set_temporary_dex_failure(false);
@@ -10599,17 +10665,17 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
-    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let user_b = create_user_with(
       BOB,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
-    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     fund_native(user_a, 1_000_000_000_000_000);
     fund_native(user_b, 1_000_000_000_000_000);
 
@@ -10656,21 +10722,21 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
 fn canonical_fifo_uses_one_physical_ticket_sequence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let user_a = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
-    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let user_b = create_user_with(
       BOB,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
 
     for (owner, actor_id) in [
@@ -10703,7 +10769,7 @@ fn canonical_head_discovery_distinguishes_empty_head_and_blocked() {
     let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
     assert_eq!(Actors::test_head_discovery(0, 1, 0, scan), (0, None, 0));
 
-    let system = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(system));
     let cutoff = Actors::next_queue_ticket();
     let (state, entry, scanned) = Actors::test_head_discovery(cutoff, 1, 0, scan);
@@ -10740,15 +10806,15 @@ fn canonical_tombstones_cannot_bypass_the_oldest_live_head() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert!(Actors::paged_enqueue(old_user));
     for _ in 0..3 {
-      let tombstone = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      let tombstone = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       assert!(Actors::paged_enqueue(tombstone));
       assert!(Actors::paged_invalidate(tombstone).is_some());
     }
-    let later_system = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let later_system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::paged_enqueue(later_system));
     let cutoff = Actors::next_queue_ticket();
     let (state, entry, _) = Actors::test_head_discovery(cutoff, 1, 0, scan);
@@ -10763,7 +10829,100 @@ fn canonical_tombstones_cannot_bypass_the_oldest_live_head() {
 }
 
 #[test]
+fn capped_exponential_balances_retry_pressure_and_recovery_at_maximum_occupancy() {
+  const HORIZON: u32 = 64;
+  const MAX_DELAY: u32 = 8;
+  let max_occupancy = <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get() as u64;
+
+  let due_blocks = |fixed_delay: Option<u32>| {
+    let mut blocks = Vec::new();
+    let mut due = 0u32;
+    let mut attempt = 0u32;
+    while due <= HORIZON.saturating_add(MAX_DELAY) {
+      let delay = fixed_delay.unwrap_or_else(|| Actors::retry_backoff_blocks(attempt));
+      due = due.checked_add(delay).expect("bounded experiment horizon");
+      blocks.push(due);
+      attempt = attempt.checked_add(1).expect("bounded experiment attempts");
+    }
+    blocks
+  };
+  let metrics = |fixed_delay| {
+    let due = due_blocks(fixed_delay);
+    let attempts_per_actor = due.iter().filter(|block| **block <= HORIZON).count() as u64;
+    let recovery_wait_sum = (1..=HORIZON)
+      .map(|available_at| {
+        due
+          .iter()
+          .copied()
+          .find(|block| *block >= available_at)
+          .expect("experiment extends through the capped delay")
+          - available_at
+      })
+      .sum::<u32>();
+    (
+      attempts_per_actor.saturating_mul(max_occupancy),
+      recovery_wait_sum,
+      max_occupancy,
+    )
+  };
+
+  let exponential = metrics(None);
+  let fixed_one = metrics(Some(1));
+  let fixed_four = metrics(Some(4));
+  let fixed_eight = metrics(Some(8));
+  let evidence: serde_json::Value = serde_json::from_str(include_str!(
+    "../tests/fixtures/retry-backoff-decision.v1.json"
+  ))
+  .expect("retry-backoff decision fixture parses");
+  let expected = |policy: &str, metric: &str| {
+    evidence[policy][metric]
+      .as_u64()
+      .expect("decision metric is an unsigned integer")
+  };
+  assert_eq!(
+    exponential.0,
+    expected("cappedExponential", "dueRetryObligations")
+  );
+  assert_eq!(
+    u64::from(exponential.1),
+    expected("cappedExponential", "recoveryWaitSum")
+  );
+  assert_eq!(fixed_one.0, expected("fixedDelay1", "dueRetryObligations"));
+  assert_eq!(
+    u64::from(fixed_one.1),
+    expected("fixedDelay1", "recoveryWaitSum")
+  );
+  assert_eq!(fixed_four.0, expected("fixedDelay4", "dueRetryObligations"));
+  assert_eq!(
+    u64::from(fixed_four.1),
+    expected("fixedDelay4", "recoveryWaitSum")
+  );
+  assert_eq!(
+    fixed_eight.0,
+    expected("fixedDelay8", "dueRetryObligations")
+  );
+  assert_eq!(
+    u64::from(fixed_eight.1),
+    expected("fixedDelay8", "recoveryWaitSum")
+  );
+  assert_eq!(evidence["decision"], "retain-capped-exponential");
+  assert!(exponential.0 < fixed_four.0);
+  assert!(exponential.1 < fixed_eight.1);
+  assert_eq!(
+    exponential.2, fixed_eight.2,
+    "delay policy changes neither maximum occupancy nor FIFO cohort fairness"
+  );
+}
+
+#[test]
 fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
+  assert_eq!(Actors::retry_backoff_blocks(0), 1);
+  assert_eq!(Actors::retry_backoff_blocks(1), 2);
+  assert_eq!(Actors::retry_backoff_blocks(2), 4);
+  assert_eq!(Actors::retry_backoff_blocks(3), 8);
+  assert_eq!(Actors::retry_backoff_blocks(31), 8);
+  assert_eq!(Actors::retry_backoff_blocks(u32::MAX), 8);
+
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -10796,14 +10955,17 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       assert_eq!(
         Actors::continuation_state(actor_id)
           .expect("not eligible before due block")
-          .attempt,
-        expected_attempt - 1
+          .unsuccessful_attempts_at_cursor,
+        expected_attempt
       );
       frame_system::Pallet::<Test>::set_block_number(due);
       run_idle(Weight::MAX);
       let continuation =
         Actors::continuation_state(actor_id).expect("temporary failure resuspends");
-      assert_eq!(continuation.attempt, expected_attempt);
+      assert_eq!(
+        continuation.unsuccessful_attempts_at_cursor,
+        expected_attempt + 1
+      );
       assert_eq!(continuation.cursor, 0);
       assert_eq!(scheduled_wakeup_block(actor_id), Some(next_due));
       assert_eq!(native_balance(&actor), balance_before);
@@ -10814,8 +10976,8 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("capped delay holds")
-        .attempt,
-      4
+        .unsuccessful_attempts_at_cursor,
+      5
     );
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(24);
@@ -10866,12 +11028,15 @@ fn continuation_weight_deferral_does_not_admit_attempt() {
     Actors::execute_cycle(Weight::from_parts(u64::MAX, proof_limit));
 
     let after = Actors::continuation_state(actor_id).expect("deferral preserves continuation");
-    assert_eq!(after.attempt, before.attempt);
+    assert_eq!(
+      after.unsuccessful_attempts_at_cursor,
+      before.unsuccessful_attempts_at_cursor
+    );
     assert_eq!(after.last_attempt_block, before.last_attempt_block);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       1
     );
     assert_eq!(
@@ -10896,7 +11061,7 @@ fn fresh_attempt_rolls_back_before_effect_when_requeue_ticket_is_exhausted() {
       ALICE,
       timer_schedule(1),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     frame_system::Pallet::<Test>::set_block_number(2);
     let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
@@ -10933,7 +11098,7 @@ fn post_attempt_rearm_rolls_back_on_fifo_topology_corruption() {
       ALICE,
       timer_schedule(1),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -10965,7 +11130,7 @@ fn scheduler_close_rolls_back_on_fifo_topology_corruption() {
       ALICE,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -11061,7 +11226,7 @@ fn cadenced_address_signal_survives_pause_and_executes_once_at_gate() {
         cooldown_blocks: 0,
       },
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
 
@@ -11124,7 +11289,7 @@ fn signal_after_missed_cadence_waits_for_next_gate() {
         cooldown_blocks: 0,
       },
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
 
@@ -11180,8 +11345,8 @@ fn continuation_retry_omits_external_timer_cadence() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("suspended")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
   });
 }
@@ -11339,8 +11504,8 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("suspended")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
 
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -11349,8 +11514,8 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("paused")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
 
     frame_system::Pallet::<Test>::set_block_number(3);
@@ -11363,8 +11528,8 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("breaker gated")
-        .attempt,
-      0
+        .unsuccessful_attempts_at_cursor,
+      1
     );
 
     assert_ok!(Actors::set_global_circuit_breaker(
@@ -11429,7 +11594,7 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -11441,7 +11606,7 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -11464,7 +11629,6 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
       Event::CycleSuspended {
         actor_id: id,
         cycle_nonce: 1,
-        attempt: 0,
         cursor: 0,
         reason: SuspensionReason::FundingUnavailable,
         ..
@@ -11506,7 +11670,7 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -11561,8 +11725,8 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("retry remains")
-        .attempt,
-      1
+        .unsuccessful_attempts_at_cursor,
+      2
     );
 
     frame_system::Pallet::<Test>::set_block_number(4);
@@ -11595,7 +11759,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
         amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: asset_b,
           asset_out,
@@ -11647,7 +11811,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
     run_idle(Weight::MAX);
     let after_capacity_failure = Actors::continuation_state(actor_id).expect("still suspended");
     assert_eq!(after_capacity_failure.cursor, 1);
-    assert_eq!(after_capacity_failure.attempt, 1);
+    assert_eq!(after_capacity_failure.unsuccessful_attempts_at_cursor, 2);
     assert_eq!(
       after_capacity_failure
         .opening_snapshot
@@ -11674,7 +11838,7 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -11687,7 +11851,7 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
       ALICE,
       percentage_trigger_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_in, 100);
@@ -11709,7 +11873,7 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
     let actor_state =
       Actors::active_actor_view(actor_id).expect("actor remains after permanent failure");
     assert_eq!(actor_state.cycle_state, CycleState::Idle);
-    assert_eq!(actor_state.consecutive_failures, 2);
+    assert_eq!(actor_state.unsuccessful_attempt_streak, 2);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::StepFailed {
@@ -11729,7 +11893,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
     let mut steps = Vec::new();
     for index in 0..8u32 {
       steps.push(StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(100 + index * 2),
           asset_b: TestAsset::Local(101 + index * 2),
@@ -11777,7 +11941,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -11790,7 +11954,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -11853,7 +12017,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -11895,7 +12059,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     let actor_before_cancel = native_balance(&actor);
     let failures_before_cancel = Actors::active_actor_view(actor_id)
       .expect("suspended actor")
-      .consecutive_failures;
+      .unsuccessful_attempt_streak;
 
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
@@ -11907,7 +12071,10 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     let actor_state = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
     assert_eq!(actor_state.cycle_state, CycleState::Idle);
     assert_eq!(actor_state.cycle_nonce, 1);
-    assert_eq!(actor_state.consecutive_failures, failures_before_cancel);
+    assert_eq!(
+      actor_state.unsuccessful_attempt_streak,
+      failures_before_cancel
+    );
     assert!(actor_state.queue_ticket.is_none());
     assert!(
       Actors::actor_hot(actor_id)
@@ -12011,7 +12178,7 @@ fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
-      inert_execution_plan(),
+      inert_contract_steps(),
       crate::CompletionPolicy::Persistent,
     ));
     let cancelled = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
@@ -12028,7 +12195,7 @@ fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
 }
 
 #[test]
-fn continuation_attempt_events_keep_stable_nonce_and_order() {
+fn continuation_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -12043,6 +12210,10 @@ fn continuation_attempt_events_keep_stable_nonce_and_order() {
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     run_idle(Weight::MAX);
+    let opening_event_index = frame_system::Pallet::<Test>::events()
+      .iter()
+      .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleStarted { actor_id: id, cycle_nonce: 1 }) if id == actor_id))
+      .expect("opening attempt has a chain event coordinate");
     let opening: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -12052,11 +12223,15 @@ fn continuation_attempt_events_keep_stable_nonce_and_order() {
       .collect();
     assert!(matches!(opening[1], Event::CycleStarted { actor_id: id, cycle_nonce: 1 } if id == actor_id));
     assert!(matches!(opening[2], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
-    assert!(matches!(opening[3], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, attempt: 0, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
+    assert!(matches!(opening[3], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
+    let retry_event_index = frame_system::Pallet::<Test>::events()
+      .iter()
+      .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
+      .expect("retry attempt has a chain event coordinate");
     let retry: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -12064,14 +12239,18 @@ fn continuation_attempt_events_keep_stable_nonce_and_order() {
         _ => None,
       })
       .collect();
-    assert!(matches!(retry[0], Event::CycleContinued { actor_id: id, cycle_nonce: 1, attempt: 1, cursor: 0 } if id == actor_id));
+    assert!(matches!(retry[0], Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0 } if id == actor_id));
     assert!(matches!(retry[1], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
-    assert!(matches!(retry[2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, attempt: 1, cursor: 0, .. } if id == actor_id));
+    assert!(matches!(retry[2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, .. } if id == actor_id));
 
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(4);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
+    let completion_event_index = frame_system::Pallet::<Test>::events()
+      .iter()
+      .position(|record| matches!(record.event, RuntimeEvent::Actors(Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0, .. }) if id == actor_id))
+      .expect("completion attempt has a chain event coordinate");
     let completion: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -12079,9 +12258,20 @@ fn continuation_attempt_events_keep_stable_nonce_and_order() {
         _ => None,
       })
       .collect();
-    assert!(matches!(completion[0], Event::CycleContinued { actor_id: id, cycle_nonce: 1, attempt: 2, cursor: 0 } if id == actor_id));
+    assert!(matches!(completion[0], Event::CycleContinued { actor_id: id, cycle_nonce: 1, cursor: 0 } if id == actor_id));
     assert!(matches!(completion[1], Event::SwapExecuted { actor_id: id, .. } if id == actor_id));
     assert!(matches!(completion[2], Event::CycleSummary { actor_id: id, cycle_nonce: 1, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if id == actor_id));
+
+    let attempt_coordinates = [
+      (1u64, 1u64, opening_event_index),
+      (1u64, 2u64, retry_event_index),
+      (1u64, 4u64, completion_event_index),
+    ];
+    assert_eq!(
+      attempt_coordinates.into_iter().collect::<BTreeSet<_>>().len(),
+      attempt_coordinates.len(),
+      "cycle nonce plus block/event coordinates uniquely identify every attempt without its stored ordinal"
+    );
   });
 }
 
@@ -12177,7 +12367,7 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       plan_id,
-      inert_execution_plan(),
+      inert_contract_steps(),
       crate::CompletionPolicy::Persistent,
     ));
     assert_noop!(
@@ -12232,7 +12422,7 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       dormant_id,
-      system_active_contract(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_contract_steps()),
     ));
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::root(), dormant_id),
@@ -12299,7 +12489,7 @@ fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       plan_id,
-      inert_execution_plan(),
+      inert_contract_steps(),
       crate::CompletionPolicy::Persistent,
     ));
     assert!(has_actor_event(|event| matches!(
@@ -12416,7 +12606,7 @@ fn window_expiry_cancels_while_failure_cutoff_finalizes_before_close() {
         _ => None,
       })
       .collect();
-    assert!(matches!(cutoff_events[0], Event::CycleContinued { actor_id, attempt: 2, .. } if actor_id == cutoff_id));
+    assert!(matches!(cutoff_events[0], Event::CycleContinued { actor_id, .. } if actor_id == cutoff_id));
     assert!(!cutoff_events.iter().any(|event| matches!(
       event,
       Event::CycleCancelled { actor_id, .. } if *actor_id == cutoff_id
@@ -12441,7 +12631,7 @@ fn cancellation_is_mutable_only() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_contract(timer_schedule(1), None, inert_execution_plan()),
+      system_active_contract(timer_schedule(1), None, inert_contract_steps()),
     ));
     assert_noop!(
       Actors::cancel_continuation(RuntimeOrigin::root(), actor_id),
@@ -12459,7 +12649,7 @@ fn user_immutable_manual_source_changes_readiness_without_mutating_contract() {
       Mutability::Immutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(actor_id, 1_000);
     let contract_before = ActorContract::<Test>::get(actor_id).expect("immutable contract");
@@ -12488,13 +12678,13 @@ fn immutable_actor_rejects_pause_and_update_contract() {
       Mutability::Immutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ImmutableActor
     );
-    let replacement = transfer_execution_plan(CHARLIE, 1);
+    let replacement = transfer_contract_steps(CHARLIE, 1);
     assert_noop!(
       update_contract_partial!(
         RuntimeOrigin::signed(ALICE),
@@ -12511,7 +12701,7 @@ fn immutable_actor_rejects_pause_and_update_contract() {
 fn user_actor_rejects_mint_task_on_create() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Mint {
+    let contract_steps = contract_steps_with_step(make_step(Task::Mint {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1),
     }));
@@ -12519,7 +12709,7 @@ fn user_actor_rejects_mint_task_on_create() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::MintNotAllowedForUserActor
     );
@@ -12530,7 +12720,7 @@ fn user_actor_rejects_mint_task_on_create() {
 fn update_contract_prunes_stale_funding_accumulators() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let initial_execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let initial_contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
@@ -12540,7 +12730,7 @@ fn update_contract_prunes_stale_funding_accumulators() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      initial_execution_plan,
+      initial_contract_steps,
     );
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -12553,7 +12743,7 @@ fn update_contract_prunes_stale_funding_accumulators() {
         .funding_accumulated
         .contains_key(&TestAsset::Native)
     );
-    let replacement = execution_plan_with_step(make_step(Task::Transfer {
+    let replacement = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Local(1),
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
@@ -12587,9 +12777,9 @@ fn update_contract_rejects_mint_for_user_actor() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
-    let replacement = execution_plan_with_step(make_step(Task::Mint {
+    let replacement = contract_steps_with_step(make_step(Task::Mint {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1),
     }));
@@ -12609,13 +12799,13 @@ fn update_contract_rejects_mint_for_user_actor() {
 fn permissionless_sweep_closes_user_below_min_balance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     deplete_user_sovereign(actor_id, prefunded);
     assert_ok!(Actors::permissionless_sweep(
@@ -12643,7 +12833,7 @@ fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
@@ -12663,21 +12853,21 @@ fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
 fn permissionless_sweep_many_closes_multiple_and_reports_counts() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let user_a_prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
-    let user_b_prefunded = user_prefunding_requirement(&transfer_execution_plan(ALICE, 1));
+    let user_a_prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
+    let user_b_prefunded = user_prefunding_requirement(&transfer_contract_steps(ALICE, 1));
     let user_a = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let user_b = create_user_with(
       BOB,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(ALICE, 1),
+      transfer_contract_steps(ALICE, 1),
     );
     deplete_user_sovereign(user_a, user_a_prefunded);
     deplete_user_sovereign(user_b, user_b_prefunded);
@@ -12685,7 +12875,7 @@ fn permissionless_sweep_many_closes_multiple_and_reports_counts() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let sweep_ids: BoundedVec<u64, <Test as crate::Config>::MaxSweepBatch> =
       BoundedVec::try_from(vec![user_a, user_b, system_alive]).expect("batch fits");
@@ -12714,21 +12904,21 @@ fn permissionless_sweep_many_closes_multiple_and_reports_counts() {
 fn permissionless_sweep_many_rolls_back_prior_closes_on_late_failure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let user_a_prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
-    let user_b_prefunded = user_prefunding_requirement(&transfer_execution_plan(ALICE, 1));
+    let user_a_prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
+    let user_b_prefunded = user_prefunding_requirement(&transfer_contract_steps(ALICE, 1));
     let user_a = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let user_b = create_user_with(
       BOB,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(ALICE, 1),
+      transfer_contract_steps(ALICE, 1),
     );
     deplete_user_sovereign(user_a, user_a_prefunded);
     deplete_user_sovereign(user_b, user_b_prefunded);
@@ -12756,13 +12946,13 @@ fn permissionless_sweep_many_rolls_back_prior_closes_on_late_failure() {
 fn permissionless_sweep_many_ignores_missing_ids() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
     let user_a = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     deplete_user_sovereign(user_a, prefunded);
     let missing_id = user_a.saturating_add(10_000);
@@ -12788,15 +12978,15 @@ fn permissionless_sweep_many_ignores_missing_ids() {
 }
 
 #[test]
-fn tiny_percentage_amount_is_skipped_without_execution_plan_failure() {
+fn tiny_percentage_amount_is_skipped_without_contract_steps_failure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -12804,7 +12994,7 @@ fn tiny_percentage_amount_is_skipped_without_execution_plan_failure() {
     ));
     run_idle(Weight::MAX);
     let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(inst.consecutive_failures, 0);
+    assert_eq!(inst.unsuccessful_attempt_streak, 0);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -12826,7 +13016,7 @@ fn tiny_percentage_amount_is_skipped_without_execution_plan_failure() {
           outcomes: OutcomeTotals {
             executed_steps: 0,
             committed_effectful_tasks: 0,
-            skipped_conditions: 0,
+            precondition_skips: 0,
             skipped_resolution: 1,
             skipped_funding_unavailable: 0,
             failed_steps: 0,
@@ -12841,7 +13031,7 @@ fn tiny_percentage_amount_is_skipped_without_execution_plan_failure() {
 fn user_resolution_skip_charges_only_eval_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
@@ -12851,7 +13041,7 @@ fn user_resolution_skip_charges_only_eval_fee() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 1_000);
@@ -12884,7 +13074,7 @@ fn condition_skip_charges_one_evaluation_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
       }]),
@@ -12900,7 +13090,7 @@ fn condition_skip_charges_one_evaluation_fee() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 1_000);
     clear_fee_collections();
@@ -12914,7 +13104,7 @@ fn condition_skip_charges_one_evaluation_fee() {
       event,
       Event::StepSkipped {
         actor_id: id,
-        reason: StepSkippedReason::ConditionsNotMet,
+        reason: StepSkippedReason::PreconditionFalse,
         ..
       } if *id == actor_id
     )));
@@ -12925,8 +13115,8 @@ fn condition_skip_charges_one_evaluation_fee() {
 fn balance_conditions_never_read_staking_share_surfaces() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 0,
       }]),
@@ -12969,8 +13159,8 @@ fn true_balance_condition_can_precede_funding_unavailable_resolution() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(StepOf::<Test> {
-        preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 1,
         }]),
@@ -13006,13 +13196,13 @@ fn executable_task_charges_eval_and_execution_fees() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1),
     };
-    let execution_plan = execution_plan_with_step(make_step(task.clone()));
+    let contract_steps = contract_steps_with_step(make_step(task.clone()));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 1_000);
@@ -13046,7 +13236,7 @@ fn executable_task_charges_eval_and_execution_fees() {
           actor_id: id,
           outcomes: OutcomeTotals {
             executed_steps: 1,
-            skipped_conditions: 0,
+            precondition_skips: 0,
             skipped_resolution: 0,
             skipped_funding_unavailable: 0,
             failed_steps: 0,
@@ -13079,7 +13269,7 @@ fn adapter_failure_retains_one_combined_step_fee() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(task.clone())),
+      contract_steps_with_step(make_step(task.clone())),
     );
     let actor = sovereign_account(actor_id);
     fund_native_raw(&actor, 1_000);
@@ -13116,9 +13306,9 @@ fn cycle_summary_tracks_step_outcomes() {
       asset: TestAsset::Native,
       threshold: 1_000,
     }]);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: step_conditions,
+        precondition: step_conditions,
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -13137,7 +13327,7 @@ fn cycle_summary_tracks_step_outcomes() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -13147,8 +13337,8 @@ fn cycle_summary_tracks_step_outcomes() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
     ])
-    .expect("execution_plan must fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    .expect("contract_steps must fit");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -13165,7 +13355,7 @@ fn cycle_summary_tracks_step_outcomes() {
           outcomes: OutcomeTotals {
             executed_steps: 1,
             committed_effectful_tasks: 1,
-            skipped_conditions: 1,
+            precondition_skips: 1,
             skipped_resolution: 1,
             skipped_funding_unavailable: 0,
             failed_steps: 1,
@@ -13193,7 +13383,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = |on_error| StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -13214,7 +13404,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     );
     fund_native(continue_id, 100);
     ActorHot::<Test>::mutate(continue_id, |maybe| {
-      maybe.as_mut().expect("actor hot state exists").consecutive_failures = 2;
+      maybe.as_mut().expect("actor hot state exists").unsuccessful_attempt_streak = 2;
     });
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::root(),
@@ -13229,7 +13419,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     run_idle(Weight::MAX);
     let after_first = Actors::active_actor_view(continue_id).expect("successful actor remains active");
     assert_eq!(after_first.cycle_nonce, 1);
-    assert_eq!(after_first.consecutive_failures, 0);
+    assert_eq!(after_first.unsuccessful_attempt_streak, 0);
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -13252,7 +13442,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     assert!(matches!(continue_events[3], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if actor_id == continue_id));
     assert!(matches!(continue_events[4], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == continue_id));
     let skip_step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1,
       }]),
@@ -13287,7 +13477,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     assert_eq!(skip_events.len(), 4);
     assert!(matches!(skip_events[0], Event::CycleStarted { actor_id, .. } if actor_id == skip_id));
     assert!(matches!(skip_events[1], Event::StepSkipped { actor_id, step_index: 0, .. } if actor_id == skip_id));
-    assert!(matches!(skip_events[2], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { skipped_conditions: 1, failed_steps: 0, .. }, .. } if actor_id == skip_id));
+    assert!(matches!(skip_events[2], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { precondition_skips: 1, failed_steps: 0, .. }, .. } if actor_id == skip_id));
     assert!(matches!(skip_events[3], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == skip_id));
     let abort_id = create_system_with(
       ALICE,
@@ -13312,7 +13502,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     let abort_instance = Actors::active_actor_view(abort_id).expect("aborted actor remains active");
-    assert_eq!(abort_instance.consecutive_failures, 1);
+    assert_eq!(abort_instance.unsuccessful_attempt_streak, 1);
     let abort_events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -13324,7 +13514,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     assert!(matches!(abort_events[0], Event::CycleStarted { actor_id, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[1], Event::StepFailed { actor_id, step_index: 0, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[2], Event::CycleSummary { actor_id, result: CycleResult::Failed, outcomes: OutcomeTotals { executed_steps: 0, failed_steps: 1, .. }, .. } if actor_id == abort_id));
-    let close_only_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let close_only_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), close_only_id));
     let close_events: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -13355,13 +13545,13 @@ fn cycle_summary_fee_fairness_property_matrix() {
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfCurrent(pct),
       };
-      let execution_plan = execution_plan_with_step(make_step(task.clone()));
+      let contract_steps = contract_steps_with_step(make_step(task.clone()));
       let actor_id = create_user_with(
         ALICE,
         Mutability::Mutable,
         manual_schedule(),
         None,
-        execution_plan,
+        contract_steps,
       );
       fund_native(actor_id, funding);
       let fee_sink_before = native_balance(&TestFeeSink::get());
@@ -13382,7 +13572,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
             ..
           }) if id == actor_id => Some((
             outcomes.executed_steps,
-            outcomes.skipped_conditions,
+            outcomes.precondition_skips,
             outcomes.skipped_resolution,
             outcomes.skipped_funding_unavailable,
             outcomes.failed_steps,
@@ -13417,7 +13607,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
 fn percentage_at_opening_uses_cycle_start_snapshot() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -13429,8 +13619,8 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
         amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
       }),
     ])
-    .expect("execution_plan fits");
-    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, execution_plan);
+    .expect("contract_steps fits");
+    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
     fund_native(actor_id, 101);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
@@ -13453,13 +13643,13 @@ fn percentage_at_opening_uses_preservable_native_snapshot_for_user() {
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageAtOpening(Perbill::one()),
     };
-    let execution_plan = execution_plan_with_step(make_step(task.clone()));
+    let contract_steps = contract_steps_with_step(make_step(task.clone()));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       percentage_trigger_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     let actor = sovereign_account(actor_id);
     let funding = 500;
@@ -13489,12 +13679,12 @@ fn percentage_at_opening_uses_preservable_native_snapshot_for_user() {
 fn percentage_of_last_funding_consumes_each_cycle_open_snapshot() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let bob_before = native_balance(&BOB);
     let actor = sovereign_account(actor_id);
     assert_ok!(ordinary_transfer_to_actor(
@@ -13546,12 +13736,12 @@ fn percentage_of_last_funding_consumes_each_cycle_open_snapshot() {
 fn system_keeps_running_on_last_funding_exhaustion_and_accepts_refill() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -13610,18 +13800,18 @@ fn system_keeps_running_on_last_funding_exhaustion_and_accepts_refill() {
 fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     assert_ok!(ordinary_transfer_to_actor(
@@ -13665,17 +13855,17 @@ fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
 fn create_accepts_swap_in_with_slippage_tolerance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapIn {
+    let contract_steps = contract_steps_with_step(make_step(Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(1),
       amount_in: AmountResolution::Fixed(10),
       slippage_tolerance: Perbill::from_percent(5),
     }));
-    prefund_active_user_creation(ALICE, &execution_plan);
+    prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_contract(manual_schedule(), None, execution_plan),
+      user_active_contract(manual_schedule(), None, contract_steps),
     ));
   });
 }
@@ -13726,7 +13916,7 @@ fn full_slippage_cannot_accept_zero_swap_output() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapIn {
+      contract_steps_with_step(make_step(Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out,
         amount_in: AmountResolution::Fixed(1),
@@ -13761,7 +13951,7 @@ fn full_slippage_cannot_accept_zero_swap_output() {
 fn create_rejects_swap_out_with_zero_input_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapOut {
+    let contract_steps = contract_steps_with_step(make_step(Task::SwapOut {
       asset_out: TestAsset::Local(2),
       amount_out: AmountResolution::Fixed(10),
       asset_in: TestAsset::Local(1),
@@ -13772,7 +13962,7 @@ fn create_rejects_swap_out_with_zero_input_cap() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::InvalidTradeBound
     );
@@ -13783,7 +13973,7 @@ fn create_rejects_swap_out_with_zero_input_cap() {
 fn create_rejects_zero_liquidity_output_bounds() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let add_plan = execution_plan_with_step(make_step(Task::AddLiquidity {
+    let add_plan = contract_steps_with_step(make_step(Task::AddLiquidity {
       asset_a: TestAsset::Local(1),
       asset_b: TestAsset::Local(2),
       amount_a: AmountResolution::Fixed(10),
@@ -13799,7 +13989,7 @@ fn create_rejects_zero_liquidity_output_bounds() {
       Error::<Test>::InvalidTradeBound
     );
 
-    let remove_plan = execution_plan_with_step(make_step(Task::RemoveLiquidity {
+    let remove_plan = contract_steps_with_step(make_step(Task::RemoveLiquidity {
       lp_asset: TestAsset::Local(3),
       asset_a: TestAsset::Local(3),
       asset_b: TestAsset::Local(3),
@@ -13827,7 +14017,7 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::AddLiquidity {
+      contract_steps_with_step(make_step(Task::AddLiquidity {
         asset_a: TestAsset::Local(1),
         asset_b: TestAsset::Local(2),
         amount_a: AmountResolution::Fixed(4),
@@ -13851,7 +14041,7 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::RemoveLiquidity {
+      contract_steps_with_step(make_step(Task::RemoveLiquidity {
         lp_asset: TestAsset::Local(3),
         asset_a: TestAsset::Local(3),
         asset_b: TestAsset::Local(3),
@@ -13965,18 +14155,18 @@ fn market_tasks_dispatch_their_resolved_task_local_amounts_without_a_system_cap(
 fn create_accepts_swap_out_with_optional_absolute_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapOut {
+    let contract_steps = contract_steps_with_step(make_step(Task::SwapOut {
       asset_out: TestAsset::Local(2),
       amount_out: AmountResolution::Fixed(10),
       asset_in: TestAsset::Local(1),
       input_limit: InputLimit::Absolute(100),
       slippage_tolerance: Perbill::from_percent(5),
     }));
-    prefund_active_user_creation(ALICE, &execution_plan);
+    prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_contract(manual_schedule(), None, execution_plan),
+      user_active_contract(manual_schedule(), None, contract_steps),
     ));
   });
 }
@@ -13994,7 +14184,7 @@ fn swap_out_live_market_mode_uses_preservable_capacity_and_emits_swap_event() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapOut {
+      contract_steps_with_step(make_step(Task::SwapOut {
         asset_out,
         amount_out: AmountResolution::Fixed(100),
         asset_in,
@@ -14046,7 +14236,7 @@ fn swap_out_never_spends_above_explicit_input_cap() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapOut {
+      contract_steps_with_step(make_step(Task::SwapOut {
         asset_out,
         amount_out: AmountResolution::Fixed(100),
         asset_in,
@@ -14089,7 +14279,7 @@ fn swap_out_absolute_input_is_a_cap_not_a_balance_gate() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapOut {
+      contract_steps_with_step(make_step(Task::SwapOut {
         asset_out,
         amount_out: AmountResolution::Fixed(100),
         asset_in,
@@ -14123,7 +14313,7 @@ fn on_initialize_is_a_zero_weight_noop() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14175,7 +14365,7 @@ fn starvation_emits_observability_event_once_without_control_effects() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14237,7 +14427,7 @@ fn proof_size_exhaustion_counts_as_idle_starvation() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14290,7 +14480,7 @@ fn starvation_recovery_is_observable_once_and_healthy_idle_stays_sparse() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14344,7 +14534,7 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14398,13 +14588,13 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
 fn breaker_keeps_explicit_repair_sweep_operational() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     deplete_user_sovereign(actor_id, prefunded);
     assert_ok!(Actors::set_global_circuit_breaker(
@@ -14432,13 +14622,13 @@ fn breaker_keeps_explicit_repair_sweep_operational() {
 fn breaker_defers_scheduler_owned_fee_budget_close_without_partial_terminal_events() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_execution_plan(BOB, 1));
+    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, 60);
@@ -14488,7 +14678,7 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
       Mutability::Mutable,
       manual_schedule(),
       Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
@@ -14529,23 +14719,23 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
 fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan_sys = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps_sys = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let execution_plan_usr = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps_usr = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let system_actor = create_system_with(ALICE, manual_schedule(), None, execution_plan_sys);
+    let system_actor = create_system_with(ALICE, manual_schedule(), None, contract_steps_sys);
     let user_actor = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_usr,
+      contract_steps_usr,
     );
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -14624,7 +14814,7 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14709,7 +14899,7 @@ fn any_verified_ingress_third_party_shapes_basis_only_with_real_delivered_value(
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
@@ -14760,7 +14950,7 @@ fn trigger_source_and_funding_provenance_are_evaluated_independently() {
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14799,7 +14989,7 @@ fn untracked_credit_can_trigger_without_allocating_funding_state() {
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14848,7 +15038,7 @@ fn one_ingress_matching_multiple_sources_mutates_funding_once() {
         cooldown_blocks: 0,
       },
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14893,7 +15083,7 @@ fn identical_authoritative_transfers_remain_distinct_funding_events() {
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14940,7 +15130,7 @@ fn direct_notification_reports_funding_overflow_without_partial_readiness_mutati
       Mutability::Mutable,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -14977,7 +15167,7 @@ fn signed_allowlist_accepts_only_verified_listed_signers_for_funding() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -15030,7 +15220,7 @@ fn immutable_user_cannot_update_contract_funding() {
       Mutability::Immutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_noop!(
       update_contract_partial!(
@@ -15047,12 +15237,12 @@ fn immutable_user_cannot_update_contract_funding() {
 fn notify_address_event_accumulates_without_pause_resume_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -15098,12 +15288,12 @@ fn notify_address_event_accumulates_without_pause_resume_cycle() {
 fn ordinary_transfer_updates_accumulator_without_resuming_paused_system_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     ActorHot::<Test>::mutate(actor_id, |maybe| {
       let hot = maybe.as_mut().expect("Actors hot state exists");
       hot.lifecycle = ActiveLifecycle::Paused;
@@ -15132,12 +15322,12 @@ fn ordinary_transfer_updates_accumulator_without_resuming_paused_system_actor() 
 fn notify_address_event_updates_accumulator_without_resuming_paused_system_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 500);
     ActorHot::<Test>::mutate(actor_id, |maybe| {
@@ -15169,7 +15359,7 @@ fn notify_address_event_updates_accumulator_without_resuming_paused_system_actor
 fn multi_asset_funding_accumulators_are_independent() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    // ExecutionPlan with TWO assets using PercentageOfLastFunding
+    // ContractSteps with TWO assets using PercentageOfLastFunding
     let step1 = make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
@@ -15180,8 +15370,8 @@ fn multi_asset_funding_accumulators_are_independent() {
       asset: TestAsset::Local(1),
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(25)),
     });
-    let execution_plan = BoundedVec::try_from(vec![step1, step2]).expect("execution_plan fits");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![step1, step2]).expect("contract_steps fits");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     // Verify both assets are tracked
     let inst = actor_funding(actor_id);
     assert!(inst.funding_tracked_assets.contains(&TestAsset::Native));
@@ -15263,7 +15453,7 @@ fn actor_id_overflow_at_max() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 10)),
       ),
       Error::<Test>::ActorIdOverflow
     );
@@ -15271,7 +15461,7 @@ fn actor_id_overflow_at_max() {
 }
 
 #[test]
-fn empty_execution_plan_rejected() {
+fn empty_contract_steps_rejected() {
   new_test_ext().execute_with(|| {
     assert_noop!(
       Actors::create_user_actor(
@@ -15279,25 +15469,25 @@ fn empty_execution_plan_rejected() {
         Mutability::Mutable,
         user_active_contract(manual_schedule(), None, BoundedVec::default()),
       ),
-      Error::<Test>::EmptyExecutionPlan
+      Error::<Test>::EmptyContractSteps
     );
   });
 }
 
 #[test]
-fn execution_plan_hard_ceiling_is_255_steps() {
-  assert!(!crate::execution_plan_steps_bound_is_valid(0));
-  assert!(crate::execution_plan_steps_bound_is_valid(1));
-  assert!(crate::execution_plan_steps_bound_is_valid(8));
-  assert!(crate::execution_plan_steps_bound_is_valid(255));
-  assert!(!crate::execution_plan_steps_bound_is_valid(256));
+fn contract_steps_hard_ceiling_is_255_steps() {
+  assert!(!crate::contract_steps_bound_is_valid(0));
+  assert!(crate::contract_steps_bound_is_valid(1));
+  assert!(crate::contract_steps_bound_is_valid(8));
+  assert!(crate::contract_steps_bound_is_valid(255));
+  assert!(!crate::contract_steps_bound_is_valid(256));
 }
 
 #[test]
-fn execution_plan_bound_is_single_and_encoded_for_both_classes() {
+fn contract_steps_bound_is_single_and_encoded_for_both_classes() {
   new_test_ext().execute_with(|| {
     assert_eq!(
-      <<Test as crate::Config>::MaxExecutionPlanSteps as Get<u32>>::get(),
+      <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get(),
       8
     );
     let steps: Vec<_> = (0..9)
@@ -15309,7 +15499,7 @@ fn execution_plan_bound_is_single_and_encoded_for_both_classes() {
         })
       })
       .collect();
-    assert!(crate::ExecutionPlanOf::<Test>::try_from(steps).is_err());
+    assert!(crate::ContractSteps::<Test>::try_from(steps).is_err());
     let maximum = BoundedVec::try_from(
       (0..8)
         .map(|i| {
@@ -15340,7 +15530,7 @@ fn execution_plan_bound_is_single_and_encoded_for_both_classes() {
 #[test]
 fn sovereign_account_collision_rejected() {
   new_test_ext().execute_with(|| {
-    let execution_plan = transfer_execution_plan(BOB, 10);
+    let contract_steps = transfer_contract_steps(BOB, 10);
     let _actor_id = Actors::next_actor_id();
     let sovereign = Actors::sovereign_account_id(&ALICE, 0);
     SovereignIndex::<Test>::insert(&sovereign, 999u64);
@@ -15348,7 +15538,7 @@ fn sovereign_account_collision_rejected() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, execution_plan),
+        user_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::SovereignAccountCollision
     );
@@ -15366,7 +15556,7 @@ fn control_authority_matrix_is_class_mutability_and_breaker_complete() {
           Mutability::Mutable,
           manual_schedule(),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         ActorType::User,
       ),
@@ -15376,7 +15566,7 @@ fn control_authority_matrix_is_class_mutability_and_breaker_complete() {
           Mutability::Immutable,
           timer_schedule(2),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         ActorType::User,
       ),
@@ -15386,7 +15576,7 @@ fn control_authority_matrix_is_class_mutability_and_breaker_complete() {
           Mutability::Mutable,
           manual_schedule(),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         ActorType::System,
       ),
@@ -15396,7 +15586,7 @@ fn control_authority_matrix_is_class_mutability_and_breaker_complete() {
           Mutability::Immutable,
           timer_schedule(2),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         ActorType::System,
       ),
@@ -15435,7 +15625,7 @@ fn not_owner_on_foreign_actor() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::signed(BOB), actor_id),
@@ -15452,7 +15642,7 @@ fn not_governance_on_user_actor_via_root() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::root(), actor_id),
@@ -15464,7 +15654,7 @@ fn not_governance_on_user_actor_via_root() {
 #[test]
 fn governance_can_manage_system_actor_control_surface() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -15504,10 +15694,10 @@ fn governance_can_manage_system_actor_control_surface() {
       maybe
         .as_mut()
         .expect("system actor hot state")
-        .consecutive_failures = 2;
+        .unsuccessful_attempt_streak = 2;
     });
     frame_system::Pallet::<Test>::set_block_number(4);
-    let updated_plan = transfer_execution_plan(BOB, 1);
+    let updated_plan = transfer_contract_steps(BOB, 1);
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
@@ -15516,7 +15706,7 @@ fn governance_can_manage_system_actor_control_surface() {
     ));
     let updated = Actors::active_actor_view(actor_id).expect("system actor");
     assert_eq!(updated.steps, updated_plan);
-    assert_eq!(updated.consecutive_failures, 0);
+    assert_eq!(updated.unsuccessful_attempt_streak, 0);
     frame_system::Pallet::<Test>::set_block_number(5);
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::root(),
@@ -15554,7 +15744,7 @@ fn resume_on_active_is_an_exact_noop() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
     System::reset_events();
@@ -15572,7 +15762,7 @@ fn identity_control_clock_tracks_creation_and_survives_deactivation() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract(manual_schedule(), None, inert_execution_plan()),
+      system_active_contract(manual_schedule(), None, inert_contract_steps()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     assert_eq!(
@@ -15596,7 +15786,7 @@ fn identity_control_clock_tracks_creation_and_survives_deactivation() {
 fn funding_policy_replacement_preserves_placement_without_continuation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(10), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(10), None, inert_contract_steps());
     let before = Actors::actor_hot(actor_id).expect("actor hot state exists");
     assert!(before.wakeup_pointer.is_some());
     assert_ok!(update_contract_partial!(
@@ -15619,7 +15809,7 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
     let funding_before = actor_funding(actor_id);
@@ -15658,7 +15848,7 @@ fn pause_on_paused_is_an_exact_noop() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -15678,7 +15868,7 @@ fn already_paused_on_manual_trigger() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert_noop!(
@@ -15696,7 +15886,7 @@ fn cycle_nonce_max_value_is_the_last_executable_cycle() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
@@ -15726,7 +15916,7 @@ fn cycle_nonce_exhaustion_closes_user_actor() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     fund_native(actor_id, 1_000);
     let bob_before = native_balance(&BOB);
@@ -15769,7 +15959,7 @@ fn cycle_nonce_exhaustion_closes_system_actor() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let bob_before = native_balance(&BOB);
     ActorIdentities::<Test>::mutate(actor_id, |maybe| {
@@ -15807,12 +15997,12 @@ fn cycle_nonce_exhaustion_closes_system_actor() {
 fn missing_tracked_snapshot_resolves_to_funding_unavailable() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -15837,12 +16027,12 @@ fn missing_tracked_snapshot_resolves_to_funding_unavailable() {
 fn zero_snapshot_resolves_to_funding_unavailable() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
       let funding = maybe.as_mut().expect("actor funding exists");
       funding
@@ -15873,12 +16063,12 @@ fn zero_snapshot_resolves_to_funding_unavailable() {
 fn stale_tracked_snapshot_remains_valid_until_overwritten() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let bob_before = native_balance(&BOB);
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -15900,11 +16090,11 @@ fn stale_tracked_snapshot_remains_valid_until_overwritten() {
 fn burn_last_funding_overspend_resolves_to_funding_unavailable() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Burn {
+    let contract_steps = contract_steps_with_step(make_step(Task::Burn {
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 100);
     crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
@@ -15932,7 +16122,7 @@ fn burn_last_funding_overspend_resolves_to_funding_unavailable() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors remains active")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
   });
@@ -15942,12 +16132,12 @@ fn burn_last_funding_overspend_resolves_to_funding_unavailable() {
 fn overspend_resolves_to_funding_unavailable_for_system_without_pause() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1_000_000),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -15980,18 +16170,18 @@ fn overspend_resolves_to_funding_unavailable_for_system_without_pause() {
 fn overspend_resolves_to_funding_unavailable_for_user_without_closing() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1_000_000),
     }));
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -16024,7 +16214,7 @@ fn overspend_resolves_to_funding_unavailable_for_user_without_closing() {
 fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -16037,13 +16227,13 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
       }),
     ])
     .expect("execution plan must fit");
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -16091,19 +16281,19 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
 fn failed_executable_step_charges_eval_and_exec_fee_without_refund() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapIn {
+    let contract_steps = contract_steps_with_step(make_step(Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(99),
       amount_in: AmountResolution::Fixed(10),
       slippage_tolerance: Perbill::zero(),
     }));
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -16150,7 +16340,7 @@ fn global_circuit_breaker_blocks_creation() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 10)),
       ),
       Error::<Test>::GlobalCircuitBreakerActive
     );
@@ -16159,7 +16349,7 @@ fn global_circuit_breaker_blocks_creation() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 10)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 10)),
       ),
       Error::<Test>::GlobalCircuitBreakerActive
     );
@@ -16190,20 +16380,20 @@ fn governance_updates_active_actor_limit_and_creation_respects_it() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let _ = create_system_with(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::create_system_actor(
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -16218,13 +16408,13 @@ fn active_actor_limit_update_validates_bounds() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     let _ = create_system_with(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 1),
+      transfer_contract_steps(BOB, 1),
     );
     assert_noop!(
       Actors::set_active_actor_limit(RuntimeOrigin::root(), 1),
@@ -16252,7 +16442,7 @@ fn active_actor_limit_update_validates_bounds() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
+        system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
       ),
       Error::<Test>::ActiveActorCapacityExceeded
     );
@@ -16275,7 +16465,7 @@ fn invalid_schedule_window_end_before_start() {
         user_active_contract(
           manual_schedule(),
           Some(window),
-          transfer_execution_plan(BOB, 10)
+          transfer_contract_steps(BOB, 10)
         ),
       ),
       Error::<Test>::InvalidScheduleWindow
@@ -16297,7 +16487,7 @@ fn schedule_window_requires_an_exact_end_plus_one_terminal_block() {
         user_active_contract(
           manual_schedule(),
           Some(window),
-          transfer_execution_plan(BOB, 10),
+          transfer_contract_steps(BOB, 10),
         ),
       ),
       Error::<Test>::InvalidScheduleWindow
@@ -16315,14 +16505,14 @@ fn in_progress_window_is_admissible_when_now_is_inside() {
       start: 10,
       end: 200,
     };
-    prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 10));
+    prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 10));
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
       user_active_contract(
         manual_schedule(),
         Some(window),
-        transfer_execution_plan(BOB, 10),
+        transfer_contract_steps(BOB, 10),
       ),
     ));
   });
@@ -16343,7 +16533,7 @@ fn already_expired_window_is_rejected() {
         user_active_contract(
           manual_schedule(),
           Some(window),
-          transfer_execution_plan(BOB, 10),
+          transfer_contract_steps(BOB, 10),
         ),
       ),
       Error::<Test>::InvalidScheduleWindow
@@ -16357,14 +16547,14 @@ fn inclusive_window_span_exact_minimum_is_admissible() {
     frame_system::Pallet::<Test>::set_block_number(1);
     // Inclusive span: end - start + 1 >= MinWindowLength (100). start 1, end 100
     // has span 100 and is admissible; start 1, end 99 has span 99 and is rejected.
-    prefund_active_user_creation(ALICE, &transfer_execution_plan(BOB, 10));
+    prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 10));
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
       user_active_contract(
         manual_schedule(),
         Some(ScheduleWindow { start: 1, end: 100 }),
-        transfer_execution_plan(BOB, 10),
+        transfer_contract_steps(BOB, 10),
       ),
     ));
     assert_noop!(
@@ -16374,7 +16564,7 @@ fn inclusive_window_span_exact_minimum_is_admissible() {
         user_active_contract(
           manual_schedule(),
           Some(ScheduleWindow { start: 1, end: 99 }),
-          transfer_execution_plan(CHARLIE, 10),
+          transfer_contract_steps(CHARLIE, 10),
         ),
       ),
       Error::<Test>::InvalidScheduleWindow
@@ -16396,7 +16586,7 @@ fn schedule_cooldown_is_bounded_by_max_execution_delay() {
       Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
-        user_active_contract(too_long, None, transfer_execution_plan(BOB, 10),),
+        user_active_contract(too_long, None, transfer_contract_steps(BOB, 10),),
       ),
       Error::<Test>::ExecutionDelayTooLong
     );
@@ -16412,7 +16602,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 5_000,
     };
-    let actor_id = create_system_with(ALICE, exact_cooldown, None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, exact_cooldown, None, inert_contract_steps());
     assert!(Actors::active_actor_view(actor_id).is_some());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -16431,7 +16621,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(overflowing_cooldown, None, inert_execution_plan()),
+        system_active_contract(overflowing_cooldown, None, inert_contract_steps()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16441,7 +16631,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
   new_test_ext().execute_with(|| {
     let max = u64::MAX;
     frame_system::Pallet::<Test>::set_block_number(max - 4);
-    let actor_id = create_system_with(ALICE, timer_schedule(4), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(4), None, inert_contract_steps());
     assert!(Actors::active_actor_view(actor_id).is_some());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -16456,7 +16646,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(timer_schedule(4), None, inert_execution_plan()),
+        system_active_contract(timer_schedule(4), None, inert_contract_steps()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16476,7 +16666,7 @@ fn future_window_terminal_and_exact_next_block_reject_overflow_without_mutation(
         start: max - 100,
         end: max - 1,
       }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(
       Actors::actor_hot(actor_id).expect("hot").terminal_at,
@@ -16494,7 +16684,7 @@ fn future_window_terminal_and_exact_next_block_reject_overflow_without_mutation(
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_contract_steps()),
       ),
       Error::<Test>::SchedulerIndexExhausted
     );
@@ -16503,13 +16693,12 @@ fn future_window_terminal_and_exact_next_block_reject_overflow_without_mutation(
 }
 
 #[test]
-fn retry_target_uses_cursor_local_count_and_ignores_cycle_global_attempt() {
+fn retry_target_uses_only_cursor_local_count_and_last_attempt_block() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let instance = Actors::active_actor_view(actor_id).expect("actor");
     let continuation = |last_attempt_block| RuntimeContinuationState {
       cursor: 0,
-      attempt: 3,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block,
       opening_snapshot: Default::default(),
@@ -16531,7 +16720,7 @@ fn retry_target_uses_cursor_local_count_and_ignores_cycle_global_attempt() {
 #[test]
 fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     frame_system::Pallet::<Test>::set_block_number(u64::MAX);
     seed_saturated_tombstone_queue();
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -16557,11 +16746,11 @@ fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
 fn mint_works_for_system_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Mint {
+    let contract_steps = contract_steps_with_step(make_step(Task::Mint {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(500),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     // Mint on empty account works — mint policy skips source-balance check
     let before = native_balance(&actor);
@@ -16580,11 +16769,11 @@ fn mint_percentage_at_opening_uses_target_not_preservable_surface() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(5);
-    let execution_plan = execution_plan_with_step(make_step(Task::Mint {
+    let contract_steps = contract_steps_with_step(make_step(Task::Mint {
       asset,
       amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
 
@@ -16605,18 +16794,13 @@ fn mint_percentage_at_opening_uses_target_not_preservable_surface() {
 }
 
 #[test]
-fn preconditionss_are_canonical_bounded_and_mode_distinct() {
+fn optional_bounded_dnf_is_canonical_and_mode_distinct() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let observed = TestAsset::Local(99);
     set_asset_balance(&ALICE, observed, 100);
-    let unconditional: crate::PreconditionsOf<Test> = Preconditions::Unconditional;
-    assert!(unconditional.is_unconditional());
-    assert_eq!(unconditional.predicate_count(), 0);
-    assert_eq!(
-      Actors::evaluate_predicate_set(&unconditional, &ALICE, 0),
-      Ok(true)
-    );
+    let unconditional: Option<crate::PreconditionOf<Test>> = None;
+    assert!(unconditional.is_none());
 
     let all = all_conditions(vec![
       Predicate::BalanceAbove {
@@ -16642,10 +16826,16 @@ fn preconditionss_are_canonical_bounded_and_mode_distinct() {
       },
       Predicate::BlockNumberAbove { threshold: 10 },
     ]);
-    assert_eq!(all.predicate_count(), 4);
-    assert_eq!(any.predicate_count(), 4);
-    assert_eq!(Actors::evaluate_predicate_set(&all, &ALICE, 0), Ok(true));
-    assert_eq!(Actors::evaluate_predicate_set(&any, &ALICE, 0), Ok(true));
+    assert_eq!(all.as_ref().expect("all precondition").predicate_count(), 4);
+    assert_eq!(any.as_ref().expect("any precondition").predicate_count(), 4);
+    assert_eq!(
+      Actors::evaluate_precondition(all.as_ref().expect("all precondition"), &ALICE, 0),
+      Ok(true)
+    );
+    assert_eq!(
+      Actors::evaluate_precondition(any.as_ref().expect("any precondition"), &ALICE, 0),
+      Ok(true)
+    );
     assert_ne!(all.encode(), any.encode());
 
     let all_false = all_conditions(vec![
@@ -16663,14 +16853,34 @@ fn preconditionss_are_canonical_bounded_and_mode_distinct() {
       Predicate::BlockNumberAbove { threshold: 10 },
     ]);
     assert_eq!(
-      Actors::evaluate_predicate_set(&all_false, &ALICE, 0),
+      Actors::evaluate_precondition(all_false.as_ref().expect("all precondition"), &ALICE, 0),
       Ok(false)
     );
     assert_eq!(
-      Actors::evaluate_predicate_set(&any_false, &ALICE, 0),
+      Actors::evaluate_precondition(any_false.as_ref().expect("any precondition"), &ALICE, 0),
       Ok(false)
     );
   });
+}
+
+#[test]
+fn predicate_evaluator_visits_every_atom_and_preserves_first_error() {
+  let precondition = any_conditions(vec![
+    Predicate::BlockNumberAbove { threshold: 0 },
+    Predicate::BlockNumberAbove { threshold: 1 },
+    Predicate::BlockNumberAbove { threshold: 2 },
+    Predicate::BlockNumberAbove { threshold: 3 },
+  ]);
+  let mut visits = 0u32;
+  let result = crate::execution::evaluate_precondition_with(
+    precondition.as_ref().expect("precondition"),
+    |_| {
+      visits += 1;
+      if visits == 1 { Err("first") } else { Ok(true) }
+    },
+  );
+  assert_eq!(result, Err("first"));
+  assert_eq!(visits, 4);
 }
 
 #[test]
@@ -16688,27 +16898,36 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
         threshold: 0,
       },
     };
-    let raw_preconditions = || {
-      Preconditions::AnyOf(
-        BoundedVec::try_from(vec![
+    let raw_precondition = || {
+      Some(Precondition {
+        clauses: BoundedVec::try_from(vec![
           BoundedVec::try_from(vec![second, first, second]).expect("predicates fit"),
         ])
         .expect("clause fits"),
-      )
+      })
     };
     let raw_plan = || {
-      execution_plan_with_step(StepOf::<Test> {
-        preconditions: raw_preconditions(),
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: raw_precondition(),
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       })
     };
     let actor_id = create_system_with(ALICE, manual_schedule(), None, raw_plan());
     let stored = Actors::actor_contract(actor_id).expect("contract exists");
-    assert_eq!(stored.steps[0].preconditions.predicate_count(), 2);
-    let Preconditions::AnyOf(clauses) = &stored.steps[0].preconditions else {
-      panic!("stored preconditions use DNF")
-    };
+    assert_eq!(
+      stored.steps[0]
+        .precondition
+        .as_ref()
+        .expect("stored precondition")
+        .predicate_count(),
+      2
+    );
+    let clauses = &stored.steps[0]
+      .precondition
+      .as_ref()
+      .expect("stored precondition")
+      .clauses;
     assert!(clauses[0][0].encode() < clauses[0][1].encode());
 
     let event_count = frame_system::Pallet::<Test>::event_count();
@@ -16732,15 +16951,15 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
       control_block
     );
 
-    let duplicate_clauses = Preconditions::AnyOf(
-      BoundedVec::try_from(vec![
+    let duplicate_clauses = Some(Precondition {
+      clauses: BoundedVec::try_from(vec![
         BoundedVec::try_from(vec![first, second]).expect("first clause fits"),
         BoundedVec::try_from(vec![second, first, second]).expect("second clause fits"),
       ])
       .expect("clauses fit"),
-    );
-    let duplicate_plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: duplicate_clauses,
+    });
+    let duplicate_plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: duplicate_clauses,
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -16753,6 +16972,46 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
       ),
       Error::<Test>::InvalidPredicate
     );
+  });
+}
+
+#[test]
+fn admission_absorbs_exact_dnf_superset_clause() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let first = TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate: Predicate::BlockNumberAbove { threshold: 0 },
+    };
+    let second = TimedPredicate {
+      timing: ObservationTiming::Current,
+      predicate: Predicate::BlockNumberBelow { threshold: 10 },
+    };
+    let absorbed = Some(Precondition {
+      clauses: BoundedVec::try_from(vec![
+        BoundedVec::try_from(vec![first]).expect("subset fits"),
+        BoundedVec::try_from(vec![second, first]).expect("superset fits"),
+      ])
+      .expect("clauses fit"),
+    });
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: absorbed,
+        task: Task::StopCycle,
+        on_error: StepErrorPolicy::AbortCycle,
+      }),
+    );
+    let stored = Actors::actor_contract(actor_id).expect("contract exists");
+    let clauses = &stored.steps[0]
+      .precondition
+      .as_ref()
+      .expect("stored precondition")
+      .clauses;
+    assert_eq!(clauses.len(), 1);
+    assert_eq!(clauses[0].as_slice(), &[first]);
   });
 }
 
@@ -16771,7 +17030,7 @@ fn opening_and_current_predicates_observe_distinct_step_state() {
           amount: AmountResolution::Fixed(60),
         }),
         StepOf::<Test> {
-          preconditions: timed_all_conditions(
+          precondition: timed_all_conditions(
             timing,
             vec![Predicate::BalanceAbove {
               asset: TestAsset::Native,
@@ -16805,7 +17064,7 @@ fn opening_and_current_predicates_observe_distinct_step_state() {
           Event::StepSkipped {
             actor_id: id,
             step_index: 1,
-            reason: StepSkippedReason::ConditionsNotMet,
+            reason: StepSkippedReason::PreconditionFalse,
             ..
           } if *id == actor_id
         )),
@@ -16820,8 +17079,8 @@ fn opening_predicate_result_is_reused_by_continuation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: timed_all_conditions(
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: timed_all_conditions(
         ObservationTiming::Opening,
         vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
@@ -16846,7 +17105,10 @@ fn opening_predicate_result_is_reused_by_continuation() {
     ));
     run_idle(Weight::MAX);
     let continuation = Actors::continuation_state(actor_id).expect("continuation exists");
-    assert_eq!(continuation.opening_predicate_results.len(), 1);
+    assert_eq!(
+      continuation.opening_predicate_results.as_slice(),
+      &[Ok(true)]
+    );
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, TestAsset::Native, 60));
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -16896,7 +17158,11 @@ fn above_and_below_conditions_are_strict_at_equality() {
     ];
     for conditions in equality_boundaries {
       assert_eq!(
-        Actors::evaluate_predicate_set(&conditions, &ALICE, 0),
+        Actors::evaluate_precondition(
+          conditions.as_ref().expect("bounded precondition"),
+          &ALICE,
+          0
+        ),
         Ok(false)
       );
     }
@@ -16946,7 +17212,10 @@ fn observation_conditions_compare_only_fresh_scalar_values() {
         max_age_blocks: 10,
       },
     ]);
-    assert_eq!(Actors::evaluate_predicate_set(&fresh, &ALICE, 0), Ok(true));
+    assert_eq!(
+      Actors::evaluate_precondition(fresh.as_ref().expect("bounded precondition"), &ALICE, 0),
+      Ok(true)
+    );
 
     for feed in 2..=4 {
       let unavailable = all_conditions(vec![Predicate::ObservationNotEquals {
@@ -16955,7 +17224,11 @@ fn observation_conditions_compare_only_fresh_scalar_values() {
         max_age_blocks: 10,
       }]);
       assert_eq!(
-        Actors::evaluate_predicate_set(&unavailable, &ALICE, 0),
+        Actors::evaluate_precondition(
+          unavailable.as_ref().expect("bounded precondition"),
+          &ALICE,
+          0
+        ),
         Ok(false)
       );
     }
@@ -16974,7 +17247,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
       },
     );
     let invalid_condition_step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::ObservationAbove {
+      precondition: all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 1,
         max_age_blocks: 5,
@@ -17038,7 +17311,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
       max_age_blocks: 5,
     }]);
     assert_eq!(
-      Actors::evaluate_predicate_set(&over_age, &ALICE, 0),
+      Actors::evaluate_precondition(over_age.as_ref().expect("bounded precondition"), &ALICE, 0),
       Err(Error::<Test>::InvalidPredicate.into())
     );
   });
@@ -17053,7 +17326,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
       AmountResolution::PercentageAtOpening(Perbill::zero()),
       AmountResolution::PercentageOfLastFunding(Perbill::zero()),
     ] {
-      let plan = execution_plan_with_step(make_step(Task::Transfer {
+      let plan = contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount,
@@ -17106,7 +17379,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
           system_active_contract(
             manual_schedule(),
             None,
-            execution_plan_with_step(make_step(task)),
+            contract_steps_with_step(make_step(task)),
           ),
         ),
         Error::<Test>::InvalidAmountResolution
@@ -17143,7 +17416,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
           system_active_contract(
             manual_schedule(),
             None,
-            execution_plan_with_step(make_step(task)),
+            contract_steps_with_step(make_step(task)),
           ),
         ),
         Error::<Test>::InvalidTradeBound
@@ -17165,7 +17438,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
         system_active_contract(
           manual_schedule(),
           None,
-          transfer_execution_plan(system_sovereign, 1),
+          transfer_contract_steps(system_sovereign, 1),
         ),
       ),
       Error::<Test>::SelfTransferNotAllowed
@@ -17180,7 +17453,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
         user_active_contract(
           manual_schedule(),
           None,
-          transfer_execution_plan(user_sovereign, 1),
+          transfer_contract_steps(user_sovereign, 1),
         ),
       ),
       Error::<Test>::SelfTransferNotAllowed
@@ -17188,14 +17461,14 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
     assert_eq!(fee_collections(), Vec::<Balance>::new());
     assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
 
-    let active_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let active_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let active_sovereign = sovereign_account(active_id);
     let before = Actors::active_actor_view(active_id).expect("active actor");
     assert_noop!(
       update_contract_partial!(
         RuntimeOrigin::root(),
         active_id,
-        transfer_execution_plan(active_sovereign, 1),
+        transfer_contract_steps(active_sovereign, 1),
         crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::SelfTransferNotAllowed
@@ -17210,7 +17483,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
       ContractInput::Dormant,
     ));
     let dormant = Actors::actor_identities(dormant_id).expect("dormant identity");
-    let self_leg_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+    let self_leg_plan = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
       legs: BoundedVec::try_from(vec![
@@ -17241,8 +17514,8 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
 #[test]
 fn zero_observation_max_age_is_rejected_during_plan_validation() {
   new_test_ext().execute_with(|| {
-    let plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::ObservationAbove {
+    let plan = contract_steps_with_step(StepOf::<Test> {
+      precondition: all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 0,
         max_age_blocks: 0,
@@ -17263,15 +17536,17 @@ fn zero_observation_max_age_is_rejected_during_plan_validation() {
 }
 
 #[test]
-fn empty_outer_and_inner_preconditions_are_rejected() {
+fn empty_outer_and_inner_precondition_forms_are_rejected() {
   new_test_ext().execute_with(|| {
-    let empty_outer = Preconditions::AnyOf(BoundedVec::default());
-    let empty_inner = Preconditions::AnyOf(
-      BoundedVec::try_from(vec![BoundedVec::default()]).expect("empty clause fits"),
-    );
-    for preconditions in [empty_outer, empty_inner] {
-      let plan = execution_plan_with_step(StepOf::<Test> {
-        preconditions,
+    let empty_outer = Precondition {
+      clauses: BoundedVec::default(),
+    };
+    let empty_inner = Precondition {
+      clauses: BoundedVec::try_from(vec![BoundedVec::default()]).expect("empty clause fits"),
+    };
+    for precondition in [empty_outer, empty_inner] {
+      let plan = contract_steps_with_step(StepOf::<Test> {
+        precondition: Some(precondition),
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -17282,7 +17557,7 @@ fn empty_outer_and_inner_preconditions_are_rejected() {
           Mutability::Mutable,
           system_active_contract(manual_schedule(), None, plan),
         ),
-        Error::<Test>::EmptyPreconditions
+        Error::<Test>::EmptyPrecondition
       );
     }
   });
@@ -17293,7 +17568,7 @@ fn any_with_multiple_true_atoms_executes_the_task_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      preconditions: any_conditions(vec![
+      precondition: any_conditions(vec![
         Predicate::BlockNumberAbove { threshold: 1 },
         Predicate::BlockNumberBelow { threshold: 10 },
       ]),
@@ -17308,7 +17583,7 @@ fn any_with_multiple_true_atoms_executes_the_task_once() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
@@ -17336,7 +17611,7 @@ fn any_skip_cannot_create_continuation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      preconditions: any_conditions(vec![
+      precondition: any_conditions(vec![
         Predicate::BlockNumberBelow { threshold: 1 },
         Predicate::BlockNumberAbove { threshold: 10 },
       ]),
@@ -17352,7 +17627,7 @@ fn any_skip_cannot_create_continuation() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
@@ -17364,7 +17639,7 @@ fn any_skip_cannot_create_continuation() {
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
   });
@@ -17376,7 +17651,7 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let step = StepOf::<Test> {
-      preconditions: any_conditions(vec![
+      precondition: any_conditions(vec![
         Predicate::BlockNumberBelow { threshold: 2 },
         Predicate::BlockNumberAbove { threshold: 100 },
       ]),
@@ -17392,7 +17667,7 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
@@ -17416,7 +17691,7 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
       event,
       Event::CycleSummary {
         actor_id: id,
-        outcomes: OutcomeTotals { skipped_conditions: 1, failed_steps: 1, .. },
+        outcomes: OutcomeTotals { precondition_skips: 1, failed_steps: 1, .. },
         ..
       } if *id == actor_id
     )));
@@ -17433,6 +17708,8 @@ fn condition_fee_depends_only_on_total_atomic_count() {
     Predicate::BlockNumberBelow { threshold: 10 },
     Predicate::BlockNumberAbove { threshold: 1 },
   ]);
+  let forward = forward.expect("bounded precondition");
+  let reverse = reverse.expect("bounded precondition");
   assert_eq!(forward.predicate_count(), reverse.predicate_count());
   assert_eq!(
     Actors::compute_eval_fee(forward.predicate_count()),
@@ -17445,7 +17722,7 @@ fn unavailable_observation_skips_without_incrementing_failures() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::ObservationNotEquals {
+      precondition: all_conditions(vec![Predicate::ObservationNotEquals {
         feed: 99,
         threshold: 0,
         max_age_blocks: 10,
@@ -17457,7 +17734,7 @@ fn unavailable_observation_skips_without_incrementing_failures() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -17468,14 +17745,14 @@ fn unavailable_observation_skips_without_incrementing_failures() {
       event,
       Event::StepSkipped {
         actor_id: id,
-        reason: StepSkippedReason::ConditionsNotMet,
+        reason: StepSkippedReason::PreconditionFalse,
         ..
       } if *id == actor_id
     )));
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")
-        .consecutive_failures,
+        .unsuccessful_attempt_streak,
       0
     );
     assert!(Actors::continuation_state(actor_id).is_none());
@@ -17487,7 +17764,7 @@ fn condition_balance_above_skips_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1_000,
       }]),
@@ -17498,8 +17775,8 @@ fn condition_balance_above_skips_when_below() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -17517,7 +17794,7 @@ fn condition_balance_above_skips_when_below() {
       Event::StepSkipped {
         actor_id: id,
         step_index: 0,
-        reason: StepSkippedReason::ConditionsNotMet,
+        reason: StepSkippedReason::PreconditionFalse,
         ..
       } if *id == actor_id
     )));
@@ -17529,7 +17806,7 @@ fn condition_balance_above_executes_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 50,
       }]),
@@ -17540,8 +17817,8 @@ fn condition_balance_above_executes_when_above() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
@@ -17562,7 +17839,7 @@ fn condition_block_number_above_skips_before_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 10 }]),
+      precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -17570,8 +17847,8 @@ fn condition_block_number_above_skips_before_threshold() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -17590,7 +17867,7 @@ fn condition_block_number_below_skips_after_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(20);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 10 }]),
+      precondition: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -17598,8 +17875,8 @@ fn condition_block_number_below_skips_after_threshold() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -17618,7 +17895,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -17632,8 +17909,8 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let charlie_before = native_balance(&CHARLIE);
     assert_ok!(Actors::manual_trigger(
@@ -17665,7 +17942,7 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
     set_pool_reserves(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in,
         asset_out,
@@ -17679,8 +17956,8 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 120);
     set_fail_dex_after_input_transfer(true);
@@ -17723,7 +18000,7 @@ fn invalid_schedule_window_too_short() {
         user_active_contract(
           manual_schedule(),
           Some(window),
-          transfer_execution_plan(BOB, 10)
+          transfer_contract_steps(BOB, 10)
         ),
       ),
       Error::<Test>::InvalidScheduleWindow
@@ -17748,7 +18025,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
       },
     ])
     .expect("two split legs fit");
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -17781,7 +18058,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
       }),
     ])
     .expect("system execution plan fits");
-    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
       maybe
@@ -17832,12 +18109,12 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
 fn percentage_of_current_uses_native_preservable_balance_as_its_base() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let actor = sovereign_account(actor_id);
     let bob_before = native_balance(&BOB);
@@ -17870,17 +18147,17 @@ fn user_all_available_preserves_current_floor_but_no_future_cycle_fee() {
       asset: TestAsset::Native,
       amount: AmountResolution::AllAvailable,
     };
-    let execution_plan = execution_plan_with_step(make_step(task));
-    let fee = Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0)
+    let contract_steps = contract_steps_with_step(make_step(task));
+    let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
       .expect("User fee envelope")
       .total;
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -17922,12 +18199,12 @@ fn user_all_available_preserves_current_floor_but_no_future_cycle_fee() {
 fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     }));
-    let fee = Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0)
+    let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
       .expect("User fee envelope")
       .total;
     let floor = TestMinUserBalance::get();
@@ -17935,13 +18212,13 @@ fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
     // floor + envelope - 1: the complete envelope cannot fit above the floor, so
     // the User attempt is NOT admitted and the actor closes with FeeBudgetExhausted
     // even though the raw balance covers the envelope (spec 5.2.1).
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let short = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan.clone(),
+      contract_steps.clone(),
     );
     deplete_user_sovereign(short, prefunded);
     fund_native(short, floor.saturating_add(fee).saturating_sub(1));
@@ -17958,13 +18235,13 @@ fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
     )));
 
     // floor + envelope: the envelope fits exactly above the floor and the run admits.
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let exact = create_user_with(
       BOB,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(exact, prefunded);
     fund_native(exact, floor.saturating_add(fee));
@@ -17995,16 +18272,16 @@ fn user_swap_out_native_input_cap_preserves_fee_native_floor_after_failed_attemp
     };
     set_pool_reserves(TestAsset::Native, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
-    let execution_plan = execution_plan_with_step(make_step(task));
+    let contract_steps = contract_steps_with_step(make_step(task));
     let fee_envelope =
-      Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0).expect("User fee envelope");
-    let prefunded = user_prefunding_requirement(&execution_plan);
+      Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0).expect("User fee envelope");
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -18039,12 +18316,12 @@ fn percentage_of_current_uses_sufficient_asset_preservable_balance_as_its_base()
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(7);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset,
       amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 10);
     assert_ok!(Actors::manual_trigger(
@@ -18062,7 +18339,7 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(7);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset,
@@ -18075,7 +18352,7 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       }),
     ])
     .expect("system execution plan fits");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 10);
     assert_ok!(Actors::manual_trigger(
@@ -18092,11 +18369,11 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
 fn burn_all_balance_preserves_the_asset_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Burn {
+    let contract_steps = contract_steps_with_step(make_step(Task::Burn {
       asset: TestAsset::Native,
       amount: AmountResolution::AllAvailable,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 500);
     let actor = sovereign_account(actor_id);
     assert_eq!(native_balance(&actor), 500);
@@ -18118,11 +18395,11 @@ fn burn_all_balance_preserves_the_asset_minimum() {
 fn mint_on_unfunded_account_creates_tokens() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Mint {
+    let contract_steps = contract_steps_with_step(make_step(Task::Mint {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(1000),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     assert_eq!(native_balance(&actor), 0);
     assert_ok!(Actors::manual_trigger(
@@ -18139,11 +18416,11 @@ fn stake_task_delegates_to_staking_adapter() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(7);
-    let execution_plan = execution_plan_with_step(make_step(Task::Stake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Stake {
       asset,
       amount: AmountResolution::Fixed(120),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 200);
     assert_ok!(Actors::manual_trigger(
@@ -18166,11 +18443,11 @@ fn stake_preserve_spend_keeps_asset_minimum_balance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(70);
-    let execution_plan = execution_plan_with_step(make_step(Task::Stake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Stake {
       asset,
       amount: AmountResolution::Fixed(99),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     assert_ok!(Actors::manual_trigger(
@@ -18189,14 +18466,14 @@ fn add_liquidity_uses_funding_unavailable_precedence_across_amount_fields() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(71);
     let asset_b = TestAsset::Local(72);
-    let execution_plan = execution_plan_with_step(make_step(Task::AddLiquidity {
+    let contract_steps = contract_steps_with_step(make_step(Task::AddLiquidity {
       asset_a,
       asset_b,
       amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(1)),
       amount_b: AmountResolution::Fixed(50),
       min_lp_out: 1,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 2);
     set_asset_balance(&actor, asset_b, 50);
@@ -18225,11 +18502,11 @@ fn unstake_task_delegates_to_staking_adapter() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
-    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
       shares: AmountResolution::Fixed(50),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 75);
     assert_ok!(Actors::manual_trigger(
@@ -18252,7 +18529,7 @@ fn unstake_dynamic_modes_resolve_against_staking_shares() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Unstake {
         asset,
         shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(25)),
@@ -18263,7 +18540,7 @@ fn unstake_dynamic_modes_resolve_against_staking_shares() {
       }),
     ])
     .expect("system execution plan fits");
-    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     signal_percentage_trigger(actor_id, asset);
@@ -18278,11 +18555,11 @@ fn unstake_all_balance_withdraws_all_staking_shares() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
-    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
       shares: AmountResolution::AllAvailable,
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 80);
     assert_ok!(Actors::manual_trigger(
@@ -18300,11 +18577,11 @@ fn unstake_last_funding_tracks_transferable_share_asset() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
-    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
       shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     set_asset_balance(&ALICE, asset, 100);
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -18327,7 +18604,7 @@ fn unstake_last_funding_tracks_transferable_share_asset() {
 fn unstake_last_funding_rejects_position_without_transferable_share_asset() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset: TestAsset::Local(u32::MAX),
       shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     }));
@@ -18336,7 +18613,7 @@ fn unstake_last_funding_rejects_position_without_transferable_share_asset() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, execution_plan),
+        system_active_contract(manual_schedule(), None, contract_steps),
       ),
       Error::<Test>::InvalidAmountResolution
     );
@@ -18348,11 +18625,11 @@ fn unstake_last_funding_fails_closed_if_share_mapping_disappears_mid_lifetime() 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
-    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
       shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     set_asset_balance(&ALICE, asset, 100);
     assert_ok!(ordinary_transfer_to_actor(
       RuntimeOrigin::signed(ALICE),
@@ -18385,7 +18662,7 @@ fn stake_adapter_failure_can_continue_next_step() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(13);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -18397,8 +18674,8 @@ fn stake_adapter_failure_can_continue_next_step() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     fund_native(actor_id, 20);
@@ -18433,7 +18710,7 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(14);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -18445,8 +18722,8 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     fund_native(actor_id, 20);
@@ -18481,7 +18758,7 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -18493,8 +18770,8 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 120);
     set_fail_staking_after_burn(true);
@@ -18528,7 +18805,7 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -18540,8 +18817,8 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 120);
     set_fail_staking_after_burn(true);
@@ -18575,13 +18852,13 @@ fn donate_liquidity_task_delegates_to_liquidity_donation_adapter() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(9);
     let asset_b = TestAsset::Local(10);
-    let execution_plan = execution_plan_with_step(make_step(Task::DonateLiquidity {
+    let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
       max_amount_a: AmountResolution::Fixed(40),
       max_ratio_error: Perbill::from_percent(1),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 100);
     set_asset_balance(&actor, asset_b, 90);
@@ -18619,13 +18896,13 @@ fn donate_liquidity_percentage_resolves_only_against_asset_a() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(73);
     let asset_b = TestAsset::Local(74);
-    let execution_plan = execution_plan_with_step(make_step(Task::DonateLiquidity {
+    let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
       max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
       max_ratio_error: Perbill::from_percent(1),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 101);
     set_asset_balance(&actor, asset_b, 100);
@@ -18649,13 +18926,13 @@ fn donate_liquidity_asset_b_debit_is_capped_at_preservable_capacity() {
     // amounts without overdrawing the b-side or the fee-native protected floor.
     let asset_a = TestAsset::Local(81);
     let asset_b = TestAsset::Local(82);
-    let execution_plan = execution_plan_with_step(make_step(Task::DonateLiquidity {
+    let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
       max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(100)),
       max_ratio_error: Perbill::from_percent(1),
     }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 100);
     // Asset b holds less than the resolved a-side, and its protected floor keeps part reserved.
@@ -18688,22 +18965,22 @@ fn donate_liquidity_user_fee_native_b_side_preserves_protected_floor() {
     // never consume the fee-native protected floor (MinUserBalance = 50).
     let asset_a = TestAsset::Local(90);
     let asset_b = TestAsset::Native;
-    let execution_plan = execution_plan_with_step(make_step(Task::DonateLiquidity {
+    let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
       max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(100)),
       max_ratio_error: Perbill::from_percent(1),
     }));
-    let fee = Actors::attempt_fee_envelope(ActorType::User, &execution_plan, 0)
+    let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
       .expect("User fee envelope")
       .total;
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
@@ -18746,7 +19023,7 @@ fn donate_liquidity_asset_b_cap_keeps_capped_task_continuing() {
     let asset_a = TestAsset::Local(11);
     let asset_b = TestAsset::Local(12);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18760,8 +19037,8 @@ fn donate_liquidity_asset_b_cap_keeps_capped_task_continuing() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 100);
     set_asset_balance(&actor, asset_b, 10);
@@ -18805,7 +19082,7 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
     let asset_a = TestAsset::Local(15);
     let asset_b = TestAsset::Local(16);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18819,8 +19096,8 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_a, 100);
     set_asset_balance(&actor, asset_b, 100);
@@ -18858,7 +19135,7 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
     let asset_a = TestAsset::Native;
     let asset_b = TestAsset::Local(19);
     let failing_step = StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+      precondition: None,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -18872,8 +19149,8 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     });
-    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset_b, 100);
     fund_native(actor_id, 120);
@@ -18908,7 +19185,7 @@ fn condition_balance_below_skips_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceBelow {
+      precondition: all_conditions(vec![Predicate::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 50,
       }]),
@@ -18919,8 +19196,8 @@ fn condition_balance_below_skips_when_above() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -18939,7 +19216,7 @@ fn condition_balance_below_executes_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceBelow {
+      precondition: all_conditions(vec![Predicate::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 200,
       }]),
@@ -18950,8 +19227,8 @@ fn condition_balance_below_executes_when_below() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
@@ -18968,7 +19245,7 @@ fn condition_balance_equals_matches_exact() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceEquals {
+      precondition: all_conditions(vec![Predicate::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -18979,8 +19256,8 @@ fn condition_balance_equals_matches_exact() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
@@ -19001,7 +19278,7 @@ fn condition_balance_equals_skips_when_not_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceEquals {
+      precondition: all_conditions(vec![Predicate::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 999,
       }]),
@@ -19012,8 +19289,8 @@ fn condition_balance_equals_skips_when_not_equal() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -19032,7 +19309,7 @@ fn condition_balance_not_equals_executes_when_different() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceNotEquals {
+      precondition: all_conditions(vec![Predicate::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 999,
       }]),
@@ -19043,8 +19320,8 @@ fn condition_balance_not_equals_executes_when_different() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
@@ -19061,7 +19338,7 @@ fn condition_balance_not_equals_skips_when_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceNotEquals {
+      precondition: all_conditions(vec![Predicate::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -19072,8 +19349,8 @@ fn condition_balance_not_equals_skips_when_equal() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -19091,18 +19368,18 @@ fn condition_balance_not_equals_skips_when_equal() {
 fn insufficient_fee_closes_cycle_immediately() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::Transfer {
+    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     }));
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     // Fund above MinUserBalance(50) but below fee threshold (eval=1 + exec=100 = 101)
@@ -19129,7 +19406,7 @@ fn condition_sees_spendable_not_raw_balance_for_user_actor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let threshold = 350;
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold,
       }]),
@@ -19140,14 +19417,14 @@ fn condition_sees_spendable_not_raw_balance_for_user_actor() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, 400);
@@ -19170,7 +19447,7 @@ fn condition_sees_full_balance_for_system_actor() {
     frame_system::Pallet::<Test>::set_block_number(1);
     // System Actors: reserved=0, so spendable == raw
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 150,
       }]),
@@ -19181,8 +19458,8 @@ fn condition_sees_full_balance_for_system_actor() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 200);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
@@ -19200,7 +19477,7 @@ fn system_condition_respects_adapter_visible_native_lock() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -19215,7 +19492,7 @@ fn system_condition_respects_adapter_visible_native_lock() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(step),
+      contract_steps_with_step(step),
     );
     fund_native(actor_id, 200);
     let sovereign = Actors::active_actor_view(actor_id)
@@ -19241,7 +19518,7 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 60,
       }]),
@@ -19252,14 +19529,14 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
-    let execution_plan = execution_plan_with_step(step);
-    let prefunded = user_prefunding_requirement(&execution_plan);
+    let contract_steps = contract_steps_with_step(step);
+    let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan,
+      contract_steps,
     );
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, 300);
@@ -19294,8 +19571,8 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
 fn timer_always_executes_on_interval() {
   new_test_ext().execute_with(|| {
     let schedule = timer_schedule(5);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let actor_id = create_system_with(ALICE, schedule, None, execution_plan);
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let actor_id = create_system_with(ALICE, schedule, None, contract_steps);
     fund_native(actor_id, 1000);
     // Track executions via cycle_nonce changes (each cycle increments nonce)
     let mut last_cycle_nonce = 0u64;
@@ -19323,7 +19600,7 @@ fn timer_always_executes_on_interval() {
 fn timer_every_block_uses_exact_next_block_before_cutoff_then_late_tickets() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
     Actors::on_idle(1, Weight::MAX);
     assert_eq!(
@@ -19366,7 +19643,7 @@ fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
       trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 10,
     };
-    let actor_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -19421,7 +19698,7 @@ fn timer_eligibility_uses_maximum_of_cadence_cooldown_and_window() {
         start: 15,
         end: 115,
       }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(15));
     frame_system::Pallet::<Test>::set_block_number(15);
@@ -19444,7 +19721,7 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
       trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 5,
     };
-    let actor_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
     run_idle(Weight::MAX);
     assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
@@ -19485,54 +19762,43 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
 }
 
 #[test]
-fn timer_wakeup_uses_one_deterministic_cadence_phase() {
+fn timer_jitter_removal_evidence_is_machine_readable_and_decisive() {
+  let evidence: serde_json::Value = serde_json::from_str(include_str!(
+    "../tests/fixtures/timer-jitter-decision.v1.json"
+  ))
+  .expect("timer-jitter decision fixture parses");
+  assert_eq!(evidence["profile"]["actorIds"], "1..=10000");
+  assert_eq!(evidence["zeroPhase"]["tailServiceBlock"], 7_429);
+  assert_eq!(evidence["historicalJitter"]["tailServiceBlock"], 7_429);
+  assert_eq!(evidence["zeroPhase"]["passExhaustedBlocks"], 6_666);
+  assert_eq!(evidence["historicalJitter"]["passExhaustedBlocks"], 6_666);
+  assert_eq!(evidence["decision"], "remove-timer-jitter");
+}
+
+#[test]
+fn timer_wakeup_uses_exact_cadence_without_actor_phase() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cadence = 20u32;
-    let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_execution_plan());
-    let scheduled_block =
-      scheduled_wakeup_block(actor_id).expect("timer wakeup should be scheduled");
-    let window = cadence
-      .saturating_div(4)
-      .min(<Test as crate::Config>::MaxTimerJitterBlocks::get());
-    let hash = frame::hashing::blake2_256(&actor_id.to_le_bytes());
-    let raw = u64::from_le_bytes([
-      hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
-    ]);
-    let jitter = if window == 0 {
-      0
-    } else {
-      raw % u64::from(window)
-    };
-    let expected = 1u64.saturating_add(jitter);
-    assert_eq!(scheduled_block, expected);
+    let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_contract_steps());
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(21));
 
-    frame_system::Pallet::<Test>::set_block_number(scheduled_block);
+    frame_system::Pallet::<Test>::set_block_number(21);
     run_idle(Weight::MAX);
-    assert_eq!(
-      scheduled_wakeup_block(actor_id),
-      Some(expected + u64::from(cadence))
-    );
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(41));
   });
 }
 
 #[test]
-fn timer_validation_includes_worst_case_deterministic_jitter() {
+fn timer_validation_accepts_the_exact_maximum_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let max_delay = TestMaxExecutionDelayBlocks::get() as u32;
-    let max_jitter =
-      <<Test as crate::Config>::MaxTimerJitterBlocks as Get<u32>>::get().saturating_sub(1);
-    let largest_valid_cadence = max_delay.saturating_sub(max_jitter);
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract(
-        timer_schedule(largest_valid_cadence),
-        None,
-        inert_execution_plan()
-      ),
+      system_active_contract(timer_schedule(max_delay), None, inert_contract_steps()),
     ));
     assert_noop!(
       Actors::create_system_actor(
@@ -19540,9 +19806,9 @@ fn timer_validation_includes_worst_case_deterministic_jitter() {
         ALICE,
         Mutability::Mutable,
         system_active_contract(
-          timer_schedule(largest_valid_cadence.saturating_add(1)),
+          timer_schedule(max_delay.saturating_add(1)),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
       ),
       Error::<Test>::ExecutionDelayTooLong
@@ -19560,8 +19826,8 @@ fn user_dca_complete_lifecycle() {
     let schedule = timer_schedule(5);
     let foreign = TestAsset::Local(1);
     set_asset_balance(&ALICE, foreign, 10_000);
-    let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+    let contract_steps = contract_steps_with_step(StepOf::<Test> {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: foreign,
         threshold: 50,
       }]),
@@ -19573,11 +19839,11 @@ fn user_dca_complete_lifecycle() {
       on_error: StepErrorPolicy::AbortCycle,
     });
     let actor_id = Actors::next_actor_id();
-    prefund_active_user_creation(ALICE, &execution_plan);
+    prefund_active_user_creation(ALICE, &contract_steps);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      user_active_contract(schedule, None, execution_plan),
+      user_active_contract(schedule, None, contract_steps),
     ));
     // Verify creation
     assert!(has_actor_event(|e| matches!(
@@ -19649,10 +19915,10 @@ fn user_dca_swap_then_cold_storage_transfer() {
     let pool_account: AccountId = u64::MAX;
     set_asset_balance(&pool_account, foreign, 10_000);
     fund_native_raw(&pool_account, 10_000);
-    // ExecutionPlan: SwapIn(foreign → native) → Transfer(native → cold wallet)
-    let execution_plan = BoundedVec::try_from(vec![
+    // ContractSteps: SwapIn(foreign → native) → Transfer(native → cold wallet)
+    let contract_steps = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: all_conditions(vec![Predicate::BalanceAbove {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: foreign,
           threshold: 50,
         }]),
@@ -19665,7 +19931,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        preconditions: all_conditions(vec![Predicate::BalanceAbove {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 10,
         }]),
@@ -19678,7 +19944,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
       },
     ])
     .unwrap();
-    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, execution_plan);
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, contract_steps);
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, foreign, 1000);
     fund_native(actor_id, 5000);
@@ -19707,8 +19973,8 @@ fn user_copybook_savings() {
     let savings: AccountId = 8888;
     let schedule = timer_schedule(10);
     // Transfer 5% of current native balance to savings
-    let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: all_conditions(vec![Predicate::BalanceAbove {
+    let contract_steps = contract_steps_with_step(StepOf::<Test> {
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
       }]),
@@ -19719,7 +19985,7 @@ fn user_copybook_savings() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
-    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, execution_plan);
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, contract_steps);
     fund_native(actor_id, 10000);
     let initial_savings = native_balance(&savings);
     // Execute multiple cycles
@@ -19745,9 +20011,9 @@ fn user_portfolio_rebalancer_both_directions() {
     // Step 1: If spendable native < 500 AND foreign > 500, transfer 50% foreign to CHARLIE
     // Full two-step attempt fee envelope ≈ 2*(1+100) = 202
     // BalanceBelow checks spendable = raw - fee_reserve
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: all_conditions(vec![Predicate::BalanceAbove {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 5000,
         }]),
@@ -19759,7 +20025,7 @@ fn user_portfolio_rebalancer_both_directions() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        preconditions: all_conditions(vec![
+        precondition: all_conditions(vec![
           Predicate::BalanceBelow {
             asset: TestAsset::Native,
             threshold: 500,
@@ -19778,9 +20044,9 @@ fn user_portfolio_rebalancer_both_directions() {
       },
     ])
     .unwrap();
-    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, execution_plan);
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, schedule, None, contract_steps);
     let actor = sovereign_account(actor_id);
-    // Phase 1: native high → step 0 fires, step 1 skipped
+    // First evaluation: native high → step 0 fires, step 1 skipped
     fund_native(actor_id, 10000);
     set_asset_balance(&actor, foreign, 2000);
     frame_system::Pallet::<Test>::set_block_number(6);
@@ -19794,7 +20060,7 @@ fn user_portfolio_rebalancer_both_directions() {
       )),
       "Step 0 should execute when spendable native > 5000"
     );
-    // Phase 2: slash native so spendable < 500, keep raw > fee_reserve (202)
+    // Second evaluation: slash native so spendable < 500, keep raw > fee_reserve (202)
     // Set raw native to 600: spendable = 600 - 202 = 398 < 500 ✓
     let actor_native = native_balance(&actor);
     let _ = <Balances as Currency<AccountId>>::slash(&actor, actor_native.saturating_sub(600));
@@ -19812,15 +20078,15 @@ fn user_portfolio_rebalancer_both_directions() {
 // --- Multi-Asset Funding Tests ---
 
 #[test]
-fn multi_asset_execution_plan_tracks_all_referenced_assets() {
+fn multi_asset_contract_steps_tracks_all_referenced_assets() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign_a = TestAsset::Local(1);
     let foreign_b = TestAsset::Local(2);
-    // ExecutionPlan references both assets via PercentageOfLastFunding
-    let execution_plan = BoundedVec::try_from(vec![
+    // ContractSteps references both assets via PercentageOfLastFunding
+    let contract_steps = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -19829,7 +20095,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -19839,7 +20105,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
       },
     ])
     .unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let funding = actor_funding(actor_id);
     // Verify both assets are tracked
     assert!(funding.funding_tracked_assets.contains(&foreign_a));
@@ -19851,7 +20117,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
 fn manual_readiness_mutates_hot_state_without_rewriting_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let contract_before = Actors::actor_contract(actor_id).expect("actor contract exists");
 
     assert_ok!(Actors::manual_trigger(
@@ -19876,7 +20142,7 @@ fn funding_ingress_mutates_only_actor_funding_state() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
@@ -19908,8 +20174,8 @@ fn funding_accumulator_isolated_per_asset() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign = TestAsset::Local(1);
-    let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+    let contract_steps = contract_steps_with_step(StepOf::<Test> {
+      precondition: None,
       task: Task::Transfer {
         to: BOB,
         asset: foreign,
@@ -19917,7 +20183,7 @@ fn funding_accumulator_isolated_per_asset() {
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     // Mint on ALICE before the ordinary transfer to the sovereign account
     set_asset_balance(&ALICE, foreign, 1000);
     assert_ok!(ordinary_transfer_to_actor(
@@ -19940,9 +20206,9 @@ fn percentage_of_last_funding_multi_asset() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign_a = TestAsset::Local(1);
     let foreign_b = TestAsset::Local(2);
-    let execution_plan = BoundedVec::try_from(vec![
+    let contract_steps = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -19951,7 +20217,7 @@ fn percentage_of_last_funding_multi_asset() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -19961,7 +20227,7 @@ fn percentage_of_last_funding_multi_asset() {
       },
     ])
     .unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     // Mint both assets on ALICE before ordinary transfers to the sovereign account
     set_asset_balance(&ALICE, foreign_a, 1000);
     set_asset_balance(&ALICE, foreign_b, 500);
@@ -19997,7 +20263,7 @@ fn percentage_modes_excluding_total_supply_remain_supported() {
       ALICE,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::Transfer {
+      contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset,
         amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
@@ -20020,12 +20286,12 @@ fn scheduler_ignores_sparse_id_gaps() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let schedule = timer_schedule(1);
-    let execution_plan = inert_execution_plan();
+    let contract_steps = inert_contract_steps();
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract(schedule.clone(), None, execution_plan.clone()),
+      system_active_contract(schedule.clone(), None, contract_steps.clone()),
     ));
     let sov_0 = Actors::sovereign_account_id_system(0);
     let _ = Balances::deposit_creating(&sov_0, 1_000_000);
@@ -20035,7 +20301,7 @@ fn scheduler_ignores_sparse_id_gaps() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      system_active_contract(schedule, None, execution_plan),
+      system_active_contract(schedule, None, contract_steps),
     ));
     let sov_2000 = Actors::sovereign_account_id_system(2000);
     let _ = Balances::deposit_creating(&sov_2000, 1_000_000);
@@ -20072,7 +20338,7 @@ fn active_actors_set_maintains_integrity() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let schedule = timer_schedule(1);
-    let inert_plan = inert_execution_plan();
+    let inert_plan = inert_contract_steps();
     for _ in 0..3 {
       assert_ok!(Actors::create_system_actor(
         RuntimeOrigin::root(),
@@ -20104,25 +20370,25 @@ fn scheduler_continues_after_in_loop_close_and_executes_following_ready_actors()
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     deplete_user_sovereign(
       close_id,
-      user_prefunding_requirement(&inert_execution_plan()),
+      user_prefunding_requirement(&inert_contract_steps()),
     );
     let live_id_1 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let live_id_2 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     fund_native(live_id_1, 1_000);
     fund_native(live_id_2, 1_000);
@@ -20165,30 +20431,30 @@ fn queue_progress_handles_adjacent_removal() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let id1 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let id2 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let id3 = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
-    deplete_user_sovereign(id3, user_prefunding_requirement(&inert_execution_plan()));
+    deplete_user_sovereign(id3, user_prefunding_requirement(&inert_contract_steps()));
     fund_native(id0, 1_000);
     fund_native(id1, 1_000);
     fund_native(id2, 1_000);
@@ -20234,27 +20500,27 @@ fn queue_progress_matrix_keeps_progress_and_coverage() {
           Mutability::Mutable,
           manual_schedule(),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         create_user_with(
           ALICE,
           Mutability::Mutable,
           manual_schedule(),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
         create_user_with(
           ALICE,
           Mutability::Mutable,
           manual_schedule(),
           None,
-          inert_execution_plan(),
+          inert_contract_steps(),
         ),
       ];
       for (idx, actor_id) in ids.iter().enumerate() {
         deplete_user_sovereign(
           *actor_id,
-          user_prefunding_requirement(&inert_execution_plan()),
+          user_prefunding_requirement(&inert_contract_steps()),
         );
         if (funded_mask & (1 << idx)) != 0 {
           fund_native(*actor_id, 1_000);
@@ -20301,7 +20567,7 @@ fn queue_progress_matrix_keeps_progress_and_coverage() {
 fn auto_close_threshold_reached_closes_actor_after_successful_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::signed(ALICE),
       actor_id,
@@ -20336,7 +20602,7 @@ fn auto_close_threshold_reached_closes_actor_after_successful_cycle() {
 fn increment_auto_close_nonce_enforces_bounds_and_overflow_rules() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_noop!(
       Actors::increment_auto_close_nonce(RuntimeOrigin::signed(ALICE), actor_id, 0),
       Error::<Test>::AutoCloseNonceIncrementZero
@@ -20378,13 +20644,13 @@ fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
       Mutability::Immutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     assert_noop!(
       Actors::set_auto_close_at_cycle_nonce(RuntimeOrigin::signed(ALICE), immutable_id, Some(2)),
       Error::<Test>::ImmutableActor
     );
-    let mutable_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let mutable_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_noop!(
       Actors::set_auto_close_at_cycle_nonce(RuntimeOrigin::signed(BOB), mutable_id, Some(2)),
       Error::<Test>::NotOwner
@@ -20435,7 +20701,7 @@ fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
 fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::signed(ALICE),
       actor_id,
@@ -20462,12 +20728,12 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
 fn system_immutable_rejects_runtime_control_paths_even_for_root() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = inert_execution_plan();
+    let contract_steps = inert_contract_steps();
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_contract(timer_schedule(1), None, execution_plan.clone()),
+      system_active_contract(timer_schedule(1), None, contract_steps.clone()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     assert_eq!(
@@ -20484,7 +20750,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
       update_contract_partial!(
         RuntimeOrigin::root(),
         actor_id,
-        execution_plan.clone(),
+        contract_steps.clone(),
         crate::CompletionPolicy::Persistent,
       ),
       Error::<Test>::ImmutableActor
@@ -20511,7 +20777,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
         actor_id,
         ALICE,
         Mutability::Immutable,
-        system_active_contract(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_contract_steps()),
       ),
       Error::<Test>::SystemSovereignOccupied
     );
@@ -20531,7 +20797,7 @@ fn system_immutable_indefinite_commitment_survives_breaker_mitigation() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      system_active_contract(timer_schedule(10), None, inert_execution_plan()),
+      system_active_contract(timer_schedule(10), None, inert_contract_steps()),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     let before = Actors::active_actor_view(actor_id).expect("immutable actor");
@@ -20572,7 +20838,7 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Immutable,
-        system_active_contract(manual_schedule(), None, inert_execution_plan()),
+        system_active_contract(manual_schedule(), None, inert_contract_steps()),
       ),
       Error::<Test>::InvalidTriggerConfiguration
     );
@@ -20583,7 +20849,7 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
       system_active_contract(
         timer_schedule(1),
         Some(ScheduleWindow { start: 1, end: 101 }),
-        inert_execution_plan(),
+        inert_contract_steps(),
       ),
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
@@ -20611,14 +20877,14 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       CloseReason::ConsecutiveFailures | CloseReason::AutoCloseNonceReached
     );
     let actor_id = if is_system {
-      create_system_with(ALICE, manual_schedule(), None, inert_execution_plan())
+      create_system_with(ALICE, manual_schedule(), None, inert_contract_steps())
     } else {
       create_user_with(
         ALICE,
         Mutability::Mutable,
         manual_schedule(),
         None,
-        inert_execution_plan(),
+        inert_contract_steps(),
       )
     };
     match reason {
@@ -20636,7 +20902,7 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
           maybe
             .as_mut()
             .expect("actor hot state exists")
-            .consecutive_failures = <Test as crate::Config>::MaxConsecutiveFailures::get();
+            .unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
         });
       }
       CloseReason::AutoCloseNonceReached => {
@@ -20731,7 +20997,7 @@ fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let sovereign = sovereign_account(actor_id);
     fund_native_raw(&sovereign, 1_000);
@@ -20768,9 +21034,9 @@ mod proptest_actor {
   };
   use crate::{
     ActorContract, ActorFunding, ActorHot, ActorIdentities, AmountResolution, AssetFilter,
-    ContinuationStateStore, CycleState, Event, FundingSourcePolicy, Mutability, Preconditions,
-    QueueOccupancy, QueuePages, Schedule, SourceFilter, StepErrorPolicy, StepOf,
-    SystemSovereignState, SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages, mock::*,
+    ContinuationStateStore, CycleState, Event, FundingSourcePolicy, Mutability, QueueOccupancy,
+    QueuePages, Schedule, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState,
+    SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -20793,18 +21059,18 @@ mod proptest_actor {
     }
   }
 
-  fn inert_execution_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
+  fn inert_contract_steps() -> crate::ContractSteps<crate::mock::Test> {
     BoundedVec::try_from(vec![RuntimeStep {
-      preconditions: all_conditions(vec![crate::Predicate::BlockNumberBelow { threshold: 0 }]),
+      precondition: all_conditions(vec![crate::Predicate::BlockNumberBelow { threshold: 0 }]),
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
-    .expect("execution_plan must fit")
+    .expect("contract_steps must fit")
   }
 
   fn create_timer_actor(owner: AccountId, every_blocks: u32) -> u64 {
     let id = Actors::next_actor_id();
-    let plan = inert_execution_plan();
+    let plan = inert_contract_steps();
     prefund_active_user_creation(owner, &plan);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(owner),
@@ -20835,7 +21101,7 @@ mod proptest_actor {
           slippage_tolerance: Perbill::one(),
         }),
         StepOf::<Test> {
-          preconditions: Preconditions::Unconditional,
+          precondition: None,
           task: Task::AddLiquidity {
             asset_a: TestAsset::Local(77),
             asset_b: TestAsset::Local(88),
@@ -20928,7 +21194,7 @@ mod proptest_actor {
           amount: AmountResolution::Fixed(10),
         }),
         StepOf::<Test> {
-          preconditions: Preconditions::Unconditional,
+          precondition: None,
           task: Task::SwapIn {
             asset_in: TestAsset::Native,
             asset_out: TestAsset::Local(77),
@@ -21019,10 +21285,10 @@ mod proptest_actor {
     })
   }
 
-  fn model_retry_plan() -> crate::ExecutionPlanOf<crate::mock::Test> {
+  fn model_retry_plan() -> crate::ContractSteps<crate::mock::Test> {
     BoundedVec::try_from(vec![
       RuntimeStep {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -21031,7 +21297,7 @@ mod proptest_actor {
         on_error: StepErrorPolicy::AbortCycle,
       },
       RuntimeStep {
-        preconditions: Preconditions::Unconditional,
+        precondition: None,
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -21059,7 +21325,7 @@ mod proptest_actor {
         cooldown_blocks: 0,
       },
       schedule_window: None,
-      steps: inert_execution_plan(),
+      steps: inert_contract_steps(),
       completion: crate::CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
@@ -21279,7 +21545,7 @@ mod proptest_actor {
     ) {
       new_test_ext().execute_with(|| {
         frame_system::Pallet::<Test>::set_block_number(1);
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
         let rejected = match corruption {
           0 => {
             assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
@@ -21498,7 +21764,7 @@ mod proptest_actor {
               let _ = update_contract_partial!(
                 RuntimeOrigin::root(),
                 system_id,
-                inert_execution_plan(),
+                inert_contract_steps(),
                 crate::CompletionPolicy::Persistent,
               );
             }
@@ -21636,13 +21902,759 @@ mod proptest_actor {
   }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StepParityStimulus {
+  PreconditionFalse,
+  PredicateError,
+  ResolutionSkipped,
+  FundingUnavailable,
+  SuccessfulTask,
+  StopCycle,
+  TemporaryFailure,
+  PermanentFailure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StepParityBound {
+  Below,
+  GlobalReached,
+  LocalReached,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StepParityCase {
+  row: &'static str,
+  name: &'static str,
+  stimulus: StepParityStimulus,
+  policy: StepErrorPolicy,
+  mutability: Mutability,
+  actor_type: ActorType,
+  bound: StepParityBound,
+}
+
+const PARITY_RETRY: StepErrorPolicy = StepErrorPolicy::RetryLater { max_attempts: 2 };
+
+const STEP_TRANSITION_PARITY_MATRIX: &[StepParityCase] = &[
+  StepParityCase {
+    row: "ST-01",
+    name: "precondition-false/continue/user",
+    stimulus: StepParityStimulus::PreconditionFalse,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-01",
+    name: "precondition-false/abort/immutable",
+    stimulus: StepParityStimulus::PreconditionFalse,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-01",
+    name: "precondition-false/retry",
+    stimulus: StepParityStimulus::PreconditionFalse,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-02",
+    name: "resolution-skip/continue",
+    stimulus: StepParityStimulus::ResolutionSkipped,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-02",
+    name: "resolution-skip/abort/user",
+    stimulus: StepParityStimulus::ResolutionSkipped,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-02",
+    name: "resolution-skip/retry",
+    stimulus: StepParityStimulus::ResolutionSkipped,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-03",
+    name: "funding-unavailable/continue",
+    stimulus: StepParityStimulus::FundingUnavailable,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-03",
+    name: "funding-unavailable/abort/immutable",
+    stimulus: StepParityStimulus::FundingUnavailable,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-04",
+    name: "funding-unavailable/retry/suspend",
+    stimulus: StepParityStimulus::FundingUnavailable,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-05",
+    name: "funding-unavailable/retry/global-bound",
+    stimulus: StepParityStimulus::FundingUnavailable,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::GlobalReached,
+  },
+  StepParityCase {
+    row: "ST-05",
+    name: "funding-unavailable/retry/local-bound",
+    stimulus: StepParityStimulus::FundingUnavailable,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::LocalReached,
+  },
+  StepParityCase {
+    row: "ST-06",
+    name: "successful-task/continue",
+    stimulus: StepParityStimulus::SuccessfulTask,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-06",
+    name: "successful-task/abort/user-immutable",
+    stimulus: StepParityStimulus::SuccessfulTask,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-06",
+    name: "successful-task/retry",
+    stimulus: StepParityStimulus::SuccessfulTask,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-07",
+    name: "stop-cycle/continue/user",
+    stimulus: StepParityStimulus::StopCycle,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-07",
+    name: "stop-cycle/abort/immutable",
+    stimulus: StepParityStimulus::StopCycle,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-07",
+    name: "stop-cycle/retry",
+    stimulus: StepParityStimulus::StopCycle,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-08",
+    name: "temporary-failure/continue/user-immutable",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-09",
+    name: "temporary-failure/abort",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-09",
+    name: "temporary-failure/abort/global-bound",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::GlobalReached,
+  },
+  StepParityCase {
+    row: "ST-10",
+    name: "temporary-failure/retry/suspend/user",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-11",
+    name: "temporary-failure/retry/global-bound",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::GlobalReached,
+  },
+  StepParityCase {
+    row: "ST-11",
+    name: "temporary-failure/retry/local-bound",
+    stimulus: StepParityStimulus::TemporaryFailure,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::LocalReached,
+  },
+  StepParityCase {
+    row: "ST-12",
+    name: "permanent-failure/continue/user-immutable",
+    stimulus: StepParityStimulus::PermanentFailure,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-12",
+    name: "predicate-error/continue",
+    stimulus: StepParityStimulus::PredicateError,
+    policy: StepErrorPolicy::ContinueNextStep,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-13",
+    name: "permanent-failure/abort",
+    stimulus: StepParityStimulus::PermanentFailure,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-13",
+    name: "permanent-failure/retry/user",
+    stimulus: StepParityStimulus::PermanentFailure,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-13",
+    name: "predicate-error/abort/user-immutable",
+    stimulus: StepParityStimulus::PredicateError,
+    policy: StepErrorPolicy::AbortCycle,
+    mutability: Mutability::Immutable,
+    actor_type: ActorType::User,
+    bound: StepParityBound::Below,
+  },
+  StepParityCase {
+    row: "ST-13",
+    name: "predicate-error/retry",
+    stimulus: StepParityStimulus::PredicateError,
+    policy: PARITY_RETRY,
+    mutability: Mutability::Mutable,
+    actor_type: ActorType::System,
+    bound: StepParityBound::Below,
+  },
+];
+
+fn parity_target_step(case: StepParityCase) -> StepOf<Test> {
+  let transfer = |amount| Task::Transfer {
+    to: BOB,
+    asset: TestAsset::Native,
+    amount,
+  };
+  let (precondition, task) = match case.stimulus {
+    StepParityStimulus::PreconditionFalse => (
+      all_conditions(vec![Predicate::BalanceAbove {
+        asset: TestAsset::Native,
+        threshold: 1_000_000,
+      }]),
+      transfer(AmountResolution::Fixed(5)),
+    ),
+    StepParityStimulus::PredicateError => (
+      all_conditions(vec![Predicate::ObservationAbove {
+        feed: 1,
+        threshold: 1,
+        max_age_blocks: 5,
+      }]),
+      transfer(AmountResolution::Fixed(5)),
+    ),
+    StepParityStimulus::ResolutionSkipped => (
+      None,
+      transfer(AmountResolution::PercentageOfCurrent(Perbill::from_parts(
+        1,
+      ))),
+    ),
+    StepParityStimulus::FundingUnavailable => (None, transfer(AmountResolution::Fixed(10))),
+    StepParityStimulus::SuccessfulTask => (None, transfer(AmountResolution::Fixed(5))),
+    StepParityStimulus::StopCycle => (None, Task::StopCycle),
+    StepParityStimulus::TemporaryFailure | StepParityStimulus::PermanentFailure => (
+      None,
+      Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+    ),
+  };
+  StepOf::<Test> {
+    precondition,
+    task,
+    on_error: case.policy,
+  }
+}
+
+fn parity_contract_steps(case: StepParityCase) -> crate::ContractSteps<Test> {
+  BoundedVec::try_from(vec![
+    make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(2),
+    }),
+    parity_target_step(case),
+    make_step(Task::Transfer {
+      to: CHARLIE,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(3),
+    }),
+  ])
+  .expect("parity matrix contract fits")
+}
+
+fn parity_advances(case: StepParityCase) -> bool {
+  match case.stimulus {
+    StepParityStimulus::PreconditionFalse
+    | StepParityStimulus::ResolutionSkipped
+    | StepParityStimulus::SuccessfulTask => true,
+    StepParityStimulus::StopCycle => false,
+    StepParityStimulus::FundingUnavailable => {
+      !matches!(case.policy, StepErrorPolicy::RetryLater { .. })
+    }
+    StepParityStimulus::PredicateError
+    | StepParityStimulus::TemporaryFailure
+    | StepParityStimulus::PermanentFailure => case.policy == StepErrorPolicy::ContinueNextStep,
+  }
+}
+
+fn parity_expected_steps(case: StepParityCase) -> Vec<SimulationStepRecord> {
+  let target = match case.stimulus {
+    StepParityStimulus::PreconditionFalse => {
+      StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
+    }
+    StepParityStimulus::PredicateError => {
+      StepOutcome::Failed(TaskFailure::permanent(Error::<Test>::InvalidPredicate))
+    }
+    StepParityStimulus::ResolutionSkipped => {
+      StepOutcome::Skipped(StepSkippedReason::ResolutionSkipped)
+    }
+    StepParityStimulus::FundingUnavailable => StepOutcome::FundingUnavailable,
+    StepParityStimulus::SuccessfulTask => StepOutcome::Executed,
+    StepParityStimulus::StopCycle => StepOutcome::Stopped,
+    StepParityStimulus::TemporaryFailure => StepOutcome::Failed(TaskFailure::temporary(
+      DispatchError::Other("TemporaryDexCapacity"),
+    )),
+    StepParityStimulus::PermanentFailure => StepOutcome::Failed(TaskFailure::permanent(
+      DispatchError::Other("MockDexAfterInputTransferFailed"),
+    )),
+  };
+  let mut steps = if case.bound == StepParityBound::LocalReached {
+    Vec::new()
+  } else {
+    vec![SimulationStepRecord {
+      step_index: 0,
+      outcome: StepOutcome::Executed,
+    }]
+  };
+  steps.push(SimulationStepRecord {
+    step_index: 1,
+    outcome: target,
+  });
+  if parity_advances(case) {
+    steps.push(SimulationStepRecord {
+      step_index: 2,
+      outcome: StepOutcome::Executed,
+    });
+  }
+  steps
+}
+
+fn observed_attempt_projection(
+  actor_id: ActorId,
+) -> (AttemptDisposition, OutcomeTotals, Option<u32>, Option<u32>) {
+  let actor_events: Vec<_> = System::events()
+    .into_iter()
+    .filter_map(|record| match record.event {
+      RuntimeEvent::Actors(event) => Some(event),
+      _ => None,
+    })
+    .collect();
+  let summary = actor_events.iter().rev().find_map(|event| match event {
+    Event::CycleSummary {
+      actor_id: id,
+      result,
+      outcomes,
+      ..
+    } if *id == actor_id => Some((*result, *outcomes)),
+    _ => None,
+  });
+  let closed = actor_events.iter().rev().find_map(|event| match event {
+    Event::ActorClosed {
+      actor_id: id,
+      reason,
+    } if *id == actor_id => Some(*reason),
+    _ => None,
+  });
+  if let Some(reason) = closed {
+    let (_, outcomes) = summary.expect("attempt close follows its cycle summary");
+    return (AttemptDisposition::Closed(reason), outcomes, None, None);
+  }
+  if let Some(continuation) = Actors::continuation_state(actor_id) {
+    return (
+      AttemptDisposition::Suspended,
+      continuation.cumulative_outcomes,
+      Some(continuation.cursor),
+      Some(continuation.unsuccessful_attempts_at_cursor),
+    );
+  }
+  let (result, outcomes) = summary.expect("terminal attempt emits a cycle summary");
+  let disposition = match result {
+    CycleResult::Completed => AttemptDisposition::Completed,
+    CycleResult::Failed => AttemptDisposition::Failed,
+    CycleResult::Cancelled => panic!("matrix does not cancel cycles"),
+  };
+  (disposition, outcomes, None, None)
+}
+
+#[test]
+fn canonical_step_transition_matrix_has_production_simulation_parity() {
+  let mut covered_rows = BTreeSet::new();
+  let mut covered_policies = BTreeSet::new();
+  let mut covered_mutability = BTreeSet::new();
+  let mut covered_actor_types = BTreeSet::new();
+  let mut covered_outcome_variants = BTreeSet::new();
+  for case in STEP_TRANSITION_PARITY_MATRIX {
+    covered_rows.insert(case.row);
+    covered_policies.insert(case.policy.encode());
+    covered_mutability.insert(case.mutability.encode());
+    covered_actor_types.insert(case.actor_type.encode());
+    let target_outcome = parity_expected_steps(*case)
+      .into_iter()
+      .find(|record| record.step_index == 1)
+      .expect("matrix target outcome exists")
+      .outcome;
+    covered_outcome_variants.insert(
+      *target_outcome
+        .encode()
+        .first()
+        .expect("StepOutcome encoding carries a variant index"),
+    );
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(10);
+      set_max_consecutive_failures(if case.bound == StepParityBound::GlobalReached {
+        1
+      } else {
+        10
+      });
+      set_observation(
+        1,
+        crate::ScalarObservationState::Fresh {
+          value: 50,
+          observed_at: 11,
+        },
+      );
+      setup_temporary_retry_pool();
+      set_temporary_dex_failure(case.stimulus == StepParityStimulus::TemporaryFailure);
+      set_fail_dex_after_input_transfer(case.stimulus == StepParityStimulus::PermanentFailure);
+      let steps = parity_contract_steps(*case);
+      let schedule = if case.stimulus == StepParityStimulus::PredicateError {
+        observation_schedule(vec![1])
+      } else if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
+        timer_schedule(1)
+      } else {
+        manual_schedule()
+      };
+      let expected_contract = match case.actor_type {
+        ActorType::User => user_active_contract(schedule.clone(), None, steps.clone()),
+        ActorType::System => system_active_contract(schedule.clone(), None, steps.clone()),
+      };
+      let actor_id = match case.actor_type {
+        ActorType::User => create_user_with(ALICE, case.mutability, schedule, None, steps),
+        ActorType::System => {
+          create_system_with_mutability(ALICE, case.mutability, schedule, None, steps)
+        }
+      };
+      fund_native(
+        actor_id,
+        if case.stimulus == StepParityStimulus::FundingUnavailable {
+          8
+        } else {
+          100
+        },
+      );
+      if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
+        frame_system::Pallet::<Test>::set_block_number(11);
+      } else if case.stimulus == StepParityStimulus::PredicateError {
+        ActorHot::<Test>::mutate(actor_id, |maybe| {
+          maybe
+            .as_mut()
+            .expect("parity actor hot state exists")
+            .pending_signal = true;
+        });
+        Actors::enqueue(actor_id).expect("parity actor enqueues");
+      } else {
+        assert_ok!(Actors::manual_trigger(
+          RuntimeOrigin::signed(ALICE),
+          actor_id
+        ));
+      }
+      if case.bound == StepParityBound::LocalReached {
+        run_idle(Weight::MAX);
+        assert_eq!(
+          Actors::continuation_state(actor_id).map(|state| state.cursor),
+          Some(1)
+        );
+        frame_system::Pallet::<Test>::set_block_number(11);
+      }
+      let mode = if case.bound == StepParityBound::LocalReached {
+        SimulationMode::CurrentContinuation
+      } else {
+        SimulationMode::FreshCurrentPlan
+      };
+      System::reset_events();
+      let actor = sovereign_account(actor_id);
+      let streak_before = Actors::active_actor_view(actor_id)
+        .expect("matrix actor remains active before production")
+        .unsuccessful_attempt_streak;
+      let before = (
+        Actors::active_actor_view(actor_id).map(|view| view.encode()),
+        Actors::continuation_state(actor_id).map(|state| state.encode()),
+        native_balance(&actor),
+        native_balance(&BOB),
+        native_balance(&CHARLIE),
+        native_balance(&TestFeeSink::get()),
+        native_balance(&u64::MAX),
+        asset_balance(&actor, TestAsset::Local(77)),
+        asset_balance(&u64::MAX, TestAsset::Local(77)),
+        System::events(),
+      );
+      let simulation = Actors::simulate_current_contract(
+        actor_id,
+        case.actor_type,
+        case.mutability,
+        expected_contract,
+        mode,
+      )
+      .unwrap_or_else(|error| panic!("{} simulation failed: {error:?}", case.name));
+      let after_simulation = (
+        Actors::active_actor_view(actor_id).map(|view| view.encode()),
+        Actors::continuation_state(actor_id).map(|state| state.encode()),
+        native_balance(&actor),
+        native_balance(&BOB),
+        native_balance(&CHARLIE),
+        native_balance(&TestFeeSink::get()),
+        native_balance(&u64::MAX),
+        asset_balance(&actor, TestAsset::Local(77)),
+        asset_balance(&u64::MAX, TestAsset::Local(77)),
+        System::events(),
+      );
+      assert_eq!(
+        after_simulation, before,
+        "{} simulation persisted state or custody",
+        case.name
+      );
+      assert_eq!(
+        simulation.steps.as_slice(),
+        parity_expected_steps(*case),
+        "{} trace",
+        case.name
+      );
+
+      clear_fee_collections();
+      System::reset_events();
+      let bob_before = native_balance(&BOB);
+      let charlie_before = native_balance(&CHARLIE);
+      let actor_before = native_balance(&actor);
+      let sink_before = native_balance(&TestFeeSink::get());
+      let pool_native_before = native_balance(&u64::MAX);
+      run_idle(Weight::MAX);
+      let (status, outcomes, cursor, attempts) = observed_attempt_projection(actor_id);
+      assert_eq!(status, simulation.status, "{} disposition", case.name);
+      assert_eq!(
+        outcomes, simulation.cumulative_outcomes,
+        "{} outcomes",
+        case.name
+      );
+      assert_eq!(
+        cursor, simulation.continuation_cursor,
+        "{} cursor",
+        case.name
+      );
+      assert_eq!(
+        attempts, simulation.unsuccessful_attempts_at_cursor,
+        "{} local attempts",
+        case.name
+      );
+      match status {
+        AttemptDisposition::Completed => assert_eq!(
+          Actors::active_actor_view(actor_id)
+            .expect("completed persistent matrix actor remains active")
+            .unsuccessful_attempt_streak,
+          0,
+          "{} completed attempt resets the failure streak",
+          case.name,
+        ),
+        AttemptDisposition::Failed | AttemptDisposition::Suspended => assert_eq!(
+          Actors::active_actor_view(actor_id)
+            .expect("failed or suspended matrix actor remains active")
+            .unsuccessful_attempt_streak,
+          streak_before
+            .checked_add(1)
+            .expect("matrix streak remains bounded"),
+          "{} unsuccessful attempt increments the failure streak once",
+          case.name,
+        ),
+        AttemptDisposition::Closed(_) => assert!(
+          Actors::active_actor_view(actor_id).is_none(),
+          "{} closed disposition removes active state",
+          case.name,
+        ),
+      }
+
+      let advances = parity_advances(*case);
+      let prefix_runs = case.bound != StepParityBound::LocalReached;
+      let target_transfer = case.stimulus == StepParityStimulus::SuccessfulTask;
+      let expected_bob: Balance =
+        (if prefix_runs { 2 } else { 0 }) + (if target_transfer { 5 } else { 0 });
+      let expected_charlie: Balance = if advances { 3 } else { 0 };
+      assert_eq!(
+        native_balance(&BOB),
+        bob_before + expected_bob,
+        "{} committed prefix/target",
+        case.name
+      );
+      assert_eq!(
+        native_balance(&CHARLIE),
+        charlie_before + expected_charlie,
+        "{} suffix boundary",
+        case.name
+      );
+      if matches!(
+        case.stimulus,
+        StepParityStimulus::TemporaryFailure | StepParityStimulus::PermanentFailure
+      ) {
+        assert_eq!(
+          native_balance(&u64::MAX),
+          pool_native_before,
+          "{} failed task custody rollback",
+          case.name
+        );
+      }
+      let fee_delta = native_balance(&TestFeeSink::get()).saturating_sub(sink_before);
+      match case.actor_type {
+        ActorType::User => {
+          assert!(
+            fee_delta > 0,
+            "{} must charge its committed attempt",
+            case.name
+          );
+          assert_eq!(
+            fee_collections().iter().copied().sum::<Balance>(),
+            fee_delta,
+            "{} fee accounting",
+            case.name
+          );
+        }
+        ActorType::System => assert_eq!(fee_delta, 0, "{} System fee exemption", case.name),
+      }
+      assert_eq!(
+        actor_before.saturating_sub(native_balance(&actor)),
+        expected_bob + expected_charlie + fee_delta,
+        "{} reservation, fee, and custody conservation",
+        case.name,
+      );
+      set_temporary_dex_failure(false);
+      set_fail_dex_after_input_transfer(false);
+    });
+  }
+  assert_eq!(
+    covered_rows,
+    BTreeSet::from([
+      "ST-01", "ST-02", "ST-03", "ST-04", "ST-05", "ST-06", "ST-07", "ST-08", "ST-09", "ST-10",
+      "ST-11", "ST-12", "ST-13"
+    ]),
+    "matrix inventory must remain closed against specification section 3.4",
+  );
+  assert_eq!(
+    covered_policies.len(),
+    variant_count::<StepErrorPolicy>(),
+    "every StepErrorPolicy variant must be represented",
+  );
+  assert_eq!(
+    covered_mutability.len(),
+    variant_count::<Mutability>(),
+    "every Mutability variant must be represented",
+  );
+  assert_eq!(
+    covered_actor_types.len(),
+    variant_count::<ActorType>(),
+    "every ActorType variant must be represented",
+  );
+  assert_eq!(
+    covered_outcome_variants.len(),
+    variant_count::<StepOutcome>(),
+    "every canonical StepOutcome variant must be represented",
+  );
+}
+
 #[test]
 fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_write() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -21662,9 +22674,8 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
     )
     .expect("ready current plan simulates");
 
-    assert_eq!(result.status, SimulationStatus::Completed);
+    assert_eq!(result.status, AttemptDisposition::Completed);
     assert_eq!(result.cycle_nonce, 1);
-    assert_eq!(result.attempt, 0);
     assert_eq!(result.start_cursor, 0);
     assert_eq!(result.continuation_cursor, None);
     assert_eq!(result.unsuccessful_attempts_at_cursor, None);
@@ -21673,7 +22684,7 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
       result.steps.as_slice(),
       &[SimulationStepRecord {
         step_index: 0,
-        outcome: SimulationStepOutcome::Executed,
+        outcome: StepOutcome::Executed,
       }]
     );
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
@@ -21695,7 +22706,7 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
 }
 
 #[test]
-fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state() {
+fn continuation_simulation_preserves_retry_position_and_committed_state() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let expected_contract =
@@ -21714,9 +22725,8 @@ fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state()
     )
     .expect("eligible continuation simulates");
 
-    assert_eq!(result.status, SimulationStatus::Suspended);
+    assert_eq!(result.status, AttemptDisposition::Suspended);
     assert_eq!(result.cycle_nonce, actor_before.cycle_nonce);
-    assert_eq!(result.attempt, continuation_before.attempt + 1);
     assert_eq!(result.start_cursor, continuation_before.cursor);
     assert_eq!(result.continuation_cursor, Some(continuation_before.cursor));
     assert_eq!(
@@ -21732,7 +22742,9 @@ fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state()
       result.steps.as_slice(),
       &[SimulationStepRecord {
         step_index: 0,
-        outcome: SimulationStepOutcome::Failed(RetryClass::Temporary),
+        outcome: StepOutcome::Failed(TaskFailure::temporary(DispatchError::Other(
+          "TemporaryDexCapacity"
+        ))),
       }]
     );
     assert_eq!(
@@ -21749,8 +22761,8 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
-    let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      preconditions: Preconditions::Unconditional,
+    let contract_steps = contract_steps_with_step(StepOf::<Test> {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -21759,8 +22771,8 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
       },
       on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
     });
-    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
     assert_ok!(Actors::manual_trigger(
@@ -21779,7 +22791,7 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
     )
     .expect("retry exhaustion simulates");
 
-    assert_eq!(result.status, SimulationStatus::Suspended);
+    assert_eq!(result.status, AttemptDisposition::Suspended);
     assert_eq!(result.continuation_cursor, Some(0));
     assert_eq!(result.unsuccessful_attempts_at_cursor, Some(1));
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
@@ -21791,14 +22803,14 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
 fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan.clone());
+    let contract_steps = transfer_contract_steps(BOB, 10);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps.clone());
     assert_eq!(
       Actors::simulate_current_contract(
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, execution_plan.clone()),
+        system_active_contract(manual_schedule(), None, contract_steps.clone()),
         SimulationMode::FreshCurrentPlan,
       )
       .err(),
@@ -21827,7 +22839,7 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, execution_plan),
+        system_active_contract(manual_schedule(), None, contract_steps),
         SimulationMode::CurrentContinuation,
       )
       .err(),
@@ -21874,11 +22886,25 @@ fn eligibility_projection_reports_not_registered_and_dormant() {
 fn eligibility_projection_rejects_partial_active_partitions() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let plan = inert_contract_steps();
+    let expected_contract = system_active_contract(manual_schedule(), None, plan.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
     ActorFunding::<Test>::remove(actor_id);
     assert_eq!(
       Actors::actor_eligibility(actor_id),
-      Err(ActorEligibilityError::ActorInvariant)
+      Err(ActorClassificationError::ActorInvariant)
+    );
+    assert_eq!(
+      Actors::simulate_current_contract(
+        actor_id,
+        ActorType::System,
+        Mutability::Mutable,
+        expected_contract,
+        SimulationMode::FreshCurrentPlan,
+      ),
+      Err(SimulationError::Classification(
+        ActorClassificationError::ActorInvariant
+      ))
     );
   });
 }
@@ -21888,10 +22914,10 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let window = ScheduleWindow { start: 1, end: 101 };
-    let execution_plan = inert_execution_plan();
+    let contract_steps = inert_contract_steps();
     let expected_contract =
-      system_active_contract(manual_schedule(), Some(window), execution_plan.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), Some(window), execution_plan);
+      system_active_contract(manual_schedule(), Some(window), contract_steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), Some(window), contract_steps);
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
@@ -21940,7 +22966,7 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       )
       .expect("terminal simulation projects")
       .status,
-      SimulationStatus::Closed(CloseReason::WindowExpired)
+      AttemptDisposition::Closed(CloseReason::WindowExpired)
     );
     assert_ok!(Actors::permissionless_sweep(
       RuntimeOrigin::signed(BOB),
@@ -21957,9 +22983,9 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = inert_execution_plan();
-    let expected_contract = system_active_contract(manual_schedule(), None, execution_plan.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let contract_steps = inert_contract_steps();
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
     let instance = Actors::active_actor_view(actor_id).expect("actor exists");
     assert_eq!(
@@ -21989,7 +23015,7 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
 fn eligibility_projection_ready_after_signal_and_waits_without_latch() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let p = eligibility_projection(actor_id);
     assert_eq!(p.phase, ActorEligibilityPhase::WaitingSignal);
     assert_eq!(p.next_eligible_block, Some(1));
@@ -22017,7 +23043,7 @@ fn eligibility_projection_waits_for_cooldown_and_reports_next_block() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 2_000);
     assert_ok!(Actors::manual_trigger(
@@ -22054,7 +23080,7 @@ fn eligibility_projection_waits_for_schedule_window_until_gate() {
         start: 50,
         end: 150,
       }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     let p = eligibility_projection(actor_id);
     assert_eq!(p.phase, ActorEligibilityPhase::WaitingTemporal);
@@ -22072,40 +23098,20 @@ fn eligibility_projection_waits_for_schedule_window_until_gate() {
 }
 
 #[test]
-fn eligibility_projection_reports_cadence_gate_with_actor_stable_phase() {
+fn eligibility_projection_reports_exact_cadence_gate_without_actor_phase() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cadence = 20u32;
-    let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_execution_plan());
-    let window = cadence
-      .saturating_div(4)
-      .min(<Test as crate::Config>::MaxTimerJitterBlocks::get());
-    let hash = frame::hashing::blake2_256(&actor_id.to_le_bytes());
-    let raw = u64::from_le_bytes([
-      hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
-    ]);
-    let jitter = if window == 0 {
-      0
-    } else {
-      raw % u64::from(window)
-    };
-    let first_gate = 1u64.saturating_add(jitter);
+    let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_contract_steps());
 
     let p = eligibility_projection(actor_id);
-    assert_eq!(p.next_eligible_block, Some(first_gate));
-    assert_eq!(
-      p.phase,
-      if first_gate == 1 {
-        ActorEligibilityPhase::Ready
-      } else {
-        ActorEligibilityPhase::WaitingTemporal
-      }
-    );
+    assert_eq!(p.phase, ActorEligibilityPhase::Ready);
+    assert_eq!(p.next_eligible_block, Some(1));
 
-    frame_system::Pallet::<Test>::set_block_number(first_gate + 10);
+    frame_system::Pallet::<Test>::set_block_number(11);
     let p = eligibility_projection(actor_id);
     assert_eq!(p.phase, ActorEligibilityPhase::WaitingTemporal);
-    assert_eq!(p.next_eligible_block, Some(first_gate + u64::from(cadence)));
+    assert_eq!(p.next_eligible_block, Some(21));
   });
 }
 
@@ -22118,7 +23124,7 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, 10),
+      transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -22129,7 +23135,7 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::set_global_circuit_breaker(
       RuntimeOrigin::root(),
       true
@@ -22148,7 +23154,7 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
         start: 50,
         end: 150,
       }),
-      inert_execution_plan(),
+      inert_contract_steps(),
     );
     frame_system::Pallet::<Test>::set_block_number(151);
     let p = eligibility_projection(actor_id);
@@ -22179,10 +23185,12 @@ fn eligibility_projection_reports_suspended_retry_then_ready_at_attempt_block() 
 fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     ActorHot::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("active actor").consecutive_failures =
-        <Test as crate::Config>::MaxConsecutiveFailures::get();
+      maybe
+        .as_mut()
+        .expect("active actor")
+        .unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
     });
     let p = eligibility_projection(actor_id);
     assert_eq!(
@@ -22194,7 +23202,7 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -22224,7 +23232,7 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
 
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     ActorIdentities::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("identity").cycle_nonce = u64::MAX;
     });

@@ -1,7 +1,7 @@
 ---
-page_type: faq
-title: FAQ для новичков
-summary: Короткий самодостаточный FAQ по главным вопросам новичков о DEOS, TMCTOL, Actors, governance, стейкинге, поверхностях данных, доменах wiki и эталонном клиенте.
+type: faq
+title: Вопросы новичков
+description: Краткие ответы на основные вопросы о DEOS, TMCTOL, Actors, управлении, стейкинге, данных, устройстве вики и эталонном клиенте.
 locale: ru
 canonical_page_id: newcomer-faq
 translation_of: newcomer-faq.en.md
@@ -10,16 +10,16 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../docs/manifesto.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/staking/docs/specification.en.md
-  - ../../docs/read-model.contract.en.md
-  - ../../web-client/docs/architecture.en.md
-  - ../../web-client/README.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../docs/read-model.contract.en.md
+  - resource: ../../web-client/docs/architecture.en.md
+  - resource: ../../web-client/README.md
+status: stable
 audience: newcomer
 tags:
   - faq
@@ -30,50 +30,50 @@ related:
   - Первые шаги
   - Маршруты чтения
   - Система Actors
-  - Physics-first против politics-first
-  - Generated Wiki
+  - Экономическая физика прежде политики
+  - Собранная вики
   - Базовые термины
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
 
-# FAQ для новичков
+# Вопросы новичков
 
 ## Кратко
 
-На этой странице собраны ответы на вопросы, которые обычно возникают первыми: что такое DEOS, как в него вписывается TMCTOL, что контролирует governance, как на высоком уровне устроены Actors и staking, как организована wiki и насколько честным должен быть эталонный клиент.
+Здесь собраны ответы на вопросы, которые обычно возникают в первую очередь: что такое DEOS, какое место в нём занимает TMCTOL, чем управляют участники, как в общих чертах устроены Actors и стейкинг, как организована вики и какие требования к достоверности данных предъявляются эталонному клиенту.
 
-Используйте [Карту доменов](../concepts/domain-map.ru.md), когда нужна общая форма системы, и [Маршруты чтения](../getting-started/reading-paths.ru.md), когда у вас есть конкретная задача.
+Чтобы увидеть устройство всей системы, откройте [Карту доменов](../concepts/domain-map.ru.md). Если перед вами конкретная задача, выберите подходящий раздел в [Маршрутах чтения](../getting-started/reading-paths.ru.md).
 
-## Идентичность и старт
+## Что такое DEOS и с чего начать
 
-**DEOS — это токен или стандарт?** Нет. `DEOS` — это фреймворк и эталонный стек. `TMCTOL` — текущий флагманский токеномический стандарт, работающий поверх него.
+**DEOS — это токен или стандарт?** Ни то ни другое. `DEOS` — фреймворк и эталонный набор компонентов. `TMCTOL` — основной на данный момент стандарт токеномики, работающий на его основе.
 
-**Почему wiki организована по доменам?** Потому что DEOS проще понимать как взаимодействующие домены, а не как список pallet-ов: экономическая физика, автономные акторы, маршрутизация, governance, staking, модели чтения, клиентский UX, инструменты и future gates.
+**Почему вики разделена по доменам?** DEOS проще понять через взаимодействие предметных областей, а не через перечень пакетов: экономическая физика, автономные Actors, маршрутизация, управление, стейкинг, проекции данных для чтения, клиентский интерфейс, инструменты и будущие условия развития.
 
-**С чего начать?** Если нужен самый короткий путь, прочитайте [Обзор фреймворка DEOS](../overview/deos-framework.ru.md), [Базовые термины](../glossary/core-terms.ru.md) и [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md). Если вы собираетесь что-то менять, используйте [Маршруты чтения](../getting-started/reading-paths.ru.md).
+**С чего начать?** Для самого короткого знакомства прочитайте [Обзор фреймворка DEOS](../overview/deos-framework.ru.md), [Базовые термины](../glossary/core-terms.ru.md) и [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md). Если собираетесь что-то изменить, воспользуйтесь [Маршрутами чтения](../getting-started/reading-paths.ru.md).
 
-## Экономика, governance и акторы
+## Экономика, управление и Actors
 
-**Почему TMCTOL избегает redemption?** Потому что текущий стандарт трактует minting как однонаправленную физику протокола, а не как выход из резервов. Смотрите [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md) и [Token Minting Curve](../overview/token-minting-curve.ru.md).
+**Почему в TMCTOL нет обратного выкупа за резерв?** Действующий стандарт рассматривает выпуск как однонаправленное правило протокола, а не как обещание обменять токен обратно на резерв. Подробнее: [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md) и [Кривая выпуска токенов](../overview/token-minting-curve.ru.md).
 
-**Исчезает ли governance?** Нет. Governance остается, но его роль сужена: он задает направление, тактические домены и ограниченные пути обновлений, а не вручную управляет survival physics. Смотрите [Governance](../overview/governance.ru.md) и [Домены Governance](../concepts/governance-domains.ru.md).
+**Исчезает ли управление сообществом?** Нет. Его роль становится уже: оно задаёт направление, управляет отдельными тактическими областями и ограниченными путями обновления, но не воспроизводит вручную базовые экономические условия существования системы. Подробнее: [Управление](../overview/governance.ru.md) и [Домены управления](../concepts/governance-domains.ru.md).
 
-**Что значит deterministic?** Реакции под управлением протокола явны и повторяемы для одного и того же состояния chain. Это не значит, что рынки становятся предсказуемыми.
+**Что означает «детерминированный»?** При одинаковом состоянии блокчейна реакции, которыми управляет протокол, заданы явно и повторяются. Это не означает, что поведение рынков становится предсказуемым.
 
-**Что такое Actors и AA-Актор?** `Actors` — вся система Account Abstraction Actors: scheduler, правила жизненного цикла, execution plans, actor accounts и task execution. `AA-Актор` — один конкретный runtime-экземпляр внутри этой системы. Смотрите [Систему Actors](../overview/actor-system.ru.md) и [AA-Актор](../overview/actor.ru.md).
+**Чем Actors отличается от AA-Актора?** `Actors` — вся система акторов с абстракцией аккаунтов (`Account Abstraction Actors`): планировщик, правила жизненного цикла, `Actor Contracts`, счета акторов и пошаговое исполнение. `AA-Актор` — один конкретный экземпляр в среде исполнения этой системы. Подробнее: [Система Actors](../overview/actor-system.ru.md) и [AA-Актор](../overview/actor.ru.md).
 
-**Как устроен staking?** Staking — это домен multi-asset share-vault. [Стейкинг](../overview/staking.ru.md) объясняют native `stNTVE`, LP nomination и snapshots наград.
+**Как устроен стейкинг?** Это область с несколькими активами и пулом с учётом долей. Раздел [Стейкинг](../overview/staking.ru.md) объясняет нативный `stNTVE`, назначение LP и снимки состояния для расчёта вознаграждений.
 
-## Данные, клиент и границы wiki
+## Данные, клиент и границы вики
 
-**Почему on-chain vs materialized data так важны?** Честность продукта зависит от того, видно ли, где каноническая chain-истина, а где индексированные или производные данные. Смотрите [Разделение read-model](../concepts/read-model-split.ru.md).
+**Почему важно различать данные из блокчейна и материализованные данные?** Достоверность продукта зависит от ясного разделения канонического состояния блокчейна и данных, которые индексируются или вычисляются отдельно. Подробнее: [Разделение данных для чтения](../concepts/read-model-split.ru.md).
 
-**Web client — источник истины?** Нет. Web client — эталонная продуктовая поверхность, которая должна честно маркировать происхождение данных. Смотрите [Эталонный клиент](../overview/reference-client.ru.md).
+**Эталонный веб-клиент — источник истины?** Нет. Это эталонный интерфейс продукта, который обязан честно указывать происхождение данных. Подробнее: [Эталонный клиент](../overview/reference-client.ru.md).
 
-**Где живут версии релизов и status notes?** История релизов живет в changelog, открытая работа — в backlog, а текущее состояние для новичков — в [Статусе разработки](../development/status.ru.md). Architecture и wiki pages должны объяснять implementation truth и границы.
+**Где искать версии выпусков и сведения о состоянии проекта?** История выпусков хранится в журнале изменений, открытая работа — в списке задач, а понятное новичку текущее состояние — в разделе [Статус разработки](../development/status.ru.md). Архитектурные страницы и вики должны объяснять фактическую реализацию и её границы.
 
-**Почему web client может рендерить wiki markdown напрямую?** Wiki markdown — доверенный repo-local content под проверкой репозитория, а не произвольный пользовательский ввод. Смотрите [Generated Wiki](../concepts/generated-wiki.ru.md).
+**Почему веб-клиент может показывать Markdown из вики напрямую?** Эти материалы входят в доверенное содержимое репозитория и проходят его проверки; это не произвольный ввод пользователей. Подробнее: [Собранная вики](../concepts/generated-wiki.ru.md).
 
 ## Связанные страницы
 
@@ -82,6 +82,6 @@ confidence: 0.85
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
 - [Система Actors](../overview/actor-system.ru.md)
-- [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-- [Generated Wiki](../concepts/generated-wiki.ru.md)
+- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
+- [Собранная вики](../concepts/generated-wiki.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

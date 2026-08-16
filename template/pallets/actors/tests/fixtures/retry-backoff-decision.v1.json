@@ -1,0 +1,38 @@
+{
+  "format": "deos.actors.retry-backoff-decision",
+  "formatVersion": 1,
+  "profile": {
+    "determinism": "closed-form-no-prng",
+    "occupancy": 10000,
+    "unavailableBlocks": 64,
+    "recoverySampleBlocks": "1..=64",
+    "retryWeightClass": "unchanged-per-serviced-attempt"
+  },
+  "cappedExponential": {
+    "delays": "1,2,4,8,8...",
+    "dueRetryObligations": 100000,
+    "recoveryWaitSum": 210,
+    "maximumWakeupCohort": 10000
+  },
+  "fixedDelay1": {
+    "dueRetryObligations": 640000,
+    "recoveryWaitSum": 0,
+    "maximumWakeupCohort": 10000
+  },
+  "fixedDelay4": {
+    "dueRetryObligations": 160000,
+    "recoveryWaitSum": 96,
+    "maximumWakeupCohort": 10000
+  },
+  "fixedDelay8": {
+    "dueRetryObligations": 80000,
+    "recoveryWaitSum": 224,
+    "maximumWakeupCohort": 10000
+  },
+  "invariantMetrics": {
+    "fifoOrderChanged": false,
+    "perAttemptWeightChanged": false,
+    "maximumSuspendedOccupancyChanged": false
+  },
+  "decision": "retain-capped-exponential"
+}

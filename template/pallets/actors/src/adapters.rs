@@ -31,8 +31,13 @@ pub enum RetryClass {
   Temporary,
 }
 
-/// Typed adapter failure. Unclassified dispatch failures convert to Permanent.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Typed Step failure. Unclassified dispatch failures convert to Permanent.
+///
+/// The concrete cause and independent retry disposition remain one canonical fact
+/// from adapter execution through production events and simulation traces.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
 pub struct TaskFailure {
   pub error: DispatchError,
   pub retry: RetryClass,

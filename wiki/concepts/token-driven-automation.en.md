@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Token-Driven Automation
-summary: DEOS expresses recurring protocol behavior as bounded execution plans triggered by balances, schedules, and typed runtime tasks. Actors is the main execution system for these flows.
+description: DEOS expresses recurring protocol behavior as bounded Actor Contracts triggered by balances and schedules. Each ordered Step carries a typed runtime Task and an optional Precondition.
 locale: en
 canonical_page_id: token-driven-automation
 translation_status: source
@@ -9,12 +9,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../docs/actors.integration.en.md
-  - ../../docs/oracle.integration.en.md
-  - ../../README.md
-status: active
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../docs/actors.integration.en.md
+  - resource: ../../docs/oracle.integration.en.md
+  - resource: ../../README.md
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -27,7 +27,7 @@ related:
   - TMCTOL Standard
   - Read-Model Split
   - Core Terms
-last_compiled: 2026-07-27
+last_compiled: 2026-08-14
 confidence: 0.9
 ---
 
@@ -35,9 +35,9 @@ confidence: 0.9
 
 ## Summary
 
-DEOS models protocol behavior as a token-driven economic automaton. Instead of centering everything on admin calls, it tries to express recurring economic actions as bounded state transitions triggered by balances, timers, and typed execution plans.
+DEOS models protocol behavior as a token-driven economic automaton. Instead of centering everything on admin calls, it tries to express recurring economic actions as bounded state transitions triggered by balances, timers, and typed Actor Contracts.
 
-The main execution system for that model is `pallet-deos-actor`, which hosts both system actors and user actors.
+The main execution system for that model is `pallet-deos-actors`, which hosts both system actors and user actors.
 
 ## The Core Coordination Rule
 
@@ -65,7 +65,7 @@ The specification keeps a few guarantees central:
 
 - Deterministic behavior for identical state and block context
 - Bounded work with explicit limits
-- Static ordered plans whose `Always`, non-empty `All`, and non-empty `Any` conditions only admit or skip the current step; they cannot create branches or choose successors
+- Static ordered Steps whose absent or bounded-DNF `Precondition` only executes or skips the current Step; Predicates cannot create branches or choose successors
 - Fieldless `StopCycle` as the sole explicit successful terminal task, with visible error-policy fall-through rather than hidden control flow
 - No task-authored workflow memory; Mutable-only sparse Continuation records unresolved suffix progress
 - Predictable outcomes such as deferred, skipped, failed, suspended, cancelled, or closed
@@ -79,7 +79,7 @@ Unexpected transfers remain real sovereign-account balances, but they become bur
 
 ## Relationship to TMCTOL
 
-In the current reference line, TMCTOL uses Actors for recurring runtime automation that existing tasks and adapters can express safely. The math lives in the standard, dedicated pallets own economic primitives, and Actors plans own bounded orchestration. Optional Bucket B/C/D unwind now splits LP transfer and Treasury-owned liquidity removal into separate admitted cycles; the lanes remain dormant until governance activates both plans.
+In the current reference line, TMCTOL uses Actors for recurring runtime automation that existing tasks and adapters can express safely. The math lives in the standard, dedicated pallets own economic primitives, and Actor Contracts own bounded orchestration. Optional Bucket B/C/D unwind now splits LP transfer and Treasury-owned liquidity removal into separate admitted cycles; the lanes remain dormant until governance activates both plans.
 
 ## Related
 

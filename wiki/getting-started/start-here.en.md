@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Start Here
-summary: A short onboarding spine that routes newcomers into one of three paths - understand DEOS, run it locally, or fork it and change the economy safely.
+description: A short onboarding spine that routes newcomers into one of three paths - understand DEOS, run it locally, or fork it and change the economy safely.
 locale: en
 canonical_page_id: start-here
 translation_status: source
@@ -9,13 +9,13 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../template/README.md
-  - ../../web-client/README.md
-  - ../../scripts/README.md
-  - ../../simulator/README.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../template/README.md
+  - resource: ../../web-client/README.md
+  - resource: ../../scripts/README.md
+  - resource: ../../simulator/README.md
+status: stable
 audience: newcomer
 tags:
   - onboarding

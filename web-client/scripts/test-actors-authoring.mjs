@@ -37,7 +37,7 @@ const triggerEditorSource = await readFile(
 );
 const conditionEditorSource = await readFile(
   new URL(
-    '../src/lib/automation/AutomationConditionEditor.svelte',
+    '../src/lib/automation/AutomationPredicateEditor.svelte',
     import.meta.url,
   ),
   'utf8',
@@ -115,7 +115,7 @@ function transferTask(amount = fixed()) {
 function authoringStep(key, task = transferTask(), overrides = {}) {
   return {
     key,
-    preconditions: { type: 'Unconditional' },
+    precondition: null,
     task,
     errorPolicy: { type: 'AbortCycle' },
     ...overrides,
@@ -243,8 +243,7 @@ test('observation authoring exposes freshness and validates bounded identity', (
   const result = validateActorAuthoringContract(
     contract([
       authoringStep('observation', transferTask(), {
-        preconditions: {
-          type: 'AnyOf',
+        precondition: {
           clauses: [[{ timing: 'Current', predicate: invalid }]],
         },
       }),
@@ -342,8 +341,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         slippageParts: 10_000_000,
       }),
       authoringStep('transfer', transferTask({ type: 'AllAvailable' }), {
-        preconditions: {
-          type: 'AnyOf',
+        precondition: {
           clauses: [
             [
               {
@@ -525,22 +523,22 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
 
 test('Unconditional and bounded DNF lower exactly and empty forms fail before encoding', () => {
   const atom = { type: 'BlockNumberAbove', threshold: 1 };
-  for (const preconditions of [
-    { type: 'Unconditional' },
-    {
-      type: 'AnyOf',
-      clauses: [[{ timing: 'Opening', predicate: atom }]],
-    },
+  for (const precondition of [
+    null,
+    { clauses: [[{ timing: 'Opening', predicate: atom }]] },
   ]) {
     const lowered = lowerActorAuthoringContract(
-      contract([authoringStep('only', transferTask(), { preconditions })]),
+      contract([authoringStep('only', transferTask(), { precondition })]),
     );
-    assert.equal(lowered.value.steps[0].preconditions.type, preconditions.type);
+    assert.equal(
+      lowered.value.steps[0].precondition === undefined,
+      precondition === null,
+    );
   }
   for (const clauses of [[], [[]]]) {
     const invalid = contract([
       authoringStep('only', transferTask(), {
-        preconditions: { type: 'AnyOf', clauses },
+        precondition: { clauses },
       }),
     ]);
     assert.equal(validateActorAuthoringContract(invalid).valid, false);
@@ -588,16 +586,14 @@ test('every Predicate and AmountResolution lowers without changing step topology
     const lowered = lowerActorAuthoringContract(
       contract([
         authoringStep('only', transferTask(), {
-          preconditions: {
-            type: 'AnyOf',
+          precondition: {
             clauses: [[{ timing: 'Current', predicate: current }]],
           },
         }),
       ]),
     );
     assert.equal(lowered.value.steps.length, 1);
-    assert.equal(lowered.value.steps[0].preconditions.type, 'AnyOf');
-    const loweredPredicate = lowered.value.steps[0].preconditions.value[0][0];
+    const loweredPredicate = lowered.value.steps[0].precondition[0][0];
     assert.equal(loweredPredicate.timing.type, 'Current');
     assert.equal(loweredPredicate.predicate.type, current.type);
     if (current.type.startsWith('Observation')) {
@@ -789,7 +785,6 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
 
 test('scenario corpus lowers every expressible or partial execution core without inventing missing predicates', () => {
   const all = (...predicates) => ({
-    type: 'AnyOf',
     clauses: [
       predicates.map((predicate) => ({ timing: 'Current', predicate })),
     ],
@@ -821,7 +816,7 @@ test('scenario corpus lowers every expressible or partial execution core without
       contract: contract(
         [
           authoringStep('swap', swap, {
-            preconditions: all(balanceAbove(local)),
+            precondition: all(balanceAbove(local)),
           }),
           authoringStep('burn', {
             type: 'Burn',
@@ -842,7 +837,7 @@ test('scenario corpus lowers every expressible or partial execution core without
       name: 'DEOS BLDR splitter',
       contract: contract([
         authoringStep('split', split(local), {
-          preconditions: all(balanceAbove(local)),
+          precondition: all(balanceAbove(local)),
         }),
       ]),
       tasks: ['SplitTransfer'],
@@ -876,7 +871,7 @@ test('scenario corpus lowers every expressible or partial execution core without
       name: 'Threshold payroll',
       contract: contract([
         authoringStep('payroll', split(), {
-          preconditions: all(balanceAbove(), {
+          precondition: all(balanceAbove(), {
             type: 'BlockNumberAbove',
             threshold: 1,
           }),

@@ -15,13 +15,29 @@ use polkadot_sdk::{
 };
 
 /// Checked increment for protocol-semantic counters. The admitted bound
-/// (`MaxExecutionPlanSteps * (MaxRetryAttempts + 1)` for outcome totals) precludes
+/// (`MaxContractSteps * (MaxRetryAttempts + 1)` for outcome totals) precludes
 /// overflow; a violation fails closed before mutation with an invariant error rather
 /// than silently saturating (spec 4.4).
 fn checked_semantic_increment(counter: u32) -> Result<u32, DispatchError> {
   counter
     .checked_add(1)
     .ok_or(DispatchError::Other("SemanticCounterOverflow"))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FailureStreakTransition {
+  UnsuccessfulAttempt,
+  Reset,
+}
+
+pub(crate) fn transition_failure_streak(
+  current: u32,
+  transition: FailureStreakTransition,
+) -> Option<u32> {
+  match transition {
+    FailureStreakTransition::UnsuccessfulAttempt => current.checked_add(1),
+    FailureStreakTransition::Reset => Some(0),
+  }
 }
 
 // Any extrinsic or runtime entrypoint that can fail after mutating multiple storage
@@ -119,14 +135,6 @@ enum PreparedTaskOutcome<T: Config> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StepResult {
-  Completed,
-  Stopped,
-  FundingUnavailable,
-  Failed(RetryClass),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StepControl {
   Advance,
   CompleteCycle,
@@ -134,8 +142,8 @@ enum StepControl {
   SuspendCurrent,
 }
 
-fn evaluate_predicate_set_with<P, MaxClauses, MaxPerClause, E, Evaluate>(
-  preconditions: &Preconditions<P, MaxClauses, MaxPerClause>,
+pub(crate) fn evaluate_precondition_with<P, MaxClauses, MaxPerClause, E, Evaluate>(
+  precondition: &Precondition<P, MaxClauses, MaxPerClause>,
   mut evaluate: Evaluate,
 ) -> Result<bool, E>
 where
@@ -143,10 +151,7 @@ where
   MaxPerClause: Get<u32>,
   Evaluate: FnMut(&TimedPredicate<P>) -> Result<bool, E>,
 {
-  let clauses = match preconditions {
-    Preconditions::Unconditional => return Ok(true),
-    Preconditions::AnyOf(clauses) => clauses,
-  };
+  let clauses = &precondition.clauses;
   let mut expression_passes = false;
   let mut first_error = None;
   for clause in clauses {
@@ -170,22 +175,33 @@ where
   Ok(expression_passes)
 }
 
-fn resolve_step_control(result: StepResult, error_policy: StepErrorPolicy) -> StepControl {
-  match (result, error_policy) {
-    (StepResult::Completed, _) => StepControl::Advance,
-    (StepResult::Stopped, _) => StepControl::CompleteCycle,
-    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }) => {
+fn resolve_step_control(outcome: &StepOutcome, error_policy: StepErrorPolicy) -> StepControl {
+  match (outcome, error_policy) {
+    (StepOutcome::Executed | StepOutcome::Skipped(_), _) => StepControl::Advance,
+    (StepOutcome::Stopped, _) => StepControl::CompleteCycle,
+    (StepOutcome::FundingUnavailable, StepErrorPolicy::RetryLater { .. }) => {
       StepControl::SuspendCurrent
     }
-    (StepResult::FundingUnavailable, _) => StepControl::Advance,
-    (StepResult::Failed(_), StepErrorPolicy::ContinueNextStep) => StepControl::Advance,
-    (StepResult::Failed(RetryClass::Temporary), StepErrorPolicy::RetryLater { .. }) => {
-      StepControl::SuspendCurrent
-    }
-    (StepResult::Failed(_), StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater { .. }) => {
+    (StepOutcome::FundingUnavailable, _) => StepControl::Advance,
+    (StepOutcome::Failed(_), StepErrorPolicy::ContinueNextStep) => StepControl::Advance,
+    (
+      StepOutcome::Failed(TaskFailure {
+        retry: RetryClass::Temporary,
+        ..
+      }),
+      StepErrorPolicy::RetryLater { .. },
+    ) => StepControl::SuspendCurrent,
+    (StepOutcome::Failed(_), StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater { .. }) => {
       StepControl::Terminate
     }
   }
+}
+
+pub(crate) struct AttemptExecution {
+  weight: Weight,
+  disposition: AttemptDisposition,
+  fee_collection_failed: bool,
+  outcomes: OutcomeTotals,
 }
 
 impl<T: Config> Pallet<T> {
@@ -279,14 +295,12 @@ impl<T: Config> Pallet<T> {
     state: ContinuationStateOf<T>,
     reason: SuspensionReason,
   ) -> DispatchResult {
-    let attempt = state.attempt;
     let cursor = state.cursor;
     let cumulative_outcomes = state.cumulative_outcomes;
     Self::write_continuation_state(actor_id, Some(state))?;
     Self::deposit_event(Event::CycleSuspended {
       actor_id,
       cycle_nonce,
-      attempt,
       cursor,
       reason,
       cumulative_outcomes,
@@ -303,8 +317,6 @@ impl<T: Config> Pallet<T> {
       let continuation = maybe
         .as_mut()
         .expect("Suspended cycle_state requires ContinuationState");
-      continuation.attempt = checked_semantic_increment(continuation.attempt)
-        .expect("attempt bound (MaxRetryAttempts) is precluded by admission");
       continuation.last_attempt_block = now;
     });
     let continuation = ContinuationStateStore::<T>::get(actor_id)
@@ -312,7 +324,6 @@ impl<T: Config> Pallet<T> {
     Self::deposit_event(Event::CycleContinued {
       actor_id,
       cycle_nonce,
-      attempt: continuation.attempt,
       cursor: continuation.cursor,
     });
     continuation
@@ -326,10 +337,10 @@ impl<T: Config> Pallet<T> {
     });
   }
 
-  fn record_simulation_step(
+  fn record_step_outcome(
     trace: &mut Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
     step_index: u32,
-    outcome: SimulationStepOutcome,
+    outcome: StepOutcome,
   ) {
     if let Some(records) = trace.as_deref_mut() {
       records.push(SimulationStepRecord {
@@ -345,7 +356,7 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> (Weight, bool) {
     let result = Self::execute_single_cycle_traced(actor_id, instance, now, None);
-    (result.0, result.3)
+    (result.weight, result.fee_collection_failed)
   }
 
   pub(crate) fn execute_single_cycle_traced(
@@ -353,14 +364,14 @@ impl<T: Config> Pallet<T> {
     instance: ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
     mut trace: Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
-  ) -> (Weight, bool, Option<CloseReason>, bool) {
+  ) -> AttemptExecution {
     let base_weight = T::WeightInfo::cycle_orchestration();
     let is_continuation = instance.cycle_state == CycleState::Suspended;
     let actor = instance.sovereign_account.clone();
-    let execution_plan = &instance.steps;
+    let contract_steps = &instance.steps;
     let fee_envelope = Self::attempt_fee_envelope(
       instance.actor_class.actor_type(),
-      execution_plan,
+      contract_steps,
       if is_continuation {
         Self::continuation_state(actor_id).map_or(0, |state| state.cursor as usize)
       } else {
@@ -382,7 +393,6 @@ impl<T: Config> Pallet<T> {
     let (
       cycle_nonce,
       start_cursor,
-      attempt,
       prior_unsuccessful_attempts_at_cursor,
       cumulative_outcomes,
       funding_snapshot,
@@ -393,7 +403,6 @@ impl<T: Config> Pallet<T> {
       (
         instance.cycle_nonce,
         continuation.cursor,
-        continuation.attempt,
         continuation.unsuccessful_attempts_at_cursor,
         continuation.cumulative_outcomes,
         continuation.funding_snapshot,
@@ -404,12 +413,12 @@ impl<T: Config> Pallet<T> {
       if instance.cycle_nonce == u64::MAX {
         Self::finalize_actor(actor_id, &instance, CloseReason::CycleNonceExhausted)
           .expect("fresh execution snapshot satisfies terminal preconditions");
-        return (
-          base_weight,
-          true,
-          Some(CloseReason::CycleNonceExhausted),
-          false,
-        );
+        return AttemptExecution {
+          weight: base_weight,
+          disposition: AttemptDisposition::Closed(CloseReason::CycleNonceExhausted),
+          fee_collection_failed: false,
+          outcomes: OutcomeTotals::default(),
+        };
       }
       let funding_snapshot = ActorFunding::<T>::get(actor_id)
         .map(|funding| funding.funding_accumulated)
@@ -417,11 +426,11 @@ impl<T: Config> Pallet<T> {
       let opening_snapshot = Self::capture_opening_snapshot(
         instance.actor_class.actor_type(),
         &actor,
-        execution_plan,
+        contract_steps,
         reserved_fee_remaining,
       );
       let opening_predicate_results =
-        Self::capture_opening_predicate_results(&actor, execution_plan, reserved_fee_remaining);
+        Self::capture_opening_predicate_results(&actor, contract_steps, reserved_fee_remaining);
       let Some(cycle_nonce) = ActorIdentities::<T>::mutate(actor_id, |maybe| {
         let identity = maybe.as_mut()?;
         identity.cycle_nonce = identity
@@ -430,7 +439,12 @@ impl<T: Config> Pallet<T> {
           .expect("nonce-exhausted actors close before run opening");
         Some(identity.cycle_nonce)
       }) else {
-        return (base_weight, true, None, false);
+        return AttemptExecution {
+          weight: base_weight,
+          disposition: AttemptDisposition::Failed,
+          fee_collection_failed: false,
+          outcomes: OutcomeTotals::default(),
+        };
       };
       ActorHot::<T>::mutate(actor_id, |maybe| {
         if let Some(hot) = maybe.as_mut() {
@@ -447,7 +461,6 @@ impl<T: Config> Pallet<T> {
         cycle_nonce,
         0,
         0,
-        0,
         OutcomeTotals::default(),
         funding_snapshot,
         opening_snapshot,
@@ -458,12 +471,12 @@ impl<T: Config> Pallet<T> {
     let funding_snapshots = &funding_snapshot;
     let mut executed_steps = cumulative_outcomes.executed_steps;
     let mut committed_effectful_tasks = cumulative_outcomes.committed_effectful_tasks;
-    let mut skipped_conditions = cumulative_outcomes.skipped_conditions;
+    let mut precondition_skips = cumulative_outcomes.precondition_skips;
     let mut skipped_resolution = cumulative_outcomes.skipped_resolution;
     let mut skipped_funding_unavailable = cumulative_outcomes.skipped_funding_unavailable;
     let mut failed_steps = cumulative_outcomes.failed_steps;
     let mut attempt_executed_steps: u32 = 0;
-    let mut execution_plan_failed = false;
+    let mut contract_steps_failed = false;
     let mut failure_close_reason = None;
     let mut suspended_at: Option<(u32, SuspensionReason)> = None;
     if !is_continuation {
@@ -473,13 +486,13 @@ impl<T: Config> Pallet<T> {
       });
     }
     let mut opening_predicate_index =
-      Self::opening_predicate_count_before(execution_plan, start_cursor as usize);
-    for step_idx in start_cursor as usize..execution_plan.len() {
-      let step = &execution_plan[step_idx];
+      Self::opening_predicate_count_before(contract_steps, start_cursor as usize);
+    for step_idx in start_cursor as usize..contract_steps.len() {
+      let step = &contract_steps[step_idx];
       let step_num = step_idx as u32;
       let step_fee = &fee_envelope.steps[step_idx - start_cursor as usize];
-      match Self::evaluate_step_preconditions(
-        &step.preconditions,
+      match Self::evaluate_step_precondition(
+        step.precondition.as_ref(),
         &actor,
         reserved_fee_remaining,
         &opening_predicate_results,
@@ -496,38 +509,36 @@ impl<T: Config> Pallet<T> {
             if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
-              Self::record_simulation_step(
-                &mut trace,
-                step_num,
-                SimulationStepOutcome::Failed(RetryClass::Permanent),
-              );
+              let failure = TaskFailure::permanent(error);
+              let outcome = StepOutcome::Failed(failure.clone());
+              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
               Self::deposit_event(Event::StepFailed {
                 actor_id,
                 cycle_nonce,
                 step_index: step_num,
-                retry_class: RetryClass::Permanent,
+                retry_class: failure.retry,
                 error,
               });
-              execution_plan_failed =
-                Self::apply_error_policy(actor_id, cycle_nonce, step_num, step.on_error, error);
-              if execution_plan_failed {
+              contract_steps_failed =
+                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+              if contract_steps_failed {
                 break;
               }
               continue;
             }
           }
-          skipped_conditions = checked_semantic_increment(skipped_conditions)
+          precondition_skips = checked_semantic_increment(precondition_skips)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
+          Self::record_step_outcome(
             &mut trace,
             step_num,
-            SimulationStepOutcome::Skipped(StepSkippedReason::ConditionsNotMet),
+            StepOutcome::Skipped(StepSkippedReason::PreconditionFalse),
           );
           Self::deposit_event(Event::StepSkipped {
             actor_id,
             cycle_nonce,
             step_index: step_num,
-            reason: StepSkippedReason::ConditionsNotMet,
+            reason: StepSkippedReason::PreconditionFalse,
           });
           continue;
         }
@@ -544,26 +555,19 @@ impl<T: Config> Pallet<T> {
           };
           failed_steps = checked_semantic_increment(failed_steps)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
-            &mut trace,
-            step_num,
-            SimulationStepOutcome::Failed(RetryClass::Permanent),
-          );
+          let failure = TaskFailure::permanent(charged_error);
+          let outcome = StepOutcome::Failed(failure.clone());
+          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
           Self::deposit_event(Event::StepFailed {
             actor_id,
             cycle_nonce,
             step_index: step_num,
-            retry_class: RetryClass::Permanent,
+            retry_class: failure.retry,
             error: charged_error,
           });
-          execution_plan_failed = Self::apply_error_policy(
-            actor_id,
-            cycle_nonce,
-            step_num,
-            step.on_error,
-            charged_error,
-          );
-          if execution_plan_failed {
+          contract_steps_failed =
+            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+          if contract_steps_failed {
             break;
           }
           continue;
@@ -588,21 +592,19 @@ impl<T: Config> Pallet<T> {
             if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
-              Self::record_simulation_step(
-                &mut trace,
-                step_num,
-                SimulationStepOutcome::Failed(RetryClass::Permanent),
-              );
+              let failure = TaskFailure::permanent(error);
+              let outcome = StepOutcome::Failed(failure.clone());
+              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
               Self::deposit_event(Event::StepFailed {
                 actor_id,
                 cycle_nonce,
                 step_index: step_num,
-                retry_class: RetryClass::Permanent,
+                retry_class: failure.retry,
                 error,
               });
-              execution_plan_failed =
-                Self::apply_error_policy(actor_id, cycle_nonce, step_num, step.on_error, error);
-              if execution_plan_failed {
+              contract_steps_failed =
+                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+              if contract_steps_failed {
                 break;
               }
               continue;
@@ -610,10 +612,10 @@ impl<T: Config> Pallet<T> {
           }
           skipped_resolution = checked_semantic_increment(skipped_resolution)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
+          Self::record_step_outcome(
             &mut trace,
             step_num,
-            SimulationStepOutcome::Skipped(StepSkippedReason::ResolutionSkipped),
+            StepOutcome::Skipped(StepSkippedReason::ResolutionSkipped),
           );
           Self::deposit_event(Event::StepSkipped {
             actor_id,
@@ -633,52 +635,42 @@ impl<T: Config> Pallet<T> {
             if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
-              Self::record_simulation_step(
-                &mut trace,
-                step_num,
-                SimulationStepOutcome::Failed(RetryClass::Permanent),
-              );
+              let failure = TaskFailure::permanent(error);
+              let outcome = StepOutcome::Failed(failure.clone());
+              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
               Self::deposit_event(Event::StepFailed {
                 actor_id,
                 cycle_nonce,
                 step_index: step_num,
-                retry_class: RetryClass::Permanent,
+                retry_class: failure.retry,
                 error,
               });
-              execution_plan_failed =
-                Self::apply_error_policy(actor_id, cycle_nonce, step_num, step.on_error, error);
-              if execution_plan_failed {
+              contract_steps_failed =
+                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+              if contract_steps_failed {
                 break;
               }
               continue;
             }
           }
-          match resolve_step_control(StepResult::FundingUnavailable, step.on_error) {
+          let outcome = StepOutcome::FundingUnavailable;
+          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
+          match resolve_step_control(&outcome, step.on_error) {
             StepControl::Advance => {}
             StepControl::CompleteCycle => {
               unreachable!("FundingUnavailable cannot complete a cycle")
             }
             StepControl::Terminate => {
-              execution_plan_failed = true;
+              contract_steps_failed = true;
               break;
             }
             StepControl::SuspendCurrent => {
-              Self::record_simulation_step(
-                &mut trace,
-                step_num,
-                SimulationStepOutcome::Suspended(SuspensionReason::FundingUnavailable),
-              );
               suspended_at = Some((step_num, SuspensionReason::FundingUnavailable));
               break;
             }
           }
           skipped_funding_unavailable = checked_semantic_increment(skipped_funding_unavailable)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
-            &mut trace,
-            step_num,
-            SimulationStepOutcome::Skipped(StepSkippedReason::FundingUnavailable),
-          );
           Self::deposit_event(Event::StepSkipped {
             actor_id,
             cycle_nonce,
@@ -700,26 +692,19 @@ impl<T: Config> Pallet<T> {
           };
           failed_steps = checked_semantic_increment(failed_steps)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
-            &mut trace,
-            step_num,
-            SimulationStepOutcome::Failed(RetryClass::Permanent),
-          );
+          let failure = TaskFailure::permanent(charged_error);
+          let outcome = StepOutcome::Failed(failure.clone());
+          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
           Self::deposit_event(Event::StepFailed {
             actor_id,
             cycle_nonce,
             step_index: step_num,
-            retry_class: RetryClass::Permanent,
+            retry_class: failure.retry,
             error: charged_error,
           });
-          execution_plan_failed = Self::apply_error_policy(
-            actor_id,
-            cycle_nonce,
-            step_num,
-            step.on_error,
-            charged_error,
-          );
-          if execution_plan_failed {
+          contract_steps_failed =
+            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+          if contract_steps_failed {
             break;
           }
           continue;
@@ -734,21 +719,19 @@ impl<T: Config> Pallet<T> {
         if let Err(error) = collect_step_fee!(charged_fee) {
           failed_steps = checked_semantic_increment(failed_steps)
             .expect("semantic counter bound is precluded by admission");
-          Self::record_simulation_step(
-            &mut trace,
-            step_num,
-            SimulationStepOutcome::Failed(RetryClass::Permanent),
-          );
+          let failure = TaskFailure::permanent(error);
+          let outcome = StepOutcome::Failed(failure.clone());
+          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
           Self::deposit_event(Event::StepFailed {
             actor_id,
             cycle_nonce,
             step_index: step_num,
-            retry_class: RetryClass::Permanent,
+            retry_class: failure.retry,
             error,
           });
-          execution_plan_failed =
-            Self::apply_error_policy(actor_id, cycle_nonce, step_num, step.on_error, error);
-          if execution_plan_failed {
+          contract_steps_failed =
+            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+          if contract_steps_failed {
             break;
           }
           continue;
@@ -765,8 +748,9 @@ impl<T: Config> Pallet<T> {
         failed_steps = checked_semantic_increment(failed_steps)
           .expect("semantic counter bound is precluded by admission");
         let retry = failure.retry;
-        let control = resolve_step_control(StepResult::Failed(retry), step.on_error);
-        Self::record_simulation_step(&mut trace, step_num, SimulationStepOutcome::Failed(retry));
+        let outcome = StepOutcome::Failed(failure.clone());
+        let control = resolve_step_control(&outcome, step.on_error);
+        Self::record_step_outcome(&mut trace, step_num, outcome);
         Self::deposit_event(Event::StepFailed {
           actor_id,
           cycle_nonce,
@@ -780,7 +764,7 @@ impl<T: Config> Pallet<T> {
             unreachable!("task failure cannot complete a cycle")
           }
           StepControl::Terminate => {
-            execution_plan_failed = true;
+            contract_steps_failed = true;
             break;
           }
           StepControl::SuspendCurrent => {
@@ -789,20 +773,18 @@ impl<T: Config> Pallet<T> {
           }
         }
       }
-      let successful_result = if matches!(&step.task, ActorTask::StopCycle) {
-        StepResult::Stopped
+      let outcome = if matches!(&step.task, ActorTask::StopCycle) {
+        StepOutcome::Stopped
       } else {
-        StepResult::Completed
+        StepOutcome::Executed
       };
-      let successful_control = resolve_step_control(successful_result, step.on_error);
-      let simulation_outcome = if successful_control == StepControl::CompleteCycle {
+      let successful_control = resolve_step_control(&outcome, step.on_error);
+      if successful_control == StepControl::CompleteCycle {
         Self::record_stop_cycle_event(actor_id, cycle_nonce, step_num);
-        SimulationStepOutcome::Stopped
       } else {
         debug_assert_eq!(successful_control, StepControl::Advance);
-        SimulationStepOutcome::Executed
-      };
-      Self::record_simulation_step(&mut trace, step_num, simulation_outcome);
+      }
+      Self::record_step_outcome(&mut trace, step_num, outcome);
       executed_steps = checked_semantic_increment(executed_steps)
         .expect("semantic counter bound is precluded by admission");
       attempt_executed_steps = checked_semantic_increment(attempt_executed_steps)
@@ -822,15 +804,16 @@ impl<T: Config> Pallet<T> {
     };
     let mut failure_already_recorded = false;
     if let Some((cursor, suspension_reason)) = suspended_at {
-      let consecutive_failures = ActorHot::<T>::mutate(actor_id, |maybe| {
+      let unsuccessful_attempt_streak = ActorHot::<T>::mutate(actor_id, |maybe| {
         let Some(hot) = maybe.as_mut() else {
           return 0;
         };
-        hot.consecutive_failures = hot
-          .consecutive_failures
-          .checked_add(1)
-          .expect("attempt admission excludes an exhausted failure counter");
-        hot.consecutive_failures
+        hot.unsuccessful_attempt_streak = transition_failure_streak(
+          hot.unsuccessful_attempt_streak,
+          FailureStreakTransition::UnsuccessfulAttempt,
+        )
+        .expect("attempt admission excludes an exhausted failure counter");
+        hot.unsuccessful_attempt_streak
       });
       failure_already_recorded = true;
       let unsuccessful_attempts_at_cursor = if is_continuation && cursor == start_cursor {
@@ -840,17 +823,17 @@ impl<T: Config> Pallet<T> {
       } else {
         1
       };
-      let max_attempts = execution_plan[cursor as usize]
+      let max_attempts = contract_steps[cursor as usize]
         .on_error
         .retry_max_attempts()
         .expect("suspension requires bounded RetryLater");
       let local_limit_reached = unsuccessful_attempts_at_cursor >= max_attempts;
-      let global_limit_reached = Self::failure_limit_reached(consecutive_failures);
+      let global_limit_reached = Self::failure_limit_reached(unsuccessful_attempt_streak);
       if !local_limit_reached && !global_limit_reached {
         let cumulative_outcomes = OutcomeTotals {
           executed_steps,
           committed_effectful_tasks,
-          skipped_conditions,
+          precondition_skips,
           skipped_resolution,
           skipped_funding_unavailable,
           failed_steps,
@@ -860,11 +843,10 @@ impl<T: Config> Pallet<T> {
           cycle_nonce,
           ContinuationState {
             cursor,
-            attempt,
             unsuccessful_attempts_at_cursor,
             last_attempt_block: now,
             opening_snapshot: Self::trim_opening_snapshot(
-              execution_plan,
+              contract_steps,
               cursor as usize,
               &opening_snapshot,
             ),
@@ -875,14 +857,19 @@ impl<T: Config> Pallet<T> {
           suspension_reason,
         )
         .expect("admitted mutable RetryLater plan has a valid unresolved cursor");
-        return (attempt_weight, false, None, fee_collection_failed);
+        return AttemptExecution {
+          weight: attempt_weight,
+          disposition: AttemptDisposition::Suspended,
+          fee_collection_failed,
+          outcomes: cumulative_outcomes,
+        };
       }
       failure_close_reason = Some(if local_limit_reached {
         CloseReason::RetryAttemptsExhausted
       } else {
         CloseReason::ConsecutiveFailures
       });
-      execution_plan_failed = true;
+      contract_steps_failed = true;
     }
     if is_continuation {
       Self::write_continuation_state(actor_id, None)
@@ -892,37 +879,41 @@ impl<T: Config> Pallet<T> {
       let Some(hot) = maybe.as_mut() else {
         return;
       };
-      if execution_plan_failed {
-        if !failure_already_recorded {
-          hot.consecutive_failures = checked_semantic_increment(hot.consecutive_failures)
-            .expect("failure bound (MaxConsecutiveFailures) is precluded by admission");
-        }
-      } else {
-        hot.consecutive_failures = 0;
+      if contract_steps_failed && failure_already_recorded {
+        return;
       }
+      let transition = if contract_steps_failed {
+        FailureStreakTransition::UnsuccessfulAttempt
+      } else {
+        FailureStreakTransition::Reset
+      };
+      hot.unsuccessful_attempt_streak =
+        transition_failure_streak(hot.unsuccessful_attempt_streak, transition)
+          .expect("failure bound (MaxConsecutiveFailures) is precluded by admission");
     });
+    let outcomes = OutcomeTotals {
+      executed_steps,
+      committed_effectful_tasks,
+      precondition_skips,
+      skipped_resolution,
+      skipped_funding_unavailable,
+      failed_steps,
+    };
     Self::deposit_event(Event::CycleSummary {
       actor_id,
       cycle_nonce,
-      result: if execution_plan_failed {
+      result: if contract_steps_failed {
         CycleResult::Failed
       } else {
         CycleResult::Completed
       },
-      outcomes: OutcomeTotals {
-        executed_steps,
-        committed_effectful_tasks,
-        skipped_conditions,
-        skipped_resolution,
-        skipped_funding_unavailable,
-        failed_steps,
-      },
+      outcomes,
     });
     let mut terminal_close_reason = None;
-    if execution_plan_failed {
+    if contract_steps_failed {
       if let Some(inst) = Self::active_actor_view(actor_id) {
         let close_reason = failure_close_reason.or_else(|| {
-          Self::failure_limit_reached(inst.consecutive_failures)
+          Self::failure_limit_reached(inst.unsuccessful_attempt_streak)
             .then_some(CloseReason::ConsecutiveFailures)
         });
         if !inst.lifecycle.is_paused() {
@@ -948,12 +939,19 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-    (
-      attempt_weight,
-      execution_plan_failed,
-      terminal_close_reason,
+    let disposition = if let Some(reason) = terminal_close_reason {
+      AttemptDisposition::Closed(reason)
+    } else if contract_steps_failed {
+      AttemptDisposition::Failed
+    } else {
+      AttemptDisposition::Completed
+    };
+    AttemptExecution {
+      weight: attempt_weight,
+      disposition,
       fee_collection_failed,
-    )
+      outcomes,
+    }
   }
 
   pub fn simulate_current_contract(
@@ -964,25 +962,17 @@ impl<T: Config> Pallet<T> {
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
     let instance = Self::active_actor_for_classification(actor_id)
-      .map_err(|error| match error {
-        ActorClassificationError::ActorInvariant => SimulationError::ActorInvariant,
-        ActorClassificationError::ContinuationInvariant => SimulationError::ContinuationInvariant,
-        ActorClassificationError::ComputationOverflow => SimulationError::ComputationOverflow,
-      })?
+      .map_err(SimulationError::Classification)?
       .ok_or(SimulationError::ActorNotFound)?;
     ensure!(
       ActorFunding::<T>::contains_key(actor_id),
-      SimulationError::ActorInvariant
+      SimulationError::Classification(ActorClassificationError::ActorInvariant)
     );
     let continuation = ContinuationStateStore::<T>::get(actor_id);
     if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
-      return Err(SimulationError::ContinuationInvariant);
-    }
-    if continuation
-      .as_ref()
-      .is_some_and(|state| state.attempt.checked_add(1).is_none())
-    {
-      return Err(SimulationError::ComputationOverflow);
+      return Err(SimulationError::Classification(
+        ActorClassificationError::ContinuationInvariant,
+      ));
     }
     if instance.actor_class.actor_type() != expected_type {
       return Err(SimulationError::TypeMismatch);
@@ -993,7 +983,7 @@ impl<T: Config> Pallet<T> {
     let ContractInput::Active(ActiveContractInput {
       schedule,
       schedule_window,
-      steps: execution_plan,
+      steps: contract_steps,
       completion: completion_policy,
       funding: funding_source_policy,
       auto_close_at_cycle_nonce,
@@ -1003,7 +993,7 @@ impl<T: Config> Pallet<T> {
     };
     if instance.schedule != schedule
       || instance.schedule_window != schedule_window
-      || instance.steps != execution_plan
+      || instance.steps != contract_steps
       || instance.completion != completion_policy
       || ActorContract::<T>::get(actor_id)
         .is_none_or(|contract| contract.funding != funding_source_policy)
@@ -1020,42 +1010,34 @@ impl<T: Config> Pallet<T> {
       }
       _ => {}
     }
-    let (cycle_nonce, attempt, start_cursor, initial_outcomes) = match mode {
+    let (cycle_nonce, start_cursor, initial_outcomes) = match mode {
       SimulationMode::FreshCurrentPlan => (
         instance.cycle_nonce.saturating_add(1),
-        0,
         0,
         OutcomeTotals::default(),
       ),
       SimulationMode::CurrentContinuation => {
         let continuation = continuation
           .as_ref()
-          .ok_or(SimulationError::ContinuationInvariant)?;
+          .ok_or(SimulationError::Classification(
+            ActorClassificationError::ContinuationInvariant,
+          ))?;
         (
           instance.cycle_nonce,
-          continuation
-            .attempt
-            .checked_add(1)
-            .ok_or(SimulationError::ComputationOverflow)?,
           continuation.cursor,
           continuation.cumulative_outcomes,
         )
       }
     };
     let classification =
-      Self::classify_actor(actor_id, &instance).map_err(|error| match error {
-        ActorClassificationError::ActorInvariant => SimulationError::ActorInvariant,
-        ActorClassificationError::ContinuationInvariant => SimulationError::ContinuationInvariant,
-        ActorClassificationError::ComputationOverflow => SimulationError::ComputationOverflow,
-      })?;
+      Self::classify_actor(actor_id, &instance).map_err(SimulationError::Classification)?;
     if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
       return Err(SimulationError::GlobalCircuitBreaker);
     }
     if let Some(reason) = classification.terminal_reason {
       return Ok(SimulationResult {
-        status: SimulationStatus::Closed(reason),
+        status: AttemptDisposition::Closed(reason),
         cycle_nonce: instance.cycle_nonce,
-        attempt: attempt.saturating_sub(u32::from(mode == SimulationMode::CurrentContinuation)),
         start_cursor,
         continuation_cursor: None,
         unsuccessful_attempts_at_cursor: None,
@@ -1074,89 +1056,60 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let mut trace = alloc::vec::Vec::new();
-      let (_, failed, close_reason, fee_collection_failed) =
-        Self::execute_single_cycle_traced(actor_id, instance, now, Some(&mut trace));
-      if fee_collection_failed {
+      let attempt = Self::execute_single_cycle_traced(actor_id, instance, now, Some(&mut trace));
+      if attempt.fee_collection_failed {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
           SimulationError::FeeCollectionFailed,
         ));
       }
       let continuation = ContinuationStateStore::<T>::get(actor_id);
-      let status = if continuation.is_some() {
-        SimulationStatus::Suspended
-      } else if let Some(reason) = close_reason {
-        SimulationStatus::Closed(reason)
-      } else if failed {
-        SimulationStatus::Failed
-      } else {
-        SimulationStatus::Completed
-      };
       let continuation_cursor = continuation.as_ref().map(|state| state.cursor);
       let unsuccessful_attempts_at_cursor = continuation
         .as_ref()
         .map(|state| state.unsuccessful_attempts_at_cursor);
-      let mut cumulative_outcomes = initial_outcomes;
-      for record in &trace {
-        match record.outcome {
-          SimulationStepOutcome::Executed => {
-            cumulative_outcomes.executed_steps =
-              cumulative_outcomes.executed_steps.saturating_add(1);
-            cumulative_outcomes.committed_effectful_tasks = cumulative_outcomes
-              .committed_effectful_tasks
-              .saturating_add(1);
-          }
-          SimulationStepOutcome::Stopped => {
-            cumulative_outcomes.executed_steps =
-              cumulative_outcomes.executed_steps.saturating_add(1);
-          }
-          SimulationStepOutcome::Skipped(StepSkippedReason::ConditionsNotMet) => {
-            cumulative_outcomes.skipped_conditions =
-              cumulative_outcomes.skipped_conditions.saturating_add(1);
-          }
-          SimulationStepOutcome::Skipped(StepSkippedReason::ResolutionSkipped) => {
-            cumulative_outcomes.skipped_resolution =
-              cumulative_outcomes.skipped_resolution.saturating_add(1);
-          }
-          SimulationStepOutcome::Skipped(StepSkippedReason::FundingUnavailable) => {
-            cumulative_outcomes.skipped_funding_unavailable = cumulative_outcomes
-              .skipped_funding_unavailable
-              .saturating_add(1);
-          }
-          SimulationStepOutcome::Failed(_) => {
-            cumulative_outcomes.failed_steps = cumulative_outcomes.failed_steps.saturating_add(1);
-          }
-          SimulationStepOutcome::Suspended(_) => {}
-        }
-      }
       if let Some(state) = continuation.as_ref() {
-        debug_assert_eq!(state.cumulative_outcomes, cumulative_outcomes);
+        debug_assert_eq!(state.cumulative_outcomes, attempt.outcomes);
       }
-      debug_assert!(trace.len() <= T::MaxExecutionPlanSteps::get() as usize);
+      debug_assert!(trace.len() <= T::MaxContractSteps::get() as usize);
       let Ok(steps) = BoundedVec::try_from(trace) else {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          SimulationError::ContinuationInvariant,
+          SimulationError::Classification(ActorClassificationError::ContinuationInvariant),
         ));
       };
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(SimulationResult {
-        status,
+        status: attempt.disposition,
         cycle_nonce,
-        attempt,
         start_cursor,
         continuation_cursor,
         unsuccessful_attempts_at_cursor,
-        cumulative_outcomes,
+        cumulative_outcomes: attempt.outcomes,
         steps,
       }))
     })
   }
 
-  pub(crate) fn failure_limit_reached(consecutive_failures: u32) -> bool {
+  pub(crate) fn failure_limit_reached(unsuccessful_attempt_streak: u32) -> bool {
     let max_failures = T::MaxConsecutiveFailures::get();
-    max_failures > 0 && consecutive_failures >= max_failures
+    max_failures > 0 && unsuccessful_attempt_streak >= max_failures
   }
 
-  pub(crate) fn compute_eval_fee_checked(num_conditions: u32) -> Result<BalanceOf<T>, Error<T>> {
-    let evaluation_weight = T::WeightInfo::predicate_set_evaluation(num_conditions)
+  pub(crate) fn predicate_evaluation_weight(evaluation_units: u32) -> Weight {
+    let component_bound = T::MaxPredicatesPerStep::get();
+    if component_bound == 0 {
+      return Weight::MAX;
+    }
+    let mut remaining = evaluation_units;
+    let mut weight = Weight::zero();
+    while remaining > 0 {
+      let chunk = remaining.min(component_bound);
+      weight = weight.saturating_add(T::WeightInfo::predicate_set_evaluation(chunk));
+      remaining = remaining.saturating_sub(chunk);
+    }
+    weight
+  }
+
+  pub(crate) fn compute_eval_fee_checked(evaluation_units: u32) -> Result<BalanceOf<T>, Error<T>> {
+    let evaluation_weight = Self::predicate_evaluation_weight(evaluation_units)
       .saturating_add(T::WeightInfo::fee_collection());
     Ok(T::WeightToFee::weight_to_fee(&evaluation_weight))
   }
@@ -1188,17 +1141,6 @@ impl<T: Config> Pallet<T> {
     }
     T::FeeCollector::collect_fee(actor, &T::FeeSink::get(), native, fee)
       .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
-  }
-
-  fn apply_error_policy(
-    _actor_id: ActorId,
-    _cycle_nonce: u64,
-    _step: u32,
-    policy: StepErrorPolicy,
-    _failure: DispatchError,
-  ) -> bool {
-    resolve_step_control(StepResult::Failed(RetryClass::Permanent), policy)
-      == StepControl::Terminate
   }
 
   fn push_trigger_surface(
@@ -1291,50 +1233,44 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn opening_surfaces(
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
     start_cursor: usize,
   ) -> alloc::vec::Vec<OpeningSurface<T::AssetId>> {
     let mut surfaces = alloc::vec::Vec::new();
-    for step_index in start_cursor..execution_plan.len() {
-      Self::collect_percentage_opening_surfaces(&execution_plan[step_index].task, &mut surfaces);
+    for step_index in start_cursor..contract_steps.len() {
+      Self::collect_percentage_opening_surfaces(&contract_steps[step_index].task, &mut surfaces);
     }
     surfaces
   }
 
-  fn opening_predicate_count_before(execution_plan: &ExecutionPlanOf<T>, end_step: usize) -> usize {
-    execution_plan
+  fn opening_predicate_count_before(contract_steps: &ContractSteps<T>, end_step: usize) -> usize {
+    contract_steps
       .iter()
       .take(end_step)
-      .map(|step| match &step.preconditions {
-        Preconditions::Unconditional => 0,
-        Preconditions::AnyOf(clauses) => clauses
-          .iter()
-          .flat_map(|clause| clause.iter())
-          .filter(|timed| timed.timing == ObservationTiming::Opening)
-          .count(),
+      .map(|step| {
+        step.precondition.as_ref().map_or(0, |precondition| {
+          precondition.opening_predicate_count() as usize
+        })
       })
       .sum()
   }
 
   fn capture_opening_predicate_results(
     actor: &T::AccountId,
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
     reserved: T::Balance,
   ) -> OpeningPredicateResultsOf<T> {
     let mut results = OpeningPredicateResultsOf::<T>::default();
-    for step in execution_plan {
-      let Preconditions::AnyOf(clauses) = &step.preconditions else {
+    for step in contract_steps {
+      let Some(precondition) = &step.precondition else {
         continue;
       };
+      let clauses = &precondition.clauses;
       for timed in clauses.iter().flat_map(|clause| clause.iter()) {
         if timed.timing != ObservationTiming::Opening {
           continue;
         }
-        let result = match Self::evaluate_atomic_predicate(&timed.predicate, actor, reserved) {
-          Ok(true) => PredicateEvaluation::True,
-          Ok(false) => PredicateEvaluation::False,
-          Err(_) => PredicateEvaluation::Invalid,
-        };
+        let result = Self::evaluate_atomic_predicate(&timed.predicate, actor, reserved);
         results
           .try_push(result)
           .unwrap_or_else(|_| panic!("admitted opening predicates fit MaxOpeningPredicateResults"));
@@ -1346,11 +1282,11 @@ impl<T: Config> Pallet<T> {
   fn capture_opening_snapshot(
     actor_type: ActorType,
     actor: &T::AccountId,
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
     reserved: T::Balance,
   ) -> ContinuationSnapshotOf<T> {
     let mut snapshot = ContinuationSnapshotOf::<T>::default();
-    for surface in Self::opening_surfaces(execution_plan, 0) {
+    for surface in Self::opening_surfaces(contract_steps, 0) {
       let balance = match surface {
         OpeningSurface::PreservableAsset(asset) => {
           Self::preservable_balance(actor_type, actor, asset, reserved)
@@ -1366,12 +1302,12 @@ impl<T: Config> Pallet<T> {
   }
 
   fn trim_opening_snapshot(
-    execution_plan: &ExecutionPlanOf<T>,
+    contract_steps: &ContractSteps<T>,
     start_cursor: usize,
     source: &ContinuationSnapshotOf<T>,
   ) -> ContinuationSnapshotOf<T> {
     let mut snapshot = ContinuationSnapshotOf::<T>::default();
-    for surface in Self::opening_surfaces(execution_plan, start_cursor) {
+    for surface in Self::opening_surfaces(contract_steps, start_cursor) {
       if let Some(balance) = source.get(&surface) {
         snapshot
           .try_insert(surface, *balance)
@@ -2024,16 +1960,20 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  fn evaluate_step_preconditions(
-    preconditions: &PreconditionsOf<T>,
+  fn evaluate_step_precondition(
+    precondition: Option<&PreconditionOf<T>>,
     who: &T::AccountId,
     reserved: T::Balance,
     opening_results: &OpeningPredicateResultsOf<T>,
     opening_index: &mut usize,
   ) -> Result<bool, DispatchError> {
-    evaluate_predicate_set_with(preconditions, |timed| match timed.timing {
+    let Some(precondition) = precondition else {
+      return Ok(true);
+    };
+    evaluate_precondition_with(precondition, |timed| match timed.timing {
       ObservationTiming::Current => {
         Self::evaluate_atomic_predicate(&timed.predicate, who, reserved)
+          .map_err(|_| Error::<T>::InvalidPredicate.into())
       }
       ObservationTiming::Opening => {
         let result = opening_results
@@ -2043,30 +1983,26 @@ impl<T: Config> Pallet<T> {
         *opening_index = opening_index
           .checked_add(1)
           .ok_or(Error::<T>::ComputationOverflow)?;
-        match result {
-          PredicateEvaluation::True => Ok(true),
-          PredicateEvaluation::False => Ok(false),
-          PredicateEvaluation::Invalid => Err(Error::<T>::InvalidPredicate.into()),
-        }
+        result.map_err(|_| Error::<T>::InvalidPredicate.into())
       }
     })
   }
 
   #[cfg(any(test, feature = "runtime-benchmarks"))]
-  pub(crate) fn evaluate_predicate_set(
-    preconditions: &PreconditionsOf<T>,
+  pub(crate) fn evaluate_precondition(
+    precondition: &PreconditionOf<T>,
     who: &T::AccountId,
     reserved: T::Balance,
   ) -> Result<bool, DispatchError> {
     let opening_results = OpeningPredicateResultsOf::<T>::default();
-    Self::evaluate_step_preconditions(preconditions, who, reserved, &opening_results, &mut 0)
+    Self::evaluate_step_precondition(Some(precondition), who, reserved, &opening_results, &mut 0)
   }
 
   fn evaluate_atomic_predicate(
     condition: &Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>,
     who: &T::AccountId,
     reserved: T::Balance,
-  ) -> Result<bool, DispatchError> {
+  ) -> Result<bool, PredicateError> {
     Ok(match condition {
       Predicate::BalanceAbove { asset, threshold } => {
         Self::spendable_balance(who, *asset, reserved) > *threshold
@@ -2118,14 +2054,14 @@ impl<T: Config> Pallet<T> {
   fn fresh_observation_value(
     feed: T::ObservationFeedId,
     max_age_blocks: u32,
-  ) -> Result<Option<u128>, DispatchError> {
+  ) -> Result<Option<u128>, PredicateError> {
     let now = frame_system::Pallet::<T>::block_number();
     match T::ObservationProvider::observe(&feed, now, max_age_blocks) {
       ScalarObservationState::Fresh { value, observed_at } => {
         let maximum_age: BlockNumberFor<T> = max_age_blocks.saturated_into();
         ensure!(
           observed_at <= now && now.saturating_sub(observed_at) <= maximum_age,
-          Error::<T>::InvalidPredicate
+          PredicateError::InvalidObservation
         );
         Ok(Some(value))
       }
@@ -2272,60 +2208,58 @@ mod step_control_tests {
 
   #[test]
   fn step_control_matrix_is_exhaustive() {
+    let permanent = StepOutcome::Failed(TaskFailure::permanent(DispatchError::Other("test")));
+    let temporary = StepOutcome::Failed(TaskFailure::temporary(DispatchError::Other("test")));
     let fixed_cases = [
       (
-        StepResult::Completed,
+        &StepOutcome::Executed,
         StepErrorPolicy::ContinueNextStep,
         StepControl::Advance,
       ),
       (
-        StepResult::Completed,
+        &StepOutcome::Executed,
         StepErrorPolicy::AbortCycle,
         StepControl::Advance,
       ),
-      (StepResult::Completed, RETRY, StepControl::Advance),
+      (&StepOutcome::Executed, RETRY, StepControl::Advance),
       (
-        StepResult::Stopped,
+        &StepOutcome::Stopped,
         StepErrorPolicy::ContinueNextStep,
         StepControl::CompleteCycle,
       ),
       (
-        StepResult::Stopped,
+        &StepOutcome::Stopped,
         StepErrorPolicy::AbortCycle,
         StepControl::CompleteCycle,
       ),
-      (StepResult::Stopped, RETRY, StepControl::CompleteCycle),
+      (&StepOutcome::Stopped, RETRY, StepControl::CompleteCycle),
       (
-        StepResult::Failed(RetryClass::Permanent),
+        &permanent,
         StepErrorPolicy::ContinueNextStep,
         StepControl::Advance,
       ),
       (
-        StepResult::Failed(RetryClass::Permanent),
+        &permanent,
         StepErrorPolicy::AbortCycle,
         StepControl::Terminate,
       ),
+      (&permanent, RETRY, StepControl::Terminate),
       (
-        StepResult::Failed(RetryClass::Permanent),
-        RETRY,
-        StepControl::Terminate,
-      ),
-      (
-        StepResult::Failed(RetryClass::Temporary),
+        &temporary,
         StepErrorPolicy::ContinueNextStep,
         StepControl::Advance,
       ),
       (
-        StepResult::Failed(RetryClass::Temporary),
+        &temporary,
         StepErrorPolicy::AbortCycle,
         StepControl::Terminate,
       ),
     ];
-    for (result, policy, expected) in fixed_cases {
-      assert_eq!(resolve_step_control(result, policy), expected);
+    for (outcome, policy, expected) in fixed_cases {
+      assert_eq!(resolve_step_control(outcome, policy), expected);
     }
     assert_eq!(
-      resolve_step_control(StepResult::Failed(RetryClass::Temporary), RETRY),
+      resolve_step_control(&temporary, RETRY),
       StepControl::SuspendCurrent,
     );
   }
@@ -2337,18 +2271,18 @@ mod step_control_tests {
       StepErrorPolicy::AbortCycle,
     ] {
       assert_eq!(
-        resolve_step_control(StepResult::FundingUnavailable, policy),
+        resolve_step_control(&StepOutcome::FundingUnavailable, policy),
         StepControl::Advance,
       );
     }
     assert_eq!(
-      resolve_step_control(StepResult::FundingUnavailable, RETRY),
+      resolve_step_control(&StepOutcome::FundingUnavailable, RETRY),
       StepControl::SuspendCurrent,
     );
   }
 
   #[test]
-  fn preconditions_dnf_never_short_circuits_truth_or_error() {
+  fn precondition_dnf_never_short_circuits_truth_or_error() {
     use polkadot_sdk::frame_support::traits::ConstU32;
 
     let clause = |predicates| BoundedVec::try_from(predicates).expect("predicates fit");
@@ -2356,15 +2290,15 @@ mod step_control_tests {
       timing: ObservationTiming::Current,
       predicate,
     };
-    let preconditions = Preconditions::<u8, ConstU32<4>, ConstU32<4>>::AnyOf(
-      BoundedVec::try_from(alloc::vec![
+    let precondition = Precondition::<u8, ConstU32<4>, ConstU32<4>> {
+      clauses: BoundedVec::try_from(alloc::vec![
         clause(alloc::vec![timed(1), timed(2)]),
         clause(alloc::vec![timed(3)]),
       ])
       .expect("clauses fit"),
-    );
+    };
     let mut visited = alloc::vec::Vec::new();
-    let result = evaluate_predicate_set_with(&preconditions, |timed| {
+    let result = evaluate_precondition_with(&precondition, |timed| {
       visited.push(timed.predicate);
       match timed.predicate {
         1 => Ok(true),
@@ -2382,8 +2316,8 @@ mod step_control_tests {
     use polkadot_sdk::sp_runtime::StateVersion;
 
     new_test_ext().execute_with(|| {
-      let conditions = Preconditions::AnyOf(
-        BoundedVec::try_from(alloc::vec![
+      let precondition = Precondition {
+        clauses: BoundedVec::try_from(alloc::vec![
           BoundedVec::try_from(alloc::vec![TimedPredicate {
             timing: ObservationTiming::Current,
             predicate: Predicate::BalanceAbove {
@@ -2394,10 +2328,10 @@ mod step_control_tests {
           .expect("one predicate fits"),
         ])
         .expect("one clause fits"),
-      );
+      };
       let before_conditions = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
-        Pallet::<Test>::evaluate_predicate_set(&conditions, &ALICE, 0),
+        Pallet::<Test>::evaluate_precondition(&precondition, &ALICE, 0),
         Ok(true),
       );
       assert_eq!(

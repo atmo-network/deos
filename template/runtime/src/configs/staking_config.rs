@@ -45,8 +45,7 @@ impl pallet_staking::NativeOperatorValidator<AccountId> for RuntimeNativeOperato
     if pallet_collator_selection::Invulnerables::<Runtime>::get().contains(account) {
       return true;
     }
-    <RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
-      == pallet_staking::NativeSecurityMode::LpBackedSelection
+    crate::Staking::native_security_candidate_selection_available()
       && pallet_collator_selection::CandidateList::<Runtime>::get()
         .iter() // deos-bypass: bounded-iter — collator-selection MaxCandidates
         .any(|candidate| &candidate.who == account)
@@ -237,8 +236,9 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance>
       mint_amount,
     )?;
     let _ = crate::Balances::deposit_creating(account, mint_amount);
-    let _ = crate::Staking::stake_native(
+    let _ = crate::Staking::stake(
       crate::RuntimeOrigin::signed(account.clone()),
+      native_asset_id,
       mint_amount / 2,
     )?;
     crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
@@ -386,7 +386,11 @@ impl pallet_staking::NativeSecurityRewardCompound<AccountId, AssetId, Balance>
     }
     <crate::Assets as Mutate<AccountId>>::mint_into(native_asset_id, account, reward)?;
     let staked_before = <crate::Assets as Inspect<AccountId>>::balance(staked_asset_id, account);
-    crate::Staking::stake_native(crate::RuntimeOrigin::signed(account.clone()), stake_amount)?;
+    crate::Staking::stake(
+      crate::RuntimeOrigin::signed(account.clone()),
+      native_asset_id,
+      stake_amount,
+    )?;
     let staked_out = <crate::Assets as Inspect<AccountId>>::balance(staked_asset_id, account)
       .checked_sub(staked_before)
       .ok_or(DispatchError::Other("NativeSecurityCompoundOverflow"))?;

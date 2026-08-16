@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: DEOS Router
-summary: DEOS Router is the framework's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
+description: DEOS Router is the framework's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
 locale: en
 canonical_page_id: router
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../docs/oracle.integration.en.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/router/docs/specification.en.md
-status: active
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../docs/oracle.integration.en.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/router/docs/specification.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

@@ -1,4 +1,4 @@
-use crate::types::{AmountResolution, Mutability, Preconditions, Predicate, StepErrorPolicy, Task};
+use crate::types::{AmountResolution, Mutability, Precondition, Predicate, StepErrorPolicy, Task};
 #[cfg(test)]
 use crate::types::{ObservationTiming, TimedPredicate};
 use crate::{RetryClass, WeightInfo};
@@ -420,14 +420,8 @@ pub struct PredicateInstructionContract<AssetId, ObservationFeedId = ()> {
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub enum PreconditionsMode {
-  Unconditional,
-  AnyOf,
-}
-
-#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct PreconditionsInstructionContract {
-  pub mode: PreconditionsMode,
+pub struct PreconditionInstructionContract {
+  pub present: bool,
   pub atomic_count: u32,
   pub canonical_non_empty: bool,
   pub evaluates_all_atoms: bool,
@@ -437,19 +431,24 @@ pub struct PreconditionsInstructionContract {
   pub nested_groups: bool,
 }
 
-pub fn describe_preconditions<C, MaxClauses: Get<u32>, MaxPerClause: Get<u32>>(
-  preconditions: &Preconditions<C, MaxClauses, MaxPerClause>,
-) -> PreconditionsInstructionContract {
-  let (mode, atomic_count, canonical_non_empty) = match preconditions {
-    Preconditions::Unconditional => (PreconditionsMode::Unconditional, 0, true),
-    Preconditions::AnyOf(clauses) => (
-      PreconditionsMode::AnyOf,
-      clauses.iter().map(|clause| clause.len() as u32).sum(),
-      !clauses.is_empty() && clauses.iter().all(|clause| !clause.is_empty()),
+pub fn describe_precondition<C, MaxClauses: Get<u32>, MaxPerClause: Get<u32>>(
+  precondition: Option<&Precondition<C, MaxClauses, MaxPerClause>>,
+) -> PreconditionInstructionContract {
+  let (present, atomic_count, canonical_non_empty) = match precondition {
+    None => (false, 0, true),
+    Some(precondition) => (
+      true,
+      precondition
+        .clauses
+        .iter()
+        .map(|clause| clause.len() as u32)
+        .sum(),
+      !precondition.clauses.is_empty()
+        && precondition.clauses.iter().all(|clause| !clause.is_empty()),
     ),
   };
-  PreconditionsInstructionContract {
-    mode,
+  PreconditionInstructionContract {
+    present,
     atomic_count,
     canonical_non_empty,
     evaluates_all_atoms: true,
@@ -522,7 +521,6 @@ pub enum AmountDataDependency {
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub enum ContextDependency {
-  None,
   TaskPolicy,
 }
 
@@ -798,9 +796,9 @@ mod tests {
   }
 
   #[test]
-  fn preconditions_contract_exposes_bounded_dnf_without_dynamic_control() {
+  fn precondition_contract_exposes_optional_bounded_dnf_without_dynamic_control() {
     type TestPredicate = Predicate<u32, u128, u32>;
-    type TestPreconditions = Preconditions<TestPredicate, ConstU32<4>, ConstU32<4>>;
+    type TestPrecondition = Precondition<TestPredicate, ConstU32<4>, ConstU32<4>>;
     let atom: TimedPredicate<TestPredicate> = TimedPredicate {
       timing: ObservationTiming::Current,
       predicate: Predicate::BlockNumberAbove { threshold: 1 },
@@ -809,16 +807,10 @@ mod tests {
       BoundedVec::try_from(alloc::vec![atom]).expect("one predicate fits");
     let clauses: BoundedVec<_, ConstU32<4>> =
       BoundedVec::try_from(alloc::vec![clause]).expect("one clause fits");
-    let cases: [(PreconditionsMode, TestPreconditions); 2] = [
-      (
-        PreconditionsMode::Unconditional,
-        Preconditions::Unconditional,
-      ),
-      (PreconditionsMode::AnyOf, Preconditions::AnyOf(clauses)),
-    ];
-    for (expected_mode, preconditions) in cases {
-      let contract: PreconditionsInstructionContract = describe_preconditions(&preconditions);
-      assert_eq!(contract.mode, expected_mode);
+    let precondition = TestPrecondition { clauses };
+    for (present, value) in [(false, None), (true, Some(&precondition))] {
+      let contract: PreconditionInstructionContract = describe_precondition(value);
+      assert_eq!(contract.present, present);
       assert!(contract.canonical_non_empty);
       assert!(contract.evaluates_all_atoms);
       assert!(contract.atomic_error_fails_group);
@@ -826,13 +818,15 @@ mod tests {
       assert_eq!(contract.admitted_task_count, 1);
       assert!(contract.nested_groups);
     }
-    let empty = TestPreconditions::AnyOf(BoundedVec::default());
-    assert!(!describe_preconditions(&empty).canonical_non_empty);
+    let empty = TestPrecondition {
+      clauses: BoundedVec::default(),
+    };
+    assert!(!describe_precondition(Some(&empty)).canonical_non_empty);
   }
 
   #[test]
-  fn every_condition_is_pure_and_bounded() {
-    let preconditions: [Predicate<u32, u128, u32, u32>; 10] = [
+  fn every_predicate_is_pure_and_bounded() {
+    let predicates: [Predicate<u32, u128, u32, u32>; 10] = [
       Predicate::BalanceAbove {
         asset: 1u32,
         threshold: 1u128,
@@ -872,8 +866,8 @@ mod tests {
         max_age_blocks: 1,
       },
     ];
-    for condition in preconditions {
-      let contract = describe_predicate(&condition);
+    for predicate in predicates {
+      let contract = describe_predicate(&predicate);
       assert!(contract.pure);
       assert_eq!(
         contract.observation_window,
@@ -884,7 +878,7 @@ mod tests {
   }
 
   #[test]
-  fn every_amount_resolution_classifies_retry_observation() {
+  fn every_amount_resolution_has_a_live_task_policy_constructor() {
     let cases = [
       AmountResolution::Fixed(1u128),
       AmountResolution::PercentageOfCurrent(Perbill::one()),

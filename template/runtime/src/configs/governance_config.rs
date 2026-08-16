@@ -419,12 +419,12 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash>
     let amount = primitives::ecosystem::params::PRECISION.saturating_mul(100);
     <crate::Assets as Mutate<AccountId>>::mint_into(domain, account, amount)?;
     let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(account, amount);
-    crate::Staking::stake_native(RuntimeOrigin::signed(account.clone()), amount / 2)?;
+    crate::Staking::stake(RuntimeOrigin::signed(account.clone()), domain, amount / 2)?;
     let payload = StrategicRuntimeUpgradePayload {
       code_hash: Hash::default(),
     }
     .encode();
-    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash_of(&payload);
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
     crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload)
       .map_err(|error| error.error)?;
     Ok((domain, payload_hash))
@@ -623,12 +623,11 @@ pub struct TacticalTreasuryInvoicePayload {
 fn tactical_treasury_account_for_invoice(
   domain: AssetId,
   funding_source: TacticalTreasuryFundingSource,
-) -> Option<AccountId> {
+) -> AccountId {
+  debug_assert_eq!(domain, tactical_governance_domain());
   match funding_source {
-    TacticalTreasuryFundingSource::BldrTreasury if domain == tactical_governance_domain() => {
-      governance_treasury_account(domain)
-    }
-    _ => None,
+    TacticalTreasuryFundingSource::BldrTreasury => governance_treasury_account(domain)
+      .expect("the admitted tactical governance domain has a configured treasury"),
   }
 }
 
@@ -731,8 +730,7 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
           .and_then(|amount| amount.checked_div(denominator))
           .ok_or(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
         let treasury_account =
-          tactical_treasury_account_for_invoice(domain, payload.funding_source)
-            .ok_or(pallet_governance::ProposalExecutionFailureReason::UnsupportedTarget)?;
+          tactical_treasury_account_for_invoice(domain, payload.funding_source);
         RuntimeCall::Assets(pallet_assets::Call::transfer {
           id: payload.payout_asset,
           target: polkadot_sdk::sp_runtime::MultiAddress::Id(payload.beneficiary.clone()),
@@ -753,7 +751,10 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
         )
         .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
       }
-      _ => Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedPayloadKind),
+      pallet_governance::ProposalPayloadKind::Intent
+      | pallet_governance::ProposalPayloadKind::L2SignalToL1 => {
+        unreachable!("advisory payloads never enter the runtime executor")
+      }
     }
   }
 }

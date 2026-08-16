@@ -36,6 +36,24 @@ The agent MUST NEVER allow `/wiki` to override `/docs`.
 
 The agent MUST NEVER silently preserve a wiki claim that conflicts with updated evidence in `/docs`.
 
+### Strict OKF Bundle Contract
+
+Read the bundled [Open Knowledge Format reference](references/okf-reference.md) before changing Wiki schema, validation, provenance, lifecycle, trust, or reserved-file behavior. This directly readable Markdown atom embeds its lock metadata and the full adopted upstream source; project extensions remain subordinate to it.
+
+`/wiki` is an explicitly declared strict OKF v0.2 bundle. Root `index.md` declares `okf_version: "0.2"`; exact `index.md` is reserved and is not a localized concept or graph node. Every other Markdown concept uses canonical `type`, `description`, and structured `sources[].resource`. DEOS locale, audience, related-link, confidence, and compilation fields remain compatible extensions. Do not emit `page_type` or `summary` aliases, and never infer `generated`, `verified`, `stale_after`, attestation, or freshness evidence from compilation, confidence, Git history, or structural validation.
+
+Strict OKF scope ends at `/wiki`; `/docs`, repository context, Skills, and unrelated Markdown are not members of this bundle merely because they use frontmatter.
+
+The reference frontmatter is the only publication atom. Its embedded lock binds the adopted version, immutable upstream revision and blob, upstream-source SHA-256, deterministic body SHA-256, and separate DEOS Wiki adoption state without a self-referential whole-file hash or a second rename. Before changing OKF schema, provenance, lifecycle, reserved files, or validation, agents MUST run the optional network freshness check:
+
+```bash
+npm run okf:check --prefix .agents/skills/wiki-sync
+```
+
+Lifecycle output is `current`, `unknown`, `review-pending`, or `adopted`. `current` means the pinned source matches the freshest upstream `GoogleCloudPlatform/knowledge-catalog/okf/SPEC.md`; it does not newly prove Wiki compatibility. `unknown` means GitHub was unavailable while the verified local atom remains valid. `review-pending` is read-only classification. `adopted` is emitted only after successful publication and is the canonical embedded adoption status. This network check is intentionally outside ordinary offline completion gates.
+
+Reference refresh is staged and explicit. `npm run okf:sync --prefix .agents/skills/wiki-sync -- --reviewed` fetches metadata, then one immutable commit, checks blob and SHA identities, and publishes the single atom only after strict tests pass. Changed content under the same version additionally needs `--allow-same-version-revision`; a newer minor needs `--allow-version-change`; a newer major needs `--allow-breaking-version`. Version changes are refused until `wiki/index.md` already declares the migrated version. These flags record review authority only: agents MUST first inspect the candidate semantics and complete the dependent validator/schema migration. Never describe reference freshness as protocol adoption.
+
 ### Layer Semantics
 
 `/docs`:
@@ -231,6 +249,16 @@ The agent MUST ensure:
 
 If localized source docs are incomplete, the agent MAY generate a truthful mirror page from the default-locale wiki page, but it MUST mark that page explicitly with metadata such as `translation_of` and `translation_status: mirrored-from-default` instead of pretending full source-localized synthesis exists.
 
+### Native Localization Contract
+
+Locale mirrors preserve semantic claims, provenance, page identity, graph topology, and link intent; they are not required to preserve English sentence structure or literal phrasing.
+
+For Russian pages and localized frontend strings, the agent MUST write natural native Russian, replace avoidable anglicisms and calques with established Russian equivalents, and restructure headings, examples, and explanations when needed for fluency. Preserve canonical project identifiers, code symbols, asset symbols, and technical terms whose translation would reduce precision. Localization MUST NOT introduce a stronger claim, omit an invariant, or drift from the source contract merely to sound natural.
+
+Read and follow [Native Russian Wiki Style](references/native-russian-style.md) before Russian localization work. Its reviewed inventory and structural exact-term exclusions provide a deterministic regression gate, while its independent bilingual handoff remains the evidence owner for native fluency.
+
+Review each Russian surface as independent prose after semantic parity is established; a mechanically mirrored translation is not complete localization evidence.
+
 ### Page-Level Provenance
 
 Each nontrivial wiki page MUST reference its supporting doc sources.
@@ -278,7 +306,7 @@ The agent MUST avoid:
 
 The agent SHOULD assume that page titles, summaries, tags, related links, and page types may be consumed directly by frontend code.
 
-Wiki frontmatter is consumed through a simple TOML-like `key: value` contract. The agent MUST NOT put additional value-side colons on scalar metadata lines such as `summary`: because downstream parsers treat colons as key/value separators. Rewrite such summaries with dashes, commas, or sentence structure instead of `summary: Topic: details`.
+Wiki frontmatter is parsed as YAML under the strict OKF validator. Use canonical `description` for the one-line preview and structured `sources` mappings. Keep scalar descriptions concise and quote them whenever YAML punctuation could change their meaning.
 
 If the repository renders wiki markdown directly in the browser as trusted repo-local content, the agent SHOULD also keep the emitted markdown inside that trust contract by avoiding raw HTML blocks, dangerous URL schemes, and inline DOM event-handler attributes so repo-level validation (e.g. via `scripts/validate-wiki-trust.sh`) can stay the primary safety boundary.
 
@@ -362,9 +390,9 @@ Recommended frontmatter shape:
 
 ```yaml
 ---
-page_type: concept
+type: concept
 title: Example Concept
-summary: What this concept is and why it matters.
+description: What this concept is and why it matters.
 locale: en
 canonical_page_id: example-concept
 translation_status: source
@@ -372,9 +400,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../docs/path/to/source-a.en.md
-  - ../docs/path/to/source-b.en.md
-status: active
+  - resource: ../docs/path/to/source-a.en.md
+  - resource: ../docs/path/to/source-b.en.md
+status: stable
 audience: newcomer
 tags:
   - architecture
@@ -391,9 +419,9 @@ Recommended mirrored-locale frontmatter extension:
 
 ```yaml
 ---
-page_type: concept
+type: concept
 title: Пример концепции
-summary: Локализованное зеркало той же страницы.
+description: Локализованное зеркало той же страницы.
 locale: ru
 canonical_page_id: example-concept
 translation_of: ./example-concept.en.md
@@ -402,9 +430,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../docs/path/to/source-a.ru.md
-  - ../docs/path/to/source-b.en.md
-status: active
+  - resource: ../docs/path/to/source-a.ru.md
+  - resource: ../docs/path/to/source-b.en.md
+status: stable
 audience: newcomer
 related:
   - Другая страница

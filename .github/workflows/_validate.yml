@@ -7,18 +7,39 @@ on:
         description: Canonical validate-local profile
         required: true
         type: string
+      release_candidate:
+        description: Produce the exact tag-bound candidate handoff after fresh full
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      candidate-artifact-id:
+        description: Exact immutable candidate artifact ID
+        value: ${{ jobs.validate.outputs.candidate-artifact-id }}
+      candidate-artifact-digest:
+        description: GitHub-computed immutable candidate archive digest
+        value: ${{ jobs.validate.outputs.candidate-artifact-digest }}
+      candidate-manifest-sha256:
+        description: Canonical candidate manifest SHA-256
+        value: ${{ jobs.validate.outputs.candidate-manifest-sha256 }}
+
+permissions:
+  contents: read
 
 jobs:
   validate:
     name: ${{ inputs.profile }} validation
     runs-on: ubuntu-24.04
+    outputs:
+      candidate-artifact-id: ${{ steps.candidate-upload.outputs.artifact-id }}
+      candidate-artifact-digest: ${{ format('sha256:{0}', steps.candidate-upload.outputs.artifact-digest) }}
+      candidate-manifest-sha256: ${{ steps.candidate-create.outputs.manifest-sha256 }}
     timeout-minutes: ${{ inputs.profile == 'full' && 720 || inputs.profile == 'heavy' && 240 || 120 }}
     env:
-      CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
       SKIP_WASM_BUILD: ${{ inputs.profile == 'full' && '0' || '1' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -26,12 +47,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes ripgrep
 
       - name: Setup pinned Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: web-client/package.json
 
       - name: Restore validation caches
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -44,5 +65,40 @@ jobs:
             ${{ runner.os }}-${{ inputs.profile }}-
             ${{ runner.os }}-
 
+      - name: Verify release-candidate trigger
+        if: inputs.release_candidate
+        run: |
+          test "${{ inputs.profile }}" = full
+          test "${{ github.event_name }}" = push
+          test "${GITHUB_REF}" = "refs/tags/v$(awk -F\" '/^version = / { print $2; exit }' template/Cargo.toml)"
+          printf 'started-at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" >> "$GITHUB_OUTPUT"
+        id: candidate-trigger
+
       - name: Run canonical profile
-        run: ./scripts/validate-local.sh "${{ inputs.profile }}"
+        run: ./scripts/validate-local.sh --fresh "${{ inputs.profile }}"
+
+      - name: Create exact candidate handoff
+        id: candidate-create
+        if: inputs.release_candidate
+        run: |
+          node scripts/release-evidence.mjs create \
+            --repo "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/deos-candidate" \
+            --repository-id "${{ github.repository_id }}" \
+            --tag-ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --started-at "${{ steps.candidate-trigger.outputs.started-at }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload immutable candidate handoff
+        id: candidate-upload
+        if: inputs.release_candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deos-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deos-candidate
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          include-hidden-files: true

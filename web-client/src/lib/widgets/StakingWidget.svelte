@@ -181,19 +181,22 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     walletStore.state.signerStatus !== 'available',
   );
   const nativeStakingPoolUnavailable = $derived(!snap?.nativeStaking.pool);
-  const securityCapabilities = $derived(
-    snap?.nativeStaking.securityCapabilities ?? null,
+  const securityModeUnavailable = $derived(
+    snap?.nativeStaking.securityMode == null,
+  );
+  const lpBackedSecurityActive = $derived(
+    snap?.nativeStaking.securityMode === 'LpBackedSelection',
   );
   const rewardClaimDisabled = $derived(
     stakingActionBusy ||
       stakingSignerUnavailable ||
-      !securityCapabilities?.rewardClaims ||
+      securityModeUnavailable ||
       rewardEpoch === null,
   );
   const rewardCompoundDisabled = $derived(
     stakingActionBusy ||
       stakingSignerUnavailable ||
-      !securityCapabilities?.rewardCompound ||
+      !lpBackedSecurityActive ||
       rewardEpoch === null ||
       rewardMinLpOut === null ||
       rewardOperatorInput.trim().length === 0,
@@ -202,7 +205,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     stakingActionBusy ||
       stakingSignerUnavailable ||
       nativeStakingPoolUnavailable ||
-      !securityCapabilities?.newNominations ||
+      !lpBackedSecurityActive ||
       lpAmount === null ||
       lpOperatorInput.trim().length === 0,
   );
@@ -214,7 +217,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   const lpRedelegateDisabled = $derived(
     stakingActionBusy ||
       stakingSignerUnavailable ||
-      !securityCapabilities?.redelegation ||
+      !lpBackedSecurityActive ||
       lpAmount === null ||
       lpOperatorInput.trim().length === 0 ||
       lpTargetOperatorInput.trim().length === 0,
@@ -481,16 +484,11 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 {/snippet}
 
 {#snippet rewardSection()}
-  {#if !securityCapabilities?.rewardClaims}
-    <Notice variant="muted"
-      >Reward claims are inactive in the current native-security mode.</Notice
-    >
-  {:else}
-    <Notice variant="muted"
-      >Claims consume one finalized session snapshot. Liquid claim pays NTVE;
-      compound atomically mints and locks canonical LP or rolls back.</Notice
-    >
-  {/if}
+  <Notice variant="muted"
+    >Claims consume one finalized session snapshot in either security mode.
+    Liquid claim pays NTVE; compound is LP-backed only and atomically mints and
+    locks canonical LP or rolls back.</Notice
+  >
   <div
     class={[
       'grid gap-2',
@@ -651,7 +649,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       variant="secondary"
       disabled={stakingActionBusy ||
         stakingSignerUnavailable ||
-        !securityCapabilities?.custodyExit ||
+        securityModeUnavailable ||
         lpAmount === null ||
         lpOperatorInput.trim().length === 0}
       onclick={requestUnlockNativeLp}

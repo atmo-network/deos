@@ -4,11 +4,13 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   full:
@@ -16,3 +18,190 @@ jobs:
     uses: ./.github/workflows/_validate.yml
     with:
       profile: full
+      release_candidate: true
+
+  network:
+    name: Tag-Bound Network Assurance
+    needs: full
+    runs-on: ubuntu-24.04
+    outputs:
+      network-artifact-id: ${{ steps.upload-network-summary.outputs.artifact-id }}
+      network-artifact-digest: ${{ format('sha256:{0}', steps.upload-network-summary.outputs.artifact-digest) }}
+      network-summary-sha256: ${{ steps.network-summary-identity.outputs.sha256 }}
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      RELEASE_BIN_DIR: ${{ runner.temp }}/release-bin
+      NETWORK_SUMMARY_PATH: ${{ runner.temp }}/network-summary/network-summary.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: web-client/package.json
+
+      - name: Verify API provenance, preflight, and extract exact candidate artifact
+        id: candidate-download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/github-release-artifact.mjs download \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "${{ github.repository_id }}" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job-name "Full Release Validation / full validation" \
+            --tag-name "$GITHUB_REF_NAME" \
+            --head-sha "$(git rev-parse HEAD)" \
+            --artifact-name "deos-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-artifact-id "${{ needs.full.outputs.candidate-artifact-id }}" \
+            --expected-artifact-digest "${{ needs.full.outputs.candidate-artifact-digest }}" \
+            --expected-manifest-sha256 "${{ needs.full.outputs.candidate-manifest-sha256 }}" \
+            --archive "$RUNNER_TEMP/candidate.zip" \
+            --output "$CANDIDATE_DIR" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify and materialize exact candidate
+        run: |
+          node scripts/release-evidence.mjs verify \
+            --input "$CANDIDATE_DIR" \
+            --repo "$GITHUB_WORKSPACE" \
+            --repository-id "${{ github.repository_id }}" \
+            --tag-ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --manifest-sha256 "${{ needs.full.outputs.candidate-manifest-sha256 }}" \
+            --materialize "$GITHUB_WORKSPACE"
+
+      - name: Run candidate-only composed network assurance
+        env:
+          COMPOSED_PATH: 1
+          RELEASE_CANDIDATE_MODE: 1
+          RELEASE_CANDIDATE_DIR: ${{ env.CANDIDATE_DIR }}
+          RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ needs.full.outputs.candidate-manifest-sha256 }}
+          RELEASE_REPOSITORY_ID: ${{ github.repository_id }}
+          RELEASE_TAG_REF: ${{ github.ref }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DEOS_BINARY_DIR: ${{ env.RELEASE_BIN_DIR }}
+        run: ./scripts/network-assurance-local.sh
+
+      - name: Record exact network summary identity
+        id: network-summary-identity
+        run: printf 'sha256=sha256:%s\n' "$(sha256sum "$NETWORK_SUMMARY_PATH" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tag-bound network summary
+        id: upload-network-summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deos-network-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NETWORK_SUMMARY_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  package-and-attest:
+    name: Package and Attest Release Evidence
+    needs: [full, network]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    outputs:
+      release-artifact-id: ${{ steps.upload-release-bundle.outputs.artifact-id }}
+      release-artifact-digest: ${{ format('sha256:{0}', steps.upload-release-bundle.outputs.artifact-digest) }}
+    env:
+      CANDIDATE_DIR: ${{ runner.temp }}/candidate
+      RELEASE_DIR: ${{ runner.temp }}/release-assets
+      NETWORK_SUMMARY_PATH: ${{ runner.temp }}/network-summary.json
+      SPDX_SCHEMA_PATH: ${{ runner.temp }}/spdx-schema-2.3.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: web-client/package.json
+
+      - name: Download exact candidate handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/github-release-artifact.mjs download \
+            --repository "$GITHUB_REPOSITORY" --repository-id "${{ github.repository_id }}" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job-name "Full Release Validation / full validation" --tag-name "$GITHUB_REF_NAME" \
+            --head-sha "$(git rev-parse HEAD)" --artifact-name "deos-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-artifact-id "${{ needs.full.outputs.candidate-artifact-id }}" \
+            --expected-artifact-digest "${{ needs.full.outputs.candidate-artifact-digest }}" \
+            --expected-manifest-sha256 "${{ needs.full.outputs.candidate-manifest-sha256 }}" \
+            --archive "$RUNNER_TEMP/candidate.zip" --output "$CANDIDATE_DIR" --github-output "$RUNNER_TEMP/candidate.outputs"
+
+      - name: Download exact successful network summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/github-release-artifact.mjs download-file \
+            --repository "$GITHUB_REPOSITORY" --repository-id "${{ github.repository_id }}" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --job-name "Tag-Bound Network Assurance" --upload-step-name "Upload tag-bound network summary" \
+            --tag-name "$GITHUB_REF_NAME" --head-sha "$(git rev-parse HEAD)" \
+            --artifact-name "deos-network-summary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-artifact-id "${{ needs.network.outputs.network-artifact-id }}" \
+            --expected-artifact-digest "${{ needs.network.outputs.network-artifact-digest }}" \
+            --expected-file-name "network-summary.json" --expected-file-sha256 "${{ needs.network.outputs.network-summary-sha256 }}" \
+            --archive "$RUNNER_TEMP/network-summary.zip" --output "$NETWORK_SUMMARY_PATH" --github-output "$RUNNER_TEMP/network.outputs"
+
+      - name: Install pinned SPDX validator and schema
+        run: |
+          npm ci --ignore-scripts --prefix scripts/release-tooling
+          node scripts/install-release-tools.mjs install-schema --lock scripts/release-tools.v1.json --output "$SPDX_SCHEMA_PATH"
+
+      - name: Build deterministic final evidence bundle
+        run: |
+          node scripts/release-evidence.mjs package \
+            --candidate "$CANDIDATE_DIR" --network-summary "$NETWORK_SUMMARY_PATH" \
+            --repo "$GITHUB_WORKSPACE" --repository "$GITHUB_REPOSITORY" --repository-id "${{ github.repository_id }}" \
+            --tag-ref "$GITHUB_REF" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --candidate-manifest-sha256 "${{ needs.full.outputs.candidate-manifest-sha256 }}" \
+            --tool-lock scripts/release-tools.v1.json --spdx-schema "$SPDX_SCHEMA_PATH" \
+            --output "$RELEASE_DIR"
+
+      - name: Upload immutable final evidence bundle
+        id: upload-release-bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deos-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RELEASE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+      - name: Attest every final release asset
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            ${{ env.RELEASE_DIR }}/deos-runtime-v0.7.18.compact.compressed.wasm
+            ${{ env.RELEASE_DIR }}/deos-runtime-v0.7.18.scale
+            ${{ env.RELEASE_DIR }}/deos-descriptors-v0.7.18.tar.gz
+            ${{ env.RELEASE_DIR }}/actors-abi-manifest-v0.7.18.json
+            ${{ env.RELEASE_DIR }}/actors-semantic-manifest-v0.7.18.json
+            ${{ env.RELEASE_DIR }}/actors-fee-envelope-vectors-v0.7.18.json
+            ${{ env.RELEASE_DIR }}/ingress-runtime-evidence-v0.7.18.ts
+            ${{ env.RELEASE_DIR }}/observation-runtime-evidence-v0.7.18.ts
+            ${{ env.RELEASE_DIR }}/validation-summary-v0.7.18.json
+            ${{ env.RELEASE_DIR }}/network-summary-v0.7.18.json
+            ${{ env.RELEASE_DIR }}/deos-v0.7.18.spdx.json
+            ${{ env.RELEASE_DIR }}/release-manifest.json
+            ${{ env.RELEASE_DIR }}/SHA256SUMS

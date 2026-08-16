@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Invariant and Threat Map
-summary: A compact map of core DEOS/TMCTOL invariants, threat shapes, owner surfaces, validation routes, governance mutability, and failure modes.
+description: A compact map of core DEOS/TMCTOL invariants, threat shapes, owner surfaces, validation routes, governance mutability, and failure modes.
 locale: en
 canonical_page_id: invariant-map
 translation_status: source
@@ -9,14 +9,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../web-client/docs/architecture.en.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../web-client/docs/architecture.en.md
+status: stable
 audience: developer
 tags:
   - concept

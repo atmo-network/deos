@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Вики DEOS
-summary: Самодостаточная карта знаний фреймворка DEOS и стандарта TMCTOL, организованная как плотный wiki-граф, а не список ссылок на docs.
+description: Самостоятельная карта знаний о фреймворке DEOS и стандарте TMCTOL, устроенная как связный граф понятий, а не перечень ссылок на документацию.
 locale: ru
 canonical_page_id: index
 translation_of: index.en.md
@@ -10,9 +10,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../docs/README.md
-  - ../README.md
-status: active
+  - resource: ../docs/README.md
+  - resource: ../README.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -23,10 +23,10 @@ related:
   - Обзор фреймворка DEOS
   - Первые шаги
   - Система Actors
-  - Governance
-  - Экономика $BLDR
+  - Управление
+  - Экономика созидателей $BLDR
   - Базовые термины
-  - FAQ для новичков
+  - Вопросы новичков
 last_compiled: 2026-07-20
 confidence: 0.9
 ---
@@ -35,82 +35,82 @@ confidence: 0.9
 
 ## Кратко
 
-DEOS — это форкаемый runtime-фреймворк для программируемых экономик: выпуск токена, protocol-owned liquidity, маршрутизация, staking, governance и автоматизированные actors становятся одной детерминированной институциональной машиной. TMCTOL — первый стандарт поверх него: mint-only curve плюс treasury-owned liquidity, сжигание комиссий, bucketed policy и ограниченный governance-контроль.
+DEOS — фреймворк среды исполнения для программируемых экономик, на основе которого можно создавать собственные экосистемы. Он объединяет выпуск токенов, ликвидность во владении протокола, маршрутизацию, стейкинг, управление и автоматизированных Actors в единую систему с детерминированными правилами. TMCTOL — первый стандарт на базе DEOS: однонаправленная эмиссия по кривой, ликвидность, принадлежащая казне, сжигание комиссий, правила распределения по корзинам и управление в чётко заданных пределах.
 
-Мем: DEOS заменяет ручное DAO-управление казначейством детерминированными экономическими контурами.
+Главная идея: DEOS заменяет ситуативное управление казной DAO детерминированными экономическими контурами.
 
-Эта wiki — самодостаточный продукт знаний для понимания этого фреймворка. Она основана на проектной правде репозитория, но путь чтения должен оставаться внутри wiki: страницы объясняют понятия напрямую и ведут к другим wiki-страницам, а не требуют перехода к исходным документам.
+Эта вики — самостоятельная карта знаний о фреймворке. Она собрана из источников, в которых хранится истина проекта, но основной путь чтения остаётся внутри вики: страницы объясняют понятия напрямую и ведут к связанным страницам, не вынуждая читателя постоянно обращаться к исходным документам.
 
-## Начните здесь
+## С чего начать
 
-- [Начните здесь](getting-started/start-here.ru.md) — выберите один путь: понять DEOS за 10 минут, поднять локально или безопасно форкнуть и изменить экономику
-- [DEOS за 60 секунд](getting-started/deos-in-60-seconds.ru.md) — внешний крючок перед архитектурным графом
-- [Первые шаги](getting-started/first-steps.ru.md) — более широкий маршрут новичка после onboarding-шлюза
-- [Маршруты чтения](getting-started/reading-paths.ru.md) — маршруты по wiki для разных задач
-- [Карта доменов](concepts/domain-map.ru.md) — главная карта доменов знаний
-- [Базовые термины](glossary/core-terms.ru.md) — словарь для всего графа
+- [С чего начать](getting-started/start-here.ru.md) — выберите цель: понять DEOS за 10 минут, запустить его локально или безопасно изменить экономику в производном проекте;
+- [DEOS за 60 секунд](getting-started/deos-in-60-seconds.ru.md) — краткая главная идея перед знакомством с архитектурой;
+- [Первые шаги](getting-started/first-steps.ru.md) — более широкий вводный маршрут;
+- [Маршруты чтения](getting-started/reading-paths.ru.md) — подбор страниц по роли и задаче;
+- [Карта доменов](concepts/domain-map.ru.md) — основная карта предметных областей;
+- [Базовые термины](glossary/core-terms.ru.md) — словарь для всего графа.
 
-## Быстрые маршруты оценки
+## Для быстрой оценки
 
-- [Partner Pitch](getting-started/partner-pitch.ru.md) — внешняя страница о том, почему это важно для партнёрских команд
-- [Executive Summary](getting-started/executive-summary.ru.md) — одностраничное резюме для читателей из экосистемы и инвесторов
-- [Сквозные сценарии](concepts/end-to-end-flows.ru.md) — конкретные проходы через маршрутизацию, actors, корзины, staking и проверку
-- [Архитектурные схемы](concepts/architecture-diagrams.ru.md) — компактные текстовые карты связей подсистем
-- [Обзор фреймворка DEOS](overview/deos-framework.ru.md) — что такое фреймворк
+- [Предложение для партнёров](getting-started/partner-pitch.ru.md) — зачем DEOS может быть нужен партнёрской команде;
+- [Краткое резюме](getting-started/executive-summary.ru.md) — одностраничный обзор для представителей экосистемы и инвесторов;
+- [Сквозные сценарии](concepts/end-to-end-flows.ru.md) — конкретные процессы маршрутизации, Actors, корзин, стейкинга и проверки;
+- [Архитектурные схемы](concepts/architecture-diagrams.ru.md) — компактные текстовые карты связей между подсистемами;
+- [Обзор фреймворка DEOS](overview/deos-framework.ru.md) — что представляет собой фреймворк.
 
-## Доменные хабы
+## Основные предметные области
 
-- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md) — экономический стандарт и законы токена
-- [Сценарии TOL buckets](concepts/tol-bucket-scenarios.ru.md) — конкретные пробуждения корзин A/B/C/D и каналы treasury
-- [Экономика $BLDR](concepts/builder-economy.ru.md) — invoices полезной работы, тактическое финансирование и паттерн основателя как первого работника
-- [Токеновые поверхности](concepts/token-surfaces.ru.md) — роли Native, VETO, BLDR, расписок и LP
-- [Система Actors](overview/actor-system.ru.md) — автономные protocol actors
-- [DEOS Router](overview/router.ru.md) — маршруты, комиссии и решения о протокольной ликвидности
-- [Типизированные наблюдения](overview/typed-observations.ru.md) — текущая scalar truth и реактивная доставка
-- [Governance](overview/governance.ru.md) — полномочия по доменам и защита
-- [Стейкинг](overview/staking.ru.md) — расписки, номинирование LP и вознаграждения
-- [Эталонный клиент](overview/reference-client.ru.md) — on-chain-first браузерный продукт и wiki reader
+- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md) — экономический стандарт и правила обращения токена;
+- [Сценарии корзин TOL](concepts/tol-bucket-scenarios.ru.md) — конкретные пробуждения корзин A/B/C/D и направления средств казны;
+- [Экономика созидателей $BLDR](concepts/builder-economy.ru.md) — оплата полезной работы, целевое финансирование и модель основателя как первого участника труда;
+- [Роли токенов](concepts/token-surfaces.ru.md) — назначение Native, VETO, BLDR, расписок и LP;
+- [Система Actors](overview/actor-system.ru.md) — автономные исполнители протокола;
+- [DEOS Router](overview/router.ru.md) — маршрутизация, комиссии и выбор ликвидности;
+- [Типизированные наблюдения](overview/typed-observations.ru.md) — актуальные скалярные данные и доставка изменений;
+- [Управление](overview/governance.ru.md) — полномочия и защита по отдельным доменам;
+- [Стейкинг](overview/staking.ru.md) — расписки, назначение LP и вознаграждения;
+- [Эталонный клиент](overview/reference-client.ru.md) — браузерный продукт с приоритетом данных из блокчейна и средством чтения вики.
 
-## Экономика и runtime-понятия
+## Экономика и среда исполнения
 
 - [Токен-управляемая автоматизация](concepts/token-driven-automation.ru.md)
-- [Контур маршрутизации и минтинга](concepts/routing-and-minting-loop.ru.md)
+- [Контур маршрутизации и эмиссии](concepts/routing-and-minting-loop.ru.md)
 - [Token Minting Curve](overview/token-minting-curve.ru.md)
 - [Формулы TMCTOL](math/tmctol-formulas.ru.md)
 - [Экономические пороги](concepts/economic-thresholds.ru.md)
 - [Уровни экономических утверждений](concepts/economic-claim-levels.ru.md)
 - [Карта инвариантов и угроз](concepts/invariant-map.ru.md)
 - [Идентичность активов](overview/asset-identity.ru.md)
-- [Паттерны runtime](overview/runtime-patterns.ru.md)
-- [Контекст parachain](concepts/parachain-context.ru.md)
-- [Стратегия случайности](overview/randomness-strategy.ru.md)
+- [Принципы среды исполнения](overview/runtime-patterns.ru.md)
+- [DEOS в экосистеме парачейнов](concepts/parachain-context.ru.md)
+- [Стратегия использования случайности](overview/randomness-strategy.ru.md)
 
-## Governance, модели чтения и форма клиента
+## Управление, данные для чтения и клиент
 
-- [Домены Governance](concepts/governance-domains.ru.md)
-- [Physics-first против politics-first](comparisons/physics-vs-politics.ru.md)
-- [Разделение read-model](concepts/read-model-split.ru.md)
-- [Generated Wiki](concepts/generated-wiki.ru.md)
+- [Домены управления](concepts/governance-domains.ru.md)
+- [Экономическая физика прежде политики](comparisons/physics-vs-politics.ru.md)
+- [Разделение данных для чтения](concepts/read-model-split.ru.md)
+- [Собранная вики](concepts/generated-wiki.ru.md)
 
-## Процессы и статус
+## Работа с проектом и его состояние
 
 - [Статус разработки](development/status.ru.md)
-- [Трехуровневая валидация](development/three-layer-validation.ru.md)
+- [Трёхуровневая проверка](development/three-layer-validation.ru.md)
 - [Слой скриптов](usage/scripts-layer.ru.md)
 - [Координация агентов](usage/agent-coordination.ru.md)
-- [Форк DEOS](usage/forking-deos.ru.md)
+- [Создание форка DEOS](usage/forking-deos.ru.md)
 - [Структура репозитория](implementation/repository-structure.ru.md)
 - [Технологический стек](implementation/tech-stack.ru.md)
-- [Руководство контрибьютора](community/contributing.ru.md)
-- [FAQ для новичков](faq/newcomer-faq.ru.md)
+- [Руководство участника](community/contributing.ru.md)
+- [Вопросы новичков](faq/newcomer-faq.ru.md)
 
-## Как читать эту wiki
+## Как читать эту вики
 
-- Сначала идите по wiki-ссылкам. Wiki должна быть понятна без выхода из wiki.
-- Используйте [Карту доменов](concepts/domain-map.ru.md), когда страница кажется слишком локальной.
-- Используйте [Базовые термины](glossary/core-terms.ru.md), когда словарь становится плотным.
-- Используйте [Статус разработки](development/status.ru.md), чтобы отделять поставленную основу от будущей внешне-зависимой работы.
-- Считайте метаданные страницы источниками, а не обязательным маршрутом чтения.
+- Сначала переходите по ссылкам внутри вики: она должна быть понятна сама по себе;
+- Возвращайтесь к [Карте доменов](concepts/domain-map.ru.md), если отдельная страница кажется слишком узкой;
+- Открывайте [Базовые термины](glossary/core-terms.ru.md), когда встречаете много новых понятий;
+- Сверяйтесь со [Статусом разработки](development/status.ru.md), чтобы отличать реализованную основу от работы, зависящей от будущих условий;
+- Метаданные страницы указывают происхождение сведений, но не задают обязательный путь чтения.
 
 ## Связанные страницы
 
@@ -118,7 +118,7 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
 - [Первые шаги](getting-started/first-steps.ru.md)
 - [Система Actors](overview/actor-system.ru.md)
-- [Governance](overview/governance.ru.md)
-- [Экономика $BLDR](concepts/builder-economy.ru.md)
+- [Управление](overview/governance.ru.md)
+- [Экономика созидателей $BLDR](concepts/builder-economy.ru.md)
 - [Базовые термины](glossary/core-terms.ru.md)
-- [FAQ для новичков](faq/newcomer-faq.ru.md)
+- [Вопросы новичков](faq/newcomer-faq.ru.md)

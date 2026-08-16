@@ -1,7 +1,7 @@
 ---
-page_type: usage
+type: usage
 title: Scripts Layer
-summary: Operator and developer automation workflows using the local scripts layer, including local bootstrap, runtime metadata export, authorized-upgrade checks, and native staking bootstrap readiness/call-preparation helpers.
+description: Operator and developer automation workflows using the local scripts layer, including local bootstrap, runtime metadata export, authorized-upgrade checks, and native staking bootstrap readiness/call-preparation helpers.
 locale: en
 canonical_page_id: scripts-layer
 translation_status: source
@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../scripts/README.md
-status: active
+  - resource: ../../scripts/README.md
+status: stable
 audience: developer
 tags:
   - usage

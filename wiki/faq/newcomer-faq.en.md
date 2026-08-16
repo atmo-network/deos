@@ -1,7 +1,7 @@
 ---
-page_type: faq
+type: faq
 title: Newcomer FAQ
-summary: A compact self-contained FAQ for recurring newcomer questions about DEOS, TMCTOL, Actors, governance, staking, data surfaces, wiki domains, and the reference client.
+description: A compact self-contained FAQ for recurring newcomer questions about DEOS, TMCTOL, Actors, governance, staking, data surfaces, wiki domains, and the reference client.
 locale: en
 canonical_page_id: newcomer-faq
 translation_status: source
@@ -9,16 +9,16 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../docs/manifesto.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/staking/docs/specification.en.md
-  - ../../docs/read-model.contract.en.md
-  - ../../web-client/docs/architecture.en.md
-  - ../../web-client/README.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../docs/read-model.contract.en.md
+  - resource: ../../web-client/docs/architecture.en.md
+  - resource: ../../web-client/README.md
+status: stable
 audience: newcomer
 tags:
   - faq
@@ -60,7 +60,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **What does deterministic mean?** Protocol-managed reactions are explicit and repeatable for the same chain state. It does not mean markets become predictable.
 
-**What is Actors versus an AA-Actor?** `Actors` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, execution plans, actor accounts, and task execution. An `AA-Actor` is one concrete runtime instance inside that system. See [Actors System](../overview/actor-system.en.md) and [AA-Actor](../overview/actor.en.md).
+**What is Actors versus an AA-Actor?** `Actors` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, Actor Contracts, actor accounts, and Step execution. An `AA-Actor` is one concrete runtime instance inside that system. See [Actors System](../overview/actor-system.en.md) and [AA-Actor](../overview/actor.en.md).
 
 **How does staking work?** Staking is a multi-asset share-vault domain. [Staking](../overview/staking.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
 

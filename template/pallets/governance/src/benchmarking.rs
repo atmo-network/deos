@@ -211,6 +211,16 @@ where
       0,
     );
   }
+  let active_ids = bucket
+    .iter()
+    .map(|touch| touch.item_id)
+    .collect::<alloc::vec::Vec<_>>();
+  ActiveProposalCounts::<T>::insert(domain, n);
+  ActiveProposalIdsByDomain::<T>::insert(
+    domain,
+    BoundedVec::try_from(active_ids)
+      .expect("benchmark active proposal index must fit configured domain cap"),
+  );
   ProposalMaturityBuckets::<T>::insert(current_epoch, bucket);
 }
 
@@ -226,12 +236,18 @@ where
     if push_result.is_err() {
       panic!("benchmark finalized outcome bucket must fit configured max")
     }
-    FinalizedProposalOutcomes::<T>::insert(
+    FinalizedProposals::<T>::insert(
       domain,
       item_id,
-      FinalizedProposalOutcome::Resolved {
-        epoch: current_epoch,
-        winner_count: 1,
+      FinalizedProposalRecord {
+        outcome: FinalizedProposalOutcome::Approved {
+          approval: ProposalApproval {
+            approved_epoch: current_epoch,
+            winner_count: 1,
+          },
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        },
+        execution_detail: None,
       },
     );
   }
@@ -609,7 +625,7 @@ mod benches {
       let _ = <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_initialize(current_epoch_u32.into());
     }
     for index in 0..n {
-      assert!(!FinalizedProposalOutcomes::<T>::contains_key(
+      assert!(!FinalizedProposals::<T>::contains_key(
         domain,
         benchmark_item_id::<T>(2_000u32.saturating_add(index))
       ));

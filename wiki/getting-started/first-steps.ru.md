@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Первые шаги
-summary: Короткий самодостаточный маршрут для понимания DEOS, выбора домена и запуска правильной проверки.
+description: Короткий самостоятельный маршрут для знакомства с DEOS, выбора предметной области и подходящей проверки.
 locale: ru
 canonical_page_id: first-steps
 translation_of: first-steps.en.md
@@ -10,25 +10,25 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../docs/read-model.contract.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/read-model.contract.en.md
+status: stable
 audience: newcomer
 tags:
   - getting-started
   - onboarding
   - workflow
 related:
-  - Начните здесь
+  - С чего начать
   - DEOS за 60 секунд
-  - Executive Summary
+  - Краткое резюме
   - Карта доменов
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
-  - Разделение read-model
+  - Разделение данных для чтения
   - Эталонный клиент
-  - FAQ для новичков
+  - Вопросы новичков
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
@@ -37,69 +37,69 @@ confidence: 0.85
 
 ## Кратко
 
-Если вы впервые смотрите на DEOS, начните с крючка, а уже потом с карты доменов. DEOS — это форкаемый runtime-фреймворк, где выпуск токена, protocol-owned liquidity, маршрутизация, staking, governance и автоматизированные actors становятся детерминированной институциональной машиной.
+Если вы впервые знакомитесь с DEOS, начните с главной идеи, а затем переходите к карте доменов. DEOS — фреймворк среды исполнения, на основе которого можно создавать собственные экономики. В нём выпуск токенов, ликвидность во владении протокола, маршрутизация, стейкинг, управление и автоматизированные Actors образуют единую систему с детерминированными правилами.
 
-Проект — не просто runtime, не просто веб-клиент и не просто токеномическая формула. Это фреймворк, где экономическая физика, автономные акторы, governance, стейкинг, клиентские модели чтения и инструменты проверки усиливают друг друга.
+Проект не сводится к среде исполнения, веб-клиенту или формуле токеномики. Это фреймворк, в котором экономическая физика, автономные Actors, управление, стейкинг, клиентские проекции данных и средства проверки дополняют друг друга.
 
-Хороший первый проход: используйте [Начните здесь](start-here.ru.md), чтобы выбрать путь понимания за 10 минут, локальный запуск или безопасный fork/change-economy путь. Затем используйте эту страницу, когда нужна более широкая карта доменов.
+Для первого знакомства откройте [С чего начать](start-here.ru.md) и выберите один из трёх путей: понять DEOS за 10 минут, запустить его локально или безопасно изменить экономику в производном проекте. К этой странице переходите, когда понадобится более широкая карта предметных областей.
 
 ## Первый маршрут
 
-0. [Начните здесь](start-here.ru.md)
+0. [С чего начать](start-here.ru.md)
 1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-2. [Executive Summary](executive-summary.ru.md)
-3. [Питч для партнера](partner-pitch.ru.md)
+2. [Краткое резюме](executive-summary.ru.md)
+3. [Предложение для партнёров](partner-pitch.ru.md)
 4. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 5. [Карта доменов](../concepts/domain-map.ru.md)
 6. [Базовые термины](../glossary/core-terms.ru.md)
 7. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 8. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-9. [Разделение read-model](../concepts/read-model-split.ru.md)
+9. [Разделение данных для чтения](../concepts/read-model-split.ru.md)
 
-Этот путь дает словарь проекта до того, как появляются имена pallet-ов, runtime-файлы или продуктовые UI-термины.
+Этот маршрут знакомит со словарём проекта до появления названий пакетов, файлов среды исполнения и терминов конкретного интерфейса.
 
-Если вы оцениваете DEOS как партнер, используйте маршрут оценки внутри [Partner Pitch](partner-pitch.ru.md), а не читайте весь граф подряд.
+Если вы оцениваете DEOS как партнёр, используйте короткий маршрут из [Предложения для партнёров](partner-pitch.ru.md), а не читайте весь граф подряд.
 
-## Выберите правильный домен
+## Выберите предметную область
 
 ### Экономическая физика
 
-Используйте [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), [Формулы TMCTOL](../math/tmctol-formulas.ru.md) и [Token Minting Curve](../overview/token-minting-curve.ru.md), когда речь идет о формулах, полу, потолке, minting, burning или claims о compression.
+Откройте [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), [Формулы TMCTOL](../math/tmctol-formulas.ru.md) и [Кривую выпуска токенов](../overview/token-minting-curve.ru.md), если задача касается формул, нижних и верхних границ, выпуска, сжигания или утверждений о сжатии.
 
-### Runtime и акторы
+### Среда исполнения и Actors
 
-Используйте [Систему Actors](../overview/actor-system.ru.md), [AA-Актор](../overview/actor.ru.md), [Паттерны runtime](../overview/runtime-patterns.ru.md) и [Идентичность активов](../overview/asset-identity.ru.md), когда затронуты поведение реализации, потоки планировщика, активы или интеграции.
+Откройте [Систему Actors](../overview/actor-system.ru.md), [AA-Актор](../overview/actor.ru.md), [Принципы среды исполнения](../overview/runtime-patterns.ru.md) и [Идентичность активов](../overview/asset-identity.ru.md), если задача касается поведения реализации, работы планировщика, активов или интеграций.
 
-### Governance и защита
+### Управление и защита
 
-Используйте [Governance](../overview/governance.ru.md), [Домены Governance](../concepts/governance-domains.ru.md) и [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md), когда затронуты полномочия, payload, protection tracks или пути обновлений.
+Откройте [Управление](../overview/governance.ru.md), [Домены управления](../concepts/governance-domains.ru.md) и [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md), если задача касается полномочий, типов предложений, защитных контуров или путей обновления.
 
-### Клиент и wiki
+### Клиент и вики
 
-Используйте [Эталонный клиент](../overview/reference-client.ru.md) и [Generated Wiki](../concepts/generated-wiki.ru.md), когда работа касается браузерного UX, честности read-model, layout, UI-примитивов или рендеринга wiki.
+Откройте [Эталонный клиент](../overview/reference-client.ru.md) и [Собранную вики](../concepts/generated-wiki.ru.md), если задача касается браузерного интерфейса, честного представления источников данных, компоновки, элементов интерфейса или отображения вики.
 
-### Локальные операции
+### Локальная работа
 
-Используйте [Слой скриптов](../usage/scripts-layer.ru.md), [Трехуровневую валидацию](../development/three-layer-validation.ru.md) и [Статус разработки](../development/status.ru.md), когда нужны настройка, проверки, release gates или текущие открытые границы.
+Откройте [Слой скриптов](../usage/scripts-layer.ru.md), [Трёхуровневую проверку](../development/three-layer-validation.ru.md) и [Статус разработки](../development/status.ru.md), если вам нужны настройка, проверки, условия выпуска или сведения об открытых ограничениях.
 
-## Подход к валидации
+## Как выбирать проверку
 
-Начинайте с наименьшего осмысленного слоя проверки:
+Начинайте с наименьшего осмысленного уровня:
 
-- Изменения математики -> проверки simulator;
-- Изменения runtime -> targeted cargo validation;
-- Изменения клиента -> проверка веб-клиента;
-- Изменения wiki -> проверка trusted wiki и формы ссылок;
-- Междоменные изменения -> локальная проверка завершенности репозитория.
+- Изменения математики — проверки симулятора;
+- Изменения среды исполнения — целевые проверки Cargo;
+- Изменения клиента — проверка веб-клиента;
+- Изменения вики — проверка доверенного содержимого и ссылок;
+- Изменения нескольких доменов — итоговая проверка репозитория.
 
 ## Связанные страницы
 
-- [Начните здесь](start-here.ru.md)
+- [С чего начать](start-here.ru.md)
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-- [Executive Summary](executive-summary.ru.md)
+- [Краткое резюме](executive-summary.ru.md)
 - [Карта доменов](../concepts/domain-map.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-- [Разделение read-model](../concepts/read-model-split.ru.md)
+- [Разделение данных для чтения](../concepts/read-model-split.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
-- [FAQ для новичков](../faq/newcomer-faq.ru.md)
+- [Вопросы новичков](../faq/newcomer-faq.ru.md)

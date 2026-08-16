@@ -145,7 +145,7 @@
       "tautology_risk": "low",
       "falsification_note": "Removing same-epoch queue dedup causes repeated enqueue attempts for one actor to produce more than one runnable queue entry.",
       "code_anchors": [
-        "template/pallets/actors/src/types.rs::ActorHot",
+        "template/pallets/actors/src/types/lifecycle.rs::ActorHotState",
         "template/pallets/actors/src/scheduler.rs::paged_enqueue"
       ],
       "falsification_tests": [

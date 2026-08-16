@@ -237,7 +237,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Price-Observation Ownership Decision
 
-The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-Actors freshness semantics. This remains local-pool observation rather than generalized market truth.
+The standalone Oracle provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System Actor freshness semantics. This remains local-pool observation rather than generalized market truth.
 
 | Dimension | Current owner and contract |
 | --- | --- |
@@ -293,7 +293,7 @@ LP registration canonicalizes pair order, rejects repeated endpoints, duplicate 
 | `PriceDeviationExceeded` | Spot price deviates from EMA beyond threshold |
 | `RouterFeeTooHigh` | New router fee exceeds `MaxRouterFee` |
 
-Every public error maps exhaustively through independent `Error::failure_class()` and `Error::retry_class()` authorities. `ExecutionError` preserves either that Router error or an `AdapterFailure` carrying independent boundary, retry, and dispatch values through pallet-to-pallet execution.
+Every public error maps exhaustively through independent `Error::failure_class()` and `Error::retry_disposition()` authorities. Missing direct or Native-anchored candidates share the reachable `NoRouteFound` semantic core; no route-family-specific duplicate remains. `ExecutionError` exposes only `Router(Error)` or the genuinely host-interface-specific `Adapter(AdapterFailure)` boundary.
 
 Signed dispatch converts only at the extrinsic boundary; the System Actor adapter consumes the typed retry value directly. Host adapters classify known market, publication, ingress, fee, and protection causes before returning. Explicit fallback conversion treats unknown errors as invariant/permanent rather than a temporary wildcard.
 

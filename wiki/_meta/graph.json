@@ -90,7 +90,7 @@
       "id": "governance",
       "title": {
         "en": "Governance",
-        "ru": "Governance"
+        "ru": "Управление"
       },
       "page_type": "overview",
       "path": {
@@ -114,7 +114,7 @@
       "id": "randomness-strategy",
       "title": {
         "en": "Randomness Strategy",
-        "ru": "Стратегия случайности"
+        "ru": "Стратегия использования случайности"
       },
       "page_type": "overview",
       "path": {
@@ -126,7 +126,7 @@
       "id": "runtime-patterns",
       "title": {
         "en": "Runtime Patterns",
-        "ru": "Паттерны runtime"
+        "ru": "Принципы среды исполнения"
       },
       "page_type": "overview",
       "path": {
@@ -150,7 +150,7 @@
       "id": "start-here",
       "title": {
         "en": "Start Here",
-        "ru": "Начните здесь"
+        "ru": "С чего начать"
       },
       "page_type": "getting-started",
       "path": {
@@ -210,7 +210,7 @@
       "id": "routing-and-minting-loop",
       "title": {
         "en": "Routing and Minting Loop",
-        "ru": "Контур маршрутизации и минтинга"
+        "ru": "Контур маршрутизации и эмиссии"
       },
       "page_type": "concept",
       "path": {
@@ -234,7 +234,7 @@
       "id": "read-model-split",
       "title": {
         "en": "Read-Model Split",
-        "ru": "Разделение read-model"
+        "ru": "Разделение данных для чтения"
       },
       "page_type": "concept",
       "path": {
@@ -246,7 +246,7 @@
       "id": "governance-domains",
       "title": {
         "en": "Governance Domains",
-        "ru": "Домены Governance"
+        "ru": "Домены управления"
       },
       "page_type": "concept",
       "path": {
@@ -258,7 +258,7 @@
       "id": "generated-wiki",
       "title": {
         "en": "Generated Wiki",
-        "ru": "Generated Wiki"
+        "ru": "Собранная вики"
       },
       "page_type": "concept",
       "path": {
@@ -282,7 +282,7 @@
       "id": "physics-vs-politics",
       "title": {
         "en": "Physics-First vs Politics-First",
-        "ru": "Physics-first против politics-first"
+        "ru": "Экономическая физика прежде политики"
       },
       "page_type": "comparison",
       "path": {
@@ -294,7 +294,7 @@
       "id": "newcomer-faq",
       "title": {
         "en": "Newcomer FAQ",
-        "ru": "FAQ для новичков"
+        "ru": "Вопросы новичков"
       },
       "page_type": "faq",
       "path": {
@@ -354,7 +354,7 @@
       "id": "token-surfaces",
       "title": {
         "en": "Token Surfaces",
-        "ru": "Токеновые поверхности"
+        "ru": "Роли токенов"
       },
       "page_type": "concept",
       "path": {
@@ -366,7 +366,7 @@
       "id": "builder-economy",
       "title": {
         "en": "$BLDR Builder Economy",
-        "ru": "Экономика $BLDR"
+        "ru": "Экономика созидателей $BLDR"
       },
       "page_type": "concept",
       "path": {
@@ -390,7 +390,7 @@
       "id": "forking-deos",
       "title": {
         "en": "Forking DEOS",
-        "ru": "Форк DEOS"
+        "ru": "Создание форка DEOS"
       },
       "page_type": "usage",
       "path": {
@@ -414,7 +414,7 @@
       "id": "parachain-context",
       "title": {
         "en": "Parachain Context",
-        "ru": "Parachain context"
+        "ru": "DEOS в экосистеме парачейнов"
       },
       "page_type": "concept",
       "path": {
@@ -426,7 +426,7 @@
       "id": "tol-bucket-scenarios",
       "title": {
         "en": "TOL Bucket Scenarios",
-        "ru": "Сценарии TOL buckets"
+        "ru": "Сценарии корзин TOL"
       },
       "page_type": "concept",
       "path": {
@@ -510,7 +510,7 @@
       "id": "three-layer-validation",
       "title": {
         "en": "Three-Layer Validation",
-        "ru": "Трехуровневая валидация"
+        "ru": "Трёхуровневая проверка"
       },
       "page_type": "development",
       "path": {
@@ -522,7 +522,7 @@
       "id": "contributing",
       "title": {
         "en": "Contributing Guidelines",
-        "ru": "Руководство контрибьютора"
+        "ru": "Руководство участника"
       },
       "page_type": "community",
       "path": {
@@ -546,7 +546,7 @@
       "id": "partner-pitch",
       "title": {
         "en": "Partner Pitch",
-        "ru": "Питч для партнера"
+        "ru": "Предложение для партнёров"
       },
       "page_type": "getting-started",
       "path": {
@@ -558,7 +558,7 @@
       "id": "executive-summary",
       "title": {
         "en": "Executive Summary",
-        "ru": "Executive Summary"
+        "ru": "Краткое резюме"
       },
       "page_type": "getting-started",
       "path": {

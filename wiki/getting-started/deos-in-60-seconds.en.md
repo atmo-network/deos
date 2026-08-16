@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: DEOS in 60 Seconds
-summary: A short external-facing entry point that explains the DEOS meme, product boundary, TMCTOL standard, and why the framework matters before the reader enters the full architecture graph.
+description: A short external-facing entry point that explains the DEOS meme, product boundary, TMCTOL standard, and why the framework matters before the reader enters the full architecture graph.
 locale: en
 canonical_page_id: deos-in-60-seconds
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../README.md
-  - ../../docs/core.architecture.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../README.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: newcomer
 tags:
   - onboarding

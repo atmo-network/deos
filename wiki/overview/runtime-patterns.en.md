@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Runtime Patterns
-summary: DEOS follows modern Polkadot SDK runtime patterns rather than older Substrate-era habits. The docs emphasize template-faithful runtime wiring, async-backing defaults, Omni Node deployment, and configuration discipline as part of the framework contract.
+description: DEOS follows modern Polkadot SDK runtime patterns rather than older Substrate-era habits. The docs emphasize template-faithful runtime wiring, async-backing defaults, Omni Node deployment, and configuration discipline as part of the framework contract.
 locale: en
 canonical_page_id: runtime-patterns
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/core.architecture.en.md
-  - ../../template/README.md
-  - ../../template/Cargo.toml
-  - ../../template/runtime/src/lib.rs
-status: active
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/README.md
+  - resource: ../../template/Cargo.toml
+  - resource: ../../template/runtime/src/lib.rs
+status: stable
 audience: newcomer
 tags:
   - overview

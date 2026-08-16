@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Staking
-summary: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts and a session-native LP security snapshot. Phase 1 keeps LP-backed selection and native reward settlement inactive behind an explicit runtime-upgrade boundary.
+description: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts and explicit `TrustedSet` or `LpBackedSelection` native-security mode.
 locale: en
 canonical_page_id: staking
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/staking/docs/specification.en.md
-  - ../../template/pallets/staking/docs/architecture.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-status: active
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/architecture.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -33,7 +33,7 @@ confidence: 0.85
 
 DEOS staking is a multi-asset share-vault system. Each registered staking asset has one deterministic pool account and share/receipt accounting so backing can rise without writing rewards to every holder.
 
-The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The Phase 1 launch line uses trusted permissioned collators and keeps user LP nomination and claimable nomination rewards inactive. Phase 2 may use locked `NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
+The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The current `TrustedSet` mode uses permissioned collators and prevents new LP-backed nomination obligations. `LpBackedSelection` uses locked `NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
 
 ## Share-Vault Model
 
@@ -63,17 +63,17 @@ The native entry path is now liquid and operator-free:
 
 ```text
 $NTVE
-  -> Staking::stake_native(amount)
+  -> Staking::stake(NativeStakingAssetId, amount)
   -> mint stNTVE receipt shares
 ```
 
 This is a vault deposit and receipt mint, not an ordinary AMM swap. It increases native staking backing and mints receipt shares according to staking-pool accounting.
 
-## Phase Boundary for Collator Security
+## Native Security Modes
 
-Phase 1 uses trusted permissioned collators. It does not expose active user nomination economics or claimable nomination rewards.
+`TrustedSet` uses permissioned collators and rejects new LP nomination, redelegation, certified reward funding, candidate selection, and compound operations while preserving retained claims and custody exits.
 
-The explicit Phase 2 contract uses LP custody rather than live `stNTVE` balances or transfer-driven native bindings:
+`LpBackedSelection` uses LP custody rather than live `stNTVE` balances or transfer-driven native bindings:
 
 ```text
 $NTVE + stNTVE
@@ -82,15 +82,15 @@ $NTVE + stNTVE
   -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
 ```
 
-The runtime contains bounded custody and valuation surfaces for locked `NTVE/stNTVE` LP, but the launch contract keeps nomination and its reward flow inactive until an explicit Phase 2 runtime upgrade.
+Switching to `LpBackedSelection` is an explicit runtime upgrade. The runtime contains bounded custody, valuation, readiness, session-snapshot, funding, liability, claim, expiry, and compound surfaces for that mode.
 
 ## Governance Custody
 
 The same native value surface can also be locked for governance-only `NativeVotePower` without nominating a collator. The current runtime includes separate LP and native-asset custody paths for tactical protection voting, with unlock requests blocked while governance lock horizons are active.
 
-## Phase 2 Native Nomination Rewards
+## LP-Backed Native Nomination Rewards
 
-The runtime currently freezes one atomic session-native eligibility snapshot containing bounded participants, candidate-eligible operators, conservative LP values, governance coefficients, account weights, and the total denominator. Funding, liabilities, retention, claims, expiry, and compound settlement remain unavailable until their complete bounded Phase 2 contract ships.
+In `LpBackedSelection`, the runtime freezes one atomic session-native eligibility snapshot containing bounded participants, candidate-eligible operators, conservative LP values, governance coefficients, account weights, and the total denominator. Certified funding creates exact liability; session-owned retention, liquid claims, expiry, and bounded atomic compound preserve settlement truth. `TrustedSet` cannot create these obligations but preserves settlement of retained Finalized pots.
 
 The legacy generic block-based reward engine, rollover cursor, reward-account inference, bootstrap call, and claim surfaces are absent.
 
@@ -101,7 +101,7 @@ Staking and governance remain separate subsystems:
 - Staking owns pool math, receipts, locked LP custody, and session security snapshots
 - Governance owns bounded participation memory, vote-power policy, execution state, and exported reward coefficients
 
-Generic non-native share-vault yield remains receipt appreciation after direct backing inflow and `sync_pool`; it creates no reward pot, liability, claim, or event-ingress dependency. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
+Generic non-native share-vault yield remains receipt appreciation after direct backing inflow and `sync_pool`; it creates no reward pot, liability, claim, or event-ingress dependency. Native `$NTVE` nomination rewards remain a dedicated mode-gated flow: new obligations require `LpBackedSelection`, while retained settlement survives `TrustedSet`.
 
 ## Related
 

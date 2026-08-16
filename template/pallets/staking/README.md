@@ -19,14 +19,14 @@ The current core/runtime slice provides:
 - Tokenized receipt mode for native/local (`0x5...`) and foreign (`0x6...`) staking assets
 - Lazy `sync_pool` against actual sovereign balance
 - `stake` and `unstake` over `pallet-assets` / `fungibles`
-- No generic reward epoch, rollover cursor, reward-account ingress, bootstrap snapshot, or claim surface
+- No generic reward identity, rollover cursor, reward-account ingress, bootstrap snapshot, or claim surface
 - Retained atomic session-native security snapshots and one certified Fee Sink funding path with exact pot/liability accounting
 - Efficient ownership lookup through shares rather than per-inflow writes
-- Liquid native `$NTVE -> stNTVE` staking through `stake_native(amount)` without operator binding
+- Liquid native `$NTVE -> stNTVE` staking through generic `stake(NativeStakingAssetId, amount)` without operator binding
 - Locked `NTVE/stNTVE` LP nomination lifecycle (`lock_native_lp_for_collator`, `request_unlock_native_lp`, `withdraw_unlocked_native_lp`, `redelegate_native_lp`)
-- Explicit native query helpers (`native_stake_value`, `passive_native_stake_value`, `delegated_native_stake_value`)
+- One generic `stake_value(asset_id, account)` query over transferable receipt ownership, without synthetic passive/delegated exposure
 
-The native security-reward channel owns certified funding, retained session pots, exact liabilities, liquid/batch claims, atomic claim-and-compound into canonical locked LP, duplicate markers, session-horizon admission, one-shot expiry return to Fee Sink, and bounded cleanup.
+The native security-reward channel owns certified funding, retained session pots, exact liabilities, mode-independent liquid/batch claims, atomic claim-and-compound into canonical locked LP, duplicate markers, and session-owned atomic bounded expiry return and state removal with permissionless recovery.
 
 ## Key rule
 
@@ -72,4 +72,4 @@ The current kernel does not yet include:
 - A stronger per-slot weighted author lottery inside a fixed authority set
 - Advanced staking UX beyond the native security path
 
-See [`docs/specification.en.md`](./docs/specification.en.md) for the contract and [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map.
+See [`docs/specification.en.md`](./docs/specification.en.md) for the contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map, and [`docs/embedding.md`](./docs/embedding.md) for host-runtime obligations.

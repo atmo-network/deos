@@ -10,6 +10,15 @@ use polkadot_sdk::{
 pub use pallet::*;
 
 pub mod contract;
+
+#[path = "types/contract.rs"]
+mod contract_types;
+#[path = "types/lifecycle.rs"]
+mod lifecycle_types;
+#[path = "types/observation.rs"]
+mod observation_types;
+#[path = "types/scheduler.rs"]
+mod scheduler_types;
 pub mod types;
 
 mod execution;
@@ -62,7 +71,7 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
   fn funding_assets(max: u32) -> alloc::vec::Vec<AssetId>;
-  fn setup_condition_assets(
+  fn setup_predicate_assets(
     owner: &AccountId,
     max: u32,
   ) -> Result<alloc::vec::Vec<AssetId>, polkadot_sdk::sp_runtime::DispatchError>;
@@ -220,10 +229,10 @@ where
   })
 }
 
-pub(crate) const MAX_EXECUTION_PLAN_STEPS_HARD_LIMIT: u32 = u8::MAX as u32;
+pub(crate) const MAX_CONTRACT_STEPS_HARD_LIMIT: u32 = u8::MAX as u32;
 
-pub(crate) const fn execution_plan_steps_bound_is_valid(bound: u32) -> bool {
-  bound > 0 && bound <= MAX_EXECUTION_PLAN_STEPS_HARD_LIMIT
+pub(crate) const fn contract_steps_bound_is_valid(bound: u32) -> bool {
+  bound > 0 && bound <= MAX_CONTRACT_STEPS_HARD_LIMIT
 }
 
 sp_api::decl_runtime_apis! {
@@ -253,7 +262,7 @@ sp_api::decl_runtime_apis! {
   {
     fn actor_eligibility(
       actor_id: types::ActorId,
-    ) -> Result<types::ActorEligibilityProjection<BlockNumber>, types::ActorEligibilityError>;
+    ) -> Result<types::ActorEligibilityProjection<BlockNumber>, types::ActorClassificationError>;
   }
 }
 
@@ -262,7 +271,7 @@ pub mod pallet {
   use super::{
     AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector, FeeEnvelopeError, FeeEnvelopeInput,
     FundingAuthority, LiquidityOps, ObservationProvider, WeightInfo, compose_attempt_fee_envelope,
-    execution_plan_steps_bound_is_valid,
+    contract_steps_bound_is_valid,
   };
   use crate::adapters::{RetryClass, SovereignAccountPolicy, StakingOps as _};
   use frame::prelude::*;
@@ -308,7 +317,7 @@ pub mod pallet {
     type GlobalBreakerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
     #[pallet::constant]
-    type MaxExecutionPlanSteps: Get<u32>;
+    type MaxContractSteps: Get<u32>;
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
     #[pallet::constant]
@@ -320,7 +329,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxPredicatesPerClause: Get<u32>;
     #[pallet::constant]
-    type MaxConditionsPerStep: Get<u32>;
+    type MaxPredicatesPerStep: Get<u32>;
     #[pallet::constant]
     type MaxOwnerSlots: Get<u8>;
     #[pallet::constant]
@@ -364,8 +373,6 @@ pub mod pallet {
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
-    type MaxTimerJitterBlocks: Get<u32>;
-    #[pallet::constant]
     type MaxIdleStarvationBlocks: Get<u32>;
     /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
     #[pallet::constant]
@@ -406,7 +413,7 @@ pub mod pallet {
         Self::AccountId,
         ScheduleOf<Self>,
         ScheduleWindow<BlockNumberFor<Self>>,
-        ExecutionPlanOf<Self>,
+        ContractSteps<Self>,
       >;
 
     #[cfg(feature = "runtime-benchmarks")]
@@ -423,7 +430,7 @@ pub mod pallet {
 
   pub type ActorObservationFeedsOf<T> =
     BoundedVec<<T as Config>::ObservationFeedId, <T as Config>::MaxTriggerSources>;
-  pub type SimulationResultOf<T> = SimulationResult<<T as Config>::MaxExecutionPlanSteps>;
+  pub type SimulationResultOf<T> = SimulationResult<<T as Config>::MaxContractSteps>;
   pub type ActorEligibilityProjectionOf<T> =
     ActorEligibilityProjection<frame::prelude::BlockNumberFor<T>>;
   pub type ObservationSubscriberPageOf<T> =
@@ -461,7 +468,7 @@ pub mod pallet {
     <T as Config>::ObservationFeedId,
   >;
 
-  pub type PreconditionsOf<T> = Preconditions<
+  pub type PreconditionOf<T> = Precondition<
     Predicate<
       <T as Config>::AssetId,
       <T as Config>::Balance,
@@ -494,10 +501,10 @@ pub mod pallet {
     <T as Config>::ObservationFeedId,
   >;
 
-  pub type ExecutionPlanOf<T> = BoundedVec<StepOf<T>, <T as Config>::MaxExecutionPlanSteps>;
+  pub type ContractSteps<T> = BoundedVec<StepOf<T>, <T as Config>::MaxContractSteps>;
 
   pub type AttemptFeeEnvelopeOf<T> =
-    AttemptFeeEnvelope<BalanceOf<T>, <T as Config>::MaxExecutionPlanSteps>;
+    AttemptFeeEnvelope<BalanceOf<T>, <T as Config>::MaxContractSteps>;
 
   pub type FundingSourcePolicyOf<T> =
     FundingSourcePolicy<<T as frame_system::Config>::AccountId, <T as Config>::MaxWhitelistSize>;
@@ -505,12 +512,12 @@ pub mod pallet {
   pub type ActiveContractInputOf<T> = ActiveContractInput<
     ScheduleOf<T>,
     BlockNumberFor<T>,
-    ExecutionPlanOf<T>,
+    ContractSteps<T>,
     FundingSourcePolicyOf<T>,
   >;
 
   pub type ContractInputOf<T> =
-    ContractInput<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>, FundingSourcePolicyOf<T>>;
+    ContractInput<ScheduleOf<T>, BlockNumberFor<T>, ContractSteps<T>, FundingSourcePolicyOf<T>>;
 
   pub type FundingAccumulatedOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
@@ -530,7 +537,7 @@ pub mod pallet {
   >;
 
   pub type OpeningPredicateResultsOf<T> =
-    BoundedVec<PredicateEvaluation, <T as Config>::MaxOpeningPredicateResults>;
+    BoundedVec<Result<bool, PredicateError>, <T as Config>::MaxOpeningPredicateResults>;
 
   pub type ContinuationStateOf<T> = ContinuationState<
     <T as Config>::AssetId,
@@ -550,7 +557,7 @@ pub mod pallet {
     <T as frame_system::Config>::AccountId,
     BlockNumberFor<T>,
     ScheduleOf<T>,
-    ExecutionPlanOf<T>,
+    ContractSteps<T>,
   >;
 
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
@@ -558,7 +565,7 @@ pub mod pallet {
   pub type ActorContractStateOf<T> = ActorContractState<
     ScheduleOf<T>,
     BlockNumberFor<T>,
-    ExecutionPlanOf<T>,
+    ContractSteps<T>,
     FundingSourcePolicyOf<T>,
   >;
 
@@ -618,7 +625,7 @@ pub mod pallet {
         completion: contract.completion,
         cycle_nonce: identity.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
-        consecutive_failures: hot.consecutive_failures,
+        unsuccessful_attempt_streak: hot.unsuccessful_attempt_streak,
         pending_signal: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
         last_control_mutation_block: identity.last_control_mutation_block,
@@ -854,14 +861,14 @@ pub mod pallet {
   ///
   /// Implement this on the runtime to return System Actors specs with explicit `actor_id` values.
   /// IDs may be sparse to reserve stable addresses for non-actor accounts.
-  pub trait GenesisSystemActors<AccountId, Schedule, ScheduleWindow, ExecutionPlan> {
+  pub trait GenesisSystemActors<AccountId, Schedule, ScheduleWindow, Steps> {
     fn system_actors() -> alloc::vec::Vec<(
       ActorId,
       AccountId,
       Mutability,
       Schedule,
       Option<ScheduleWindow>,
-      ExecutionPlan,
+      Steps,
       CompletionPolicy,
     )>;
 
@@ -877,8 +884,8 @@ pub mod pallet {
   }
 
   /// Default no-op implementation: no System Actors created at genesis.
-  impl<AccountId, Schedule, ScheduleWindowT, ExecutionPlan>
-    GenesisSystemActors<AccountId, Schedule, ScheduleWindowT, ExecutionPlan> for ()
+  impl<AccountId, Schedule, ScheduleWindowT, Steps>
+    GenesisSystemActors<AccountId, Schedule, ScheduleWindowT, Steps> for ()
   {
     fn system_actors() -> alloc::vec::Vec<(
       ActorId,
@@ -886,7 +893,7 @@ pub mod pallet {
       Mutability,
       Schedule,
       Option<ScheduleWindowT>,
-      ExecutionPlan,
+      Steps,
       CompletionPolicy,
     )> {
       alloc::vec::Vec::new()
@@ -904,22 +911,22 @@ pub mod pallet {
   impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
     fn build(&self) {
       assert!(
-        execution_plan_steps_bound_is_valid(T::MaxExecutionPlanSteps::get()),
-        "MaxExecutionPlanSteps must be in 1..=255"
+        contract_steps_bound_is_valid(T::MaxContractSteps::get()),
+        "MaxContractSteps must be in 1..=255"
       );
       assert_eq!(
         T::MaxOpeningSnapshotEntries::get(),
-        T::MaxExecutionPlanSteps::get()
+        T::MaxContractSteps::get()
           .checked_mul(2)
           .expect("opening amount-surface bound must fit u32"),
         "MaxOpeningSnapshotEntries must equal two per execution-plan step"
       );
       assert_eq!(
         T::MaxOpeningPredicateResults::get(),
-        T::MaxExecutionPlanSteps::get()
-          .checked_mul(T::MaxConditionsPerStep::get())
+        T::MaxContractSteps::get()
+          .checked_mul(T::MaxPredicatesPerStep::get())
           .expect("opening predicate-result bound must fit u32"),
-        "MaxOpeningPredicateResults must equal MaxExecutionPlanSteps * MaxConditionsPerStep"
+        "MaxOpeningPredicateResults must equal MaxContractSteps * MaxPredicatesPerStep"
       );
       STORAGE_VERSION.put::<Pallet<T>>();
       if ActiveActorLimit::<T>::get() == 0 {
@@ -931,7 +938,7 @@ pub mod pallet {
         mutability,
         schedule,
         schedule_window,
-        mut execution_plan,
+        mut contract_steps,
         completion_policy,
       ) in T::GenesisSystemActors::system_actors()
       {
@@ -954,22 +961,22 @@ pub mod pallet {
           mutability == Mutability::Mutable || !schedule.trigger.manual_source_enabled(),
           "genesis System Immutable Actors cannot admit Manual readiness"
         );
-        Pallet::<T>::canonicalize_preconditions(&mut execution_plan)
-          .expect("genesis preconditions must have valid bounded DNF");
-        Pallet::<T>::validate_execution_plan_shape(ActorType::System, &execution_plan)
+        Pallet::<T>::canonicalize_preconditions(&mut contract_steps)
+          .expect("genesis precondition formulas must have valid bounded DNF");
+        Pallet::<T>::validate_contract_steps_shape(ActorType::System, &contract_steps)
           .expect("genesis execution plan must have valid task and predicate shapes");
-        Pallet::<T>::validate_recipient_configuration(&execution_plan, &sovereign_account)
+        Pallet::<T>::validate_recipient_configuration(&contract_steps, &sovereign_account)
           .expect("genesis execution plan cannot transfer to its own sovereign account");
-        Pallet::<T>::validate_opening_snapshot_surfaces(&execution_plan)
+        Pallet::<T>::validate_opening_snapshot_surfaces(&contract_steps)
           .expect("genesis opening snapshot surfaces must be valid");
-        Pallet::<T>::ensure_retry_later_allowed(mutability, &execution_plan)
+        Pallet::<T>::ensure_retry_later_allowed(mutability, &contract_steps)
           .expect("genesis System Immutable Actors cannot use RetryLater");
-        Pallet::<T>::ensure_execution_plan_fits_idle_budget(ActorType::System, &execution_plan)
+        Pallet::<T>::ensure_contract_steps_fits_idle_budget(ActorType::System, &contract_steps)
           .unwrap_or_else(|_| {
             panic!("genesis System Actors {actor_id} exceeds the guaranteed on_idle budget")
           });
-        let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&execution_plan)
-          .expect("genesis execution_plan must have valid funding-tracked assets");
+        let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&contract_steps)
+          .expect("genesis contract_steps must have valid funding-tracked assets");
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(schedule_window, Zero::zero());
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
@@ -985,7 +992,7 @@ pub mod pallet {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
           auto_close_at_cycle_nonce: None,
-          consecutive_failures: 0,
+          unsuccessful_attempt_streak: 0,
           pending_signal: false,
           queue_ticket: None,
           wakeup_pointer: None,
@@ -996,7 +1003,7 @@ pub mod pallet {
         let contract = ActorContractState {
           schedule,
           schedule_window,
-          steps: execution_plan,
+          steps: contract_steps,
           funding: FundingSourcePolicy::RuntimePolicy,
           completion: completion_policy,
         };
@@ -1128,8 +1135,8 @@ pub mod pallet {
         "MaxConsecutiveFailures must be non-zero for bounded Continuation lifetime"
       );
       assert!(
-        execution_plan_steps_bound_is_valid(T::MaxExecutionPlanSteps::get()),
-        "MaxExecutionPlanSteps must be in 1..=255"
+        contract_steps_bound_is_valid(T::MaxContractSteps::get()),
+        "MaxContractSteps must be in 1..=255"
       );
       assert_eq!(
         T::MaxRetryAttempts::get(),
@@ -1137,7 +1144,7 @@ pub mod pallet {
         "MaxRetryAttempts must equal the protocol-fixed bound"
       );
       assert!(
-        T::MaxExecutionPlanSteps::get()
+        T::MaxContractSteps::get()
           .checked_mul(T::MaxRetryAttempts::get())
           .is_some(),
         "plan and retry bounds must compose without u32 overflow"
@@ -1152,10 +1159,10 @@ pub mod pallet {
       );
       assert_eq!(
         T::MaxOpeningSnapshotEntries::get(),
-        T::MaxExecutionPlanSteps::get()
+        T::MaxContractSteps::get()
           .checked_mul(2)
           .expect("validated plan bound fits u32"),
-        "MaxOpeningSnapshotEntries must equal twice MaxExecutionPlanSteps"
+        "MaxOpeningSnapshotEntries must equal twice MaxContractSteps"
       );
       assert!(
         T::MinUserBalance::get() >= T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()),
@@ -1233,7 +1240,7 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_cleanup = after_base.saturating_sub(saturated_cleanup_weight);
-      // Phase 2: due wakeups and bounded lazy physical cleanup before fanout (spec 8.2.1).
+      // Wakeup pass: due wakeups and bounded lazy physical cleanup before fanout (spec 8.2.1).
       // The worker is bounded component-wise by both its configured ceiling and the actual
       // on_idle budget left after base work and saturated queue cleanup.
       let configured_wakeup_limit = T::WakeupWeightLimit::get();
@@ -1249,7 +1256,7 @@ pub mod pallet {
       Self::drain_overdue_wakeups_cursor(now, &mut wakeup_meter);
       let wakeup_weight = wakeup_meter.consumed();
       let remaining_after_wakeups = remaining_after_cleanup.saturating_sub(wakeup_weight);
-      // Phase 3: observation fanout under ObservationFanoutWeightLimit, after wakeups and
+      // Fanout pass: observation fanout under ObservationFanoutWeightLimit, after wakeups and
       // before the cutoff/actor-execution pass.
       let fanout_weight = if DirtyObservationListState::<T>::get().count > 0 {
         Self::fanout_dirty_observations(remaining_after_wakeups)
@@ -1310,7 +1317,6 @@ pub mod pallet {
     CycleSuspended {
       actor_id: ActorId,
       cycle_nonce: u64,
-      attempt: u32,
       cursor: u32,
       reason: SuspensionReason,
       cumulative_outcomes: OutcomeTotals,
@@ -1318,7 +1324,6 @@ pub mod pallet {
     CycleContinued {
       actor_id: ActorId,
       cycle_nonce: u64,
-      attempt: u32,
       cursor: u32,
     },
     CycleCancelled {
@@ -1491,8 +1496,8 @@ pub mod pallet {
     ActiveActorLimitTooLow,
     ActiveActorLimitBelowCurrent,
     ActorPaused,
-    EmptyExecutionPlan,
-    ExecutionPlanExceedsOnIdleBudget,
+    EmptyContractSteps,
+    ContractStepsExceedOnIdleBudget,
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
     ImmutableActor,
@@ -1521,7 +1526,7 @@ pub mod pallet {
     SystemSovereignInvariant,
     SovereignAccountCollision,
     ReservedSovereignAccount,
-    ExecutionPlanTooLong,
+    TooManyContractSteps,
     SnapshotUnavailable,
     FundingAccumulatorOverflow,
     QueueTicketExhausted,
@@ -1535,7 +1540,7 @@ pub mod pallet {
     ContinuationNotFound,
     ContinuationInvariant,
     ComputationOverflow,
-    EmptyPreconditions,
+    EmptyPrecondition,
     ManualSourceDisabled,
     RecipientDepositUnavailable,
     ObservationSubscriptionCapacityExceeded,
@@ -1716,17 +1721,17 @@ pub mod pallet {
       actor_id: ActorId,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      mut steps: ExecutionPlanOf<T>,
+      mut steps: ContractSteps<T>,
       funding: FundingSourcePolicyOf<T>,
       completion: CompletionPolicy,
     ) -> DispatchResult {
-      ensure!(!steps.is_empty(), Error::<T>::EmptyExecutionPlan);
+      ensure!(!steps.is_empty(), Error::<T>::EmptyContractSteps);
       Self::canonicalize_preconditions(&mut steps)?;
       Self::validate_schedule(&schedule)?;
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(actor_id, &schedule, schedule_window)?;
+      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
       let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_retry_later_allowed(snapshot.mutability, &steps)?;
@@ -1751,17 +1756,17 @@ pub mod pallet {
       }
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
-      Self::validate_execution_plan_shape(snapshot.actor_class.actor_type(), &steps)?;
+      Self::validate_contract_steps_shape(snapshot.actor_class.actor_type(), &steps)?;
       Self::validate_recipient_configuration(&steps, &snapshot.sovereign_account)?;
       Self::validate_opening_snapshot_surfaces(&steps)?;
-      Self::ensure_execution_plan_fits_idle_budget(snapshot.actor_class.actor_type(), &steps)?;
+      Self::ensure_contract_steps_fits_idle_budget(snapshot.actor_class.actor_type(), &steps)?;
       ensure!(
-        (steps.len() as u32) <= T::MaxExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
+        (steps.len() as u32) <= T::MaxContractSteps::get(),
+        Error::<T>::TooManyContractSteps
       );
       if snapshot.actor_class.actor_type() == ActorType::User {
         ensure!(
-          !Self::execution_plan_contains_mint(&steps),
+          !Self::contract_steps_contains_mint(&steps),
           Error::<T>::MintNotAllowedForUserActor
         );
       }
@@ -1809,7 +1814,11 @@ pub mod pallet {
             hot.terminal_at = schedule_window.map(|window| Self::window_terminal_at(&window));
           }
           if steps_changed {
-            hot.consecutive_failures = 0;
+            hot.unsuccessful_attempt_streak = crate::execution::transition_failure_streak(
+              hot.unsuccessful_attempt_streak,
+              crate::execution::FailureStreakTransition::Reset,
+            )
+            .expect("failure-streak reset is infallible");
           }
           Self::record_control_mutation(actor_id, now);
         });
@@ -2074,28 +2083,32 @@ pub mod pallet {
 
     pub(crate) fn compute_cycle_weight_upper_from(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
       start_cursor: usize,
     ) -> Weight {
-      let mut upper = T::WeightInfo::step_orchestration(execution_plan.len() as u32);
-      for step_index in start_cursor..execution_plan.len() {
-        let step = &execution_plan[step_index];
-        let condition_evaluation =
-          T::WeightInfo::predicate_set_evaluation(step.preconditions.evaluation_units());
+      let mut upper = T::WeightInfo::step_orchestration(contract_steps.len() as u32);
+      for step_index in start_cursor..contract_steps.len() {
+        let step = &contract_steps[step_index];
+        let predicate_evaluation = Self::predicate_evaluation_weight(
+          step
+            .precondition
+            .as_ref()
+            .map_or(0, Precondition::evaluation_units),
+        );
         upper = upper
-          .saturating_add(condition_evaluation)
+          .saturating_add(predicate_evaluation)
           .saturating_add(Self::weight_upper_bound(&step.task));
         if actor_type == ActorType::User {
           upper = upper.saturating_add(T::WeightInfo::fee_collection());
         }
       }
-      if (start_cursor..execution_plan.len()).any(|step_index| {
-        execution_plan[step_index]
+      if (start_cursor..contract_steps.len()).any(|step_index| {
+        contract_steps[step_index]
           .on_error
           .retry_max_attempts()
           .is_some()
       }) {
-        let snapshot_entries = Self::opening_surfaces(execution_plan, start_cursor).len() as u32;
+        let snapshot_entries = Self::opening_surfaces(contract_steps, start_cursor).len() as u32;
         upper = upper.saturating_add(
           T::WeightInfo::continuation_suspend(snapshot_entries)
             .max(T::WeightInfo::continuation_complete())
@@ -2107,20 +2120,25 @@ pub mod pallet {
 
     pub fn compute_cycle_weight_upper(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> Weight {
-      Self::compute_cycle_weight_upper_from(actor_type, execution_plan, 0)
+      Self::compute_cycle_weight_upper_from(actor_type, contract_steps, 0)
     }
 
     pub fn attempt_fee_envelope(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
       start_cursor: usize,
     ) -> Result<AttemptFeeEnvelopeOf<T>, Error<T>> {
       let mut inputs = BoundedVec::default();
-      for step in execution_plan {
+      for step in contract_steps {
         let evaluation = if actor_type == ActorType::User {
-          Self::compute_eval_fee_checked(step.preconditions.evaluation_units())?
+          Self::compute_eval_fee_checked(
+            step
+              .precondition
+              .as_ref()
+              .map_or(0, Precondition::evaluation_units),
+          )?
         } else {
           Zero::zero()
         };
@@ -2185,11 +2203,11 @@ pub mod pallet {
 
     /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
     /// envelope. Independently metered durable housekeeping may defer this work across blocks.
-    pub fn execution_plan_admission_weight_upper(
+    pub fn contract_steps_admission_weight_upper(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> Weight {
-      let funding_count = Self::derive_funding_tracked_assets(execution_plan)
+      let funding_count = Self::derive_funding_tracked_assets(contract_steps)
         .map(|assets| assets.len() as u32)
         .unwrap_or_else(|_| T::MaxFundingTrackedAssets::get());
       let snapshot_open = if funding_count == 0 {
@@ -2197,20 +2215,20 @@ pub mod pallet {
       } else {
         T::WeightInfo::funding_snapshot_open(funding_count)
       };
-      let continuation_retry = if (0..execution_plan.len()).any(|step_index| {
-        execution_plan[step_index]
+      let continuation_retry = if (0..contract_steps.len()).any(|step_index| {
+        contract_steps[step_index]
           .on_error
           .retry_max_attempts()
           .is_some()
       }) {
         let retry = T::WeightInfo::continuation_retry();
-        let suffix = T::WeightInfo::continuation_suffix_admission(execution_plan.len() as u32);
+        let suffix = T::WeightInfo::continuation_suffix_admission(contract_steps.len() as u32);
         Weight::from_parts(retry.ref_time().saturating_add(suffix.ref_time()), 0)
       } else {
         Weight::zero()
       };
       Self::scheduler_admission_overhead()
-        .saturating_add(Self::compute_cycle_weight_upper(actor_type, execution_plan))
+        .saturating_add(Self::compute_cycle_weight_upper(actor_type, contract_steps))
         .saturating_add(continuation_retry)
         .saturating_add(snapshot_open)
         .saturating_add(Self::close_cleanup_weight_upper())
@@ -2226,16 +2244,16 @@ pub mod pallet {
         .and_then(|remaining| remaining.checked_sub(&T::ObservationFanoutWeightLimit::get()))
     }
 
-    fn ensure_execution_plan_fits_idle_budget(
+    fn ensure_contract_steps_fits_idle_budget(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> DispatchResult {
       let actor_service = Self::guaranteed_actor_service_weight()
-        .ok_or(Error::<T>::ExecutionPlanExceedsOnIdleBudget)?;
+        .ok_or(Error::<T>::ContractStepsExceedOnIdleBudget)?;
       ensure!(
-        Self::execution_plan_admission_weight_upper(actor_type, execution_plan)
+        Self::contract_steps_admission_weight_upper(actor_type, contract_steps)
           .all_lte(actor_service),
-        Error::<T>::ExecutionPlanExceedsOnIdleBudget
+        Error::<T>::ContractStepsExceedOnIdleBudget
       );
       Ok(())
     }
@@ -2305,9 +2323,9 @@ pub mod pallet {
     /// sovereign fee-native balance must cover `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`
     /// so the first opening can charge the whole cycle fee while preserving `MinUserBalance`.
     fn user_active_prefunding_requirement(
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> Result<BalanceOf<T>, Error<T>> {
-      let envelope_total = Self::attempt_fee_envelope(ActorType::User, execution_plan, 0)?.total;
+      let envelope_total = Self::attempt_fee_envelope(ActorType::User, contract_steps, 0)?.total;
       T::MinUserBalance::get()
         .checked_add(&envelope_total)
         .ok_or(Error::<T>::AdmissionBoundOverflow)
@@ -2315,9 +2333,9 @@ pub mod pallet {
 
     fn ensure_user_active_prefunding(
       sovereign_account: &T::AccountId,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> DispatchResult {
-      let required = Self::user_active_prefunding_requirement(execution_plan)?;
+      let required = Self::user_active_prefunding_requirement(contract_steps)?;
       ensure!(
         T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required,
         Error::<T>::InsufficientBalance
@@ -2552,7 +2570,7 @@ pub mod pallet {
         ContractInput::Active(ActiveContractInput {
           schedule,
           schedule_window,
-          steps: execution_plan,
+          steps: contract_steps,
           completion: completion_policy,
           funding: funding_source_policy,
           auto_close_at_cycle_nonce,
@@ -2562,7 +2580,7 @@ pub mod pallet {
           mutability,
           schedule,
           schedule_window,
-          execution_plan,
+          contract_steps,
           completion_policy,
           funding_source_policy,
           auto_close_at_cycle_nonce,
@@ -2594,7 +2612,7 @@ pub mod pallet {
         ContractInput::Active(ActiveContractInput {
           schedule,
           schedule_window,
-          steps: execution_plan,
+          steps: contract_steps,
           completion: completion_policy,
           funding: funding_source_policy,
           auto_close_at_cycle_nonce,
@@ -2604,7 +2622,7 @@ pub mod pallet {
           mutability,
           schedule,
           schedule_window,
-          execution_plan,
+          contract_steps,
           completion_policy,
           funding_source_policy,
           auto_close_at_cycle_nonce,
@@ -2620,7 +2638,7 @@ pub mod pallet {
       mutability: Mutability,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      mut steps: ExecutionPlanOf<T>,
+      mut steps: ContractSteps<T>,
       completion: CompletionPolicy,
       funding_source_policy: FundingSourcePolicyOf<T>,
       auto_close_at_cycle_nonce: Option<u64>,
@@ -2631,15 +2649,15 @@ pub mod pallet {
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(!steps.is_empty(), Error::<T>::EmptyExecutionPlan);
+      ensure!(!steps.is_empty(), Error::<T>::EmptyContractSteps);
       Self::canonicalize_preconditions(&mut steps)?;
       ensure!(
-        (steps.len() as u32) <= T::MaxExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
+        (steps.len() as u32) <= T::MaxContractSteps::get(),
+        Error::<T>::TooManyContractSteps
       );
       if actor_type == ActorType::User {
         ensure!(
-          !Self::execution_plan_contains_mint(&steps),
+          !Self::contract_steps_contains_mint(&steps),
           Error::<T>::MintNotAllowedForUserActor
         );
       }
@@ -2647,8 +2665,8 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(NextActorId::<T>::get(), &schedule, schedule_window)?;
-      Self::validate_execution_plan_shape(actor_type, &steps)?;
+      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
+      Self::validate_contract_steps_shape(actor_type, &steps)?;
       Self::validate_opening_snapshot_surfaces(&steps)?;
       Self::ensure_retry_later_allowed(mutability, &steps)?;
       if let Some(target_nonce) = auto_close_at_cycle_nonce {
@@ -2669,7 +2687,7 @@ pub mod pallet {
         ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
         Error::<T>::ActorIdentityCapacityExceeded
       );
-      Self::ensure_execution_plan_fits_idle_budget(actor_type, &steps)?;
+      Self::ensure_contract_steps_fits_idle_budget(actor_type, &steps)?;
       let funding_tracked_assets = Self::derive_funding_tracked_assets(&steps)?;
       let actor_id = NextActorId::<T>::get();
       ensure!(
@@ -2761,7 +2779,7 @@ pub mod pallet {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
           auto_close_at_cycle_nonce,
-          consecutive_failures: 0,
+          unsuccessful_attempt_streak: 0,
           pending_signal: false,
           queue_ticket: None,
           wakeup_pointer: None,
@@ -2850,13 +2868,13 @@ pub mod pallet {
       let ContractInput::Active(ActiveContractInput {
         schedule,
         schedule_window,
-        steps: mut execution_plan,
+        steps: mut contract_steps,
         completion: completion_policy,
         funding: funding_source_policy,
         auto_close_at_cycle_nonce,
       }) = contract
       else {
-        return Err(Error::<T>::EmptyExecutionPlan.into());
+        return Err(Error::<T>::EmptyContractSteps.into());
       };
       ensure!(
         !GlobalCircuitBreaker::<T>::get(),
@@ -2867,15 +2885,15 @@ pub mod pallet {
         Error::<T>::ImmutableActor
       );
       let actor_type = identity.actor_class.actor_type();
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      Self::canonicalize_preconditions(&mut execution_plan)?;
+      ensure!(!contract_steps.is_empty(), Error::<T>::EmptyContractSteps);
+      Self::canonicalize_preconditions(&mut contract_steps)?;
       ensure!(
-        (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
+        (contract_steps.len() as u32) <= T::MaxContractSteps::get(),
+        Error::<T>::TooManyContractSteps
       );
       if actor_type == ActorType::User {
         ensure!(
-          !Self::execution_plan_contains_mint(&execution_plan),
+          !Self::contract_steps_contains_mint(&contract_steps),
           Error::<T>::MintNotAllowedForUserActor
         );
       }
@@ -2883,22 +2901,22 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(actor_id, &schedule, schedule_window)?;
-      Self::validate_execution_plan_shape(actor_type, &execution_plan)?;
-      Self::validate_recipient_configuration(&execution_plan, &identity.sovereign_account)?;
-      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
-      Self::ensure_retry_later_allowed(identity.mutability, &execution_plan)?;
+      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
+      Self::validate_contract_steps_shape(actor_type, &contract_steps)?;
+      Self::validate_recipient_configuration(&contract_steps, &identity.sovereign_account)?;
+      Self::validate_opening_snapshot_surfaces(&contract_steps)?;
+      Self::ensure_retry_later_allowed(identity.mutability, &contract_steps)?;
       if let Some(target_nonce) = auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(identity.cycle_nonce, target_nonce)?;
       }
-      Self::ensure_execution_plan_fits_idle_budget(actor_type, &execution_plan)?;
-      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
+      Self::ensure_contract_steps_fits_idle_budget(actor_type, &contract_steps)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&contract_steps)?;
       ensure!(
         Self::active_instance_count() < Self::effective_active_actor_limit(),
         Error::<T>::ActiveActorCapacityExceeded
       );
       if actor_type == ActorType::User {
-        Self::ensure_user_active_prefunding(&identity.sovereign_account, &execution_plan)?;
+        Self::ensure_user_active_prefunding(&identity.sovereign_account, &contract_steps)?;
       }
       let now = frame_system::Pallet::<T>::block_number();
       ensure!(
@@ -2914,7 +2932,7 @@ pub mod pallet {
         lifecycle: ActiveLifecycle::Active,
         cycle_state: CycleState::Idle,
         auto_close_at_cycle_nonce,
-        consecutive_failures: 0,
+        unsuccessful_attempt_streak: 0,
         pending_signal: false,
         queue_ticket: None,
         wakeup_pointer: None,
@@ -2925,7 +2943,7 @@ pub mod pallet {
       let contract = ActorContractState {
         schedule,
         schedule_window,
-        steps: execution_plan,
+        steps: contract_steps,
         funding: funding_source_policy,
         completion: completion_policy,
       };
@@ -3003,8 +3021,8 @@ pub mod pallet {
       })
     }
 
-    fn execution_plan_contains_mint(execution_plan: &ExecutionPlanOf<T>) -> bool {
-      for step in execution_plan.as_slice() {
+    fn contract_steps_contains_mint(contract_steps: &ContractSteps<T>) -> bool {
+      for step in contract_steps.as_slice() {
         if matches!(step.task, ActorTask::Mint { .. }) {
           return true;
         }
@@ -3021,15 +3039,8 @@ pub mod pallet {
       let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
       if let TriggerPolicy::Cadenced { every_blocks, .. } = &schedule.trigger {
         ensure!(*every_blocks > 0, Error::<T>::InvalidTriggerConfiguration);
-        let jitter_window = every_blocks
-          .saturating_div(4)
-          .min(T::MaxTimerJitterBlocks::get());
-        let worst_case_jitter = jitter_window.saturating_sub(1);
-        let composed_delay = every_blocks
-          .checked_add(&worst_case_jitter)
-          .ok_or(Error::<T>::ExecutionDelayTooLong)?;
         ensure!(
-          composed_delay <= max_delay,
+          *every_blocks <= max_delay,
           Error::<T>::ExecutionDelayTooLong
         );
       }
@@ -3057,7 +3068,6 @@ pub mod pallet {
     }
 
     fn validate_future_schedule_targets(
-      actor_id: ActorId,
       schedule: &ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
     ) -> DispatchResult {
@@ -3077,18 +3087,11 @@ pub mod pallet {
       let first_temporal_eligible =
         if let TriggerPolicy::Cadenced { every_blocks, .. } = schedule.trigger {
           let cadence: BlockNumberFor<T> = every_blocks.into();
-          let phase_window = every_blocks
-            .saturating_div(4)
-            .min(T::MaxTimerJitterBlocks::get());
-          let worst_case_phase: BlockNumberFor<T> = phase_window.saturating_sub(1).into();
           ensure!(
-            schedule_anchor
-              .checked_add(&cadence)
-              .and_then(|target| target.checked_add(&worst_case_phase))
-              .is_some(),
+            schedule_anchor.checked_add(&cadence).is_some(),
             Error::<T>::SchedulerIndexExhausted
           );
-          Self::cadence_at_or_after(actor_id, schedule_anchor, every_blocks, schedule_anchor)
+          Self::cadence_at_or_after(schedule_anchor, every_blocks, schedule_anchor)
             .map_err(|_| Error::<T>::SchedulerIndexExhausted)?
         } else {
           schedule_anchor
@@ -3141,10 +3144,10 @@ pub mod pallet {
 
     fn ensure_retry_later_allowed(
       mutability: Mutability,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> DispatchResult {
       if mutability == Mutability::Immutable {
-        for step in execution_plan {
+        for step in contract_steps {
           ensure!(
             step.on_error.retry_max_attempts().is_none(),
             Error::<T>::RetryLaterNotAllowedForImmutableActor
@@ -3154,16 +3157,17 @@ pub mod pallet {
       Ok(())
     }
 
-    fn canonicalize_preconditions(execution_plan: &mut ExecutionPlanOf<T>) -> DispatchResult {
+    fn canonicalize_preconditions(contract_steps: &mut ContractSteps<T>) -> DispatchResult {
       let mut opening_predicate_count = 0u32;
-      for step in execution_plan.iter_mut() {
-        let Preconditions::AnyOf(clauses) = &mut step.preconditions else {
+      for step in contract_steps.iter_mut() {
+        let Some(precondition) = &mut step.precondition else {
           continue;
         };
-        ensure!(!clauses.is_empty(), Error::<T>::EmptyPreconditions);
+        let clauses = &mut precondition.clauses;
+        ensure!(!clauses.is_empty(), Error::<T>::EmptyPrecondition);
         let mut canonical_clauses = alloc::vec::Vec::with_capacity(clauses.len());
         for clause in clauses.iter() {
-          ensure!(!clause.is_empty(), Error::<T>::EmptyPreconditions);
+          ensure!(!clause.is_empty(), Error::<T>::EmptyPrecondition);
           let mut predicates = clause.to_vec();
           predicates.sort_by_key(Encode::encode);
           predicates.dedup();
@@ -3176,12 +3180,33 @@ pub mod pallet {
           !canonical_clauses.windows(2).any(|pair| pair[0] == pair[1]),
           Error::<T>::InvalidPredicate
         );
+        let mut absorbed = alloc::vec![false; canonical_clauses.len()];
+        for subset_index in 0..canonical_clauses.len() {
+          for superset_index in 0..canonical_clauses.len() {
+            if subset_index == superset_index
+              || canonical_clauses[subset_index].len() >= canonical_clauses[superset_index].len()
+            {
+              continue;
+            }
+            if canonical_clauses[subset_index]
+              .iter()
+              .all(|predicate| canonical_clauses[superset_index].contains(predicate))
+            {
+              absorbed[superset_index] = true;
+            }
+          }
+        }
+        canonical_clauses = canonical_clauses
+          .into_iter()
+          .zip(absorbed)
+          .filter_map(|(clause, is_absorbed)| (!is_absorbed).then_some(clause))
+          .collect();
         let predicate_count = canonical_clauses
           .iter()
           .try_fold(0u32, |total, clause| total.checked_add(clause.len() as u32))
           .ok_or(Error::<T>::AdmissionBoundOverflow)?;
         ensure!(
-          predicate_count <= T::MaxConditionsPerStep::get(),
+          predicate_count <= T::MaxPredicatesPerStep::get(),
           Error::<T>::AdmissionBoundOverflow
         );
         let step_opening_count = canonical_clauses
@@ -3202,33 +3227,36 @@ pub mod pallet {
       Ok(())
     }
 
-    fn validate_execution_plan_shape(
+    fn validate_contract_steps_shape(
       actor_type: ActorType,
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> DispatchResult {
       ensure!(
-        execution_plan_steps_bound_is_valid(T::MaxExecutionPlanSteps::get()),
-        Error::<T>::ExecutionPlanTooLong
+        contract_steps_bound_is_valid(T::MaxContractSteps::get()),
+        Error::<T>::TooManyContractSteps
       );
-      Self::attempt_fee_envelope(actor_type, execution_plan, 0)?;
-      for step in execution_plan.as_slice() {
+      Self::attempt_fee_envelope(actor_type, contract_steps, 0)?;
+      for step in contract_steps.as_slice() {
         if let Some(max_attempts) = step.on_error.retry_max_attempts() {
           ensure!(
             max_attempts >= 2 && max_attempts <= T::MaxRetryAttempts::get(),
             Error::<T>::InvalidRetryAttemptLimit
           );
         }
-        if let Preconditions::AnyOf(clauses) = &step.preconditions {
-          ensure!(!clauses.is_empty(), Error::<T>::EmptyPreconditions);
+        if let Some(precondition) = &step.precondition {
           ensure!(
-            clauses.iter().all(|clause| !clause.is_empty()),
-            Error::<T>::EmptyPreconditions
+            !precondition.clauses.is_empty(),
+            Error::<T>::EmptyPrecondition
           );
           ensure!(
-            step.preconditions.predicate_count() <= T::MaxConditionsPerStep::get(),
+            precondition.clauses.iter().all(|clause| !clause.is_empty()),
+            Error::<T>::EmptyPrecondition
+          );
+          ensure!(
+            precondition.predicate_count() <= T::MaxPredicatesPerStep::get(),
             Error::<T>::AdmissionBoundOverflow
           );
-          for timed in clauses.iter().flat_map(|clause| clause.iter()) {
+          for timed in precondition.clauses.iter().flat_map(|clause| clause.iter()) {
             let max_age_blocks = match &timed.predicate {
               Predicate::ObservationAbove { max_age_blocks, .. }
               | Predicate::ObservationBelow { max_age_blocks, .. }
@@ -3313,10 +3341,10 @@ pub mod pallet {
     }
 
     fn validate_recipient_configuration(
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
       sovereign_account: &T::AccountId,
     ) -> DispatchResult {
-      for step in execution_plan {
+      for step in contract_steps {
         match &step.task {
           ActorTask::Transfer { to, .. } => {
             ensure!(to != sovereign_account, Error::<T>::SelfTransferNotAllowed);
@@ -3348,8 +3376,8 @@ pub mod pallet {
       Ok(())
     }
 
-    fn validate_opening_snapshot_surfaces(execution_plan: &ExecutionPlanOf<T>) -> DispatchResult {
-      for surface in Self::opening_surfaces(execution_plan, 0) {
+    fn validate_opening_snapshot_surfaces(contract_steps: &ContractSteps<T>) -> DispatchResult {
+      for surface in Self::opening_surfaces(contract_steps, 0) {
         if let OpeningSurface::StakingShares(position_asset) = surface {
           ensure!(
             T::StakingOps::share_asset(position_asset).is_some(),
@@ -3361,7 +3389,7 @@ pub mod pallet {
     }
 
     fn derive_funding_tracked_assets(
-      execution_plan: &ExecutionPlanOf<T>,
+      contract_steps: &ContractSteps<T>,
     ) -> Result<BoundedBTreeSet<T::AssetId, T::MaxFundingTrackedAssets>, DispatchError> {
       let mut tracked = alloc::collections::BTreeSet::new();
 
@@ -3371,7 +3399,7 @@ pub mod pallet {
         }
       };
 
-      for step in execution_plan.as_slice() {
+      for step in contract_steps.as_slice() {
         match &step.task {
           ActorTask::Transfer { asset, amount, .. }
           | ActorTask::SplitTransfer { asset, amount, .. }
@@ -3431,7 +3459,7 @@ pub mod pallet {
         }
       }
 
-      BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::ExecutionPlanTooLong.into())
+      BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::TooManyContractSteps.into())
     }
 
     pub(crate) fn validate_split_transfer_legs(legs: &SplitTransferLegsOf<T>) -> DispatchResult {
@@ -3732,9 +3760,9 @@ pub mod pallet {
       if T::MaxOwnerSlots::get() == 0 {
         return Err(TryRuntimeError::Other("MaxOwnerSlots must be nonzero"));
       }
-      if !execution_plan_steps_bound_is_valid(T::MaxExecutionPlanSteps::get()) {
+      if !contract_steps_bound_is_valid(T::MaxContractSteps::get()) {
         return Err(TryRuntimeError::Other(
-          "MaxExecutionPlanSteps must be in 1..=255",
+          "MaxContractSteps must be in 1..=255",
         ));
       }
       if limit == 0 || limit > Self::max_configurable_active_actor_limit() {
@@ -3805,7 +3833,7 @@ pub mod pallet {
           ));
         }
         let instance = Self::derive_active_actor_view(identity, hot, contract);
-        if !Self::execution_plan_admission_weight_upper(
+        if !Self::contract_steps_admission_weight_upper(
           instance.actor_class.actor_type(),
           &instance.steps,
         )
@@ -3913,13 +3941,10 @@ pub mod pallet {
         let expected_opening_predicates = contract
           .steps
           .iter()
-          .map(|step| match &step.preconditions {
-            Preconditions::Unconditional => 0,
-            Preconditions::AnyOf(clauses) => clauses
-              .iter()
-              .flat_map(|clause| clause.iter())
-              .filter(|timed| timed.timing == ObservationTiming::Opening)
-              .count(),
+          .map(|step| {
+            step.precondition.as_ref().map_or(0, |precondition| {
+              precondition.opening_predicate_count() as usize
+            })
           })
           .sum::<usize>();
         if continuation.opening_predicate_results.len() != expected_opening_predicates {

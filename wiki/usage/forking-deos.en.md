@@ -1,7 +1,7 @@
 ---
-page_type: usage
+type: usage
 title: Forking DEOS
-summary: A practical map of what a downstream team changes, preserves, and validates when forking DEOS into a concrete ecosystem.
+description: A practical map of what a downstream team changes, preserves, and validates when forking DEOS into a concrete ecosystem.
 locale: en
 canonical_page_id: forking-deos
 translation_status: source
@@ -9,15 +9,15 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../template/pallets/actors/docs/embedding.md
-  - ../../docs/framework-instance.contract.en.md
-  - ../../template/README.md
-  - ../../web-client/README.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../template/pallets/actors/docs/embedding.md
+  - resource: ../../docs/framework-instance.contract.en.md
+  - resource: ../../template/README.md
+  - resource: ../../web-client/README.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: developer
 tags:
   - usage
@@ -69,7 +69,7 @@ A fork should preserve the core framework discipline unless it has strong eviden
 
 - Deterministic protocol-managed economic reactions;
 - Bounded runtime read surfaces versus materialized/indexed views;
-- Explicit Actor roles and execution-plan boundaries;
+- Explicit Actor roles and Actor Contract boundaries;
 - TMCTOL math validation before runtime changes;
 - Governance domain/protection separation;
 - Staking share-vault and receipt accounting invariants;

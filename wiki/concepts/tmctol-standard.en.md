@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: TMCTOL Standard
-summary: TMCTOL is the current flagship tokenomic standard running on DEOS. It combines a mint-only curve, treasury-owned liquidity, and fee burning to create a more explicit and rule-bound downside structure than a conventional token launch.
+description: TMCTOL is the current flagship tokenomic standard running on DEOS. It combines a mint-only curve, treasury-owned liquidity, and fee burning to create a more explicit and rule-bound downside structure than a conventional token launch.
 locale: en
 canonical_page_id: tmctol-standard
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-  - ../../README.md
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../README.md
+status: stable
 audience: newcomer
 tags:
   - concept

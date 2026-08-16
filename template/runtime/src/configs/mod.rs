@@ -462,9 +462,7 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
   fn new_session(index: SessionIndex) -> Option<Vec<AccountId>> {
     let mut collators =
       polkadot_sdk::pallet_collator_selection::Invulnerables::<Runtime>::get().into_inner();
-    if <crate::configs::staking_config::RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
-      == pallet_staking::NativeSecurityMode::TrustedSet
-    {
+    if !crate::Staking::native_security_candidate_selection_available() {
       log::info!(
         target: "runtime::collator-selection",
         "new_session({index}) -> trusted-collator phase active, using {} invulnerables only",
@@ -473,8 +471,11 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       return Some(collators);
     }
     let readiness = crate::Staking::native_security_readiness();
-    crate::Staking::note_native_security_boundary(index, readiness);
     if readiness != pallet_staking::NativeSecurityReadiness::Ready {
+      crate::Staking::note_native_security_boundary(
+        index,
+        pallet_staking::NativeSecurityBoundaryOutcome::NotReady(readiness),
+      );
       log::error!(
         target: "runtime::collator-selection",
         "new_session({index}) -> LP-backed security not ready ({readiness:?}); preserving the current validator set",
@@ -487,10 +488,17 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
         .filter(|candidate| !crate::Staking::operator_native_lp_locked(&candidate.who).is_zero())
         .map(|candidate| candidate.who.clone())
         .collect::<Vec<_>>();
+    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
+      <Runtime as pallet_staking::Config>::WeightInfo::open_native_security_epoch(
+        crate::Staking::native_security_participants().len() as u32,
+        crate::configs::staking_config::SecurityRewardClaimHorizon::get().saturating_add(2),
+      ),
+      DispatchClass::Mandatory,
+    );
     if crate::Staking::open_native_security_epoch(index, &eligible_operators).is_err() {
       crate::Staking::note_native_security_boundary(
         index,
-        pallet_staking::NativeSecurityReadiness::SnapshotOpenFailed,
+        pallet_staking::NativeSecurityBoundaryOutcome::SnapshotOpenFailed,
       );
       log::error!(
         target: "runtime::collator-selection",
@@ -498,11 +506,9 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       );
       return None;
     }
-    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
-      <Runtime as pallet_staking::Config>::WeightInfo::open_native_security_epoch(
-        crate::Staking::native_security_participants().len() as u32,
-      ),
-      DispatchClass::Mandatory,
+    crate::Staking::note_native_security_boundary(
+      index,
+      pallet_staking::NativeSecurityBoundaryOutcome::SnapshotOpened,
     );
     let candidates_len_before: u32 =
       polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::decode_len()
@@ -543,10 +549,43 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
   }
 
   fn start_session(index: SessionIndex) {
-    if <crate::configs::staking_config::RuntimeNativeSecurityModeProvider as pallet_staking::NativeSecurityModeProvider>::mode()
-      == pallet_staking::NativeSecurityMode::LpBackedSelection
-      && crate::Staking::activate_native_security_epoch(index).is_err()
-    {
+    frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
+      <Runtime as pallet_staking::Config>::WeightInfo::settle_due_native_security_reward(
+        crate::configs::staking_config::SecurityRewardClaimHorizon::get().saturating_add(2),
+      ),
+      DispatchClass::Mandatory,
+    );
+    if let Err(error) = crate::Staking::settle_due_native_security_reward() {
+      frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
+        <Runtime as pallet_staking::Config>::WeightInfo::cancel_native_security_epoch_plan(),
+        DispatchClass::Mandatory,
+      );
+      if let Err(cancel_error) = crate::Staking::cancel_native_security_epoch_plan(index) {
+        log::error!(
+          target: "runtime::collator-selection",
+          "start_session({index}) -> failed retention also left its planned epoch retained: {cancel_error:?}",
+        );
+      }
+      log::error!(
+        target: "runtime::collator-selection",
+        "start_session({index}) -> oldest due native security reward epoch could not settle: {error:?}",
+      );
+      return;
+    }
+    if !crate::Staking::native_security_candidate_selection_available() {
+      frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
+        <Runtime as pallet_staking::Config>::WeightInfo::contract_native_security_obligations(),
+        DispatchClass::Mandatory,
+      );
+      if let Err(error) = crate::Staking::contract_native_security_obligations_for_trusted_mode() {
+        log::error!(
+          target: "runtime::collator-selection",
+          "start_session({index}) -> retained native security obligations could not contract: {error:?}",
+        );
+      }
+      return;
+    }
+    if crate::Staking::activate_native_security_epoch(index).is_err() {
       log::error!(
         target: "runtime::collator-selection",
         "start_session({index}) -> planned LP-backed security epoch could not activate",

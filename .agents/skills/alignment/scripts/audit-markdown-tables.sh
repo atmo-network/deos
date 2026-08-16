@@ -9,7 +9,8 @@ Usage: audit-markdown-tables.sh [MARKDOWN_FILE...]
 
 Checks repository-owned Markdown table rows for compact readable syntax:
 exactly one padding space inside every cell boundary, exactly three delimiter
-hyphens, and only optional alignment colons.
+hyphens, and only optional alignment colons. Immutable bundled upstream
+references are excluded because their exact source bytes are authoritative.
 
 With no file arguments, audits every existing tracked or unignored untracked
 Markdown file in the repository; paths deleted by the current diff are ignored.
@@ -68,6 +69,12 @@ run_audit() {
     local failed=0
     local file path
     for file in "${FILES[@]}"; do
+        case "$file" in
+            .agents/skills/wiki-sync/references/okf-*.md|"$PROJECT_ROOT"/.agents/skills/wiki-sync/references/okf-*.md)
+                log_info "Skipping immutable upstream reference: $file"
+                continue
+                ;;
+        esac
         if [[ "$file" = /* ]]; then
             path="$file"
         else

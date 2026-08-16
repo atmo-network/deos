@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Routing and Minting Loop
-summary: The current DEOS reference line pairs DEOS Router with the Token Minting Curve to decide how trades execute and how new supply enters the system. The router compares recipient output across market liquidity and protocol liquidity, while TMC provides deterministic mint-side pricing.
+description: The current DEOS reference line pairs DEOS Router with the Token Minting Curve to decide how trades execute and how new supply enters the system. The router compares recipient output across market liquidity and protocol liquidity, while TMC provides deterministic mint-side pricing.
 locale: en
 canonical_page_id: routing-and-minting-loop
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/tmc/docs/architecture.en.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/router/docs/specification.en.md
-status: active
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../template/pallets/tmc/docs/architecture.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../template/pallets/router/docs/specification.en.md
+status: stable
 audience: newcomer
 tags:
   - concept

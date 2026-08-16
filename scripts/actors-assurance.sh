@@ -17,6 +17,12 @@ REQUIRED_HEAVY_PROFILES=(
 OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
 DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
 
+report_validation_boundary() {
+    if [[ "${DEOS_VALIDATION_INTERNAL:-0}" == "1" ]]; then
+        node "$PROJECT_ROOT/scripts/validation-evidence.mjs" boundary "$1"
+    fi
+}
+
 usage() {
     cat <<'EOF'
 Usage: actors-assurance.sh [OPTIONS]
@@ -100,7 +106,7 @@ verify_heavy_profiles_resolve_exactly_once() {
 }
 
 run_gate() {
-    run_shell_step "Actors gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json"
+    run_shell_step "Actors gate: 0.7.17 golden-equivalence freshness" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --check"
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: accepted specification hash" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-spec-acceptance"
@@ -109,7 +115,7 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
     run_shell_step "Actors gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
     run_shell_step "Actors gate: certified ingress evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:ingress-evidence"
     run_shell_step "Actors gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
-    run_shell_step "Actors gate: reactive operations corpus contract" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\""
+    run_shell_step "Actors gate: exhaustive production/simulation Step parity" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib canonical_step_transition_matrix_has_production_simulation_parity"
 
     if [[ "$QUICK_MODE" == "1" ]]; then
         run_shell_step "Actors quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy --locked -p pallet-deos-actors -p deos-runtime -p pallet-deos-actors-embedding-fixture --all-targets -- -D warnings"
@@ -119,9 +125,9 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
     fi
 
     if [[ "$CARGO_PROFILE" == "release" ]]; then
-        run_shell_step "Actors gate: executable reactive operations corpus" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\" --execute --release"
+        run_shell_step "Actors gate: executable 0.7.17 golden equivalence" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --execute --release"
     else
-        run_shell_step "Actors gate: executable reactive operations corpus" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\" --execute"
+        run_shell_step "Actors gate: executable 0.7.17 golden equivalence" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --execute"
     fi
 
     run_shell_step \
@@ -161,6 +167,7 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
             "Actors gate: exact heavy profile ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked ${profile} -- --ignored --nocapture"
+        report_validation_boundary "actors.scheduler.${profile}"
     done
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" != "1" ]]; then
         log_warning "Skipping occupancy profile"

@@ -74,7 +74,7 @@ The browser realization axis is separate:
 
 A session-built chart or retained UI panel must not masquerade as archive truth. A future archive/search/dashboard surface must declare its materialized provider boundary explicitly. `ReadModelValue.fetchedAt` is only a browser observation timestamp for cache/session freshness; canonical chain time or finality must come from bounded chain facts such as `asOfBlock` / `asOfHash` when those facts matter.
 
-The automation widget reads known System actors from `Actors.ActorIdentities`, `Actors.ActorHot`, `Actors.ActorContract`, and sparse `Actors.ContinuationState` at one finalized block. Current cursor, logical-cycle attempt, and unsuccessful-attempt count at that cursor are canonical-chain truth. Historical attempt timelines remain materialized. The automation authoring, analysis, and local simulation contracts derive `MaxExecutionPlanSteps` and `MaxRetryAttempts` from the generated Actors ABI manifest; RetryLater remains Mutable-only and does not fabricate adapter retryability.
+The automation widget reads known System actors from `Actors.ActorIdentities`, `Actors.ActorHot`, `Actors.ActorContract`, and sparse `Actors.ContinuationState` at one finalized block. Current cursor, logical-cycle attempt, and unsuccessful-attempt count at that cursor are canonical-chain truth. Historical attempt timelines remain materialized. The automation authoring, analysis, and local simulation contracts derive `MaxContractSteps` and `MaxRetryAttempts` from the generated Actors ABI manifest; RetryLater remains Mutable-only and does not fabricate adapter retryability.
 
 Actors exposes no permanent cache epoch or generic revalidation progress surface. Weight-, adapter-, or envelope-affecting upgrades use their concrete migration contract and finite semantic Weight-class proof rather than client-visible per-actor cache repair state.
 
@@ -104,7 +104,7 @@ Stability, probability, causal strength, contention harm, and economic impact re
 
 Unscored reactive findings separate structural paths from evidence-bound timing and policy comparisons. Static analysis derives cooldown from schedule bytes and derives absent hysteresis/persistence from the current stateless linear Predicate language. Chatter rows identify the plan. Other timing/policy rows require generated runtime, metadata, weights, fanout limits, and field provenance; mismatch suppresses them without hiding graph truth.
 
-Trigger projection keeps admission independent from source identity. Manual and AddressEvent remain source kinds; every `OnObservationChange` entry additionally preserves its exact metadata-decoded feed projection without inventing a threshold, condition, callback, or execution result.
+Trigger projection keeps admission independent from source identity. Manual and AddressEvent remain source kinds; every `OnObservationChange` entry additionally preserves its exact metadata-decoded feed projection without inventing a threshold, Predicate, callback, or execution result.
 
 Authoring treats `SourceFilter::Any` as an explicit fee-griefing exposure rather than a convenience default: any certified sender matching the asset filter may latch readiness, and the resulting User attempt consumes the actor's Weight-derived fee budget. The client does not infer trusted senders or runtime reimbursement; authors narrow exposure with `OwnerOnly` or a bounded whitelist.
 
@@ -120,7 +120,9 @@ Observation predicates author the complete typed feed identity, raw `u128` thres
 
 `projectObservationDeliveryInspection` owns the fail-closed reactive delivery projection over one finalized input. `projectObservationFanoutServiceTopology` is its single numerical owner: it counts occupied-page attempts plus cursorless restart/cleanup transitions, then derives the exclusive-budget lower bound and stable-topology fair-service ceiling from cursor distance, active-feed count, and the identified RefTime/ProofSize service budget. Impossible revision, active-list, cursor, page-count, or mixed-snapshot relationships throw instead of producing partial timing claims.
 
-The blockchain adapter pins every Oracle and Actors query to one finalized hash, follows the exact active dirty-feed links and occupied subscriber-page links under stored count bounds, and never enumerates subscribers through a storage prefix. `runtime-evidence.generated.ts` owns the browser's expected runtime/metadata/code/descriptor/weight identity and fanout envelope; `scripts/generate-observation-runtime-evidence.mjs --check` fails when runtime source, compressed runtime-code Wasm, metadata, descriptors, or generated Actors weights drift.
+The blockchain adapter pins every Oracle and Actors query to one finalized hash, follows the exact active dirty-feed links and occupied subscriber-page links under stored count bounds, and never enumerates subscribers through a storage prefix. `runtime-evidence.generated.ts` owns the browser's expected runtime/metadata/code/descriptor/weight identity and fanout envelope; its code identity is the exact production compact compressed Wasm.
+
+`scripts/generate-observation-runtime-evidence.mjs --check` fails when runtime source, production Wasm, metadata, descriptors, or generated Actors weights drift. Canonical `full` regenerates this tracked evidence and fails on resulting drift before publication evidence can be accepted.
 
 The adapter facade reads runtime versions, V16 metadata, runtime code, and fanout constants at the same finalized hash as observation state, then compares them with generated evidence. Transport failure or any identity, version, constant, descriptor-bound metadata, code-bound weight, or budget mismatch produces `EvidenceMismatch`: factual Oracle/Actors topology remains visible while every numerical service estimate becomes unavailable.
 
@@ -136,9 +138,9 @@ The step editor presents `AbortCycle` as “Abort on task failure” without cha
 
 `AutomationWidget` keeps actor monitoring, observation inspection, and composition in separate views. `AutomationTriggerEditor` exposes Immediate/Cadenced admission, Always/WhenSignalled mode, and up to four Manual or filtered AddressEvent sources.
 
-Composition renders stable numbered rows with `Unconditional` or bounded `AnyOf` DNF, explicit `Opening`/`Current` predicate timing, and task-parameter, amount, and error-policy controls for every current primitive. Removing the final predicate returns the row to `Unconditional`; `StopCycle` renders terminal completion without adding an edge. The widget creates artifacts but has no submission action.
+Composition renders stable numbered rows with an absent unconditional guard or one bounded `Precondition` DNF, explicit `Opening`/`Current` predicate timing, and task-parameter, amount, and error-policy controls for every current primitive. Removing the final predicate makes `precondition` absent; `StopCycle` renders terminal completion without adding an edge. The widget creates artifacts but has no submission action.
 
-Automation amount, asset, condition, task, and step editors live in `src/lib/automation/` as domain-owned presentation components. `src/lib/widgets/AutomationWidget.svelte` remains the layout entrypoint and composes those controls; the widget directory does not own automation internals.
+Automation amount, asset, Predicate, Task, and Step editors live in `src/lib/automation/` as domain-owned presentation components. `src/lib/widgets/AutomationWidget.svelte` remains the layout entrypoint and composes those controls; the widget directory does not own automation internals.
 
 The blockchain adapter supplies V16 metadata and runtime identity at one finalized block without fetching runtime code or invoking the simulation API. After validation, the widget displays exact `contractId`, metadata/genesis/runtime pins, finalized context, and SCALE size. Forecast, adapter-local, and matching-Wasm lanes remain separately labeled `Not run` until their own required model or provider executes.
 
@@ -185,7 +187,11 @@ Router quote adapters invoke bounded FRAME view functions at the selected snapsh
 
 Concrete adapters receive endpoint, selected address, and dApp name from `system/adapter-context.ts`. They should not import wallet stores or endpoint state directly.
 
-The staking snapshot reads `native_security_mode()`, `native_security_capabilities()`, `current_security_epoch()`, fail-closed `native_security_readiness()`, and the single boundary diagnostic at the same finalized block as pool/custody views. Live readiness and the most recent planned diagnostic remain distinct. Write preparation checks runtime capability before nomination, redelegation, liquid claim, or compound. Certified funding remains runtime/Actor-owned with no user action. Claim/compound require an explicit retained epoch, compound additionally requires operator and minimum LP output, and custody exits stay available in `TrustedSet`.
+The staking snapshot reads one fail-closed `native_security_view()` and the single boundary diagnostic at the same finalized block as pool/custody views. The canonical view owns mode, live readiness, current and Planned epoch identity, and retained-settlement presence; the diagnostic separately projects the latest `NotReady`, `SnapshotOpened`, or `SnapshotOpenFailed` planning outcome. The client derives action availability from mode instead of consuming a duplicated capability view.
+
+Write preparation checks runtime capability before nomination, redelegation, liquid claim, or compound. Certified funding remains runtime/Actor-owned with no user action. Claim/compound require an explicit retained epoch, compound additionally requires operator and minimum LP output, and custody exits stay available in `TrustedSet`.
+
+Signed governance authoring derives typed payload bytes and hash together, checks runtime admission policy and exact preimage status, and blocks submission until those bytes are noted. The PAPI write adapter repeats that fail-closed check before signing. Hash-first construction stays outside the browser signed path and belongs only to administrative bootstrap/recovery.
 
 ## 6. UI Kit
 
@@ -243,7 +249,7 @@ Current rules:
 
 `WikiWidget` renders generated repo-local wiki markdown from `/wiki`.
 
-This content is treated as trusted reviewed repository content, not user input. The safety boundary lives at repository validation through:
+This content is an isolated strict OKF v0.2 bundle and is treated as trusted reviewed repository content, not user input. Its reserved root `index.md` declares the bundle but remains outside localized navigation and graph nodes. The safety boundary lives at repository validation through:
 
 ```sh
 cd web-client
@@ -289,7 +295,7 @@ For wiki-rendering/content changes, run:
 npm run validate:wiki
 ```
 
-`validate:wiki` runs the trusted markdown validator and the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
+`validate:wiki` runs strict OKF and trusted-markdown validation before the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
 
 To run every configured client-adjacent gate:
 

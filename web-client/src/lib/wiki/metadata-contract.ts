@@ -87,10 +87,16 @@ export type ResolvedWikiNavigationSection = {
   items: ResolvedWikiNavigationItem[];
 };
 
+export type WikiRelationPresentation = {
+  source: string;
+  label: string;
+  target: string;
+};
+
 export type RelatedWikiItem = {
   id: string;
   title: string;
   path: string;
   summary: string;
-  relation: string;
+  relations: WikiRelationPresentation[];
 };

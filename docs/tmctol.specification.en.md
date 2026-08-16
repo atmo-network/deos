@@ -365,21 +365,21 @@ Properties:
 - Relationship is nonlinear due to cubic denominator
 ```
 
-`Phase Evolution`:
+`State-Regime Evolution`:
 
-`Phase 1 — Early Accumulation` (low TOL/supply ratio):
+`Early Accumulation Regime` (low TOL/supply ratio):
 
 - TMC pricing dominates, XYK spreads wide
 - Floor elevation rate: low
 - System fragile, high volatility
 
-`Phase 2 — Transition` (moderate TOL/supply ratio):
+`Transition Regime` (moderate TOL/supply ratio):
 
 - Both mechanisms contribute comparably
 - Floor elevation accelerates
 - Bootstrap gravity well forms (~15% TOL/market-cap)
 
-`Phase 3 — Maturation` (high TOL/supply ratio):
+`Maturation Regime` (high TOL/supply ratio):
 
 - XYK mechanism dominates
 - Convergence to equilibrium

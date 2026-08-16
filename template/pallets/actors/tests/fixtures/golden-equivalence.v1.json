@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "deos.actors-golden-equivalence/1",
+  "baseline": {
+    "release": "0.7.17",
+    "tag": "v0.7.17",
+    "commit": "e5bcb85ceb93f201add3db0df08f2583930287c8"
+  },
+  "immutableCorpora": [
+    {
+      "kind": "ReactiveOperations",
+      "path": "template/runtime/src/tests/fixtures/actors-reactive-operations.v1.json",
+      "sha256": "32669c0c324ee429614c5c80986c1ef0da14859377475692b3e8ed3585951a4e"
+    },
+    {
+      "kind": "SemanticManifest",
+      "path": "web-client/src/lib/automation/actors-semantic-manifest.json",
+      "sha256": "15ab53a31193e8a03686db673b0c57929f8425d92ea14868e7be7da831819342"
+    }
+  ],
+  "intentionalMappings": [
+    {
+      "kind": "TestAnchorRename",
+      "baseline": "tiny_percentage_amount_is_skipped_without_execution_plan_failure",
+      "current": "tiny_percentage_amount_is_skipped_without_contract_steps_failure",
+      "reason": "Execution Plan became Actor Contract vocabulary without changing zero-resolution behavior."
+    }
+  ],
+  "semanticBehaviorAnchors": [
+    {
+      "id": "committed-prefix-and-suspension",
+      "proves": ["committedEconomicEffects", "suspension", "productionFinalState"],
+      "baseline": "retry_later_resumes_same_cursor_without_replaying_committed_prefix",
+      "current": "retry_later_resumes_same_cursor_without_replaying_committed_prefix"
+    },
+    {
+      "id": "resolution-skip",
+      "proves": ["skips", "productionFinalState"],
+      "baseline": "tiny_percentage_amount_is_skipped_without_execution_plan_failure",
+      "current": "tiny_percentage_amount_is_skipped_without_contract_steps_failure"
+    },
+    {
+      "id": "task-failure-rollback",
+      "proves": ["failures", "committedEconomicEffects", "productionFinalState"],
+      "baseline": "unstake_adapter_failure_aborts_cycle_without_partial_effects",
+      "current": "unstake_adapter_failure_aborts_cycle_without_partial_effects"
+    },
+    {
+      "id": "productive-close",
+      "proves": ["closeCauses", "committedEconomicEffects", "productionFinalState"],
+      "baseline": "close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor",
+      "current": "close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor"
+    },
+    {
+      "id": "failed-task-fee",
+      "proves": ["fees", "failures", "productionFinalState"],
+      "baseline": "adapter_failure_retains_one_combined_step_fee",
+      "current": "adapter_failure_retains_one_combined_step_fee"
+    },
+    {
+      "id": "global-fifo",
+      "proves": ["fifoOrder", "productionFinalState"],
+      "baseline": "canonical_fifo_executes_global_ticket_order_across_actor_types",
+      "current": "canonical_fifo_executes_global_ticket_order_across_actor_types"
+    },
+    {
+      "id": "custody-reattachment",
+      "proves": ["custody", "productionFinalState"],
+      "baseline": "system_sovereign_reattachment_creates_fresh_identity_with_same_custody",
+      "current": "system_sovereign_reattachment_creates_fresh_identity_with_same_custody"
+    },
+    {
+      "id": "simulation-effect-and-rollback",
+      "proves": ["simulationFinalOutcome", "committedEconomicEffects", "custody"],
+      "baseline": "fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_write",
+      "current": "fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_write"
+    },
+    {
+      "id": "simulation-production-close-boundary",
+      "proves": ["simulationFinalOutcome", "productionFinalState", "closeCauses", "fees"],
+      "baseline": "simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary",
+      "current": "simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary"
+    }
+  ],
+  "requiredProofs": [
+    "committedEconomicEffects",
+    "skips",
+    "failures",
+    "suspension",
+    "closeCauses",
+    "fees",
+    "fifoOrder",
+    "custody",
+    "productionFinalState",
+    "simulationFinalOutcome"
+  ]
+}

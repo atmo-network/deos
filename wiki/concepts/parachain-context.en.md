@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Parachain Context
-summary: How DEOS relates to Polkadot, parachains, XCM, collators, Omni Node, and upstream relay-chain dependencies.
+description: How DEOS relates to Polkadot, parachains, XCM, collators, Omni Node, and upstream relay-chain dependencies.
 locale: en
 canonical_page_id: parachain-context
 translation_status: source
@@ -9,12 +9,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/asset-registry/docs/architecture.en.md
-  - ../../docs/randomness.strategy.en.md
-  - ../../template/README.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/asset-registry/docs/architecture.en.md
+  - resource: ../../docs/randomness.strategy.en.md
+  - resource: ../../template/README.md
+status: stable
 audience: newcomer
 tags:
   - concept

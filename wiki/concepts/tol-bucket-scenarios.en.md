@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: TOL Bucket Scenarios
-summary: Concrete scenarios for the TMCTOL treasury-owned-liquidity bucket model, including bucket A, B, C, D behavior, unwind paths, and actor wakeups.
+description: Concrete scenarios for the TMCTOL treasury-owned-liquidity bucket model, including bucket A, B, C, D behavior, unwind paths, and actor wakeups.
 locale: en
 canonical_page_id: tol-bucket-scenarios
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../AGENTS.md
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../AGENTS.md
+status: stable
 audience: newcomer
 tags:
   - concept

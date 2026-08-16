@@ -198,10 +198,7 @@ function step({
       ? predicates.map((predicate) => [timed(predicate)])
       : [predicates.map((predicate) => timed(predicate))];
   return {
-    preconditions:
-      predicates.length === 0
-        ? variant('Unconditional')
-        : { type: 'AnyOf', value: clauses },
+    precondition: predicates.length === 0 ? undefined : clauses,
     task: { type: task, value: taskValue(task, amount) },
     on_error:
       onError === 'RetryLater'
@@ -679,7 +676,7 @@ test('fixed split warnings require provenance-bound minimum and zero-balance evi
 
 test('authoring copy separates skips, funding, and task failure classes', () => {
   for (const label of [
-    'Condition false:',
+    'Precondition false:',
     'Resolution skipped:',
     'Funding unavailable:',
     'Temporary task failure:',
@@ -701,7 +698,7 @@ test('bounded DNF clause and predicate counts remain explicit without graph cont
         steps: [step({ predicates: atoms, preconditionMode: legacyShape })],
       }),
     );
-    assert.deepEqual(result.steps[0].preconditions, {
+    assert.deepEqual(result.steps[0].precondition, {
       mode: 'AnyOf',
       clauseCount,
       atomicCount: 2,
@@ -714,8 +711,8 @@ test('bounded DNF clause and predicate counts remain explicit without graph cont
     assert.deepEqual(result.steps[0].failureControls, ['advance', 'terminate']);
   }
   const unconditional = analyze(artifactFor({ steps: [step()] })).steps[0];
-  assert.equal(unconditional.preconditions.mode, 'Unconditional');
-  assert.equal(unconditional.preconditions.atomicCount, 0);
+  assert.equal(unconditional.precondition.mode, 'Unconditional');
+  assert.equal(unconditional.precondition.atomicCount, 0);
 });
 
 test('StopCycle separates successful cycle completion from failure fall-through', () => {

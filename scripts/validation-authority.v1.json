@@ -1,0 +1,71 @@
+{
+  "schema": "validation-authority/v2",
+  "roots": [
+    ".agents/skills/alignment",
+    ".agents/skills/domain-dag",
+    ".agents/skills/wiki-sync",
+    "AGENTS.md",
+    "BACKLOG.md",
+    "CHANGELOG.md",
+    "docs",
+    "scripts",
+    "simulator",
+    "template",
+    "web-client",
+    "wiki"
+  ],
+  "fullArtifactOutputs": [
+    {
+      "path": "template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/.papi/metadata/deos.scale",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/.papi/descriptors",
+      "kind": "directory",
+      "requiredMembers": [
+        "package.json",
+        "generated.json",
+        "dist/index.js",
+        "dist/index.d.ts"
+      ]
+    },
+    {
+      "path": "web-client/src/lib/automation/actors-abi-manifest.json",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/src/lib/automation/actors-semantic-manifest.json",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/src/lib/automation/actors-fee-envelope-vectors.json",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/src/lib/automation/ingress-runtime-evidence.generated.ts",
+      "kind": "file",
+      "requiredMembers": []
+    },
+    {
+      "path": "web-client/src/lib/observation/runtime-evidence.generated.ts",
+      "kind": "file",
+      "requiredMembers": []
+    }
+  ],
+  "immutableRefInputs": [
+    {
+      "profiles": ["heavy", "full"],
+      "name": "deos-actors-0.7.17-baseline",
+      "commit": "e5bcb85ceb93f201add3db0df08f2583930287c8"
+    }
+  ]
+}

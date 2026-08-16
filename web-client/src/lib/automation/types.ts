@@ -25,7 +25,6 @@ export type AutomationRunState = 'idle' | 'suspended';
 
 export type AutomationContinuationSnapshot = {
   cursor: number;
-  attempt: number;
   unsuccessfulAttemptsAtCursor: number;
   lastAttemptBlock: number;
 };
