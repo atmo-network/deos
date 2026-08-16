@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: $BLDR Builder Economy
-summary: The reference builder pattern coordinates proven work through public invoices, tactical governance, protocol-owned liquidity, and bounded treasury payouts without making founder privilege a framework entitlement.
+description: The reference builder pattern coordinates proven work through public invoices, tactical governance, protocol-owned liquidity, and bounded treasury payouts without making founder privilege a framework entitlement.
 locale: en
 canonical_page_id: builder-economy
 translation_status: source
@@ -9,15 +9,15 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/README.md
-  - ../../docs/manifesto.en.md
-  - ../../docs/framework-instance.contract.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/tmc/docs/architecture.en.md
-status: active
+  - resource: ../../docs/README.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../docs/framework-instance.contract.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/tmc/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -92,7 +92,7 @@ buyer pays $NTVE
 
 TMC sends two thirds of minted `$BLDR` to the BLDR Splitter. The splitter divides that protocol allocation equally between the BLDR Liquidity Actor and BLDR Treasury, while routing the incoming `$NTVE` collateral to liquidity provisioning. The resulting LP accumulates in immutable BLDR Bucket A.
 
-A separate L1 Building lane can unwind its own LP into Treasury B, gradually buy `$BLDR` on the market, and burn it. Builder payouts and buyback/burn therefore remain distinct flows: one funds useful work, while the other applies bounded market demand and supply reduction when its execution plan remains live.
+A separate L1 Building lane can unwind its own LP into Treasury B, gradually buy `$BLDR` on the market, and burn it. Builder payouts and buyback/burn therefore remain distinct flows: one funds useful work, while the other applies bounded market demand and supply reduction while its Actor Contract remains live.
 
 ## A Federated Domain, Not an Isolated Economy
 

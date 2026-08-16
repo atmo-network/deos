@@ -134,7 +134,7 @@ export type ActorStaticRecipient =
 
 export type ActorStaticStepAnalysis = {
   index: number;
-  preconditions: {
+  precondition: {
     mode: 'Unconditional' | 'AnyOf';
     clauseCount: number;
     atomicCount: number;
@@ -309,7 +309,7 @@ export type ActorStaticFinding =
       kind: 'AdministrativeInvalidationSurface';
       conditional: true;
       actions: Array<
-        | 'execution-plan-replacement'
+        | 'contract-steps-replacement'
         | 'schedule-replacement'
         | 'funding-policy-replacement'
         | 'deactivation'
@@ -394,6 +394,16 @@ function member(
   const projected = record(value, label);
   if (!(key in projected)) throw new Error(`${label}.${key} is required`);
   return projected[key];
+}
+
+function isNoneProjection(value: ActorContractProjection | undefined) {
+  return (
+    value != null &&
+    !Array.isArray(value) &&
+    typeof value === 'object' &&
+    '$none' in value &&
+    value.$none === true
+  );
 }
 
 function safeInteger(value: ActorContractProjection, label: string): number {
@@ -867,41 +877,33 @@ function stepCost(
 
 function parseSteps(
   artifact: ActorContractArtifact,
-  executionPlan: ActorContractProjection,
+  contractSteps: ActorContractProjection,
   model: ActorStaticWeightModel,
   capabilities?: ActorAdapterCapabilityProfile,
 ) {
   const forecastInputs: ActorStepCostInput[] = [];
-  const steps = array(executionPlan, 'ContractInput.steps').map(
+  const steps = array(contractSteps, 'ContractInput.steps').map(
     (projectedStep, index): ActorStaticStepAnalysis => {
-      const parsedPreconditions = variant(
-        member(projectedStep, 'preconditions', `Step ${index}`),
-        `Step ${index}.predicates`,
-      );
-      if (!['Unconditional', 'AnyOf'].includes(parsedPreconditions.type)) {
-        throw new Error(
-          `Unsupported Preconditions variant: ${parsedPreconditions.type}`,
-        );
-      }
-      const mode = parsedPreconditions.type as 'Unconditional' | 'AnyOf';
-      const clauses =
-        mode === 'Unconditional'
-          ? []
-          : array(
-              parsedPreconditions.value,
-              `Step ${index}.preconditions.AnyOf`,
-            ).map((clause, clauseIndex) => {
+      const projectedStepRecord = record(projectedStep, `Step ${index}`);
+      const projectedPrecondition = projectedStepRecord.precondition;
+      const noPrecondition = isNoneProjection(projectedPrecondition);
+      const mode = noPrecondition ? 'Unconditional' : 'AnyOf';
+      const clauses = noPrecondition
+        ? []
+        : array(projectedPrecondition, `Step ${index}.precondition`).map(
+            (clause, clauseIndex) => {
               const predicates = array(
                 clause,
-                `Step ${index}.preconditions.AnyOf[${clauseIndex}]`,
+                `Step ${index}.precondition.clauses[${clauseIndex}]`,
               );
               if (predicates.length === 0) {
-                throw new Error('AnyOf clauses must remain non-empty');
+                throw new Error('Precondition clauses must remain non-empty');
               }
               return predicates.map(predicateAnalysis);
-            });
+            },
+          );
       if (mode === 'AnyOf' && clauses.length === 0) {
-        throw new Error('AnyOf must remain non-empty');
+        throw new Error('Precondition must remain non-empty');
       }
       const conditions = clauses.flat();
       const parsedTask = variant(
@@ -931,7 +933,7 @@ function parseSteps(
         policy === 'RetryLater';
       return {
         index,
-        preconditions: {
+        precondition: {
           mode,
           clauseCount: clauses.length,
           atomicCount: conditions.length,
@@ -1441,7 +1443,7 @@ function findings(
       kind: 'AdministrativeInvalidationSurface',
       conditional: true,
       actions: [
-        'execution-plan-replacement',
+        'contract-steps-replacement',
         'schedule-replacement',
         'funding-policy-replacement',
         'deactivation',

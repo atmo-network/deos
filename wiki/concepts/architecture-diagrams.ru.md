@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Архитектурные схемы
-summary: Компактные текстовые схемы главных связей DEOS, включая карту доменов, routing loop, граф Actors, read-model split и границу governance/staking.
+description: "Компактные текстовые схемы основных связей между подсистемами DEOS: карта доменов, контур маршрутизации, граф Actors, разделение данных для чтения и граница между управлением и стейкингом."
 locale: ru
 canonical_page_id: architecture-diagrams
 translation_of: architecture-diagrams.en.md
@@ -10,12 +10,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/staking/docs/architecture.en.md
-status: active
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../template/pallets/staking/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -25,9 +25,9 @@ tags:
 related:
   - Карта доменов
   - Сквозные сценарии
-  - Контур маршрутизации и минтинга
+  - Контур маршрутизации и эмиссии
   - Система Actors
-  - Разделение read-model
+  - Разделение данных для чтения
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
@@ -36,91 +36,91 @@ confidence: 0.85
 
 ## Кратко
 
-Эта страница дает компактные визуальные карты для читателей, которым сначала нужна общая форма, а уже потом детали. Схемы намеренно текстовые: так они одинаково читаются в репозитории, web client и agent contexts.
+Эта страница даёт компактные наглядные карты читателям, которым прежде подробностей нужна общая форма системы. Схемы намеренно сделаны текстовыми, чтобы их было одинаково удобно читать в репозитории, веб-клиенте и контексте агентов.
 
-Используйте [Карту доменов](domain-map.ru.md) для понимания владельцев доменов и [Сквозные сценарии](end-to-end-flows.ru.md) для пошаговых walkthroughs.
+Владение доменами описано на [Карте доменов](domain-map.ru.md), а последовательности действий — в [Сквозных сценариях](end-to-end-flows.ru.md).
 
-## Главный доменный контур
+## Основной контур доменов
 
 ```text
-User intent
-  -> Reference Client
-  -> Read-model classification
-  -> Runtime surface
+Намерение пользователя
+  -> Эталонный клиент
+  -> Классификация данных для чтения
+  -> Интерфейс среды исполнения
   -> DEOS Router / TMC / DEOS Staking / DEOS Governance
-  -> Events, balances, bounded projections
-  -> Reference Client feedback
+  -> События, балансы и ограниченные проекции
+  -> Обратная связь в эталонном клиенте
 ```
 
-Клиент не является источником истины. Он читает bounded chain truth напрямую, когда это возможно, и явно помечает session/materialized data, если это не прямое protocol state.
+Клиент не является источником истины. По возможности он напрямую считывает ограниченную истину из блокчейна, а данные сеанса или материализованные данные явно обозначает как не являющиеся непосредственным состоянием протокола.
 
-## Routing и minting
+## Маршрутизация и выпуск
 
 ```text
-Swap request
+Запрос на обмен
   -> DEOS Router
-      -> Compare XYK market path
-      -> Compare TMC protocol path
-      -> Choose best bounded route
-  -> Execute swap or mint
-  -> Взимание комиссии
-  -> Направление комиссии в настроенный контур Burn Actor
+      -> Сравнить рыночный путь XYK
+      -> Сравнить протокольный путь TMC
+      -> Выбрать лучший из ограниченных маршрутов
+  -> Выполнить обмен или выпуск
+  -> Взимать комиссию
+  -> Направить комиссию в настроенный контур Burn Actor
 ```
 
-Router координирует market liquidity и protocol liquidity. TMC владеет deterministic mint-side pricing. Long-range analytics остаются вне consensus state.
+DEOS Router согласует рыночную ликвидность с ликвидностью протокола. TMC отвечает за детерминированное ценообразование при выпуске. Аналитика за длительный срок остаётся вне состояния консенсуса.
 
 ## Граф Actors
 
 ```text
-Наступает настроенное условие запуска
-  -> Поступление баланса для всеядных акторов
-     или ограниченное расписание для акторов по таймеру
-  -> Планировщик Actors проверяет lifecycle / cooldown / limits
-  -> Актор выполняет типизированный план
-  -> Выходной актив поступает на другой счет
-  -> Следующий актор по входящему балансу может пробудиться
+Наступает момент настроенного запуска
+  -> Поступление средств для всеядных акторов
+     или ограниченное расписание для акторов, запускаемых по таймеру
+  -> Планировщик Actors проверяет жизненный цикл / задержку / пределы
+  -> Актор исполняет типизированный план
+  -> Выходной актив поступает на другой счёт
+  -> Следующий актор может пробудиться от поступления средств
 ```
 
-Actors — переиспользуемая система исполнения. AA-Актор — один ограниченный экземпляр внутри нее. Более крупное поведение протокола собирается из малых actor steps.
+Actors — многократно используемая система исполнения. AA-Актор — один ограниченный экземпляр внутри неё. Более сложное поведение протокола можно составлять из небольших шагов акторов.
 
-## Граница governance и staking
+## Граница между управлением и стейкингом
 
 ```text
-Governance domain
-  -> Primary track + protection track
-  -> Typed payload
-  -> Bounded execution authority
-  -> Optional participation-quality signal
-  -> Staking reward coefficient
+Домен управления
+  -> Основной контур + защитный контур
+  -> Типизированная полезная нагрузка
+  -> Ограниченные полномочия на исполнение
+  -> Необязательный показатель качества участия
+  -> Коэффициент вознаграждения за стейкинг
 
-Staking pool
-  -> Share-vault accounting
-  -> Receipt supply
-  -> Reward settlement
+Пул стейкинга
+  -> Учёт долей пула
+  -> Объём расписок
+  -> Расчёт вознаграждений
 ```
 
-Governance и staking взаимодействуют, но не схлопываются в одну подсистему. Governance может давать bounded reward signals; staking владеет pool math и settlement.
+Управление и стейкинг взаимодействуют, но не сливаются в одну подсистему. Управление может формировать ограниченные показатели для вознаграждений; стейкинг отвечает за математику пулов и расчёты.
 
-## Read-model split
+## Разделение данных для чтения
 
 ```text
-Public datum
-  -> Bounded canonical on-chain projection
-  -> Or indexed / materialized view
+Общедоступная единица данных
+  -> Ограниченная каноническая проекция из блокчейна
+  -> Или индексированное / материализованное представление
 
-Browser realization
-  -> Direct read
-  -> Session cache
-  -> Session-derived view
-  -> Provider-backed materialized data
+Получение данных в браузере
+  -> Прямое чтение
+  -> Кэш сеанса
+  -> Вычисленное за сеанс представление
+  -> Материализованные данные от внешнего поставщика
 ```
 
-Первое разделение — protocol contract. Второе объясняет, как браузер сейчас получает конкретное значение.
+Первое разделение задаётся протокольным контрактом. Второе объясняет, как браузер сейчас получает значение.
 
 ## Связанные страницы
 
 - [Карта доменов](domain-map.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
-- [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md)
+- [Контур маршрутизации и эмиссии](routing-and-minting-loop.ru.md)
 - [Система Actors](../overview/actor-system.ru.md)
-- [Разделение read-model](read-model-split.ru.md)
+- [Разделение данных для чтения](read-model-split.ru.md)

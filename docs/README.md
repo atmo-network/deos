@@ -48,7 +48,7 @@ The flagship economic standard combining minting curves with automatic liquidity
   Package-owned host-runtime obligations for generic types, authority, bounded hooks, consumers, production weights, and independent integration evidence.
 
 - [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
-  Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, execution-plan/task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
+  Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, Actor Contract Step/Task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
 
 - [DEOS Actors External Runtime Embedding Guide](../template/pallets/actors/docs/embedding.md)
   Package-owned host-runtime checklist for reusing `pallet-deos-actors` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.

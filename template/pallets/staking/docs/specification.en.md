@@ -2,7 +2,7 @@
 
 > Contract maps: [`architecture.en.md`](./architecture.en.md), [Governance architecture](../../governance/docs/architecture.en.md), [DEOS Router architecture](../../router/docs/architecture.en.md)
 >
-> This document defines the target staking contract: the conceptual model, economic invariants, public capability surface, and governance-power semantics. Implementation status, migration state, runtime wiring, and operator rollout details belong in the paired architecture documents.
+> This document defines the normative staking contract: the conceptual model, economic invariants, public capability surface, and governance-power semantics. Runtime wiring and operational constraints belong in the paired architecture documents.
 
 ---
 
@@ -52,10 +52,10 @@ It would not participate in native collator nomination unless a future governanc
 
 The reference activation policy is owned by one runtime-code `NativeSecurityMode::{TrustedSet, LpBackedSelection}` decision:
 
-- `TrustedSet` uses trusted permissioned collators, wires LP-donation funding through Actors #14, and bridges staking-yield native-balance holdings into staking pool truth after donation execution
-- `LpBackedSelection` enables permissionless collators, explicit LP nomination, retained snapshots/pots, certified funding, liquid claims, and bounded atomic compound
+- `TrustedSet` uses trusted permissioned collators, wires LP-donation funding through Actors #14, bridges staking-yield native-balance holdings into staking pool truth after donation execution, and preserves settlement of retained reward and custody obligations
+- `LpBackedSelection` enables permissionless collators, explicit LP nomination, new retained snapshots/pots, certified funding, and bounded atomic compound
 
-`LpBackedSelection` is an explicit runtime-upgrade boundary, not mutable storage or a launch-time governance parameter. Session selection, candidate eligibility, new nomination, redelegation, and client/action availability MUST derive from this one mode owner. `native_security_readiness()` MUST classify inactive mode, native pool/receipt absence, canonical liquidity-pool absence or LP mismatch, zero reserves, zero LP issuance, unavailable valuation, inconsistent bounded indexes, absent positively backed candidate operators, duplicate candidate identity, and ready state without optimistic fallback. Each LP-backed planning attempt MUST overwrite one bounded diagnostic containing the planned `SecurityEpoch` and readiness; block hooks MUST NOT create diagnostic history or redefine it. A non-ready LP-backed session boundary MUST return no replacement set before ranking or candidate cleanup. Candidate order MUST use conservative native-equivalent locked LP descending and canonical account order ascending as the sole tie breaker; a candidate admission deposit MUST NOT establish operator eligibility, become security backing, or become a ranking input. Mode contraction MUST still allow nomination unlock requests and matured withdrawals so deactivation never traps custody.
+`LpBackedSelection` is an explicit runtime-upgrade boundary, not mutable storage or a launch-time governance parameter. One operation-availability classifier MUST derive session selection, candidate eligibility, new nomination, redelegation, certified funding, compound, and Trusted contraction from this mode owner; liquid claims and custody exits remain mode-independent. `TrustedSet` rejects every operation that creates a new LP-backed security obligation while preserving liquid settlement and custody exits. `native_security_view()` MUST own mode, readiness, current and Planned epoch identity, and retained-settlement presence. Readiness MUST classify inactive mode, native pool/receipt absence, canonical liquidity-pool absence or LP mismatch, zero reserves, zero LP issuance, unavailable valuation, inconsistent bounded indexes, absent positively backed candidate operators, duplicate candidate identity, and ready state without optimistic fallback. Each LP-backed planning attempt MUST overwrite one bounded diagnostic containing the planned `SecurityEpoch` and transition outcome; block hooks MUST NOT create diagnostic history or redefine it. A non-ready LP-backed session boundary MUST return no replacement set before ranking or candidate cleanup. Candidate order MUST use conservative native-equivalent locked LP descending and canonical account order ascending as the sole tie breaker; a candidate admission deposit MUST NOT establish operator eligibility, become security backing, or become a ranking input. Mode contraction MUST still allow nomination unlock requests and matured withdrawals so deactivation never traps custody.
 
 Upstream collection sends 100% of transaction, Actors, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. The reference permissioned phase divides available native balance 50/50 between staking ingress and liquidity provisioning. LP-backed mode uses exact 34/33/33 integer shares for certified security funding, staking ingress, and liquidity provisioning; the security leg fails closed unless the current retained pot is open and coherent.
 
@@ -100,13 +100,13 @@ This reward is not separately claimable. Existing LP holders receive it through 
 
 ### 3.3 Governance-conditioned nomination reward
 
-Nomination reward is the selective claimable Phase 2 flow. It belongs only to accounts that lock `NTVE/stNTVE` LP for collator nomination and maintain useful governance activity.
+Nomination reward is the selective claimable `LpBackedSelection` flow. It belongs only to accounts that lock `NTVE/stNTVE` LP for collator nomination and maintain useful governance activity.
 
 ```text
 locked_lp_native_value * governance_coefficient -> nomination_reward_weight
 ```
 
-The LP-backed contract admits reward funding only through a typed certified Fee Sink operation into one retained `SecurityEpoch` pot. Unsolicited reward-account balance creates no pot, liability, accrual, or claim right. Trusted Phase 1 keeps funding, claims, and compound inactive; LP-backed mode enables certified funding, claims, and bounded atomic compound.
+The LP-backed contract admits reward funding only through a typed certified Fee Sink operation into one retained `SecurityEpoch` pot. Unsolicited reward-account balance creates no pot, liability, accrual, or claim right. `TrustedSet` keeps new funding and compound inactive while preserving liquid claims against retained Finalized obligations; `LpBackedSelection` enables certified funding and bounded atomic compound.
 
 ---
 
@@ -428,7 +428,7 @@ This preserves both obligations: collator nomination and referendum voting.
 
 ## 11. Governance-Conditioned Nomination Rewards
 
-A nomination reward epoch uses locked LP value and governance activity. `SecurityEpoch` is an exact alias of the host session owner's `SessionIndex`; block-number cadence and maintenance progress cannot change it. At a ready LP-backed planning boundary, Staking atomically retains one complete Planned snapshot containing the future epoch, bounded participants, eligible operators, conservative values, governance coefficients, account reward weights, and total denominator. The current Open snapshot and funding pot remain unchanged until `start_session(epoch)` atomically promotes the plan and finalizes the prior pot. Any validation, bound, valuation, arithmetic, or activation failure leaves prior active state intact.
+A `SecurityEpoch` uses locked LP value and governance activity. `SecurityEpoch` is an exact alias of the host session owner's `SessionIndex`; block-number cadence and maintenance progress cannot change it. At a ready LP-backed planning boundary, Staking atomically retains one complete Planned snapshot containing the future epoch, bounded participants, eligible operators, conservative values, governance coefficients, account reward weights, and total denominator. The current Open snapshot and funding pot remain unchanged until `start_session(epoch)` atomically promotes the plan and finalizes the prior pot. Any validation, bound, valuation, arithmetic, or activation failure leaves prior active state intact.
 
 Eligibility requires:
 
@@ -459,17 +459,19 @@ Epoch-lag rule:
 
 Native nomination reward funding uses one typed certified operation for the current open `SecurityEpoch`. The pallet call `fund_native_security_reward(amount)` requires `SecurityRewardFundingOrigin`, derives the current session identity internally, transfers `$NTVE` only from `SecurityRewardFundingSource`, and atomically increases the retained pot and exact outstanding liability. The runtime Fee Sink transfer adapter uses the same source-checked preflight and certification boundary when LP-backed allocation is active. Funding fails before mutation when mode, epoch identity, retained pot state, source authority, amount, or liability arithmetic is invalid.
 
-Planning creates a Planned zero-credit pot; session start promotes it to Open and finalizes the prior Open pot. Reopening an epoch is rejected. A Planned future pot cannot receive funding, and planning it cannot redirect funding from the current Open epoch. The deterministic reward account is custody, not an inference surface: unsolicited balance creates no pot, liability, accrual, claim, carry-forward, or funding event. Funding depends on neither block event replay, `stNTVE` transfer tracking, LP transfer tracking, nor a holder scan.
+Planning creates at most one Planned zero-credit pot. In `LpBackedSelection`, session start promotes it to Open and finalizes the prior Open pot. On transition to `TrustedSet`, session start finalizes the retained Open pot without changing credit or liability, removes the unactivated zero-credit Planned snapshot/pot, and clears active identity; resulting Finalized claims and expiry rights remain live. Reopening an epoch, planning while an older plan exists, planning while an overdue epoch remains, or growing retained pots beyond `SecurityRewardClaimHorizon + current + one planned` is rejected. A Planned future pot cannot receive funding, and planning it cannot redirect funding from the current Open epoch. The deterministic reward account is custody, not an inference surface: unsolicited balance creates no pot, liability, accrual, claim, carry-forward, or funding event. Funding depends on neither block event replay, `stNTVE` transfer tracking, LP transfer tracking, nor a holder scan.
 
 ---
 
 ## 13. Nomination Reward Settlement
 
-Claims consume only Finalized retained session pots and frozen account weights. `claim_native_security_reward(epoch)` and bounded `claim_native_security_reward_batch(epochs)` share duplicate-first prevalidation, horizon checks, account eligibility, floor allocation, exact claimed-total/liability accounting, transactional native payout, and claim markers. Future, Planned, Open, missing, expired, zero-weight, zero-pot, duplicate-epoch, duplicate-claim, ineligible-account, or mode-invalid requests fail without mutation.
+Claims consume only Finalized retained session pots and frozen account weights in either security mode. `claim_native_security_reward(epoch)` and bounded `claim_native_security_reward_batch(epochs)` share duplicate-first prevalidation, horizon checks, account eligibility, floor allocation, exact claimed-total/liability accounting, transactional native payout, and claim markers. Future, Planned, Open, missing, expired, zero-weight, zero-pot, duplicate-epoch, duplicate-claim, or ineligible-account requests fail without mutation.
 
 A liquid claim pays `$NTVE`. `claim_and_compound_native_security_reward(epoch, operator, min_lp_out)` remains one transaction from claim consumption through deterministic stake/liquidity composition, `stNTVE` minting, canonical LP minting, measured caller minimum output, and lock to an explicit validated operator. Runtime ratio/debit protection bounds pool movement; stale state, invalid operators, insufficient output, or intermediate failure rolls back every economic and claim effect.
 
-`SecurityRewardClaimHorizon` is measured in sessions and enforced during claim and expiry admission. After the horizon, `expire_native_security_reward(epoch)` proves reward custody excluding its persistent ED anchor covers exact liability, transfers `credited - claimed` including rounding dust plus any uncredited excess to Fee Sink, reduces liability only by the accounted epoch remainder, and verifies retained custody equals the remaining liability before changing Finalized to Expired. Repeated expiry cannot transfer again. `cleanup_expired_native_security_reward(epoch)` then clears at most `MaxNativeSecurityParticipants` claim markers and removes the retained snapshot and pot; it cannot run before Expired settlement.
+`SecurityRewardClaimHorizon` is measured in sessions and enforced during claim and expiry admission. At each session start, runtime progression considers the oldest overdue epoch, which is exactly the epoch crossing the horizon during ordinary progression. It invokes the same settlement transition available through permissionless `expire_native_security_reward(epoch)` recovery. A failed boundary cancels its unactivated zero-credit plan, blocks newer planning while the overdue obligation remains, and retries the oldest due epoch at the next boundary.
+
+Settlement works in either security mode. It atomically proves reward custody excluding its persistent ED anchor covers exact liability, transfers `credited - claimed` including rounding dust plus any uncredited excess to Fee Sink, reduces liability only by the accounted epoch remainder, verifies retained custody equals the remaining liability, clears at most `MaxNativeSecurityParticipants` claim markers, and removes the retained snapshot and pot. No intermediate expired state exists, and repeated expiry cannot transfer again.
 
 ---
 
@@ -479,9 +481,9 @@ A conforming launch implementation SHOULD expose bounded capabilities for:
 
 ### 14.1 Native liquid staking
 
-- `stake_native(amount)`
-- `unstake(NativeStakingAssetId, shares)` or an equivalent `unstake_native(shares)` alias
-- `sync_pool(NativeStakingAssetId)` or an equivalent `sync_native_pool()` alias
+- `stake(NativeStakingAssetId, amount)`
+- `unstake(NativeStakingAssetId, shares)`
+- `sync_pool(NativeStakingAssetId)`
 
 ### 14.2 Native AMM and donation support
 
@@ -526,7 +528,7 @@ Canonical on-chain projections SHOULD cover:
 - Locked LP nomination state
 - Operator locked LP and backing estimate
 - Governance lock state and frozen vote power
-- Retained security-epoch reward status and account claimability once settlement ships
+- Retained `SecurityEpoch` reward status and account claimability once settlement ships
 
 Indexed / materialized views SHOULD cover:
 
@@ -537,7 +539,7 @@ Indexed / materialized views SHOULD cover:
 - Long-range nomination reward history
 - Wallet PnL
 - Operator leaderboards beyond current bounded state
-- Search across expired reward epochs
+- Search across expired `SecurityEpoch` values
 
 ---
 
@@ -559,9 +561,9 @@ Native security work is bounded and session-oriented:
 
 - Lazy native pool sync occurs only on explicit touchpoints
 - Atomic LP value, eligibility, coefficient, and denominator planning precedes session-start activation
-- Certified funding, claims, expiry, and cleanup consume retained session pots under explicit bounds
+- Certified funding, claims, and atomic expiry consume retained session pots under the exact horizon plus current and at-most-one-planned bound
 
-Block-number hooks MUST NOT open, promote, fund, claim, expire, or finalize a security epoch. Cleanup is permissionless, bounded by `MaxNativeSecurityParticipants`, and does not redefine `SecurityEpoch` progression.
+Block-number hooks MUST NOT open, promote, fund, claim, expire, or finalize a `SecurityEpoch`. Expiry is permissionless, bounded by `MaxNativeSecurityParticipants`, and does not redefine `SecurityEpoch` progression.
 
 ---
 

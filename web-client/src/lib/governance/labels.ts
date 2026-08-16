@@ -93,10 +93,6 @@ export function executionFailureReasonLabel(reason?: string | null) {
       return 'Unsupported governance domain';
     case 'UnsupportedCall':
       return 'Unsupported runtime call';
-    case 'UnsupportedTarget':
-      return 'Unsupported delegated target';
-    case 'UnsupportedPayloadKind':
-      return 'Unsupported payload kind';
     case 'MissingWinningPrimaryOption':
       return 'Missing winning primary option';
     case 'DispatchFailed':
@@ -309,9 +305,7 @@ export function treasurySpendScalarLabel(scalar?: string | null) {
 export function treasurySpendSettlementKindLabel(kind?: string | null) {
   return kind === 'InvoiceScalarTransfer'
     ? 'Scalar invoice transfer'
-    : kind === 'DirectTransfer'
-      ? 'Direct transfer'
-      : 'Unavailable';
+    : 'Unavailable';
 }
 
 export function accountIdentifierLabel(accountId?: string | null) {
@@ -329,15 +323,12 @@ export function finalizedExecutionDetailRows(
 ): FinalizedExecutionDetailRow[] {
   if (!detail) return [];
   switch (detail.kind) {
-    case 'Executed': {
+    case 'Succeeded': {
       const rows: FinalizedExecutionDetailRow[] = [
         {
           label: 'Execution receipt',
-          value:
-            finalizedExecutionDetailLabel(detail) ??
-            `${payloadKindLabel(detail.payloadKind)} executed`,
+          value: finalizedExecutionDetailLabel(detail) ?? 'Executed',
         },
-        { label: 'Executed epoch', value: detail.executedEpoch.toString() },
       ];
       switch (detail.detail.kind) {
         case 'Generic':
@@ -395,7 +386,7 @@ export function finalizedExecutionDetailRows(
       }
       return rows;
     }
-    case 'ExecutionFailed':
+    case 'Failed':
       return [
         {
           label: 'Execution receipt',
@@ -403,21 +394,10 @@ export function finalizedExecutionDetailRows(
             finalizedExecutionDetailLabel(detail) ??
             `Failed · ${executionFailureReasonLabel(detail.reason)}`,
         },
-        { label: 'Failed epoch', value: detail.failedEpoch.toString() },
         {
           label: 'Failure reason',
           value: executionFailureReasonLabel(detail.reason),
         },
-      ];
-    case 'AdvisoryFinalized':
-      return [
-        {
-          label: 'Execution receipt',
-          value:
-            finalizedExecutionDetailLabel(detail) ??
-            `Advisory · ${payloadKindLabel(detail.payloadKind)}`,
-        },
-        { label: 'Finalized epoch', value: detail.finalizedEpoch.toString() },
       ];
   }
   return [];
@@ -547,10 +527,10 @@ export function retainedWinningPrimaryOptionLabel(
 export function executedStateLabel(
   detail: GovernanceProposalExecutionDetail | null,
 ) {
-  if (!detail || detail.kind !== 'Executed') return 'Executed';
+  if (!detail || detail.kind !== 'Succeeded') return 'Executed';
   switch (detail.detail.kind) {
     case 'Generic':
-      return `${payloadKindLabel(detail.payloadKind)} executed`;
+      return 'Executed';
     case 'RuntimeUpgradeAuthorized':
       return 'Executed · Runtime upgrade authorized';
     case 'ParameterChangeExecuted':
@@ -568,22 +548,23 @@ export function finalizedExecutionStateLabel(
   >,
 ) {
   switch (proposal.outcome.kind) {
-    case 'Resolved':
-      return 'Approved only, no retained execution receipt';
     case 'Rejected':
       return 'Not executed · Rejected before enactment';
     case 'VetoCancelled':
       return 'Not executed · Blocked by protection';
-    case 'Enacted':
-      return executedStateLabel(proposal.executionDetail);
-    case 'ExecutionFailed':
-      return proposal.executionDetail?.kind === 'ExecutionFailed'
-        ? `Execution failed · ${executionFailureReasonLabel(proposal.executionDetail.reason)}`
-        : 'Execution attempted and failed';
-    case 'AdvisoryFinalized':
-      return proposal.executionDetail?.kind === 'AdvisoryFinalized'
-        ? `Advisory finalization · ${payloadKindLabel(proposal.executionDetail.payloadKind)}`
-        : 'Advisory finalization only';
+    case 'Approved':
+      switch (proposal.outcome.enactment.kind) {
+        case 'NotAttempted':
+          return 'Approved only, no retained execution receipt';
+        case 'Enacted':
+          return executedStateLabel(proposal.executionDetail);
+        case 'ExecutionFailed':
+          return proposal.executionDetail?.kind === 'Failed'
+            ? `Execution failed · ${executionFailureReasonLabel(proposal.executionDetail.reason)}`
+            : 'Execution attempted and failed';
+        case 'AdvisoryFinalized':
+          return 'Advisory finalization only';
+      }
   }
   return 'Unavailable';
 }
@@ -604,22 +585,23 @@ export function finalizedOutcomeLabel(
 ) {
   const outcome = proposal.outcome;
   switch (outcome.kind) {
-    case 'Resolved':
-      return `Resolved · epoch ${outcome.epoch}`;
     case 'Rejected':
-      return `Rejected · ${rejectionReasonLabel(outcome.reason)}`;
+      return `Rejected · ${rejectionReasonLabel(outcome.reason)} · epoch ${outcome.finalizedEpoch}`;
     case 'VetoCancelled':
-      return `Veto cancelled · epoch ${outcome.epoch}`;
-    case 'Enacted':
-      return `Enacted · epoch ${outcome.executedEpoch}`;
-    case 'ExecutionFailed':
-      return proposal.executionDetail?.kind === 'ExecutionFailed'
-        ? `Execution failed · ${executionFailureReasonLabel(proposal.executionDetail.reason)} · epoch ${outcome.failedEpoch}`
-        : `Execution failed · epoch ${outcome.failedEpoch}`;
-    case 'AdvisoryFinalized':
-      return proposal.executionDetail?.kind === 'AdvisoryFinalized'
-        ? `Advisory finalized · ${payloadKindLabel(proposal.executionDetail.payloadKind)} · epoch ${outcome.finalizedEpoch}`
-        : `Advisory finalized · epoch ${outcome.finalizedEpoch}`;
+      return `Veto cancelled · epoch ${outcome.finalizedEpoch}`;
+    case 'Approved':
+      switch (outcome.enactment.kind) {
+        case 'NotAttempted':
+          return `Approved · epoch ${outcome.approval.approvedEpoch}`;
+        case 'Enacted':
+          return `Enacted · epoch ${outcome.enactment.epoch}`;
+        case 'ExecutionFailed':
+          return proposal.executionDetail?.kind === 'Failed'
+            ? `Execution failed · ${executionFailureReasonLabel(proposal.executionDetail.reason)} · epoch ${outcome.enactment.epoch}`
+            : `Execution failed · epoch ${outcome.enactment.epoch}`;
+        case 'AdvisoryFinalized':
+          return `Advisory finalized · epoch ${outcome.enactment.epoch}`;
+      }
   }
   return 'Unavailable';
 }
@@ -685,10 +667,10 @@ export function finalizedExecutionDetailLabel(
 ) {
   if (!detail) return null;
   switch (detail.kind) {
-    case 'Executed':
+    case 'Succeeded':
       switch (detail.detail.kind) {
         case 'Generic':
-          return `${payloadKindLabel(detail.payloadKind)} executed`;
+          return 'Executed';
         case 'RuntimeUpgradeAuthorized':
           return `Runtime upgrade authorized · ${detail.detail.codeHash}`;
         case 'ParameterChangeExecuted':
@@ -697,10 +679,8 @@ export function finalizedExecutionDetailLabel(
           return `Treasury payout · ${treasurySpendScalarLabel(detail.detail.scalar)} · ${detail.detail.baseAmount.toLocaleString()} → ${detail.detail.finalAmount.toLocaleString()} · ${accountIdentifierLabel(detail.detail.fundingSource)}`;
       }
       break;
-    case 'ExecutionFailed':
+    case 'Failed':
       return `Failed · ${executionFailureReasonLabel(detail.reason)}`;
-    case 'AdvisoryFinalized':
-      return `Advisory · ${payloadKindLabel(detail.payloadKind)}`;
   }
   return null;
 }

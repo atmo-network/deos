@@ -522,7 +522,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetId, Balance, u32>
     }
   }
 
-  fn setup_condition_assets(_: &AccountId, max: u32) -> Result<Vec<AssetId>, DispatchError> {
+  fn setup_predicate_assets(_: &AccountId, max: u32) -> Result<Vec<AssetId>, DispatchError> {
     Ok((0..max).map(|_| NATIVE_ASSET).collect())
   }
 
@@ -571,13 +571,13 @@ impl pallet_deos_actors::Config for Runtime {
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
-  type MaxExecutionPlanSteps = ConstU32<8>;
+  type MaxContractSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
   type MaxOpeningSnapshotEntries = ConstU32<16>;
   type MaxOpeningPredicateResults = ConstU32<16>;
   type MaxPreconditionClauses = ConstU32<2>;
   type MaxPredicatesPerClause = ConstU32<2>;
-  type MaxConditionsPerStep = ConstU32<2>;
+  type MaxPredicatesPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
   type MaxQueueLength = ConstU32<128>;
@@ -595,7 +595,6 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxSplitTransferLegs = ConstU32<4>;
   type TargetBlockTime = ConstU64<315_576>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
-  type MaxTimerJitterBlocks = ConstU32<0>;
   type MaxIdleStarvationBlocks = ConstU32<3>;
   type ActorOnIdleReserve = ActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
@@ -673,20 +672,20 @@ mod tests {
     UncheckedExtrinsic::new_signed(call, signer, signature, tx_ext)
   }
 
-  fn execution_plan(
+  fn contract_steps(
     task: pallet_deos_actors::TaskOf<Runtime>,
-  ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
+  ) -> pallet_deos_actors::ContractSteps<Runtime> {
     BoundedVec::try_from(alloc::vec![pallet_deos_actors::StepOf::<Runtime> {
-      preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      precondition: None,
       task,
       on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
     }])
     .expect("one-step plan fits")
   }
 
-  fn all_preconditions(
+  fn all_precondition(
     predicates: alloc::vec::Vec<pallet_deos_actors::Predicate<u32, Balance, u32, u32>>,
-  ) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+  ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
     let clause = BoundedVec::try_from(
       predicates
         .into_iter()
@@ -697,14 +696,14 @@ mod tests {
         .collect::<alloc::vec::Vec<_>>(),
     )
     .expect("predicates fit");
-    pallet_deos_actors::Preconditions::AnyOf(
-      BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"),
-    )
+    Some(pallet_deos_actors::Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![clause]).expect("clause fits"),
+    })
   }
 
-  fn any_preconditions(
+  fn any_precondition(
     predicates: alloc::vec::Vec<pallet_deos_actors::Predicate<u32, Balance, u32, u32>>,
-  ) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+  ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
     let clauses = predicates
       .into_iter()
       .map(|predicate| {
@@ -715,11 +714,13 @@ mod tests {
         .expect("predicate fits")
       })
       .collect::<alloc::vec::Vec<_>>();
-    pallet_deos_actors::Preconditions::AnyOf(BoundedVec::try_from(clauses).expect("clauses fit"))
+    Some(pallet_deos_actors::Precondition {
+      clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
+    })
   }
 
   /// Spec 7.1 prefunding requirement: `MinUserBalance + attempt fee envelope`.
-  fn user_prefunding_requirement(plan: &pallet_deos_actors::ExecutionPlanOf<Runtime>) -> Balance {
+  fn user_prefunding_requirement(plan: &pallet_deos_actors::ContractSteps<Runtime>) -> Balance {
     let min_user_balance: Balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
     min_user_balance.saturating_add(
       Actors::attempt_fee_envelope(pallet_deos_actors::ActorType::User, plan, 0)
@@ -755,7 +756,7 @@ mod tests {
   fn prefund_user_sovereign(
     owner: AccountId,
     slot: u8,
-    plan: &pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    plan: &pallet_deos_actors::ContractSteps<Runtime>,
   ) {
     let sovereign = Actors::sovereign_account_id(&owner, slot);
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
@@ -766,7 +767,7 @@ mod tests {
 
   fn prefund_active_user_creation(
     owner: AccountId,
-    plan: &pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    plan: &pallet_deos_actors::ContractSteps<Runtime>,
   ) {
     let slot = lowest_free_owner_slot(owner);
     prefund_user_sovereign(owner, slot, plan);
@@ -785,7 +786,7 @@ mod tests {
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     task: pallet_deos_actors::TaskOf<Runtime>,
   ) -> pallet_deos_actors::ContractInputOf<Runtime> {
-    let plan = execution_plan(task);
+    let plan = contract_steps(task);
     pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
       schedule: pallet_deos_actors::Schedule {
         trigger,
@@ -818,7 +819,7 @@ mod tests {
     on_error: pallet_deos_actors::StepErrorPolicy,
   ) -> pallet_deos_actors::StepOf<Runtime> {
     pallet_deos_actors::Step {
-      preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      precondition: None,
       task,
       on_error,
     }
@@ -866,12 +867,13 @@ mod tests {
       b"ContinuationState".as_slice(),
       b"QueuePages".as_slice(),
       b"WakeupPages".as_slice(),
-      b"Preconditions".as_slice(),
+      b"Precondition".as_slice(),
+      b"precondition".as_slice(),
       b"Always".as_slice(),
       b"All".as_slice(),
       b"Any".as_slice(),
       b"StopCycle".as_slice(),
-      b"EmptyPreconditions".as_slice(),
+      b"EmptyPrecondition".as_slice(),
     ] {
       assert!(
         encoded
@@ -884,17 +886,15 @@ mod tests {
   }
 
   #[test]
-  fn preconditions_scale_round_trip_preserves_canonical_dnf() {
+  fn precondition_scale_round_trip_preserves_optional_canonical_dnf() {
     let atom = pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 };
-    let values: alloc::vec::Vec<pallet_deos_actors::PreconditionsOf<Runtime>> = alloc::vec![
-      pallet_deos_actors::Preconditions::Unconditional,
-      all_preconditions(alloc::vec![atom]),
-    ];
+    let values: alloc::vec::Vec<Option<pallet_deos_actors::PreconditionOf<Runtime>>> =
+      alloc::vec![None, all_precondition(alloc::vec![atom])];
     let encoded = alloc::vec![values[0].encode(), values[1].encode()];
     assert_eq!([encoded[0][0], encoded[1][0]], [0, 1]);
     for (expected, bytes) in values.into_iter().zip(encoded) {
-      let decoded = pallet_deos_actors::PreconditionsOf::<Runtime>::decode(&mut &bytes[..])
-        .expect("Preconditions decodes");
+      let decoded = Option::<pallet_deos_actors::PreconditionOf<Runtime>>::decode(&mut &bytes[..])
+        .expect("optional Precondition decodes");
       assert_eq!(decoded, expected);
     }
   }
@@ -904,14 +904,14 @@ mod tests {
   fn independent_runtime_try_state_accepts_condition_aggregate_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let preconditions = any_preconditions(alloc::vec![
+      let precondition = any_precondition(alloc::vec![
         pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
       ]);
       let contract = active_contract(
         pallet_deos_actors::Trigger::immediate_manual(),
         0,
         alloc::vec![pallet_deos_actors::Step {
-          preconditions,
+          precondition,
           task: pallet_deos_actors::Task::StopCycle,
           on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
         }],
@@ -957,7 +957,7 @@ mod tests {
       assert!(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).is_none());
       // Spec 7.1: the existing dormant sovereign must cover the activation
       // prefunding requirement before the Active Actor Contract commits.
-      let activate_plan = execution_plan(pallet_deos_actors::Task::Transfer {
+      let activate_plan = contract_steps(pallet_deos_actors::Task::Transfer {
         to: BOB,
         asset: NATIVE_ASSET,
         amount: pallet_deos_actors::AmountResolution::Fixed(5),
@@ -1057,17 +1057,17 @@ mod tests {
         0,
         alloc::vec![
           pallet_deos_actors::Step {
-            preconditions: pallet_deos_actors::Preconditions::Unconditional,
+            precondition: None,
             task: transfer(7),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
           pallet_deos_actors::Step {
-            preconditions: all_preconditions(all),
+            precondition: all_precondition(all),
             task: transfer(11),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
           pallet_deos_actors::Step {
-            preconditions: any_preconditions(any),
+            precondition: any_precondition(any),
             task: transfer(13),
             on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
           },
@@ -1174,7 +1174,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let step = || pallet_deos_actors::StepOf::<Runtime> {
-        preconditions: pallet_deos_actors::Preconditions::Unconditional,
+        precondition: None,
         task: pallet_deos_actors::Task::Transfer {
           to: BOB,
           asset: NATIVE_ASSET,
@@ -1183,7 +1183,7 @@ mod tests {
         on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
       };
       assert!(
-        BoundedVec::<_, <Runtime as pallet_deos_actors::Config>::MaxExecutionPlanSteps>::try_from(
+        BoundedVec::<_, <Runtime as pallet_deos_actors::Config>::MaxContractSteps>::try_from(
           alloc::vec![
             step(),
             step(),
@@ -1210,7 +1210,7 @@ mod tests {
         step(),
       ])
       .expect("eight steps fit the shared bound");
-      let admission = Actors::execution_plan_admission_weight_upper(
+      let admission = Actors::contract_steps_admission_weight_upper(
         pallet_deos_actors::ActorType::User,
         &admitted,
       );
@@ -1408,7 +1408,7 @@ mod tests {
           active_id,
           contract.schedule,
           contract.schedule_window,
-          execution_plan(mint_task()),
+          contract_steps(mint_task()),
           contract.funding,
           pallet_deos_actors::CompletionPolicy::Persistent,
         ),
@@ -1490,15 +1490,15 @@ mod tests {
 
       let suspended = Actors::continuation_state(actor_id).expect("temporary failure suspends");
       assert_eq!(suspended.cursor, 1);
-      assert_eq!(suspended.attempt, 0);
+      assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
       System::set_block_number(2);
       let _ = Actors::on_idle(2, Weight::MAX);
       assert_eq!(
         Actors::continuation_state(actor_id)
           .expect("cooldown defers retry")
-          .attempt,
-        0
+          .unsuccessful_attempts_at_cursor,
+        1
       );
 
       System::set_block_number(3);
@@ -1718,7 +1718,7 @@ mod tests {
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
       let actor = Actors::active_actor_view(actor_id).expect("actor remains after first failure");
-      assert_eq!(actor.consecutive_failures, 1);
+      assert_eq!(actor.unsuccessful_attempt_streak, 1);
       assert_eq!(actor.cycle_state, pallet_deos_actors::CycleState::Idle);
       assert!(Actors::continuation_state(actor_id).is_none());
     });
@@ -1826,7 +1826,7 @@ mod tests {
       System::set_block_number(1);
       let plan = BoundedVec::try_from(alloc::vec![
         pallet_deos_actors::StepOf::<Runtime> {
-          preconditions: pallet_deos_actors::Preconditions::Unconditional,
+          precondition: None,
           task: pallet_deos_actors::Task::Stake {
             asset: NATIVE_ASSET,
             amount: pallet_deos_actors::AmountResolution::Fixed(10),
@@ -1834,7 +1834,7 @@ mod tests {
           on_error: pallet_deos_actors::StepErrorPolicy::ContinueNextStep,
         },
         pallet_deos_actors::StepOf::<Runtime> {
-          preconditions: pallet_deos_actors::Preconditions::Unconditional,
+          precondition: None,
           task: pallet_deos_actors::Task::Transfer {
             to: BOB,
             asset: NATIVE_ASSET,

@@ -102,7 +102,7 @@ export async function runActorMatchingWasmSimulation(input: {
       `Invalid Actors Actor Contract artifact: ${inspection.errors.join('; ')}`,
     );
   }
-  const maxSteps = activeExecutionPlanLength(inspection.runtimeValue);
+  const maxSteps = activeContractStepsLength(inspection.runtimeValue);
   if (input.actorId < 0n) {
     throw new Error('actorId must be non-negative');
   }
@@ -180,7 +180,7 @@ export async function runActorMatchingWasmSimulation(input: {
   return response;
 }
 
-function activeExecutionPlanLength(runtimeValue: unknown) {
+function activeContractStepsLength(runtimeValue: unknown) {
   if (runtimeValue == null || typeof runtimeValue !== 'object') {
     throw new Error('Runtime simulation requires an Active ContractInput');
   }
@@ -190,7 +190,7 @@ function activeExecutionPlanLength(runtimeValue: unknown) {
   }
   const value = contract.value as Record<string, unknown>;
   if (!Array.isArray(value.steps) || value.steps.length === 0) {
-    throw new Error('Runtime simulation requires a non-empty execution plan');
+    throw new Error('Runtime simulation requires non-empty Contract Steps');
   }
   return value.steps.length;
 }
@@ -219,7 +219,6 @@ function validateOutcome(
   ) {
     throw new Error('Unsupported runtime simulation status');
   }
-  validateIndex(outcome.attempt, 'outcome.attempt');
   validateIndex(outcome.startCursor, 'outcome.startCursor');
   if (outcome.cycleNonce < 0n) {
     throw new Error('outcome.cycleNonce must be non-negative');
@@ -230,9 +229,7 @@ function validateOutcome(
     );
   }
   if (outcome.steps.length > maxSteps) {
-    throw new Error(
-      'Runtime step evidence exceeds the admitted execution plan',
-    );
+    throw new Error('Runtime Step evidence exceeds admitted Contract Steps');
   }
   let previousStep = -1;
   for (const step of outcome.steps) {
@@ -256,9 +253,7 @@ function validateOutcome(
     }
     validateIndex(outcome.continuationCursor, 'outcome.continuationCursor');
     if (outcome.continuationCursor >= maxSteps) {
-      throw new Error(
-        'Continuation cursor exceeds the admitted execution plan',
-      );
+      throw new Error('Continuation cursor exceeds admitted Contract Steps');
     }
     if (outcome.continuationCursor < outcome.startCursor) {
       throw new Error(

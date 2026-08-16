@@ -1,0 +1,15 @@
+{
+  "name": "@deos/wiki-sync-tooling",
+  "description": "Private strict OKF Wiki validation and single-atom reference lifecycle tooling.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "okf:check": "node scripts/okf-reference.mjs --check",
+    "okf:sync": "node scripts/okf-reference.mjs --sync",
+    "test": "node --test scripts/test-okf-wiki.mjs scripts/test-okf-reference.mjs scripts/test-native-russian.mjs && node --test ../../../web-client/scripts/test-wiki-relations.mjs",
+    "locale:ru": "bash scripts/audit-native-russian.sh"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
+  }
+}

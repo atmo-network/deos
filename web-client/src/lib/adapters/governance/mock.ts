@@ -202,18 +202,15 @@ function seededDomainState(): MockDomainState {
     },
     recentFinalized: [
       {
+        domainId: 1000,
         itemId: 309,
         outcome: {
-          kind: 'ExecutionFailed',
-          approvedEpoch: 41,
-          failedEpoch: 41,
-          winnerCount: 2,
+          kind: 'Approved',
+          approval: { approvedEpoch: 41, winnerCount: 2 },
+          enactment: { kind: 'ExecutionFailed', epoch: 41 },
         },
         executionDetail: {
-          kind: 'ExecutionFailed',
-          payloadKind: 'L1RootAction',
-          authority: 'Root',
-          failedEpoch: 41,
+          kind: 'Failed',
           reason: 'UnsupportedCall',
         },
         metadata: {
@@ -229,18 +226,15 @@ function seededDomainState(): MockDomainState {
         winningPrimaryOption: null,
       },
       {
+        domainId: 1000,
         itemId: 308,
         outcome: {
-          kind: 'Enacted',
-          approvedEpoch: 40,
-          executedEpoch: 40,
-          winnerCount: 2,
+          kind: 'Approved',
+          approval: { approvedEpoch: 40, winnerCount: 2 },
+          enactment: { kind: 'Enacted', epoch: 40 },
         },
         executionDetail: {
-          kind: 'Executed',
-          payloadKind: 'L2TreasurySpend',
-          authority: 'DomainTreasury',
-          executedEpoch: 40,
+          kind: 'Succeeded',
           detail: {
             kind: 'TreasurySpendExecuted',
             fundingSource: 'bldr-treasury',
@@ -265,10 +259,11 @@ function seededDomainState(): MockDomainState {
         winningPrimaryOption: 'Approve',
       },
       {
+        domainId: 1000,
         itemId: 307,
         outcome: {
           kind: 'VetoCancelled',
-          epoch: 39,
+          finalizedEpoch: 39,
           vetoWeight: 6_000n,
         },
         executionDetail: null,
@@ -341,6 +336,7 @@ function cloneDomainState(domain: MockDomainState): MockDomainState {
       ]),
     ),
     recentFinalized: domain.recentFinalized.map((proposal) => ({
+      domainId: proposal.domainId,
       itemId: proposal.itemId,
       outcome: { ...proposal.outcome },
       executionDetail: proposal.executionDetail
@@ -848,13 +844,14 @@ function winningPrimaryOptionForResolution(
 }
 
 function finalizeProposal(
+  domainId: GovernanceDomainId,
   domain: MockDomainState,
   itemId: GovernanceItemId,
   outcome: GovernanceFinalizedProposalOutcome,
   winningPrimaryOption: GovernancePrimaryTrackOption | null = null,
 ) {
   const proposal = domain.activeProposals[itemId];
-  if (proposal && (outcome.kind === 'Resolved' || outcome.kind === 'Enacted')) {
+  if (proposal && outcome.kind === 'Approved') {
     ensureCounters(
       domain,
       proposal.proposerAccountId,
@@ -866,6 +863,7 @@ function finalizeProposal(
   );
   domain.recentFinalized = [
     {
+      domainId,
       itemId,
       outcome,
       executionDetail: null,
@@ -882,12 +880,23 @@ function finalizeProposal(
   ].slice(0, MAX_RECENT_FINALIZED);
 }
 
+function approvedMockOutcome(
+  approvedEpoch: number,
+  winnerCount: number,
+): GovernanceFinalizedProposalOutcome {
+  return {
+    kind: 'Approved',
+    approval: { approvedEpoch, winnerCount },
+    enactment: { kind: 'NotAttempted' },
+  };
+}
+
 function adminRejectedOutcome(
   epoch: number,
 ): GovernanceFinalizedProposalOutcome {
   return {
     kind: 'Rejected',
-    epoch,
+    finalizedEpoch: epoch,
     reason: 'AdminRejected',
   };
 }
@@ -899,51 +908,36 @@ function settlementOutcome(
 ): GovernanceFinalizedProposalOutcome {
   switch (resolution.kind) {
     case 'PassingAye':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.ayeVoters,
-      };
+      return approvedMockOutcome(domain.currentEpoch, proposal.tally.ayeVoters);
     case 'PassingAmplify':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.amplifyVoters,
-      };
+      return approvedMockOutcome(
+        domain.currentEpoch,
+        proposal.tally.amplifyVoters,
+      );
     case 'PassingApprove':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.approveVoters,
-      };
+      return approvedMockOutcome(
+        domain.currentEpoch,
+        proposal.tally.approveVoters,
+      );
     case 'PassingReduce':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.reduceVoters,
-      };
+      return approvedMockOutcome(
+        domain.currentEpoch,
+        proposal.tally.reduceVoters,
+      );
     case 'PassingNay':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.nayVoters,
-      };
+      return approvedMockOutcome(domain.currentEpoch, proposal.tally.nayVoters);
     case 'Confirming':
-      return {
-        kind: 'Resolved',
-        epoch: domain.currentEpoch,
-        winnerCount: proposal.tally.ayeVoters,
-      };
+      return approvedMockOutcome(domain.currentEpoch, proposal.tally.ayeVoters);
     case 'Rejected':
       return {
         kind: 'Rejected',
-        epoch: domain.currentEpoch,
+        finalizedEpoch: domain.currentEpoch,
         reason: resolution.reason,
       };
     case 'VetoPassing':
       return {
         kind: 'VetoCancelled',
-        epoch: domain.currentEpoch,
+        finalizedEpoch: domain.currentEpoch,
         vetoWeight: proposal.tally.vetoWeight,
       };
     case 'VotingWindowOpen':
@@ -1432,6 +1426,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     ) {
       applyWinningParticipation(domain, proposal, resolution);
       finalizeProposal(
+        input.domainId,
         domain,
         input.itemId,
         settlementOutcome(domain, proposal, resolution),
@@ -1455,6 +1450,11 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     ) {
       throw new Error(
         `${input.payloadKind} is not publicly submittable in mock governance for domain ${input.domainId}`,
+      );
+    }
+    if (!this.notedPreimageHashes.has(input.payloadHash)) {
+      throw new Error(
+        `Mock signed proposal submission requires an available preimage for ${input.payloadHash}`,
       );
     }
     if (domain.activeProposals[input.itemId]) {
@@ -1540,11 +1540,15 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     if (!proposal) {
       throw new Error(`Mock proposal #${input.itemId} is not active`);
     }
-    finalizeProposal(domain, input.itemId, {
-      kind: 'Resolved',
-      epoch: domain.currentEpoch,
-      winnerCount: Math.max(input.winners.length, 1),
-    });
+    finalizeProposal(
+      input.domainId,
+      domain,
+      input.itemId,
+      approvedMockOutcome(
+        domain.currentEpoch,
+        Math.max(input.winners.length, 1),
+      ),
+    );
   }
 
   async rejectProposal(input: {
@@ -1556,6 +1560,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       throw new Error(`Mock proposal #${input.itemId} is not active`);
     }
     finalizeProposal(
+      input.domainId,
       domain,
       input.itemId,
       adminRejectedOutcome(domain.currentEpoch),
@@ -1584,6 +1589,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     }
     applyWinningParticipation(domain, proposal, resolution);
     finalizeProposal(
+      input.domainId,
       domain,
       input.itemId,
       settlementOutcome(domain, proposal, resolution),
@@ -1611,6 +1617,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     }
     applyWinningParticipation(domain, proposal, resolution);
     finalizeProposal(
+      input.domainId,
       domain,
       input.itemId,
       settlementOutcome(domain, proposal, resolution),

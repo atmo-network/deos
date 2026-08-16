@@ -18,10 +18,7 @@ export class BlockchainStakingActions {
     amount: bigint,
     operator: string,
   ): Promise<void> {
-    await this.requireNativeSecurityCapability(
-      'new_nominations',
-      'Native LP collator nomination',
-    );
+    await this.requireLpBackedSecurityMode('Native LP collator nomination');
     if (amount <= 0n) {
       throw new Error('LP lock amount must be greater than zero');
     }
@@ -51,10 +48,6 @@ export class BlockchainStakingActions {
   }
 
   async claimNativeSecurityReward(epoch: number): Promise<void> {
-    await this.requireNativeSecurityCapability(
-      'reward_claims',
-      'Native security reward claim',
-    );
     this.requireSecurityEpoch(epoch);
     await this.submitSigned(
       (snapshot, _accountId, signer) =>
@@ -71,10 +64,7 @@ export class BlockchainStakingActions {
     operator: string,
     minLpOut: bigint,
   ): Promise<void> {
-    await this.requireNativeSecurityCapability(
-      'reward_compound',
-      'Native security reward compound',
-    );
+    await this.requireLpBackedSecurityMode('Native security reward compound');
     this.requireSecurityEpoch(epoch);
     if (minLpOut <= 0n) {
       throw new Error('Minimum LP output must be greater than zero');
@@ -148,10 +138,7 @@ export class BlockchainStakingActions {
     toOperator: string,
     amount: bigint,
   ): Promise<void> {
-    await this.requireNativeSecurityCapability(
-      'redelegation',
-      'Native LP redelegation',
-    );
+    await this.requireLpBackedSecurityMode('Native LP redelegation');
     if (amount <= 0n) {
       throw new Error('LP redelegation amount must be greater than zero');
     }
@@ -332,20 +319,12 @@ export class BlockchainStakingActions {
     }
   }
 
-  private async requireNativeSecurityCapability(
-    capability:
-      | 'new_nominations'
-      | 'redelegation'
-      | 'reward_claims'
-      | 'reward_compound',
-    action: string,
-  ): Promise<void> {
+  private async requireLpBackedSecurityMode(action: string): Promise<void> {
     const snapshot = await (await this.ensurePapi()).snapshot();
-    const capabilities =
-      await snapshot.typedApi.view.Staking.native_security_capabilities({
-        at: snapshot.at,
-      });
-    if (!capabilities[capability]) {
+    const view = await snapshot.typedApi.view.Staking.native_security_view({
+      at: snapshot.at,
+    });
+    if (!view.success || view.value.mode.type !== 'LpBackedSelection') {
       throw new Error(`${action} is inactive in the current security mode`);
     }
   }

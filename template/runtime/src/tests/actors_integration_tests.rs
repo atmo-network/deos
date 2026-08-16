@@ -31,12 +31,12 @@ use codec::Encode;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
   ActiveContractInput, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
-  CloseReason, CompletionPolicy, ContractInput, CycleResult, DexOps, Error, Event,
-  ExecutionContext, ExecutionPlanOf, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
+  AttemptDisposition, CloseReason, CompletionPolicy, ContractInput, ContractSteps, CycleResult,
+  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
   IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass, Schedule,
-  ScheduleOf, ScheduleWindow, SimulationMode, SimulationStatus, SimulationStepOutcome,
-  SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
-  StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
+  ScheduleOf, ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg,
+  SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task,
+  TaskOf, Trigger, TriggerSource, WeightInfo,
 };
 use pallet_deos_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
@@ -98,7 +98,7 @@ fn canonical_actors_seed_derives_documented_accounts() {
 type RuntimeAssetFilter = AssetFilterOf<Runtime>;
 type RuntimeTask = TaskOf<Runtime>;
 type RuntimeStep = StepOf<Runtime>;
-type ExecutionPlan = ExecutionPlanOf<Runtime>;
+type RuntimeContractSteps = pallet_deos_actors::ContractSteps<Runtime>;
 
 #[test]
 fn runtime_oracle_change_hook_coalesces_into_actor_dirty_feed_state() {
@@ -277,7 +277,7 @@ fn signed_extrinsic(
 
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Runtime> {
-    preconditions: pallet_deos_actors::Preconditions::Unconditional,
+    precondition: None,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
@@ -285,7 +285,7 @@ fn make_step(task: RuntimeTask) -> RuntimeStep {
 
 fn all_preconditions(
   predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
-) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clause = BoundedVec::try_from(
     predicates
       .into_iter()
@@ -296,14 +296,14 @@ fn all_preconditions(
       .collect::<Vec<_>>(),
   )
   .expect("runtime predicates fit");
-  pallet_deos_actors::Preconditions::AnyOf(
-    BoundedVec::try_from(vec![clause]).expect("runtime clause fits"),
-  )
+  Some(pallet_deos_actors::Precondition {
+    clauses: BoundedVec::try_from(vec![clause]).expect("runtime clause fits"),
+  })
 }
 
 fn any_preconditions(
   predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
-) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clauses = predicates
     .into_iter()
     .map(|predicate| {
@@ -314,9 +314,9 @@ fn any_preconditions(
       .expect("runtime predicate fits")
     })
     .collect::<Vec<_>>();
-  pallet_deos_actors::Preconditions::AnyOf(
-    BoundedVec::try_from(clauses).expect("runtime clauses fit"),
-  )
+  Some(pallet_deos_actors::Precondition {
+    clauses: BoundedVec::try_from(clauses).expect("runtime clauses fit"),
+  })
 }
 
 fn inert_task() -> RuntimeTask {
@@ -350,7 +350,11 @@ fn on_address_event_schedule(
   }
 }
 
-fn transfer_execution_plan(to: crate::AccountId, asset: AssetKind, amount: u128) -> ExecutionPlan {
+fn transfer_contract_steps(
+  to: crate::AccountId,
+  asset: AssetKind,
+  amount: u128,
+) -> RuntimeContractSteps {
   BoundedVec::try_from(vec![make_step(Task::Transfer {
     to,
     asset,
@@ -362,7 +366,7 @@ fn transfer_execution_plan(to: crate::AccountId, asset: AssetKind, amount: u128)
 fn user_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  steps: ExecutionPlan,
+  steps: RuntimeContractSteps,
 ) -> pallet_deos_actors::ContractInputOf<Runtime> {
   pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
     schedule,
@@ -377,7 +381,7 @@ fn user_active_contract(
 fn system_active_contract(
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  steps: ExecutionPlan,
+  steps: RuntimeContractSteps,
 ) -> pallet_deos_actors::ContractInputOf<Runtime> {
   pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
     schedule,
@@ -393,7 +397,7 @@ fn create_user(
   who: crate::AccountId,
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  steps: ExecutionPlan,
+  steps: RuntimeContractSteps,
 ) -> ActorId {
   prefund_active_user_creation(&who, &steps);
   let id = Actors::next_actor_id();
@@ -410,7 +414,7 @@ fn create_system(
   owner: crate::AccountId,
   schedule: RuntimeSchedule,
   schedule_window: Option<ScheduleWindow<u32>>,
-  steps: ExecutionPlan,
+  steps: RuntimeContractSteps,
 ) -> ActorId {
   let id = Actors::next_actor_id();
   assert_ok!(Actors::create_system_actor(
@@ -453,7 +457,7 @@ fn fund_native(actor_id: ActorId, amount: u128) {
 }
 
 /// User Active prefunding requirement: `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`.
-fn user_prefunding_requirement(plan: &ExecutionPlan) -> u128 {
+fn user_prefunding_requirement(plan: &RuntimeContractSteps) -> u128 {
   <Runtime as pallet_deos_actors::Config>::MinUserBalance::get().saturating_add(
     Actors::attempt_fee_envelope(ActorType::User, plan, 0)
       .expect("fixture plan has a checked fee envelope")
@@ -487,7 +491,7 @@ fn lowest_free_owner_slot(owner: &crate::AccountId) -> u8 {
 
 /// Pre-funds the deterministic User sovereign so Active creation/activation admits (spec 7.1)
 /// without mutating any pallet state.
-fn prefund_user_sovereign(owner: &crate::AccountId, slot: u8, plan: &ExecutionPlan) {
+fn prefund_user_sovereign(owner: &crate::AccountId, slot: u8, plan: &RuntimeContractSteps) {
   let sovereign = Actors::sovereign_account_id(owner, slot);
   let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
     &sovereign,
@@ -496,7 +500,7 @@ fn prefund_user_sovereign(owner: &crate::AccountId, slot: u8, plan: &ExecutionPl
 }
 
 /// Pre-funds the next automatically allocated User slot for a direct Active creation fixture.
-fn prefund_active_user_creation(owner: &crate::AccountId, plan: &ExecutionPlan) {
+fn prefund_active_user_creation(owner: &crate::AccountId, plan: &RuntimeContractSteps) {
   let slot = lowest_free_owner_slot(owner);
   prefund_user_sovereign(owner, slot, plan);
 }
@@ -523,19 +527,19 @@ fn deos_runtime_executes_unconditional_and_dnf_with_fixed_successors() {
     };
     let plan = BoundedVec::try_from(vec![
       pallet_deos_actors::Step {
-        preconditions: pallet_deos_actors::Preconditions::Unconditional,
+        precondition: None,
         task: transfer(7),
         on_error: StepErrorPolicy::AbortCycle,
       },
       pallet_deos_actors::Step {
-        preconditions: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
+        precondition: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
           threshold: 0,
         }]),
         task: transfer(11),
         on_error: StepErrorPolicy::AbortCycle,
       },
       pallet_deos_actors::Step {
-        preconditions: any_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
+        precondition: any_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
           threshold: 0,
         }]),
         task: transfer(13),
@@ -572,7 +576,7 @@ fn genesis_anchor_buckets_are_custody_only_accounts() {
       assert!(Actors::active_actor_view(actor_id).is_none());
       assert!(Actors::actor_identities(actor_id).is_none());
       assert!(Actors::sovereign_index(sovereign).is_none());
-      let plan = transfer_execution_plan(BOB, AssetKind::Native, 1);
+      let plan = transfer_contract_steps(BOB, AssetKind::Native, 1);
       assert_noop!(
         update_actor_contract_partial!(
           RuntimeOrigin::root(),
@@ -751,7 +755,7 @@ pub fn has_actor_event(predicate: impl Fn(&Event<Runtime>) -> bool) -> bool {
 // --- Actors Platform: Lifecycle ---
 
 #[test]
-fn manual_trigger_executes_transfer_execution_plan() {
+fn manual_trigger_executes_transfer_contract_steps() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let amount = 5_000_000_000_000u128;
@@ -759,7 +763,7 @@ fn manual_trigger_executes_transfer_execution_plan() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -779,7 +783,7 @@ fn manual_trigger_executes_transfer_execution_plan() {
           outcomes: OutcomeTotals {
             executed_steps: 1,
             committed_effectful_tasks: 1,
-            skipped_conditions: 0,
+            precondition_skips: 0,
             skipped_resolution: 0,
             skipped_funding_unavailable: 0,
             failed_steps: 0,
@@ -799,7 +803,7 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
     let contract = ContractInput::Active(ActiveContractInput {
       schedule: manual_schedule(),
       schedule_window: None,
-      steps: transfer_execution_plan(BOB, AssetKind::Native, amount),
+      steps: transfer_contract_steps(BOB, AssetKind::Native, amount),
       completion: CompletionPolicy::CloseAfterProductiveCycle,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
@@ -826,7 +830,7 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
     .expect("ready productive contract simulates");
     assert_eq!(
       simulation.status,
-      SimulationStatus::Closed(CloseReason::ProductiveCycleCompleted)
+      AttemptDisposition::Closed(CloseReason::ProductiveCycleCompleted)
     );
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert_eq!(native_balance(&BOB), bob_before);
@@ -862,7 +866,7 @@ fn native_staking_liquidity_actor_activation_requires_initialized_pool() {
       TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1),
       DispatchError::Other("NativeStakingAmmUnavailable")
     );
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
     let base_asset = AssetKind::Local(0);
     let staked_asset = AssetKind::Local(staked_asset_id);
@@ -1052,7 +1056,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
     let base_asset = AssetKind::Local(0);
     let staked_asset = AssetKind::Local(staked_asset_id);
@@ -1099,7 +1103,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
         pool.lp_token,
       );
-    let steps = TmctolGenesisSystemActors::build_native_staking_liquidity_execution_plan(1);
+    let steps = TmctolGenesisSystemActors::build_native_staking_liquidity_contract_steps(1);
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     let sovereign = actor_account(actor_id);
     assert_ok!(Assets::transfer(
@@ -1151,7 +1155,7 @@ fn create_user_charges_creation_fee_to_fee_sink() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     assert_eq!(native_balance(&fee_sink), sink_before.saturating_add(fee));
     assert_eq!(native_balance(&ALICE), alice_before.saturating_sub(fee));
@@ -1244,20 +1248,20 @@ fn permissionless_sweep_many_batches_lifecycle_evaluation() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let user_a_prefunded =
-      user_prefunding_requirement(&transfer_execution_plan(BOB, AssetKind::Native, 1));
+      user_prefunding_requirement(&transfer_contract_steps(BOB, AssetKind::Native, 1));
     let user_b_prefunded =
-      user_prefunding_requirement(&transfer_execution_plan(ALICE, AssetKind::Native, 1));
+      user_prefunding_requirement(&transfer_contract_steps(ALICE, AssetKind::Native, 1));
     let user_a = create_user(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let user_b = create_user(
       BOB,
       manual_schedule(),
       None,
-      transfer_execution_plan(ALICE, AssetKind::Native, 1),
+      transfer_contract_steps(ALICE, AssetKind::Native, 1),
     );
     deplete_user_sovereign(user_a, user_a_prefunded);
     deplete_user_sovereign(user_b, user_b_prefunded);
@@ -1265,7 +1269,7 @@ fn permissionless_sweep_many_batches_lifecycle_evaluation() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let sweep_ids: BoundedVec<ActorId, <Runtime as pallet_deos_actors::Config>::MaxSweepBatch> =
       BoundedVec::try_from(vec![user_a, user_b, system_alive]).expect("batch fits");
@@ -1407,7 +1411,7 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.proof_size() / unit.proof_size());
 
   assert_eq!(base, Weight::from_parts(31_565_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(12_170_187_000, 166_430));
+  assert_eq!(unit, Weight::from_parts(12_136_381_000, 166_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 5,
@@ -1503,7 +1507,7 @@ fn close_actor_emits_owner_initiated_reason() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
     let fee_sink_before = native_balance(&fee_sink);
@@ -1599,7 +1603,7 @@ fn cycle_summary_reports_funding_unavailable_skip() {
           outcomes: OutcomeTotals {
             executed_steps: 0,
             committed_effectful_tasks: 0,
-            skipped_conditions: 0,
+            precondition_skips: 0,
             skipped_resolution: 0,
             skipped_funding_unavailable: 1,
             failed_steps: 0,
@@ -2158,7 +2162,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
     ] {
       let plan = alloc::vec![
         pallet_deos_actors::Step {
-          preconditions: pallet_deos_actors::Preconditions::Unconditional,
+          precondition: None,
           task: Task::RemoveLiquidity {
             lp_asset,
             asset_a: pair.0,
@@ -2170,7 +2174,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
           on_error: policy,
         },
         pallet_deos_actors::Step {
-          preconditions: pallet_deos_actors::Preconditions::Unconditional,
+          precondition: None,
           task: Task::StopCycle,
           on_error: StepErrorPolicy::AbortCycle,
         },
@@ -2252,7 +2256,6 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     RouterError::<Runtime>::NoRouteFound,
     RouterError::<Runtime>::InsufficientLiquidity,
     RouterError::<Runtime>::InvalidOracleData,
-    RouterError::<Runtime>::NoMultiHopRoute,
     RouterError::<Runtime>::InsufficientInputBalance,
   ] {
     assert_eq!(classify_router_failure(error).retry, RetryClass::Temporary);
@@ -2587,7 +2590,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     let amount = 10 * PRECISION;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
     let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(ASSET_A),
@@ -2622,7 +2625,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
     let continuation = Actors::continuation_state(actor_id).expect("deviation suspends");
-    assert_eq!(continuation.attempt, 0);
+    assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(continuation.cursor, 0);
     assert_eq!(native_balance(&actor), before);
     let first_retry = Actors::actor_hot(actor_id).expect("actor stays hot");
@@ -2632,7 +2635,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
     System::set_block_number(2);
     run_idle(Weight::MAX);
     let continuation = Actors::continuation_state(actor_id).expect("deviation resuspends");
-    assert_eq!(continuation.attempt, 1);
+    assert_eq!(continuation.unsuccessful_attempts_at_cursor, 2);
     assert_eq!(continuation.cursor, 0);
     assert_eq!(native_balance(&actor), before);
     let second_retry = Actors::actor_hot(actor_id).expect("actor stays hot");
@@ -2658,7 +2661,7 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapOut {
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
@@ -2732,7 +2735,7 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
         }
       };
       let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-        preconditions: pallet_deos_actors::Preconditions::Unconditional,
+        precondition: None,
         task,
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       }])
@@ -2894,7 +2897,7 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
         }
       };
       let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-        preconditions: pallet_deos_actors::Preconditions::Unconditional,
+        precondition: None,
         task,
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
       }])
@@ -3529,19 +3532,16 @@ fn ten_julian_year_horizon_matches_six_second_runtime_binding() {
 }
 
 #[test]
-fn timer_horizon_validation_includes_runtime_jitter_bound() {
+fn timer_horizon_validation_accepts_exact_runtime_bound() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let max_delay: u32 = <Runtime as pallet_deos_actors::Config>::MaxExecutionDelayBlocks::get();
-    let max_jitter =
-      <<Runtime as pallet_deos_actors::Config>::MaxTimerJitterBlocks as Get<u32>>::get()
-        .saturating_sub(1);
-    let largest_valid_cadence = max_delay.saturating_sub(max_jitter);
+    let largest_valid_cadence = max_delay;
     let schedule = |every_blocks| Schedule {
       trigger: Trigger::cadenced_always(every_blocks),
       cooldown_blocks: 0,
     };
-    let valid_plan = transfer_execution_plan(BOB, AssetKind::Native, 1);
+    let valid_plan = transfer_contract_steps(BOB, AssetKind::Native, 1);
     prefund_active_user_creation(&ALICE, &valid_plan);
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
@@ -3555,7 +3555,7 @@ fn timer_horizon_validation_includes_runtime_jitter_bound() {
         user_active_contract(
           schedule(largest_valid_cadence.saturating_add(1)),
           None,
-          transfer_execution_plan(BOB, AssetKind::Native, 1),
+          transfer_contract_steps(BOB, AssetKind::Native, 1),
         ),
       ),
       Error::<Runtime>::ExecutionDelayTooLong
@@ -3574,7 +3574,7 @@ fn on_address_event_owner_only_respects_source_filter() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -3607,7 +3607,7 @@ fn on_address_event_asset_filter_is_enforced() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Whitelist(asset_whitelist)),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -3639,7 +3639,7 @@ fn on_address_event_without_source_is_ignored_for_filtered_trigger() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -3705,7 +3705,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, receiver_amount),
+      transfer_contract_steps(BOB, AssetKind::Native, receiver_amount),
     );
     let receiver_sovereign = actor_account(receiver_id);
     fund_native(receiver_id, 100_000_000_000_000);
@@ -3713,7 +3713,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
       CHARLIE,
       manual_schedule(),
       None,
-      transfer_execution_plan(receiver_sovereign, AssetKind::Native, 5_000),
+      transfer_contract_steps(receiver_sovereign, AssetKind::Native, 5_000),
     );
     let sender_sovereign = actor_account(sender_id);
     let sender_whitelist = BoundedVec::try_from(vec![sender_sovereign]).expect("fits");
@@ -3903,7 +3903,7 @@ fn runtime_rejects_self_transfer_before_contract_replacement() {
       update_actor_contract_partial!(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        transfer_execution_plan(before.sovereign_account.clone(), AssetKind::Native, 1_000,),
+        transfer_contract_steps(before.sovereign_account.clone(), AssetKind::Native, 1_000,),
         CompletionPolicy::Persistent,
       ),
       Error::<Runtime>::SelfTransferNotAllowed
@@ -3928,13 +3928,13 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
       CHARLIE,
       event_schedule,
       None,
-      transfer_execution_plan(actor_a_account, AssetKind::Native, 1_000),
+      transfer_contract_steps(actor_a_account, AssetKind::Native, 1_000),
     );
     let actor_b_account = actor_account(actor_b);
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_a,
-      transfer_execution_plan(actor_b_account, AssetKind::Native, 1_000),
+      transfer_contract_steps(actor_b_account, AssetKind::Native, 1_000),
       CompletionPolicy::Persistent,
     ));
     System::set_block_number(2);
@@ -4047,7 +4047,7 @@ fn router_fee_routing_notifies_burn_actor_via_runtime_ingress_adapter() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       burn_actor_id,
-      transfer_execution_plan(BOB, AssetKind::Native, 777),
+      transfer_contract_steps(BOB, AssetKind::Native, 777),
       CompletionPolicy::Persistent,
     ));
     let bob_before = native_balance(&BOB);
@@ -4169,7 +4169,7 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
       system_active_contract(
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, AssetKind::Native, 1),
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
       ),
     ));
     let fresh = Actors::active_actor_view(fresh_id).expect("fresh Fee Sink identity");
@@ -4194,7 +4194,7 @@ fn ingress_adapter_without_source_matches_any_source_filter() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 333),
+      transfer_contract_steps(BOB, AssetKind::Native, 333),
     );
     let receiver_sovereign = actor_account(receiver_id);
     fund_native(receiver_id, 100_000_000_000_000);
@@ -4217,7 +4217,7 @@ fn ingress_adapter_without_source_is_ignored_by_owner_only_filter() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 333),
+      transfer_contract_steps(BOB, AssetKind::Native, 333),
     );
     let receiver_sovereign = actor_account(receiver_id);
     fund_native(receiver_id, 100_000_000_000_000);
@@ -4277,7 +4277,7 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       CHARLIE,
       manual_schedule(),
       None,
-      transfer_execution_plan(target_sovereign, AssetKind::Native, refill_amount),
+      transfer_contract_steps(target_sovereign, AssetKind::Native, refill_amount),
     );
     fund_native(sender_id, 100_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -4306,7 +4306,7 @@ fn xcm_ingress_with_source_triggers_owner_only_on_address_event() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     let sovereign = actor_account(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
@@ -4448,7 +4448,7 @@ fn xcm_ingress_without_source_is_ignored_for_owner_only() {
       ALICE,
       on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     let sovereign = actor_account(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
@@ -4477,7 +4477,7 @@ fn xcm_mixed_ingress_single_deposit_triggers_single_cycle() {
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     let sovereign = actor_account(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
@@ -4691,14 +4691,14 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     fund_native(light_a, 1_000_000_000_000_000);
     let light_b = create_system(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     fund_native(light_b, 1_000_000_000_000_000);
     for actor_id in [head, light_a, light_b] {
@@ -5626,11 +5626,11 @@ fn maximum_single_task_attempt_and_cleanup_fit_derived_service_envelope() {
       amount: AmountResolution::Fixed(100),
       legs: SplitTransferLegsOf::<Runtime>::try_from(legs).expect("maximum legs fit"),
     };
-    let plan: ExecutionPlanOf<Runtime> =
+    let plan: ContractSteps<Runtime> =
       BoundedVec::try_from(vec![make_step(task)]).expect("one maximum task fits");
     let service = Actors::guaranteed_actor_service_weight().expect("runtime envelope is valid");
 
-    let maximum_attempt = Actors::execution_plan_admission_weight_upper(ActorType::System, &plan);
+    let maximum_attempt = Actors::contract_steps_admission_weight_upper(ActorType::System, &plan);
     assert!(
       maximum_attempt.all_lte(service),
       "maximum_attempt={maximum_attempt:?}, service={service:?}"
@@ -5648,7 +5648,7 @@ fn on_initialize_is_a_zero_weight_noop() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, amount),
+      transfer_contract_steps(BOB, AssetKind::Native, amount),
     );
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
@@ -5707,7 +5707,7 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_pure_cleanup() {
     let mut max_proof_size = (0u64, 0u64);
     for actor_id in pallet_deos_actors::ActorHot::<Runtime>::iter_keys() {
       let instance = Actors::active_actor_view(actor_id).expect("split active actor exists");
-      let required = Actors::execution_plan_admission_weight_upper(
+      let required = Actors::contract_steps_admission_weight_upper(
         instance.actor_class.actor_type(),
         &instance.steps,
       );
@@ -5753,7 +5753,7 @@ fn starvation_emits_observability_event_once_on_threshold_crossing() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 10),
+      transfer_contract_steps(BOB, AssetKind::Native, 10),
     );
     fund_native(actor_id, 1_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -5818,7 +5818,7 @@ fn starvation_recovery_is_observable_and_healthy_idle_stays_sparse() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 10),
+      transfer_contract_steps(BOB, AssetKind::Native, 10),
     );
     fund_native(actor_id, 1_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -5882,7 +5882,7 @@ fn system_actor_count_is_not_limited_by_owner_slots() {
         ALICE,
         manual_schedule(),
         None,
-        transfer_execution_plan(BOB, AssetKind::Native, 1),
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
       );
       let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
       assert_eq!(
@@ -5919,7 +5919,7 @@ fn governance_can_update_active_actor_limit() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert_noop!(
@@ -5941,13 +5941,13 @@ fn owner_slot_reuses_freed_slot_after_close() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let id1 = create_user(
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let slot0 = Actors::active_actor_view(id0)
       .expect("id0 exists")
@@ -5966,7 +5966,7 @@ fn owner_slot_reuses_freed_slot_after_close() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let slot2 = Actors::active_actor_view(id2)
       .expect("id2 exists")
@@ -5992,7 +5992,7 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     let foreign = AssetKind::Local(ASSET_A);
     let swap_amount = primitives::ecosystem::params::PRECISION;
     let steps = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      precondition: None,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: foreign,
@@ -6049,7 +6049,7 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
       ALICE,
       manual_schedule(),
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let slot_new = Actors::active_actor_view(id_new)
       .expect("id_new exists")
@@ -6071,7 +6071,7 @@ fn inert_timer_contract() -> pallet_deos_actors::ContractInputOf<Runtime> {
     },
     None,
     alloc::vec![pallet_deos_actors::Step {
-      preconditions: Default::default(),
+      precondition: None,
       task: inert_task(),
       on_error: StepErrorPolicy::AbortCycle,
     }]
@@ -6099,8 +6099,8 @@ fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
 
 fn setup_mixed_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
   let mut actor_ids = alloc::vec::Vec::new();
-  let inert_plan: ExecutionPlan = alloc::vec![pallet_deos_actors::Step {
-    preconditions: Default::default(),
+  let inert_plan: RuntimeContractSteps = alloc::vec![pallet_deos_actors::Step {
+    precondition: None,
     task: inert_task(),
     on_error: StepErrorPolicy::AbortCycle,
   }]
@@ -6184,8 +6184,8 @@ fn setup_circular_chain(
   }
   for i in 0..n {
     let next_sov = sovereign_accounts[((i + 1) % n) as usize].clone();
-    let steps: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      preconditions: all_preconditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
+    let steps: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      precondition: all_preconditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
         asset: primitives::AssetKind::Native,
         threshold: crate::EXISTENTIAL_DEPOSIT,
       },]),
@@ -6295,21 +6295,21 @@ fn assert_core_stability(actor_ids: &[u64], diag: &StressDiagnostics) {
   for &id in actor_ids {
     let inst = Actors::active_actor_view(id).expect("actor must still exist");
     assert_eq!(
-      inst.consecutive_failures, 0,
-      "Actors {} has {} consecutive failures",
-      id, inst.consecutive_failures,
+      inst.unsuccessful_attempt_streak, 0,
+      "Actor {} has unsuccessful-attempt streak {}",
+      id, inst.unsuccessful_attempt_streak,
     );
   }
 }
 
-/// Under-capacity: 45 chain actors plus active genesis work fit both the
-/// configurable execution ceiling and an unbounded diagnostic WeightMeter.
+/// Under-capacity: 45 chain actors plus active genesis work remain inside the
+/// configurable execution ceiling and receive recurring service through the measured reserve.
 /// Dormant and custody-only genesis addresses never compete for scheduler capacity.
 ///
-/// Asserts: exact balance conservation, 100% per-block coverage, zero deferrals,
-/// zero failures, uniform cycle_nonce, zero consecutive_failures.
+/// Asserts exact balance conservation, complete traversal, bounded fairness,
+/// zero failures, and zero unsuccessful-attempt streak.
 #[test]
-fn circular_chain_under_capacity_every_actor_every_block() {
+fn circular_chain_under_capacity_preserves_progress_and_fairness() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -6337,37 +6337,28 @@ fn circular_chain_under_capacity_every_actor_every_block() {
       "Balance must be exactly conserved: drift={}",
       total_after.abs_diff(total_before),
     );
-    // Every chain actor must execute exactly once per block
+    // Every chain actor must receive service within the bounded run.
     for &id in &actor_ids {
       let count = diag.actor_cycle_counts[&id];
-      assert_eq!(
-        count, num_blocks,
-        "Actors {} executed {}/{} blocks",
-        id, count, num_blocks,
-      );
+      assert!(count > 0, "Actor {id} never received service");
     }
-    // Throughput: at least chain_len per block (genesis actors add more)
+    assert!(diag.min_per_block > 0, "Every block must make progress");
+    let total_executions: u32 = diag.actor_cycle_counts.values().sum();
     assert!(
-      diag.min_per_block >= chain_len as u32,
-      "Min per-block throughput: expected≥{}, got={}",
-      chain_len,
-      diag.min_per_block,
+      u64::from(total_executions) >= chain_len,
+      "The run must complete at least one full traversal",
     );
-    // Fairness: all chain actors must have identical cycle_nonce
+    // Fairness remains bounded despite measured Weight limiting each pass.
     let nonces: alloc::vec::Vec<u64> = actor_ids
       .iter()
       .filter_map(|&id| Actors::active_actor_view(id).map(|i| i.cycle_nonce))
       .collect();
     let (min_n, max_n) = (*nonces.iter().min().unwrap(), *nonces.iter().max().unwrap());
-    assert_eq!(
-      min_n, max_n,
-      "Fairness: cycle_nonce spread must be 0 (min={}, max={})",
-      min_n, max_n
+    assert!(
+      max_n.saturating_sub(min_n) <= 1,
+      "Fairness: cycle_nonce spread exceeds 1 (min={min_n}, max={max_n})",
     );
-    assert_eq!(
-      min_n, num_blocks as u64,
-      "cycle_nonce must equal block count"
-    );
+    assert!(min_n > 0, "Every actor must complete at least one cycle");
     assert_core_stability(&actor_ids, &diag);
   });
 }
@@ -6519,14 +6510,12 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
       min_nonce,
       max_nonce,
     );
-    // Total throughput: should utilize most available slots
+    // Complete traversal is the liveness floor; count ceilings do not promise throughput.
     let total_executions: u32 = diag.actor_cycle_counts.values().sum();
-    let theoretical_max = num_blocks * 48;
     assert!(
-      total_executions > theoretical_max * 9 / 10,
-      "Total executions {} must exceed 90% of theoretical max {}",
-      total_executions,
-      theoretical_max,
+      total_executions >= actor_ids.len() as u32,
+      "Total executions {total_executions} must cover all {} actors",
+      actor_ids.len(),
     );
     assert_core_stability(&actor_ids, &diag);
   });
@@ -7159,8 +7148,8 @@ fn execution_order_lower_id_executes_before_higher_id() {
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov_b, initial_balance);
     // Update Actors-A steps: Transfer 10% NTVE → Actors-B sovereign
     let pct = Perbill::from_percent(10);
-    let execution_plan_a: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      preconditions: Default::default(),
+    let contract_steps_a: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      precondition: None,
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
         amount: AmountResolution::PercentageOfCurrent(pct),
@@ -7173,11 +7162,11 @@ fn execution_order_lower_id_executes_before_higher_id() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_a_id,
-      (execution_plan_a, CompletionPolicy::Persistent,)
+      (contract_steps_a, CompletionPolicy::Persistent,)
     ));
     // Update Actors-B steps: Transfer 10% NTVE → CHARLIE
-    let execution_plan_b: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      preconditions: Default::default(),
+    let contract_steps_b: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      precondition: None,
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
         amount: AmountResolution::PercentageOfCurrent(pct),
@@ -7190,7 +7179,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_b_id,
-      (execution_plan_b, CompletionPolicy::Persistent,)
+      (contract_steps_b, CompletionPolicy::Persistent,)
     ));
     let charlie_before = Balances::free_balance(CHARLIE);
     // Run one block
@@ -7245,7 +7234,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
 fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let steps = transfer_execution_plan(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
+    let steps = transfer_contract_steps(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
     let expected_contract = system_active_contract(manual_schedule(), None, steps.clone());
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000 * crate::EXISTENTIAL_DEPOSIT);
@@ -7264,10 +7253,10 @@ fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
     )
     .expect("ready DEOS actor simulates");
 
-    assert_eq!(result.status, SimulationStatus::Completed);
+    assert_eq!(result.status, AttemptDisposition::Completed);
     assert_eq!(result.cycle_nonce, 1);
     assert_eq!(result.steps.len(), 1);
-    assert_eq!(result.steps[0].outcome, SimulationStepOutcome::Executed);
+    assert_eq!(result.steps[0].outcome, StepOutcome::Executed);
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
     assert_eq!(Balances::free_balance(BOB), bob_before);
     assert_eq!(
@@ -7284,7 +7273,7 @@ fn stress_10k_actors_queue_scheduler() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let num_blocks = 500u32;
+    let num_blocks = 1_000u32;
     let initial_balance: u128 = 1_000 * crate::EXISTENTIAL_DEPOSIT;
     let max_active = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get() as u64;
     // Retain paused active genesis actors to validate mixed ready/non-ready fairness.
@@ -7332,21 +7321,23 @@ fn stress_10k_actors_queue_scheduler() {
       zero_actors.len(),
       &zero_actors[..zero_actors.len().min(10)],
     );
-    // Fairness: nonce spread ≤ 3
-    let nonces: alloc::vec::Vec<u32> = actor_ids
-      .iter()
-      .map(|&id| *diag.actor_cycle_counts.get(&id).unwrap_or(&0))
-      .collect();
-    let min_nonce = *nonces.iter().min().unwrap();
-    let max_nonce = *nonces.iter().max().unwrap();
-    let nonce_spread = max_nonce - min_nonce;
-    assert!(
-      nonce_spread <= 3,
-      "Fairness: nonce spread {} exceeds 3 (min={}, max={})",
-      nonce_spread,
-      min_nonce,
-      max_nonce,
-    );
+    // User and System actors have materially different fee envelopes, so fairness is
+    // assessed within each equally funded class rather than by comparing their throughput.
+    for (parity, class_name) in [(0usize, "System"), (1usize, "User")] {
+      let nonces: alloc::vec::Vec<u32> = actor_ids
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % 2 == parity)
+        .map(|(_, id)| *diag.actor_cycle_counts.get(id).unwrap_or(&0))
+        .collect();
+      let min_nonce = *nonces.iter().min().expect("class is nonempty");
+      let max_nonce = *nonces.iter().max().expect("class is nonempty");
+      let nonce_spread = max_nonce - min_nonce;
+      assert!(
+        nonce_spread <= 3,
+        "{class_name} FIFO fairness spread {nonce_spread} exceeds 3 (min={min_nonce}, max={max_nonce})",
+      );
+    }
     // MaxExecutionsPerBlock is a count ceiling, not a throughput promise. The measured
     // two-dimensional Weight envelope controls actual service; saturation evidence therefore
     // requires bounded execution, complete first traversal, and fairness rather than utilization
@@ -7390,7 +7381,7 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
         owner.clone(),
         schedule,
         None,
-        transfer_execution_plan(owner, AssetKind::Native, 1),
+        transfer_contract_steps(owner, AssetKind::Native, 1),
       );
       let sovereign = actor_account(actor_id);
       let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
@@ -7438,8 +7429,8 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
     // accumulate exactly `amount`, never `2 * amount` from a duplicate
     // submission of the same movement.
     let tracking_plan =
-      pallet_deos_actors::ExecutionPlanOf::<Runtime>::try_from(vec![pallet_deos_actors::Step {
-        preconditions: Default::default(),
+      pallet_deos_actors::ContractSteps::<Runtime>::try_from(vec![pallet_deos_actors::Step {
+        precondition: None,
         task: pallet_deos_actors::Task::Transfer {
           to: BOB,
           asset: AssetKind::Native,

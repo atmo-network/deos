@@ -1,7 +1,7 @@
 ---
-page_type: implementation
+type: implementation
 title: Repository Structure
-summary: Detailed description of the DEOS framework repository directories and their purpose.
+description: Detailed description of the DEOS framework repository directories and their purpose.
 locale: en
 canonical_page_id: repository-structure
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../README.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../README.md
+status: stable
 audience: developer
 tags:
   - implementation

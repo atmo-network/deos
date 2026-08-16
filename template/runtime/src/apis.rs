@@ -138,7 +138,7 @@ impl_runtime_apis! {
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
             pallet_deos_actors::ActorEligibilityProjection<BlockNumber>,
-            pallet_deos_actors::ActorEligibilityError,
+            pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)
         }

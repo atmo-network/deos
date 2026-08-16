@@ -1,6 +1,6 @@
 <!--
 Domain: Automation step editor
-Owns: One stable ordered Step row, condition controls, task parameters, error policy, and linear move/remove actions.
+Owns: One stable ordered Step row, Precondition controls, Task parameters, error policy, and linear move/remove actions.
 Excludes: Contract storage, artifact encoding, analysis, simulation, and runtime execution.
 Zone: Automation presentation helper; composes typed authoring fields without successor selection.
 -->
@@ -23,7 +23,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     SelectField,
   } from '$lib/ui';
 
-  import AutomationConditionEditor from './AutomationConditionEditor.svelte';
+  import AutomationPredicateEditor from './AutomationPredicateEditor.svelte';
   import AutomationTaskEditor from './AutomationTaskEditor.svelte';
 
   type Props = {
@@ -51,27 +51,22 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   }: Props = $props();
 
   function selectPreconditionMode(event: Event) {
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Unconditional'
-      | 'AnyOf';
+    const enabled =
+      (event.currentTarget as HTMLSelectElement).value === 'bounded';
     step = {
       ...step,
-      preconditions:
-        type === 'Unconditional'
-          ? { type }
-          : step.preconditions.type === 'Unconditional'
-            ? {
-                type,
-                clauses: [
-                  [
-                    {
-                      timing: 'Current',
-                      predicate: createActorAuthoringPredicate('BalanceAbove'),
-                    },
-                  ],
-                ],
-              }
-            : step.preconditions,
+      precondition: enabled
+        ? (step.precondition ?? {
+            clauses: [
+              [
+                {
+                  timing: 'Current',
+                  predicate: createActorAuthoringPredicate('BalanceAbove'),
+                },
+              ],
+            ],
+          })
+        : null,
     };
   }
 
@@ -96,23 +91,21 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   }
 
   function predicateCount() {
-    return step.preconditions.type === 'Unconditional'
-      ? 0
-      : step.preconditions.clauses.reduce(
-          (total, clause) => total + clause.length,
-          0,
-        );
+    return (
+      step.precondition?.clauses.reduce(
+        (total, clause) => total + clause.length,
+        0,
+      ) ?? 0
+    );
   }
 
   function addClause() {
-    if (step.preconditions.type === 'Unconditional' || predicateCount() >= 4)
-      return;
+    if (step.precondition === null || predicateCount() >= 4) return;
     step = {
       ...step,
-      preconditions: {
-        ...step.preconditions,
+      precondition: {
         clauses: [
-          ...step.preconditions.clauses,
+          ...step.precondition.clauses,
           [
             {
               timing: 'Current',
@@ -125,13 +118,11 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   }
 
   function addPredicate(clauseIndex: number) {
-    if (step.preconditions.type === 'Unconditional' || predicateCount() >= 4)
-      return;
+    if (step.precondition === null || predicateCount() >= 4) return;
     step = {
       ...step,
-      preconditions: {
-        ...step.preconditions,
-        clauses: step.preconditions.clauses.map((clause, candidate) =>
+      precondition: {
+        clauses: step.precondition.clauses.map((clause, candidate) =>
           candidate === clauseIndex
             ? [
                 ...clause,
@@ -151,15 +142,14 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     predicateIndex: number,
     event: Event,
   ) {
-    if (step.preconditions.type === 'Unconditional') return;
+    if (step.precondition === null) return;
     const timing = (event.currentTarget as HTMLSelectElement).value as
       | 'Opening'
       | 'Current';
     step = {
       ...step,
-      preconditions: {
-        ...step.preconditions,
-        clauses: step.preconditions.clauses.map((clause, candidateClause) =>
+      precondition: {
+        clauses: step.precondition.clauses.map((clause, candidateClause) =>
           candidateClause === clauseIndex
             ? clause.map((timed, candidatePredicate) =>
                 candidatePredicate === predicateIndex
@@ -173,8 +163,8 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   }
 
   function removePredicate(clauseIndex: number, predicateIndex: number) {
-    if (step.preconditions.type === 'Unconditional') return;
-    const clauses = step.preconditions.clauses
+    if (step.precondition === null) return;
+    const clauses = step.precondition.clauses
       .map((clause, candidateClause) =>
         candidateClause === clauseIndex
           ? clause.filter((_, candidate) => candidate !== predicateIndex)
@@ -183,10 +173,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       .filter((clause) => clause.length > 0);
     step = {
       ...step,
-      preconditions:
-        clauses.length === 0
-          ? { type: 'Unconditional' }
-          : { type: 'AnyOf', clauses },
+      precondition: clauses.length === 0 ? null : { clauses },
     };
   }
 </script>
@@ -216,9 +203,9 @@ Zone: Automation presentation helper; composes typed authoring fields without su
           {step.task.type.replace(/([a-z])([A-Z])/g, '$1 $2')}
         </div>
         <div class="text-[10px] text-(--mono-muted)">
-          {step.preconditions.type === 'Unconditional'
+          {step.precondition === null
             ? 'Unconditional when reached'
-            : `${step.preconditions.clauses.length} clause${step.preconditions.clauses.length === 1 ? '' : 's'} · ${predicateCount()} timed predicate${predicateCount() === 1 ? '' : 's'}`}
+            : `${step.precondition.clauses.length} clause${step.precondition.clauses.length === 1 ? '' : 's'} · ${predicateCount()} timed predicate${predicateCount() === 1 ? '' : 's'}`}
         </div>
       </div>
     </div>
@@ -251,28 +238,28 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
     <div class="flex flex-wrap items-end justify-between gap-2">
       <SelectField
-        label="Preconditions"
-        value={step.preconditions.type}
+        label="Precondition"
+        value={step.precondition === null ? 'none' : 'bounded'}
         onchange={selectPreconditionMode}
         selectClass="h-9 py-1.5 text-xs"
       >
-        <option value="Unconditional">Unconditional</option>
-        <option value="AnyOf">Bounded DNF</option>
+        <option value="none">None — unconditional</option>
+        <option value="bounded">Bounded DNF</option>
       </SelectField>
-      {#if step.preconditions.type === 'AnyOf'}
+      {#if step.precondition !== null}
         <Button
           size="sm"
           variant="ghost"
           onclick={addClause}
           disabled={predicateCount() >= 4 ||
-            step.preconditions.clauses.length >= 4}
+            step.precondition.clauses.length >= 4}
           class="inline-flex items-center gap-1"
         >
           <Plus size={12} /> Add OR clause
         </Button>
       {/if}
     </div>
-    {#if step.preconditions.type === 'Unconditional'}
+    {#if step.precondition === null}
       <div
         class="rounded-xl border border-dashed border-(--mono-border) px-3 py-2 text-[10px] text-(--mono-muted)"
       >
@@ -284,7 +271,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         Clauses compose with OR; predicates inside each clause compose with AND.
         Every predicate is visited. False skips only this task and advances.
       </div>
-      {#each step.preconditions.clauses as clause, clauseIndex}
+      {#each step.precondition.clauses as clause, clauseIndex}
         <div
           class="grid gap-2 rounded-xl border border-(--mono-border) bg-white p-2"
         >
@@ -315,9 +302,9 @@ Zone: Automation presentation helper; composes typed authoring fields without su
                   >Current — immediately before step</option
                 >
               </SelectField>
-              <AutomationConditionEditor
-                bind:condition={
-                  step.preconditions.clauses[clauseIndex][predicateIndex]
+              <AutomationPredicateEditor
+                bind:predicate={
+                  step.precondition.clauses[clauseIndex][predicateIndex]
                     .predicate
                 }
                 {compact}
@@ -374,8 +361,8 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       </summary>
       <ul class="mt-1.5 grid gap-1 border-l border-(--mono-border) pl-3">
         <li>
-          <span class="text-(--mono-fg)">Condition false:</span> Skip this task and
-          advance; the failure policy does not run.
+          <span class="text-(--mono-fg)">Precondition false:</span> Skip this task
+          and advance; the failure policy does not run.
         </li>
         <li>
           <span class="text-(--mono-fg)">Resolution skipped:</span> Record a non-failing
@@ -397,7 +384,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     </details>
     {#if step.task.type === 'StopCycle' && step.errorPolicy.type === 'ContinueNextStep'}
       <Notice variant="warn">
-        False conditions skip this stop normally. An atomic condition or User
+        A false Precondition skips this stop normally. A Predicate error or User
         fee-collection failure can also advance to the next row and may still
         end as an ordinary successful run. Use Abort on task failure unless that
         fall-through is deliberate.

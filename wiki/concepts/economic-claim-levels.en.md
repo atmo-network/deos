@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Economic Claim Levels
-summary: A ladder and audit posture for classifying DEOS/TMCTOL economic claims across formulas, simulations, runtime enforcement, governance dependency, and market assumptions.
+description: A ladder and audit posture for classifying DEOS/TMCTOL economic claims across formulas, simulations, runtime enforcement, governance dependency, and market assumptions.
 locale: en
 canonical_page_id: economic-claim-levels
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../simulator/README.md
-  - ../../.agents/skills/alignment/economic-claims.json
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../simulator/README.md
+  - resource: ../../.agents/skills/alignment/economic-claims.json
+status: stable
 audience: newcomer
 tags:
   - concept

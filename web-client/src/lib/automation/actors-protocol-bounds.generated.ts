@@ -1,5 +1,5 @@
-/* Generated from Actors runtime metadata 586934c385a2709fab1d37122cc976fec57d258e7150bc4416e85774dc5a1031; do not edit. */
-export const ACTORS_MAX_EXECUTION_PLAN_STEPS = 8;
+/* Generated from Actors runtime metadata 9b5660c6f2b1f6c963d7dc6f6bbc44f46e34acb5cff75f09919eea836f257d67; do not edit. */
+export const ACTORS_MAX_CONTRACT_STEPS = 8;
 export const ACTORS_MAX_RETRY_ATTEMPTS = 10;
 export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = 16;
 export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = 32;

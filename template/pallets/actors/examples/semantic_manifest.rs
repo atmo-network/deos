@@ -421,7 +421,6 @@ fn dependency(value: AmountDataDependency) -> &'static str {
 
 fn context_dependency(value: ContextDependency) -> &'static str {
   match value {
-    ContextDependency::None => "None",
     ContextDependency::TaskPolicy => "TaskPolicy",
   }
 }

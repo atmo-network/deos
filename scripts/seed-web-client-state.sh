@@ -223,7 +223,8 @@ async function main() {
 
     const aliceStakedBefore = await api.view.Assets.balance_of(alice.address, STAKED_NATIVE_ASSET_ID) ?? 0n;
     if (aliceStakedBefore < NATIVE_STAKING_LIQUIDITY) {
-      await submitWithRetry('stake local NTVE into stNTVE', () => api.tx.Staking.stake_native({
+      await submitWithRetry('stake local NTVE into stNTVE', () => api.tx.Staking.stake({
+        asset_id: NATIVE_STAKING_ASSET_ID,
         amount: NATIVE_STAKE_AMOUNT,
       }));
     } else {

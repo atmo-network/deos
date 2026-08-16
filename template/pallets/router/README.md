@@ -48,4 +48,4 @@ The current kernel does not yet include:
 - Governance policy over treasury deployment or bucket strategy
 - Generalized intent settlement outside the bounded TMCTOL route families
 
-See the [DEOS Router specification](./docs/specification.en.md) for intended semantics, the [package architecture](./docs/architecture.en.md) for shipped implementation truth, and the [embedding contract](./docs/embedding.md) for independent host obligations.
+See the [DEOS Router specification](./docs/specification.en.md) for intended semantics, the [package architecture](./docs/architecture.en.md) for shipped implementation truth, and the [embedding contract](./docs/embedding.md) for independent host obligations. The [external-consumer fixture](./embedding-runtime/README.md) proves that contract without the DEOS runtime or Actors topology.

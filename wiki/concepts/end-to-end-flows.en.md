@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: End-to-End Flows
-summary: Concrete walkthroughs that connect user actions, runtime routing, Actor wakeups, buckets, read-model surfaces, and validation choices inside DEOS.
+description: Concrete walkthroughs that connect user actions, runtime routing, Actor wakeups, buckets, read-model surfaces, and validation choices inside DEOS.
 locale: en
 canonical_page_id: end-to-end-flows
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/staking/docs/architecture.en.md
-status: active
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../template/pallets/staking/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - concept

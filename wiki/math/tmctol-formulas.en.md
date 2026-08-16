@@ -1,7 +1,7 @@
 ---
-page_type: math
+type: math
 title: TMCTOL Formulas
-summary: Mathematical models defining the Token Minting Curve (TMC) and Treasury-Owned Liquidity (TOL).
+description: Mathematical models defining the Token Minting Curve (TMC) and Treasury-Owned Liquidity (TOL).
 locale: en
 canonical_page_id: tmctol-formulas
 translation_status: source
@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: developer
 tags:
   - math

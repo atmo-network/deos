@@ -36,7 +36,7 @@ Environment:
   CHAIN_SPEC_PATH=template/chain_spec.json
 
 Inputs:
-  Selected DEOS runtime Wasm, chain-spec-builder, Python, and profile values.
+  Selected DEOS runtime Wasm, chain-spec-builder, Node.js, and profile values.
 
 Outputs:
   The selected CHAIN_SPEC_PATH.
@@ -95,7 +95,8 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands chain-spec-builder python3 du cut mv mkdir dirname mktemp rm
+    require_commands chain-spec-builder node du cut mv mkdir dirname mktemp rm
+    require_local_script "patch-chain-spec.mjs"
     log_success "Chain spec prerequisites checked"
 }
 
@@ -155,63 +156,11 @@ patch_chain_spec() {
     local spec_path="$1"
     log_info "Patching chain spec metadata (chainType=$CHAIN_TYPE, name=$CHAIN_NAME, id=$CHAIN_ID)"
 
-    python3 -c "
-import json, sys
-spec_path, chain_type, chain_name, chain_id, native_staking_id, foreign_id, initial_price, slope, foreign_balance = sys.argv[1:10]
-native_staking_id = int(native_staking_id)
-foreign_id = int(foreign_id)
-initial_price = int(initial_price)
-slope = int(slope)
-foreign_balance = int(foreign_balance)
-with open(spec_path, 'r') as f:
-    spec = json.load(f)
-spec['chainType'] = chain_type
-spec['name'] = chain_name
-spec['id'] = chain_id
-patch = spec.setdefault('genesis', {}).setdefault('runtimeGenesis', {}).setdefault('patch', {})
-patch.pop('sudo', None)
-assets = patch.setdefault('assets', {})
-assets.setdefault('nextAssetId', None)
-assets.setdefault('reserves', [])
-asset_entries = assets.setdefault('assets', [])
-metadata_entries = assets.setdefault('metadata', [])
-account_entries = assets.setdefault('accounts', [])
-balances = patch.get('balances', {}).get('balances', [])
-bootstrap_asset_owner = None
-if balances:
-    first_balance_entry = balances[0]
-    if isinstance(first_balance_entry, list) and first_balance_entry:
-        bootstrap_asset_owner = first_balance_entry[0]
-if bootstrap_asset_owner is None:
-    raise SystemExit('Chain spec patching requires at least one endowed balance account to own local dev bootstrap assets')
-native_staking_asset_entry = [native_staking_id, bootstrap_asset_owner, True, 1]
-if native_staking_asset_entry not in asset_entries:
-    asset_entries.append(native_staking_asset_entry)
-native_staking_metadata_entry = [native_staking_id, list(b'Native Staking Token'), list(b'NTVE'), 12]
-if native_staking_metadata_entry not in metadata_entries:
-    metadata_entries.append(native_staking_metadata_entry)
-native_staking_account_entry = [native_staking_id, bootstrap_asset_owner, foreign_balance]
-if native_staking_account_entry not in account_entries:
-    account_entries.append(native_staking_account_entry)
-foreign_asset_entry = [foreign_id, bootstrap_asset_owner, True, 1]
-if foreign_asset_entry not in asset_entries:
-    asset_entries.append(foreign_asset_entry)
-foreign_metadata_entry = [foreign_id, list(b'Foreign Token'), list(b'FRGN'), 12]
-if foreign_metadata_entry not in metadata_entries:
-    metadata_entries.append(foreign_metadata_entry)
-foreign_account_entry = [foreign_id, bootstrap_asset_owner, foreign_balance]
-if foreign_account_entry not in account_entries:
-    account_entries.append(foreign_account_entry)
-patch['tokenMintingCurve'] = {
-    'curves': [['Native', {'Foreign': foreign_id}, initial_price, slope]],
-}
-patch['staking'] = {
-    'registeredAssets': [native_staking_id],
-}
-with open(spec_path, 'w') as f:
-    json.dump(spec, f, indent=2)
-    f.write('\n')
-" "$spec_path" "$CHAIN_TYPE" "$CHAIN_NAME" "$CHAIN_ID" "$LOCAL_WEB_CLIENT_NATIVE_STAKING_ID" "$LOCAL_WEB_CLIENT_FOREIGN_ID" "$LOCAL_WEB_CLIENT_INITIAL_PRICE" "$LOCAL_WEB_CLIENT_SLOPE" "$LOCAL_WEB_CLIENT_FOREIGN_BALANCE"
+    node "$SCRIPT_DIR/patch-chain-spec.mjs" \
+        "$spec_path" "$CHAIN_TYPE" "$CHAIN_NAME" "$CHAIN_ID" \
+        "$LOCAL_WEB_CLIENT_NATIVE_STAKING_ID" "$LOCAL_WEB_CLIENT_FOREIGN_ID" \
+        "$LOCAL_WEB_CLIENT_INITIAL_PRICE" "$LOCAL_WEB_CLIENT_SLOPE" \
+        "$LOCAL_WEB_CLIENT_FOREIGN_BALANCE"
 }
 
 verify_output() {

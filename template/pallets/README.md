@@ -8,7 +8,7 @@ The current pallet set follows the workspace-owned Polkadot SDK dependency graph
 
 ### [Actors](./actors/README.md)
 
-Deterministic account-abstraction actor runtime for bounded execution plans, scheduling, event-driven triggers, and lifecycle management.
+Deterministic account-abstraction actor runtime for bounded Actor Contracts, ordered Steps, scheduling, event-driven triggers, and lifecycle management.
 
 ### [Asset Registry](./asset-registry/README.md)
 

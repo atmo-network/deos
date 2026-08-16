@@ -17,20 +17,9 @@ export type NativeSecurityReadiness =
   | 'EmptyLpIssuance'
   | 'ValuationUnavailable'
   | 'ParticipantIndexInconsistent'
-  | 'SnapshotOpenFailed'
   | 'EligibleOperatorSetEmpty'
   | 'CandidateSetInconsistent'
   | 'Ready';
-
-export type NativeSecurityCapabilitiesProjection = {
-  newNominations: boolean;
-  redelegation: boolean;
-  candidateSelection: boolean;
-  rewardFunding: boolean;
-  rewardClaims: boolean;
-  rewardCompound: boolean;
-  custodyExit: boolean;
-};
 
 export type NativeStakingPoolProjection = {
   nativeAssetId: number;
@@ -67,18 +56,24 @@ export type NativeGovernanceCustodyPositionProjection = {
   pendingAssetUnlockBlock: number | null;
 };
 
+export type NativeSecurityBoundaryOutcome =
+  | { type: 'NotReady'; readiness: NativeSecurityReadiness }
+  | { type: 'SnapshotOpened' }
+  | { type: 'SnapshotOpenFailed' };
+
 export type NativeSecurityBoundaryDiagnosticProjection = {
   plannedEpoch: number;
-  readiness: NativeSecurityReadiness;
+  outcome: NativeSecurityBoundaryOutcome;
 };
 
 export type NativeStakingProjection = {
   isAvailable: boolean;
   accountAddress: string | null;
   securityMode: NativeSecurityMode | null;
-  securityCapabilities: NativeSecurityCapabilitiesProjection | null;
   securityReadiness: NativeSecurityReadiness | null;
   securityEpoch: number | null;
+  plannedSecurityEpoch: number | null;
+  settlementObligationsRemain: boolean | null;
   boundaryDiagnostic: NativeSecurityBoundaryDiagnosticProjection | null;
   exchangeRate: bigint | null;
   pool: NativeStakingPoolProjection | null;

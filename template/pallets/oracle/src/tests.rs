@@ -5,6 +5,25 @@ use crate::{
 use codec::{Decode, Encode};
 use polkadot_sdk::frame_support::{assert_noop, assert_ok, traits::StorageInfoTrait};
 
+fn public_error_name(error: Error<Test>) -> &'static str {
+  match error {
+    Error::<Test>::FeedAlreadyExists => "FeedAlreadyExists",
+    Error::<Test>::FeedNotFound => "FeedNotFound",
+    Error::<Test>::FeedCapacityReached => "FeedCapacityReached",
+    Error::<Test>::ProducerCapacityReached => "ProducerCapacityReached",
+    Error::<Test>::InvalidScale => "InvalidScale",
+    Error::<Test>::InvalidHalfLife => "InvalidHalfLife",
+    Error::<Test>::UnauthorizedProducer => "UnauthorizedProducer",
+    Error::<Test>::FeedPaused => "FeedPaused",
+    Error::<Test>::FeedDeactivated => "FeedDeactivated",
+    Error::<Test>::InvalidLifecycleTransition => "InvalidLifecycleTransition",
+    Error::<Test>::ZeroRejected => "ZeroRejected",
+    Error::<Test>::ArithmeticOverflow => "ArithmeticOverflow",
+    Error::<Test>::RevisionOverflow => "RevisionOverflow",
+    Error::<Test>::InvalidMaximumAge => "InvalidMaximumAge",
+  }
+}
+
 fn register(feed: u32, producer: u64, aggregation: Aggregation) {
   assert_ok!(Oracle::register_feed(
     RuntimeOrigin::root(),
@@ -17,6 +36,37 @@ fn register(feed: u32, producer: u64, aggregation: Aggregation) {
     ZeroPolicy::Reject,
     false,
   ));
+}
+
+#[test]
+fn public_error_inventory_is_compiler_exhaustive_and_observation_boundary_stays_opaque() {
+  let _: fn(u32, u64) -> Result<ObservationState<u64>, polkadot_sdk::sp_runtime::DispatchError> =
+    Oracle::observation_state;
+  let cases = [
+    (Error::<Test>::FeedAlreadyExists, "FeedAlreadyExists"),
+    (Error::<Test>::FeedNotFound, "FeedNotFound"),
+    (Error::<Test>::FeedCapacityReached, "FeedCapacityReached"),
+    (
+      Error::<Test>::ProducerCapacityReached,
+      "ProducerCapacityReached",
+    ),
+    (Error::<Test>::InvalidScale, "InvalidScale"),
+    (Error::<Test>::InvalidHalfLife, "InvalidHalfLife"),
+    (Error::<Test>::UnauthorizedProducer, "UnauthorizedProducer"),
+    (Error::<Test>::FeedPaused, "FeedPaused"),
+    (Error::<Test>::FeedDeactivated, "FeedDeactivated"),
+    (
+      Error::<Test>::InvalidLifecycleTransition,
+      "InvalidLifecycleTransition",
+    ),
+    (Error::<Test>::ZeroRejected, "ZeroRejected"),
+    (Error::<Test>::ArithmeticOverflow, "ArithmeticOverflow"),
+    (Error::<Test>::RevisionOverflow, "RevisionOverflow"),
+    (Error::<Test>::InvalidMaximumAge, "InvalidMaximumAge"),
+  ];
+  for (error, expected) in cases {
+    assert_eq!(public_error_name(error), expected);
+  }
 }
 
 #[test]

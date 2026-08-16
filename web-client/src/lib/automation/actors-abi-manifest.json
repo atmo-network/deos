@@ -2,7 +2,7 @@
   "format": "deos.actor.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "586934c385a2709fab1d37122cc976fec57d258e7150bc4416e85774dc5a1031",
+    "sha256": "9b5660c6f2b1f6c963d7dc6f6bbc44f46e34acb5cff75f09919eea836f257d67",
     "version": 16
   },
   "pallet": {
@@ -78,16 +78,16 @@
           { "name": "schedule", "type": 225, "typeName": "ScheduleOf<T>" },
           {
             "name": "schedule_window",
-            "type": 258,
+            "type": 259,
             "typeName": "Option<ScheduleWindow<BlockNumberFor<T>>>"
           },
-          { "name": "steps", "type": 236, "typeName": "ExecutionPlanOf<T>" },
+          { "name": "steps", "type": 236, "typeName": "ContractSteps<T>" },
           {
             "name": "funding",
-            "type": 254,
+            "type": 255,
             "typeName": "FundingSourcePolicyOf<T>"
           },
-          { "name": "completion", "type": 260, "typeName": "CompletionPolicy" }
+          { "name": "completion", "type": 261, "typeName": "CompletionPolicy" }
         ],
         "index": 9,
         "name": "update_contract"
@@ -111,7 +111,7 @@
         "fields": [
           {
             "name": "actor_ids",
-            "type": 261,
+            "type": 262,
             "typeName": "BoundedVec<ActorId, T::MaxSweepBatch>"
           }
         ],
@@ -156,8 +156,8 @@
     "constants": [
       { "name": "FeeNativeAssetId", "type": 197, "value": "0x00" },
       { "name": "MinWindowLength", "type": 14, "value": "0x64000000" },
-      { "name": "PalletId", "type": 434, "value": "0x6163746f72733030" },
-      { "name": "MaxExecutionPlanSteps", "type": 14, "value": "0x08000000" },
+      { "name": "PalletId", "type": 435, "value": "0x6163746f72733030" },
+      { "name": "MaxContractSteps", "type": 14, "value": "0x08000000" },
       { "name": "MaxFundingTrackedAssets", "type": 14, "value": "0x0a000000" },
       {
         "name": "MaxOpeningSnapshotEntries",
@@ -171,7 +171,7 @@
       },
       { "name": "MaxPreconditionClauses", "type": 14, "value": "0x04000000" },
       { "name": "MaxPredicatesPerClause", "type": 14, "value": "0x04000000" },
-      { "name": "MaxConditionsPerStep", "type": 14, "value": "0x04000000" },
+      { "name": "MaxPredicatesPerStep", "type": 14, "value": "0x04000000" },
       { "name": "MaxOwnerSlots", "type": 3, "value": "0xff" },
       { "name": "MaxExecutionsPerBlock", "type": 14, "value": "0xe8030000" },
       { "name": "MaxQueueLength", "type": 14, "value": "0x10270000" },
@@ -205,7 +205,6 @@
       { "name": "MaxSplitTransferLegs", "type": 14, "value": "0x08000000" },
       { "name": "TargetBlockTime", "type": 10, "value": "0x0600000000000000" },
       { "name": "MaxExecutionDelayBlocks", "type": 14, "value": "0x208d2203" },
-      { "name": "MaxTimerJitterBlocks", "type": 14, "value": "0x40000000" },
       { "name": "MaxIdleStarvationBlocks", "type": 14, "value": "0x19000000" },
       {
         "name": "ActorOnIdleReserve",
@@ -252,8 +251,8 @@
       { "fields": [], "index": 11, "name": "ActiveActorLimitTooLow" },
       { "fields": [], "index": 12, "name": "ActiveActorLimitBelowCurrent" },
       { "fields": [], "index": 13, "name": "ActorPaused" },
-      { "fields": [], "index": 14, "name": "EmptyExecutionPlan" },
-      { "fields": [], "index": 15, "name": "ExecutionPlanExceedsOnIdleBudget" },
+      { "fields": [], "index": 14, "name": "EmptyContractSteps" },
+      { "fields": [], "index": 15, "name": "ContractStepsExceedOnIdleBudget" },
       { "fields": [], "index": 16, "name": "ExecutionDelayTooLong" },
       { "fields": [], "index": 17, "name": "GlobalCircuitBreakerActive" },
       { "fields": [], "index": 18, "name": "ImmutableActor" },
@@ -282,7 +281,7 @@
       { "fields": [], "index": 41, "name": "SystemSovereignInvariant" },
       { "fields": [], "index": 42, "name": "SovereignAccountCollision" },
       { "fields": [], "index": 43, "name": "ReservedSovereignAccount" },
-      { "fields": [], "index": 44, "name": "ExecutionPlanTooLong" },
+      { "fields": [], "index": 44, "name": "TooManyContractSteps" },
       { "fields": [], "index": 45, "name": "SnapshotUnavailable" },
       { "fields": [], "index": 46, "name": "FundingAccumulatorOverflow" },
       { "fields": [], "index": 47, "name": "QueueTicketExhausted" },
@@ -300,7 +299,7 @@
       { "fields": [], "index": 55, "name": "ContinuationNotFound" },
       { "fields": [], "index": 56, "name": "ContinuationInvariant" },
       { "fields": [], "index": 57, "name": "ComputationOverflow" },
-      { "fields": [], "index": 58, "name": "EmptyPreconditions" },
+      { "fields": [], "index": 58, "name": "EmptyPrecondition" },
       { "fields": [], "index": 59, "name": "ManualSourceDisabled" },
       { "fields": [], "index": 60, "name": "RecipientDepositUnavailable" },
       {
@@ -319,7 +318,7 @@
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "owner", "type": 1, "typeName": "T::AccountId" },
-          { "name": "actor_class", "type": 346, "typeName": "ActorClass" },
+          { "name": "actor_class", "type": 347, "typeName": "ActorClass" },
           { "name": "mutability", "type": 223, "typeName": "Mutability" },
           {
             "name": "sovereign_account",
@@ -328,7 +327,7 @@
           },
           {
             "name": "initial_lifecycle",
-            "type": 347,
+            "type": 348,
             "typeName": "InitialLifecycle"
           }
         ],
@@ -358,7 +357,7 @@
       {
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
-          { "name": "reason", "type": 348, "typeName": "CloseReason" }
+          { "name": "reason", "type": 349, "typeName": "CloseReason" }
         ],
         "index": 5,
         "name": "ActorClosed"
@@ -375,8 +374,8 @@
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "result", "type": 349, "typeName": "CycleResult" },
-          { "name": "outcomes", "type": 350, "typeName": "OutcomeTotals" }
+          { "name": "result", "type": 350, "typeName": "CycleResult" },
+          { "name": "outcomes", "type": 351, "typeName": "OutcomeTotals" }
         ],
         "index": 7,
         "name": "CycleSummary"
@@ -385,12 +384,11 @@
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "attempt", "type": 14, "typeName": "u32" },
           { "name": "cursor", "type": 14, "typeName": "u32" },
-          { "name": "reason", "type": 351, "typeName": "SuspensionReason" },
+          { "name": "reason", "type": 352, "typeName": "SuspensionReason" },
           {
             "name": "cumulative_outcomes",
-            "type": 350,
+            "type": 351,
             "typeName": "OutcomeTotals"
           }
         ],
@@ -401,7 +399,6 @@
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "attempt", "type": 14, "typeName": "u32" },
           { "name": "cursor", "type": 14, "typeName": "u32" }
         ],
         "index": 9,
@@ -411,7 +408,7 @@
         "fields": [
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "reason", "type": 352, "typeName": "CancellationReason" }
+          { "name": "reason", "type": 353, "typeName": "CancellationReason" }
         ],
         "index": 10,
         "name": "CycleCancelled"
@@ -430,7 +427,7 @@
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "step_index", "type": 14, "typeName": "u32" },
-          { "name": "reason", "type": 353, "typeName": "StepSkippedReason" }
+          { "name": "reason", "type": 354, "typeName": "StepSkippedReason" }
         ],
         "index": 12,
         "name": "StepSkipped"
@@ -440,8 +437,8 @@
           { "name": "actor_id", "type": 10, "typeName": "ActorId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "step_index", "type": 14, "typeName": "u32" },
-          { "name": "retry_class", "type": 354, "typeName": "RetryClass" },
-          { "name": "error", "type": 292, "typeName": "DispatchError" }
+          { "name": "retry_class", "type": 355, "typeName": "RetryClass" },
+          { "name": "error", "type": 293, "typeName": "DispatchError" }
         ],
         "index": 13,
         "name": "StepFailed"
@@ -666,7 +663,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 639
+            "value": 645
           }
         }
       },
@@ -678,7 +675,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 644
+            "value": 650
           }
         }
       },
@@ -690,7 +687,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 645
+            "value": 651
           }
         }
       },
@@ -702,7 +699,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 650
+            "value": 656
           }
         }
       },
@@ -714,7 +711,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 659
+            "value": 666
           }
         }
       },
@@ -736,7 +733,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 660
+            "value": 667
           }
         }
       },
@@ -773,7 +770,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 661
+            "value": 668
           }
         }
       },
@@ -784,8 +781,8 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 664,
-            "value": 665
+            "key": 671,
+            "value": 672
           }
         }
       },
@@ -797,7 +794,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 670
+            "value": 677
           }
         }
       },
@@ -809,7 +806,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 671
+            "value": 678
           }
         }
       },
@@ -855,7 +852,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 672
+            "value": 679
           }
         }
       },
@@ -901,7 +898,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 673
+            "value": 680
           }
         }
       },
@@ -915,8 +912,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 674,
-            "value": 675
+            "key": 681,
+            "value": 682
           }
         }
       },
@@ -928,7 +925,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 678
+            "value": 685
           }
         }
       },
@@ -969,14 +966,14 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 679
+            "value": 686
           }
         }
       },
       {
         "modifier": 1,
         "name": "DirtyObservationListState",
-        "type": { "tag": "plain", "value": 681 }
+        "type": { "tag": "plain", "value": 688 }
       },
       {
         "modifier": 1,
@@ -986,7 +983,7 @@
       {
         "modifier": 1,
         "name": "IdleStarvationState",
-        "type": { "tag": "plain", "value": 682 }
+        "type": { "tag": "plain", "value": 689 }
       }
     ]
   },
@@ -1383,25 +1380,25 @@
               {
                 "docs": [],
                 "name": "schedule_window",
-                "type": 258,
+                "type": 259,
                 "typeName": "Option<ScheduleWindow<BlockNumberFor<T>>>"
               },
               {
                 "docs": [],
                 "name": "steps",
                 "type": 236,
-                "typeName": "ExecutionPlanOf<T>"
+                "typeName": "ContractSteps<T>"
               },
               {
                 "docs": [],
                 "name": "funding",
-                "type": 254,
+                "type": 255,
                 "typeName": "FundingSourcePolicyOf<T>"
               },
               {
                 "docs": [],
                 "name": "completion",
-                "type": 260,
+                "type": 261,
                 "typeName": "CompletionPolicy"
               }
             ],
@@ -1443,7 +1440,7 @@
               {
                 "docs": [],
                 "name": "actor_ids",
-                "type": 261,
+                "type": 262,
                 "typeName": "BoundedVec<ActorId, T::MaxSweepBatch>"
               }
             ],
@@ -1556,8 +1553,8 @@
             "fields": [
               {
                 "docs": [],
-                "type": 257,
-                "typeName": "ActiveContractInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy>"
+                "type": 258,
+                "typeName": "ActiveContractInput<Schedule, BlockNumber, Steps, FundingPolicy>"
               }
             ],
             "index": 1,
@@ -1569,8 +1566,8 @@
       "params": [
         { "name": "Schedule", "type": 225 },
         { "name": "BlockNumber", "type": 14 },
-        { "name": "ExecutionPlan", "type": 236 },
-        { "name": "FundingPolicy", "type": 254 }
+        { "name": "Steps", "type": 236 },
+        { "name": "FundingPolicy", "type": 255 }
       ],
       "path": ["pallet_deos_actors", "types", "ContractInput"]
     },
@@ -1822,7 +1819,7 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 253, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 254, "typeName": "Vec<T>" }]
       },
       "id": 236,
       "params": [{ "name": "T", "type": 237 }, { "name": "S" }],
@@ -1834,20 +1831,20 @@
         "value": [
           {
             "docs": [],
-            "name": "preconditions",
+            "name": "precondition",
             "type": 238,
-            "typeName": "Preconditions<Predicate<AssetId, Balance, u32, ObservationFeedId>,\nMaxPreconditionClauses, MaxPredicatesPerClause,>"
+            "typeName": "Option<Precondition<Predicate<AssetId, Balance, u32, ObservationFeedId>\n, MaxPreconditionClauses, MaxPredicatesPerClause,>,>"
           },
           {
             "docs": [],
             "name": "task",
-            "type": 246,
+            "type": 247,
             "typeName": "Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>"
           },
           {
             "docs": [],
             "name": "on_error",
-            "type": 252,
+            "type": 253,
             "typeName": "StepErrorPolicy"
           }
         ]
@@ -1868,28 +1865,38 @@
       "def": {
         "tag": "variant",
         "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "Unconditional" },
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [
-              {
-                "docs": [],
-                "type": 240,
-                "typeName": "BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>"
-              }
-            ],
+            "fields": [{ "docs": [], "type": 239 }],
             "index": 1,
-            "name": "AnyOf"
+            "name": "Some"
           }
         ]
       },
       "id": 238,
+      "params": [{ "name": "T", "type": 239 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "clauses",
+            "type": 241,
+            "typeName": "BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>"
+          }
+        ]
+      },
+      "id": 239,
       "params": [
-        { "name": "P", "type": 239 },
+        { "name": "P", "type": 240 },
         { "name": "MaxClauses" },
         { "name": "MaxPerClause" }
       ],
-      "path": ["pallet_deos_actors", "types", "Preconditions"]
+      "path": ["pallet_deos_actors", "types", "Precondition"]
     },
     {
       "def": {
@@ -2099,7 +2106,7 @@
           }
         ]
       },
-      "id": 239,
+      "id": 240,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -2111,19 +2118,19 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 245, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 246, "typeName": "Vec<T>" }]
       },
-      "id": 240,
-      "params": [{ "name": "T", "type": 241 }, { "name": "S" }],
+      "id": 241,
+      "params": [{ "name": "T", "type": 242 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 244, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 245, "typeName": "Vec<T>" }]
       },
-      "id": 241,
-      "params": [{ "name": "T", "type": 242 }, { "name": "S" }],
+      "id": 242,
+      "params": [{ "name": "T", "type": 243 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -2133,14 +2140,14 @@
           {
             "docs": [],
             "name": "timing",
-            "type": 243,
+            "type": 244,
             "typeName": "ObservationTiming"
           },
-          { "docs": [], "name": "predicate", "type": 239, "typeName": "P" }
+          { "docs": [], "name": "predicate", "type": 240, "typeName": "P" }
         ]
       },
-      "id": 242,
-      "params": [{ "name": "P", "type": 239 }],
+      "id": 243,
+      "params": [{ "name": "P", "type": 240 }],
       "path": ["pallet_deos_actors", "types", "TimedPredicate"]
     },
     {
@@ -2151,19 +2158,19 @@
           { "docs": [], "fields": [], "index": 1, "name": "Current" }
         ]
       },
-      "id": 243,
+      "id": 244,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ObservationTiming"]
     },
     {
-      "def": { "tag": "sequence", "value": 242 },
-      "id": 244,
+      "def": { "tag": "sequence", "value": 243 },
+      "id": 245,
       "params": [],
       "path": []
     },
     {
-      "def": { "tag": "sequence", "value": 241 },
-      "id": 245,
+      "def": { "tag": "sequence", "value": 242 },
+      "id": 246,
       "params": [],
       "path": []
     },
@@ -2184,7 +2191,7 @@
               {
                 "docs": [],
                 "name": "amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               }
             ],
@@ -2203,13 +2210,13 @@
               {
                 "docs": [],
                 "name": "amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
                 "docs": [],
                 "name": "legs",
-                "type": 248,
+                "type": 249,
                 "typeName": "BoundedVec<SplitLeg<AccountId>, MaxSplitTransferLegs>"
               }
             ],
@@ -2228,7 +2235,7 @@
               {
                 "docs": [],
                 "name": "amount_in",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
@@ -2259,7 +2266,7 @@
               {
                 "docs": [],
                 "name": "amount_out",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
@@ -2271,7 +2278,7 @@
               {
                 "docs": [],
                 "name": "input_limit",
-                "type": 251,
+                "type": 252,
                 "typeName": "InputLimit<Balance>"
               },
               {
@@ -2302,13 +2309,13 @@
               {
                 "docs": [],
                 "name": "amount_a",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
                 "docs": [],
                 "name": "amount_b",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
@@ -2345,7 +2352,7 @@
               {
                 "docs": [],
                 "name": "lp_amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
@@ -2376,7 +2383,7 @@
               {
                 "docs": [],
                 "name": "amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               }
             ],
@@ -2395,7 +2402,7 @@
               {
                 "docs": [],
                 "name": "amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               }
             ],
@@ -2414,7 +2421,7 @@
               {
                 "docs": [],
                 "name": "amount",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               }
             ],
@@ -2439,7 +2446,7 @@
               {
                 "docs": [],
                 "name": "max_amount_a",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               },
               {
@@ -2464,7 +2471,7 @@
               {
                 "docs": [],
                 "name": "shares",
-                "type": 247,
+                "type": 248,
                 "typeName": "AmountResolution<Balance>"
               }
             ],
@@ -2474,7 +2481,7 @@
           { "docs": [], "fields": [], "index": 11, "name": "StopCycle" }
         ]
       },
-      "id": 246,
+      "id": 247,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -2514,17 +2521,17 @@
           { "docs": [], "fields": [], "index": 4, "name": "AllAvailable" }
         ]
       },
-      "id": 247,
+      "id": 248,
       "params": [{ "name": "Balance", "type": 49 }],
       "path": ["pallet_deos_actors", "types", "AmountResolution"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 250, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 251, "typeName": "Vec<T>" }]
       },
-      "id": 248,
-      "params": [{ "name": "T", "type": 249 }, { "name": "S" }],
+      "id": 249,
+      "params": [{ "name": "T", "type": 250 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -2535,13 +2542,13 @@
           { "docs": [], "name": "share", "type": 212, "typeName": "Perbill" }
         ]
       },
-      "id": 249,
+      "id": 250,
       "params": [{ "name": "AccountId", "type": 1 }],
       "path": ["pallet_deos_actors", "types", "SplitLeg"]
     },
     {
-      "def": { "tag": "sequence", "value": 249 },
-      "id": 250,
+      "def": { "tag": "sequence", "value": 250 },
+      "id": 251,
       "params": [],
       "path": []
     },
@@ -2558,7 +2565,7 @@
           }
         ]
       },
-      "id": 251,
+      "id": 252,
       "params": [{ "name": "Balance", "type": 49 }],
       "path": ["pallet_deos_actors", "types", "InputLimit"]
     },
@@ -2583,13 +2590,13 @@
           }
         ]
       },
-      "id": 252,
+      "id": 253,
       "params": [],
       "path": ["pallet_deos_actors", "types", "StepErrorPolicy"]
     },
     {
       "def": { "tag": "sequence", "value": 237 },
-      "id": 253,
+      "id": 254,
       "params": [],
       "path": []
     },
@@ -2603,7 +2610,7 @@
             "fields": [
               {
                 "docs": [],
-                "type": 255,
+                "type": 256,
                 "typeName": "BoundedBTreeSet<AccountId, MaxSignedFundingSources>"
               }
             ],
@@ -2614,7 +2621,7 @@
           { "docs": [], "fields": [], "index": 3, "name": "AnyVerifiedIngress" }
         ]
       },
-      "id": 254,
+      "id": 255,
       "params": [
         { "name": "AccountId", "type": 1 },
         { "name": "MaxSignedFundingSources" }
@@ -2624,15 +2631,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 256, "typeName": "BTreeSet<T>" }]
+        "value": [{ "docs": [], "type": 257, "typeName": "BTreeSet<T>" }]
       },
-      "id": 255,
+      "id": 256,
       "params": [{ "name": "T", "type": 1 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 51 }] },
-      "id": 256,
+      "id": 257,
       "params": [{ "name": "T", "type": 1 }],
       "path": ["BTreeSet"]
     },
@@ -2649,20 +2656,20 @@
           {
             "docs": [],
             "name": "schedule_window",
-            "type": 258,
+            "type": 259,
             "typeName": "Option<ScheduleWindow<BlockNumber>>"
           },
           { "docs": [], "name": "steps", "type": 236, "typeName": "Steps" },
           {
             "docs": [],
             "name": "funding",
-            "type": 254,
+            "type": 255,
             "typeName": "FundingPolicy"
           },
           {
             "docs": [],
             "name": "completion",
-            "type": 260,
+            "type": 261,
             "typeName": "CompletionPolicy"
           },
           {
@@ -2673,12 +2680,12 @@
           }
         ]
       },
-      "id": 257,
+      "id": 258,
       "params": [
         { "name": "Schedule", "type": 225 },
         { "name": "BlockNumber", "type": 14 },
         { "name": "Steps", "type": 236 },
-        { "name": "FundingPolicy", "type": 254 }
+        { "name": "FundingPolicy", "type": 255 }
       ],
       "path": ["pallet_deos_actors", "types", "ActiveContractInput"]
     },
@@ -2689,14 +2696,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 259 }],
+            "fields": [{ "docs": [], "type": 260 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 258,
-      "params": [{ "name": "T", "type": 259 }],
+      "id": 259,
+      "params": [{ "name": "T", "type": 260 }],
       "path": ["Option"]
     },
     {
@@ -2712,7 +2719,7 @@
           { "docs": [], "name": "end", "type": 14, "typeName": "BlockNumber" }
         ]
       },
-      "id": 259,
+      "id": 260,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "ScheduleWindow"]
     },
@@ -2729,22 +2736,22 @@
           }
         ]
       },
-      "id": 260,
+      "id": 261,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CompletionPolicy"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 262, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 263, "typeName": "Vec<T>" }]
       },
-      "id": 261,
+      "id": 262,
       "params": [{ "name": "T", "type": 10 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 10 },
-      "id": 262,
+      "id": 263,
       "params": [],
       "path": []
     },
@@ -2757,7 +2764,7 @@
           { "docs": [], "fields": [], "index": 2, "name": "BadOrigin" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 293, "typeName": "ModuleError" }],
+            "fields": [{ "docs": [], "type": 294, "typeName": "ModuleError" }],
             "index": 3,
             "name": "Module"
           },
@@ -2766,14 +2773,14 @@
           { "docs": [], "fields": [], "index": 6, "name": "TooManyConsumers" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 294, "typeName": "TokenError" }],
+            "fields": [{ "docs": [], "type": 295, "typeName": "TokenError" }],
             "index": 7,
             "name": "Token"
           },
           {
             "docs": [],
             "fields": [
-              { "docs": [], "type": 295, "typeName": "ArithmeticError" }
+              { "docs": [], "type": 296, "typeName": "ArithmeticError" }
             ],
             "index": 8,
             "name": "Arithmetic"
@@ -2781,7 +2788,7 @@
           {
             "docs": [],
             "fields": [
-              { "docs": [], "type": 296, "typeName": "TransactionalError" }
+              { "docs": [], "type": 297, "typeName": "TransactionalError" }
             ],
             "index": 9,
             "name": "Transactional"
@@ -2792,13 +2799,13 @@
           { "docs": [], "fields": [], "index": 13, "name": "RootNotAllowed" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 297, "typeName": "TrieError" }],
+            "fields": [{ "docs": [], "type": 298, "typeName": "TrieError" }],
             "index": 14,
             "name": "Trie"
           }
         ]
       },
-      "id": 292,
+      "id": 293,
       "params": [],
       "path": ["sp_runtime", "DispatchError"]
     },
@@ -2815,7 +2822,7 @@
           }
         ]
       },
-      "id": 293,
+      "id": 294,
       "params": [],
       "path": ["sp_runtime", "ModuleError"]
     },
@@ -2835,7 +2842,7 @@
           { "docs": [], "fields": [], "index": 9, "name": "Blocked" }
         ]
       },
-      "id": 294,
+      "id": 295,
       "params": [],
       "path": ["sp_runtime", "TokenError"]
     },
@@ -2848,7 +2855,7 @@
           { "docs": [], "fields": [], "index": 2, "name": "DivisionByZero" }
         ]
       },
-      "id": 295,
+      "id": 296,
       "params": [],
       "path": ["sp_arithmetic", "ArithmeticError"]
     },
@@ -2860,7 +2867,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "NoLayer" }
         ]
       },
-      "id": 296,
+      "id": 297,
       "params": [],
       "path": ["sp_runtime", "TransactionalError"]
     },
@@ -2904,19 +2911,19 @@
           { "docs": [], "fields": [], "index": 13, "name": "DecodeError" }
         ]
       },
-      "id": 297,
+      "id": 298,
       "params": [],
       "path": ["sp_runtime", "proving_trie", "TrieError"]
     },
     {
-      "def": { "tag": "sequence", "value": 322 },
-      "id": 321,
+      "def": { "tag": "sequence", "value": 323 },
+      "id": 322,
       "params": [],
       "path": []
     },
     {
       "def": { "tag": "tuple", "value": [197, 49] },
-      "id": 322,
+      "id": 323,
       "params": [],
       "path": []
     },
@@ -2942,7 +2949,7 @@
               {
                 "docs": [],
                 "name": "actor_class",
-                "type": 346,
+                "type": 347,
                 "typeName": "ActorClass"
               },
               {
@@ -2960,7 +2967,7 @@
               {
                 "docs": [],
                 "name": "initial_lifecycle",
-                "type": 347,
+                "type": 348,
                 "typeName": "InitialLifecycle"
               }
             ],
@@ -3031,7 +3038,7 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 348,
+                "type": 349,
                 "typeName": "CloseReason"
               }
             ],
@@ -3075,13 +3082,13 @@
               {
                 "docs": [],
                 "name": "result",
-                "type": 349,
+                "type": 350,
                 "typeName": "CycleResult"
               },
               {
                 "docs": [],
                 "name": "outcomes",
-                "type": 350,
+                "type": 351,
                 "typeName": "OutcomeTotals"
               }
             ],
@@ -3103,18 +3110,17 @@
                 "type": 10,
                 "typeName": "u64"
               },
-              { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
               { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
               {
                 "docs": [],
                 "name": "reason",
-                "type": 351,
+                "type": 352,
                 "typeName": "SuspensionReason"
               },
               {
                 "docs": [],
                 "name": "cumulative_outcomes",
-                "type": 350,
+                "type": 351,
                 "typeName": "OutcomeTotals"
               }
             ],
@@ -3136,7 +3142,6 @@
                 "type": 10,
                 "typeName": "u64"
               },
-              { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
               { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" }
             ],
             "index": 9,
@@ -3160,7 +3165,7 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 352,
+                "type": 353,
                 "typeName": "CancellationReason"
               }
             ],
@@ -3216,7 +3221,7 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 353,
+                "type": 354,
                 "typeName": "StepSkippedReason"
               }
             ],
@@ -3247,13 +3252,13 @@
               {
                 "docs": [],
                 "name": "retry_class",
-                "type": 354,
+                "type": 355,
                 "typeName": "RetryClass"
               },
               {
                 "docs": [],
                 "name": "error",
-                "type": 292,
+                "type": 293,
                 "typeName": "DispatchError"
               }
             ],
@@ -3901,7 +3906,7 @@
           }
         ]
       },
-      "id": 345,
+      "id": 346,
       "params": [{ "name": "T" }],
       "path": ["pallet_deos_actors", "pallet", "Event"]
     },
@@ -3932,7 +3937,7 @@
           }
         ]
       },
-      "id": 346,
+      "id": 347,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ActorClass"]
     },
@@ -3944,7 +3949,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Active" }
         ]
       },
-      "id": 347,
+      "id": 348,
       "params": [],
       "path": ["pallet_deos_actors", "types", "InitialLifecycle"]
     },
@@ -3993,7 +3998,7 @@
           }
         ]
       },
-      "id": 348,
+      "id": 349,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CloseReason"]
     },
@@ -4006,7 +4011,7 @@
           { "docs": [], "fields": [], "index": 2, "name": "Cancelled" }
         ]
       },
-      "id": 349,
+      "id": 350,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CycleResult"]
     },
@@ -4028,7 +4033,7 @@
           },
           {
             "docs": [],
-            "name": "skipped_conditions",
+            "name": "precondition_skips",
             "type": 14,
             "typeName": "u32"
           },
@@ -4047,7 +4052,7 @@
           { "docs": [], "name": "failed_steps", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 350,
+      "id": 351,
       "params": [],
       "path": ["pallet_deos_actors", "types", "OutcomeTotals"]
     },
@@ -4064,7 +4069,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
         ]
       },
-      "id": 351,
+      "id": 352,
       "params": [],
       "path": ["pallet_deos_actors", "types", "SuspensionReason"]
     },
@@ -4080,14 +4085,13 @@
           { "docs": [], "fields": [], "index": 5, "name": "Deactivated" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 348, "typeName": "CloseReason" }],
+            "fields": [{ "docs": [], "type": 349, "typeName": "CloseReason" }],
             "index": 6,
             "name": "Closing"
-          },
-          { "docs": [], "fields": [], "index": 7, "name": "RuntimeUpgrade" }
+          }
         ]
       },
-      "id": 352,
+      "id": 353,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CancellationReason"]
     },
@@ -4095,12 +4099,12 @@
       "def": {
         "tag": "variant",
         "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "ConditionsNotMet" },
+          { "docs": [], "fields": [], "index": 0, "name": "PreconditionFalse" },
           { "docs": [], "fields": [], "index": 1, "name": "ResolutionSkipped" },
           { "docs": [], "fields": [], "index": 2, "name": "FundingUnavailable" }
         ]
       },
-      "id": 353,
+      "id": 354,
       "params": [],
       "path": ["pallet_deos_actors", "types", "StepSkippedReason"]
     },
@@ -4112,7 +4116,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
         ]
       },
-      "id": 354,
+      "id": 355,
       "params": [],
       "path": ["pallet_deos_actors", "adapters", "RetryClass"]
     },
@@ -4121,13 +4125,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 103, "typeName": "[u8; 8]" }]
       },
-      "id": 434,
+      "id": 435,
       "params": [],
       "path": ["frame_support", "PalletId"]
     },
     {
       "def": { "tag": "sequence", "value": 215 },
-      "id": 632,
+      "id": 638,
       "params": [],
       "path": []
     },
@@ -4138,13 +4142,13 @@
           {
             "docs": [],
             "name": "lifecycle",
-            "type": 640,
+            "type": 646,
             "typeName": "ActiveLifecycle"
           },
           {
             "docs": [],
             "name": "cycle_state",
-            "type": 641,
+            "type": 647,
             "typeName": "CycleState"
           },
           {
@@ -4155,7 +4159,7 @@
           },
           {
             "docs": [],
-            "name": "consecutive_failures",
+            "name": "unsuccessful_attempt_streak",
             "type": 14,
             "typeName": "u32"
           },
@@ -4174,7 +4178,7 @@
           {
             "docs": [],
             "name": "wakeup_pointer",
-            "type": 642,
+            "type": 648,
             "typeName": "Option<WakeupPointer<BlockNumber>>"
           },
           {
@@ -4197,7 +4201,7 @@
           }
         ]
       },
-      "id": 639,
+      "id": 645,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "ActorHotState"]
     },
@@ -4209,7 +4213,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Paused" }
         ]
       },
-      "id": 640,
+      "id": 646,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ActiveLifecycle"]
     },
@@ -4221,7 +4225,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Suspended" }
         ]
       },
-      "id": 641,
+      "id": 647,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CycleState"]
     },
@@ -4232,14 +4236,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 643 }],
+            "fields": [{ "docs": [], "type": 649 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 642,
-      "params": [{ "name": "T", "type": 643 }],
+      "id": 648,
+      "params": [{ "name": "T", "type": 649 }],
       "path": ["Option"]
     },
     {
@@ -4261,7 +4265,7 @@
           { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
         ]
       },
-      "id": 643,
+      "id": 649,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "WakeupPointer"]
     },
@@ -4278,30 +4282,30 @@
           {
             "docs": [],
             "name": "schedule_window",
-            "type": 258,
+            "type": 259,
             "typeName": "Option<ScheduleWindow<BlockNumber>>"
           },
           { "docs": [], "name": "steps", "type": 236, "typeName": "Steps" },
           {
             "docs": [],
             "name": "funding",
-            "type": 254,
+            "type": 255,
             "typeName": "FundingPolicy"
           },
           {
             "docs": [],
             "name": "completion",
-            "type": 260,
+            "type": 261,
             "typeName": "CompletionPolicy"
           }
         ]
       },
-      "id": 644,
+      "id": 650,
       "params": [
         { "name": "Schedule", "type": 225 },
         { "name": "BlockNumber", "type": 14 },
         { "name": "Steps", "type": 236 },
-        { "name": "FundingPolicy", "type": 254 }
+        { "name": "FundingPolicy", "type": 255 }
       ],
       "path": ["pallet_deos_actors", "types", "ActorContractState"]
     },
@@ -4312,30 +4316,30 @@
           {
             "docs": [],
             "name": "funding_accumulated",
-            "type": 646,
+            "type": 652,
             "typeName": "FundingAccumulated"
           },
           {
             "docs": [],
             "name": "funding_tracked_assets",
-            "type": 648,
+            "type": 654,
             "typeName": "FundingTrackedAssets"
           }
         ]
       },
-      "id": 645,
+      "id": 651,
       "params": [
-        { "name": "FundingAccumulated", "type": 646 },
-        { "name": "FundingTrackedAssets", "type": 648 }
+        { "name": "FundingAccumulated", "type": 652 },
+        { "name": "FundingTrackedAssets", "type": 654 }
       ],
       "path": ["pallet_deos_actors", "types", "ActorFundingState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 647, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 653, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 646,
+      "id": 652,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 },
@@ -4344,8 +4348,8 @@
       "path": ["bounded_collections", "bounded_btree_map", "BoundedBTreeMap"]
     },
     {
-      "def": { "tag": "composite", "value": [{ "docs": [], "type": 321 }] },
-      "id": 647,
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 322 }] },
+      "id": 653,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 }
@@ -4355,15 +4359,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 649, "typeName": "BTreeSet<T>" }]
+        "value": [{ "docs": [], "type": 655, "typeName": "BTreeSet<T>" }]
       },
-      "id": 648,
+      "id": 654,
       "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 233 }] },
-      "id": 649,
+      "id": 655,
       "params": [{ "name": "T", "type": 197 }],
       "path": ["BTreeSet"]
     },
@@ -4372,7 +4376,6 @@
         "tag": "composite",
         "value": [
           { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
-          { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
           {
             "docs": [],
             "name": "unsuccessful_attempts_at_cursor",
@@ -4388,30 +4391,30 @@
           {
             "docs": [],
             "name": "opening_snapshot",
-            "type": 651,
+            "type": 657,
             "typeName": "BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>"
           },
           {
             "docs": [],
             "name": "opening_predicate_results",
-            "type": 656,
-            "typeName": "BoundedVec<PredicateEvaluation, MaxOpeningPredicateResults>"
+            "type": 662,
+            "typeName": "BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>"
           },
           {
             "docs": [],
             "name": "funding_snapshot",
-            "type": 646,
+            "type": 652,
             "typeName": "BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>"
           },
           {
             "docs": [],
             "name": "cumulative_outcomes",
-            "type": 350,
+            "type": 351,
             "typeName": "OutcomeTotals"
           }
         ]
       },
-      "id": 650,
+      "id": 656,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -4425,11 +4428,11 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 653, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 659, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 651,
+      "id": 657,
       "params": [
-        { "name": "K", "type": 652 },
+        { "name": "K", "type": 658 },
         { "name": "V", "type": 49 },
         { "name": "S" }
       ],
@@ -4459,56 +4462,79 @@
           }
         ]
       },
-      "id": 652,
+      "id": 658,
       "params": [{ "name": "AssetId", "type": 197 }],
       "path": ["pallet_deos_actors", "types", "OpeningSurface"]
     },
     {
-      "def": { "tag": "composite", "value": [{ "docs": [], "type": 654 }] },
-      "id": 653,
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 660 }] },
+      "id": 659,
       "params": [
-        { "name": "K", "type": 652 },
+        { "name": "K", "type": 658 },
         { "name": "V", "type": 49 }
       ],
       "path": ["BTreeMap"]
     },
     {
-      "def": { "tag": "sequence", "value": 655 },
-      "id": 654,
+      "def": { "tag": "sequence", "value": 661 },
+      "id": 660,
       "params": [],
       "path": []
     },
     {
-      "def": { "tag": "tuple", "value": [652, 49] },
-      "id": 655,
+      "def": { "tag": "tuple", "value": [658, 49] },
+      "id": 661,
       "params": [],
       "path": []
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 658, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 665, "typeName": "Vec<T>" }]
       },
-      "id": 656,
-      "params": [{ "name": "T", "type": 657 }, { "name": "S" }],
+      "id": 662,
+      "params": [{ "name": "T", "type": 663 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "variant",
         "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "True" },
-          { "docs": [], "fields": [], "index": 1, "name": "False" },
-          { "docs": [], "fields": [], "index": 2, "name": "Invalid" }
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 50 }],
+            "index": 0,
+            "name": "Ok"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 664 }],
+            "index": 1,
+            "name": "Err"
+          }
         ]
       },
-      "id": 657,
-      "params": [],
-      "path": ["pallet_deos_actors", "types", "PredicateEvaluation"]
+      "id": 663,
+      "params": [
+        { "name": "T", "type": 50 },
+        { "name": "E", "type": 664 }
+      ],
+      "path": ["Result"]
     },
     {
-      "def": { "tag": "sequence", "value": 657 },
-      "id": 658,
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "InvalidObservation" }
+        ]
+      },
+      "id": 664,
+      "params": [],
+      "path": ["pallet_deos_actors", "types", "PredicateError"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 663 },
+      "id": 665,
       "params": [],
       "path": []
     },
@@ -4526,7 +4552,7 @@
           {
             "docs": [],
             "name": "actor_class",
-            "type": 346,
+            "type": 347,
             "typeName": "ActorClass"
           },
           {
@@ -4544,7 +4570,7 @@
           }
         ]
       },
-      "id": 659,
+      "id": 666,
       "params": [
         { "name": "AccountId", "type": 1 },
         { "name": "BlockNumber", "type": 14 }
@@ -4564,17 +4590,17 @@
           }
         ]
       },
-      "id": 660,
+      "id": 667,
       "params": [],
       "path": ["pallet_deos_actors", "types", "SystemSovereignState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 663, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 670, "typeName": "Vec<T>" }]
       },
-      "id": 661,
-      "params": [{ "name": "T", "type": 662 }, { "name": "S" }],
+      "id": 668,
+      "params": [{ "name": "T", "type": 669 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4590,19 +4616,19 @@
           { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" }
         ]
       },
-      "id": 662,
+      "id": 669,
       "params": [],
       "path": ["pallet_deos_actors", "types", "QueueEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 662 },
-      "id": 663,
+      "def": { "tag": "sequence", "value": 669 },
+      "id": 670,
       "params": [],
       "path": []
     },
     {
       "def": { "tag": "tuple", "value": [14, 10] },
-      "id": 664,
+      "id": 671,
       "params": [],
       "path": []
     },
@@ -4610,7 +4636,7 @@
       "def": {
         "tag": "composite",
         "value": [
-          { "docs": [], "name": "entries", "type": 666, "typeName": "Entries" },
+          { "docs": [], "name": "entries", "type": 673, "typeName": "Entries" },
           { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
           {
             "docs": [],
@@ -4632,17 +4658,17 @@
           }
         ]
       },
-      "id": 665,
-      "params": [{ "name": "Entries", "type": 666 }],
+      "id": 672,
+      "params": [{ "name": "Entries", "type": 673 }],
       "path": ["pallet_deos_actors", "types", "WakeupPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 669, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 676, "typeName": "Vec<T>" }]
       },
-      "id": 666,
-      "params": [{ "name": "T", "type": 667 }, { "name": "S" }],
+      "id": 673,
+      "params": [{ "name": "T", "type": 674 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4652,14 +4678,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 668 }],
+            "fields": [{ "docs": [], "type": 675 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 667,
-      "params": [{ "name": "T", "type": 668 }],
+      "id": 674,
+      "params": [{ "name": "T", "type": 675 }],
       "path": ["Option"]
     },
     {
@@ -4669,13 +4695,13 @@
           { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" }
         ]
       },
-      "id": 668,
+      "id": 675,
       "params": [],
       "path": ["pallet_deos_actors", "types", "WakeupEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 667 },
-      "id": 669,
+      "def": { "tag": "sequence", "value": 674 },
+      "id": 676,
       "params": [],
       "path": []
     },
@@ -4710,7 +4736,7 @@
           }
         ]
       },
-      "id": 670,
+      "id": 677,
       "params": [],
       "path": ["pallet_deos_actors", "types", "WakeupBucketState"]
     },
@@ -4719,16 +4745,16 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 203, "typeName": "Vec<T>" }]
       },
-      "id": 671,
+      "id": 678,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 632, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 638, "typeName": "Vec<T>" }]
       },
-      "id": 672,
+      "id": 679,
       "params": [{ "name": "T", "type": 215 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
@@ -4737,13 +4763,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 203, "typeName": "Vec<T>" }]
       },
-      "id": 673,
+      "id": 680,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "tuple", "value": [215, 14] },
-      "id": 674,
+      "id": 681,
       "params": [],
       "path": []
     },
@@ -4766,27 +4792,27 @@
           {
             "docs": [],
             "name": "entries",
-            "type": 676,
+            "type": 683,
             "typeName": "BoundedVec<Option<ActorId>, MaxEntries>"
           }
         ]
       },
-      "id": 675,
+      "id": 682,
       "params": [{ "name": "MaxEntries" }],
       "path": ["pallet_deos_actors", "types", "ObservationSubscriberPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 677, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 684, "typeName": "Vec<T>" }]
       },
-      "id": 676,
+      "id": 683,
       "params": [{ "name": "T", "type": 189 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 189 },
-      "id": 677,
+      "id": 684,
       "params": [],
       "path": []
     },
@@ -4799,7 +4825,7 @@
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 678,
+      "id": 685,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ObservationSubscriberPageList"]
     },
@@ -4834,18 +4860,18 @@
           {
             "docs": [],
             "name": "previous_dirty_feed",
-            "type": 680,
+            "type": 687,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "next_dirty_feed",
-            "type": 680,
+            "type": 687,
             "typeName": "Option<FeedId>"
           }
         ]
       },
-      "id": 679,
+      "id": 686,
       "params": [
         { "name": "FeedId", "type": 215 },
         { "name": "BlockNumber", "type": 14 }
@@ -4865,7 +4891,7 @@
           }
         ]
       },
-      "id": 680,
+      "id": 687,
       "params": [{ "name": "T", "type": 215 }],
       "path": ["Option"]
     },
@@ -4876,25 +4902,25 @@
           {
             "docs": [],
             "name": "head",
-            "type": 680,
+            "type": 687,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "tail",
-            "type": 680,
+            "type": 687,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "cursor",
-            "type": 680,
+            "type": 687,
             "typeName": "Option<FeedId>"
           },
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 681,
+      "id": 688,
       "params": [{ "name": "FeedId", "type": 215 }],
       "path": ["pallet_deos_actors", "types", "DirtyObservationList"]
     },
@@ -4931,7 +4957,7 @@
           }
         ]
       },
-      "id": 682,
+      "id": 689,
       "params": [],
       "path": ["pallet_deos_actors", "types", "IdleStarvationPhase"]
     },
@@ -5002,13 +5028,13 @@
             "docs": [],
             "fields": [],
             "index": 14,
-            "name": "EmptyExecutionPlan"
+            "name": "EmptyContractSteps"
           },
           {
             "docs": [],
             "fields": [],
             "index": 15,
-            "name": "ExecutionPlanExceedsOnIdleBudget"
+            "name": "ContractStepsExceedOnIdleBudget"
           },
           {
             "docs": [],
@@ -5147,7 +5173,7 @@
             "docs": [],
             "fields": [],
             "index": 44,
-            "name": "ExecutionPlanTooLong"
+            "name": "TooManyContractSteps"
           },
           {
             "docs": [],
@@ -5231,7 +5257,7 @@
             "docs": [],
             "fields": [],
             "index": 58,
-            "name": "EmptyPreconditions"
+            "name": "EmptyPrecondition"
           },
           {
             "docs": [],
@@ -5283,7 +5309,7 @@
           }
         ]
       },
-      "id": 683,
+      "id": 690,
       "params": [{ "name": "T" }],
       "path": ["pallet_deos_actors", "pallet", "Error"]
     }

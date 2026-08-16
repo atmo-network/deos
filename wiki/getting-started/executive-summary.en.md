@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Executive Summary
-summary: A one-page external summary of what DEOS is, why it matters, how it differs from discretionary DAO treasury management, why Polkadot/Substrate is the right substrate, what is shipped, what is not shipped, and how adoption starts.
+description: A one-page external summary of what DEOS is, why it matters, how it differs from discretionary DAO treasury management, why Polkadot/Substrate is the right substrate, what is shipped, what is not shipped, and how adoption starts.
 locale: en
 canonical_page_id: executive-summary
 translation_status: source
@@ -9,14 +9,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../AGENTS.md
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../docs/manifesto.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../AGENTS.md
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: partner
 tags:
   - onboarding

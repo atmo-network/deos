@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Token Minting Curve
-summary: The Token Minting Curve is the mint-only issuance engine in the current TMCTOL line. It prices new supply along a deterministic linear ceiling, uses integral math for exact minting, and treats launch parameters as immutable physics on the current launch line.
+description: The Token Minting Curve is the mint-only issuance engine in the current TMCTOL line. It prices new supply along a deterministic linear ceiling, uses integral math for exact minting, and treats launch parameters as immutable physics on the current launch line.
 locale: en
 canonical_page_id: token-minting-curve
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/tmc/docs/architecture.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../template/pallets/tmc/docs/architecture.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

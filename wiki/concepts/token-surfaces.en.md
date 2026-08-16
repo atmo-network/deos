@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Token Surfaces
-summary: A compact map of the main DEOS/TMCTOL token surfaces, including Native, VETO, BLDR, stNTVE, LP tokens, and how each token participates in economics, governance, staking, and read-model boundaries.
+description: A compact map of the main DEOS/TMCTOL token surfaces, including Native, VETO, BLDR, stNTVE, LP tokens, and how each token participates in economics, governance, staking, and read-model boundaries.
 locale: en
 canonical_page_id: token-surfaces
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/staking/docs/specification.en.md
-  - ../../template/primitives/src/ecosystem.rs
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../template/primitives/src/ecosystem.rs
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -61,7 +61,7 @@ This page is a compact map. It does not replace the exact formulas, governance r
 
 ### LP Tokens
 
-LP tokens represent positions in AMM pools. Some LP tokens can become protocol automation inputs: an actor can receive LP, unwind it, split outputs, or use it in treasury/staking flows depending on its execution plan.
+LP tokens represent positions in AMM pools. Some LP tokens can become protocol automation inputs: an actor can receive LP, unwind it, split outputs, or use it in treasury/staking flows according to its Actor Contract.
 
 ### `stXXX`
 

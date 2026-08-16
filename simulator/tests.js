@@ -13,8 +13,8 @@ import {
   Router,
   User,
   collect_protocol_fee,
-  distribute_fee_sink_phase1,
-  distribute_fee_sink_phase2,
+  distribute_fee_sink_permissionless_target,
+  distribute_fee_sink_trusted_set,
 } from "./model.js";
 
 /** @typedef {import("./model.js").SystemConfig} SystemConfig */
@@ -2122,44 +2122,44 @@ runTest("Router Intelligence - XYK Route Selection", () => {
   );
 });
 
-runTest("Two-Phase Reward Routing - Unified Fee Collection", () => {
+runTest("Mode-Named Reward Routing - Unified Fee Collection", () => {
   const amount = 100n * PRECISION;
   const collected = collect_protocol_fee(amount);
   assert(collected.fee_sink === amount, "Fee Sink should receive 100% of protocol fees");
 });
 
-runTest("Two-Phase Reward Routing - Phase 1 Pools", () => {
+runTest("TrustedSet Reward Routing - Pool Halves", () => {
   const feeSinkAmount = 100n * PRECISION;
-  const split = distribute_fee_sink_phase1(feeSinkAmount);
-  assert(split.staking_pool === 50n * PRECISION, "Phase 1 staking pool should receive half of Fee Sink flow");
-  assert(split.liquidity_pool === 50n * PRECISION, "Phase 1 liquidity pool should receive half of Fee Sink flow");
-  assert(split.staking_pool + split.liquidity_pool === feeSinkAmount, "Phase 1 distribution must conserve Fee Sink amount");
+  const split = distribute_fee_sink_trusted_set(feeSinkAmount);
+  assert(split.staking_pool === 50n * PRECISION, "TrustedSet staking pool should receive half of Fee Sink flow");
+  assert(split.liquidity_pool === 50n * PRECISION, "TrustedSet liquidity pool should receive half of Fee Sink flow");
+  assert(split.staking_pool + split.liquidity_pool === feeSinkAmount, "TrustedSet distribution must conserve Fee Sink amount");
 });
 
-runTest("Two-Phase Reward Routing - Phase 2 Equal Thirds", () => {
+runTest("Permissionless Target Reward Routing - Equal Thirds", () => {
   const feeSinkAmount = 60n * PRECISION;
-  const split = distribute_fee_sink_phase2(feeSinkAmount);
-  assert(split.security_rewards === 20n * PRECISION, "Phase 2 security rewards should receive one third");
-  assert(split.staking_pool === 20n * PRECISION, "Phase 2 staking pool should receive one third");
-  assert(split.liquidity_pool === 20n * PRECISION, "Phase 2 liquidity pool should receive one third");
-  assert(split.fee_sink_remainder === 0n, "Divisible Phase 2 flow should leave no remainder");
+  const split = distribute_fee_sink_permissionless_target(feeSinkAmount);
+  assert(split.security_rewards === 20n * PRECISION, "Permissionless target security rewards should receive one third");
+  assert(split.staking_pool === 20n * PRECISION, "Permissionless target staking pool should receive one third");
+  assert(split.liquidity_pool === 20n * PRECISION, "Permissionless target liquidity pool should receive one third");
+  assert(split.fee_sink_remainder === 0n, "Divisible permissionless target flow should leave no remainder");
 });
 
-runTest("Two-Phase Reward Routing - Remainder Conservation", () => {
+runTest("Mode-Named Reward Routing - Remainder Conservation", () => {
   const collected = collect_protocol_fee(7n);
   assert(collected.fee_sink === 7n, "Collection must conserve dust amounts");
-  const phase1 = distribute_fee_sink_phase1(collected.fee_sink);
-  assert(phase1.staking_pool + phase1.liquidity_pool === collected.fee_sink, "Phase 1 dust split must conserve Fee Sink amount");
-  const phase2 = distribute_fee_sink_phase2(collected.fee_sink);
+  const trusted = distribute_fee_sink_trusted_set(collected.fee_sink);
+  assert(trusted.staking_pool + trusted.liquidity_pool === collected.fee_sink, "TrustedSet dust split must conserve Fee Sink amount");
+  const permissionless = distribute_fee_sink_permissionless_target(collected.fee_sink);
   assert(
-    phase2.security_rewards +
-      phase2.staking_pool +
-      phase2.liquidity_pool +
-      phase2.fee_sink_remainder ===
+    permissionless.security_rewards +
+      permissionless.staking_pool +
+      permissionless.liquidity_pool +
+      permissionless.fee_sink_remainder ===
       collected.fee_sink,
-    "Phase 2 dust split plus retained Fee Sink remainder must conserve the collected amount",
+    "Permissionless target dust split plus retained Fee Sink remainder must conserve the collected amount",
   );
-  assert(phase2.fee_sink_remainder === 1n, "Indivisible thirds should retain their remainder in Fee Sink");
+  assert(permissionless.fee_sink_remainder === 1n, "Indivisible thirds should retain their remainder in Fee Sink");
 });
 
 runTest("Economic Incentive Alignment", () => {

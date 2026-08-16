@@ -362,9 +362,10 @@ export class BlockchainSnapshotBuilder {
       isAvailable: false,
       accountAddress,
       securityMode: null,
-      securityCapabilities: null,
       securityReadiness: null,
       securityEpoch: null,
+      plannedSecurityEpoch: null,
+      settlementObligationsRemain: null,
       boundaryDiagnostic: null,
       exchangeRate: null,
       pool: null,
@@ -372,25 +373,13 @@ export class BlockchainSnapshotBuilder {
     } satisfies NativeStakingProjection;
     try {
       const [
-        securityMode,
-        securityCapabilities,
-        securityReadiness,
-        securityEpoch,
+        securityViewResult,
         boundaryDiagnostic,
         exchangeRate,
         pool,
         accountPosition,
       ] = await Promise.all([
-        snapshot.typedApi.view.Staking.native_security_mode({
-          at: snapshot.at,
-        }),
-        snapshot.typedApi.view.Staking.native_security_capabilities({
-          at: snapshot.at,
-        }),
-        snapshot.typedApi.view.Staking.native_security_readiness({
-          at: snapshot.at,
-        }),
-        snapshot.typedApi.view.Staking.current_security_epoch({
+        snapshot.typedApi.view.Staking.native_security_view({
           at: snapshot.at,
         }),
         snapshot.typedApi.query.Staking.LastNativeSecurityBoundaryDiagnostic.getValue(
@@ -411,25 +400,30 @@ export class BlockchainSnapshotBuilder {
             )
           : Promise.resolve(null),
       ]);
+      if (!securityViewResult.success) {
+        throw new Error(
+          `Native security view rejected bounded state: ${securityViewResult.value.type}`,
+        );
+      }
+      const securityView = securityViewResult.value;
       return {
         isAvailable: pool !== null,
         accountAddress,
-        securityMode: securityMode.type,
-        securityCapabilities: {
-          newNominations: securityCapabilities.new_nominations,
-          redelegation: securityCapabilities.redelegation,
-          candidateSelection: securityCapabilities.candidate_selection,
-          rewardFunding: securityCapabilities.reward_funding,
-          rewardClaims: securityCapabilities.reward_claims,
-          rewardCompound: securityCapabilities.reward_compound,
-          custodyExit: securityCapabilities.custody_exit,
-        },
-        securityReadiness: securityReadiness.type,
-        securityEpoch,
+        securityMode: securityView.mode.type,
+        securityReadiness: securityView.readiness.type,
+        securityEpoch: securityView.current_epoch,
+        plannedSecurityEpoch: securityView.planned_epoch ?? null,
+        settlementObligationsRemain: securityView.settlement_obligations_remain,
         boundaryDiagnostic: boundaryDiagnostic
           ? {
               plannedEpoch: boundaryDiagnostic.planned_epoch,
-              readiness: boundaryDiagnostic.readiness.type,
+              outcome:
+                boundaryDiagnostic.outcome.type === 'NotReady'
+                  ? {
+                      type: 'NotReady',
+                      readiness: boundaryDiagnostic.outcome.value.type,
+                    }
+                  : { type: boundaryDiagnostic.outcome.type },
             }
           : null,
         exchangeRate: exchangeRate ?? null,

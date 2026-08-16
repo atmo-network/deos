@@ -32,7 +32,6 @@ enum AdmissionDecision {
 /// closed through the public error surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnqueueOutcome {
-  Ok,
   AlreadyLive,
   CapacityUnavailable,
   TicketExhausted,
@@ -553,7 +552,6 @@ impl<T: Config> Pallet<T> {
   pub fn enqueue_outcome_error(outcome: Result<(), EnqueueOutcome>) -> Result<(), DispatchError> {
     match outcome {
       Ok(()) => Ok(()),
-      Err(EnqueueOutcome::Ok) => Ok(()),
       Err(EnqueueOutcome::AlreadyLive) => Ok(()),
       Err(EnqueueOutcome::CapacityUnavailable) => Err(Error::<T>::QueueCapacityUnavailable.into()),
       Err(EnqueueOutcome::TicketExhausted) => Err(Error::<T>::QueueTicketExhausted.into()),
@@ -1707,20 +1705,6 @@ impl<T: Config> Pallet<T> {
     total
   }
 
-  pub(crate) fn cadence_phase_blocks(actor_id: ActorId, every_blocks: u32) -> BlockNumberFor<T> {
-    let window = every_blocks
-      .saturating_div(4)
-      .min(T::MaxTimerJitterBlocks::get());
-    if window == 0 {
-      return Zero::zero();
-    }
-    let hash = frame::hashing::blake2_256(&actor_id.encode());
-    let raw = u64::from_le_bytes([
-      hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7],
-    ]);
-    (raw % u64::from(window)).saturated_into()
-  }
-
   /// The Active-epoch clock anchor. Set to the current block (clamped to window
   /// start) at Active installation and schedule replacement; reactivation with
   /// `cycle_nonce > 0` uses it as the conservative cooldown anchor when no
@@ -1735,14 +1719,11 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn cadence_at_or_after(
-    actor_id: ActorId,
     schedule_anchor: BlockNumberFor<T>,
     every_blocks: u32,
     lower: BlockNumberFor<T>,
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
-    let origin = schedule_anchor
-      .checked_add(&Self::cadence_phase_blocks(actor_id, every_blocks))
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    let origin = schedule_anchor;
     if lower <= origin {
       return Ok(origin);
     }
@@ -1762,7 +1743,6 @@ impl<T: Config> Pallet<T> {
   }
 
   fn next_eligible_at(
-    actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
     include_timer: bool,
@@ -1795,16 +1775,14 @@ impl<T: Config> Pallet<T> {
           .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?,
       );
     }
-    Self::cadence_at_or_after(actor_id, instance.schedule_anchor, every_blocks, lower)
+    Self::cadence_at_or_after(instance.schedule_anchor, every_blocks, lower)
   }
 
-  fn retry_backoff_blocks(cursor_local_attempt: u32) -> u32 {
-    match cursor_local_attempt {
-      0 => 1,
-      1 => 2,
-      2 => 4,
-      _ => MAX_RETRY_BACKOFF_BLOCKS,
-    }
+  pub(crate) fn retry_backoff_blocks(cursor_local_attempt: u32) -> u32 {
+    1u32
+      .checked_shl(cursor_local_attempt)
+      .unwrap_or(MAX_RETRY_BACKOFF_BLOCKS)
+      .min(MAX_RETRY_BACKOFF_BLOCKS)
   }
 
   pub(crate) fn retry_eligible_at(
@@ -1843,7 +1821,6 @@ impl<T: Config> Pallet<T> {
       Self::retry_eligible_at(actor_id, instance)?
     } else if instance.pending_signal {
       Self::next_eligible_at(
-        actor_id,
         instance,
         now,
         instance.schedule.trigger.cadence_blocks().is_some(),
@@ -1852,7 +1829,7 @@ impl<T: Config> Pallet<T> {
       let exact_next_block = now
         .checked_add(&One::one())
         .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-      Self::next_eligible_at(actor_id, instance, exact_next_block, true)?
+      Self::next_eligible_at(instance, exact_next_block, true)?
     } else {
       return Self::schedule_window_expiry(actor_id, instance);
     };
@@ -1985,9 +1962,6 @@ impl<T: Config> Pallet<T> {
       {
         return Err(ActorClassificationError::ContinuationInvariant);
       }
-      if state.attempt.checked_add(1).is_none() {
-        return Err(ActorClassificationError::ComputationOverflow);
-      }
     }
 
     let terminal_reason = if Self::is_window_expired(instance) {
@@ -2003,7 +1977,7 @@ impl<T: Config> Pallet<T> {
         .is_some_and(|max_attempts| state.unsuccessful_attempts_at_cursor >= max_attempts)
     }) {
       Some(CloseReason::RetryAttemptsExhausted)
-    } else if Self::failure_limit_reached(instance.consecutive_failures) {
+    } else if Self::failure_limit_reached(instance.unsuccessful_attempt_streak) {
       Some(CloseReason::ConsecutiveFailures)
     } else if instance.cycle_state == CycleState::Idle
       && instance
@@ -2036,7 +2010,7 @@ impl<T: Config> Pallet<T> {
     } else {
       let now = frame_system::Pallet::<T>::block_number();
       let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
-      let eligible_at = Self::next_eligible_at(actor_id, instance, now, include_timer)
+      let eligible_at = Self::next_eligible_at(instance, now, include_timer)
         .map_err(|_| ActorClassificationError::ComputationOverflow)?;
       if eligible_at > now {
         ActorExecutionPhase::WaitingTemporal(eligible_at)
@@ -2077,7 +2051,7 @@ impl<T: Config> Pallet<T> {
     start_cursor: usize,
     prior_unsuccessful_attempts_at_cursor: Option<u32>,
   ) -> bool {
-    if Self::failure_limit_reached(instance.consecutive_failures.saturating_add(1)) {
+    if Self::failure_limit_reached(instance.unsuccessful_attempt_streak.saturating_add(1)) {
       return true;
     }
     for index in start_cursor..instance.steps.len() {
@@ -2182,7 +2156,7 @@ impl<T: Config> Pallet<T> {
   /// gate for a waiting phase, or `None` when no future gate is computable.
   pub fn actor_eligibility(
     actor_id: ActorId,
-  ) -> Result<ActorEligibilityProjection<BlockNumberFor<T>>, ActorEligibilityError> {
+  ) -> Result<ActorEligibilityProjection<BlockNumberFor<T>>, ActorClassificationError> {
     let Some(identity) = ActorIdentities::<T>::get(actor_id) else {
       return Ok(ActorEligibilityProjection {
         phase: ActorEligibilityPhase::NotRegistered,
@@ -2200,16 +2174,9 @@ impl<T: Config> Pallet<T> {
         });
       }
       (Some(hot), Some(contract), true) => Self::derive_active_actor_view(identity, hot, contract),
-      _ => return Err(ActorEligibilityError::ActorInvariant),
+      _ => return Err(ActorClassificationError::ActorInvariant),
     };
-    let classification =
-      Self::classify_actor(actor_id, &instance).map_err(|error| match error {
-        ActorClassificationError::ActorInvariant => ActorEligibilityError::ActorInvariant,
-        ActorClassificationError::ContinuationInvariant => {
-          ActorEligibilityError::ContinuationInvariant
-        }
-        ActorClassificationError::ComputationOverflow => ActorEligibilityError::ComputationOverflow,
-      })?;
+    let classification = Self::classify_actor(actor_id, &instance)?;
     let (phase, next_eligible_block) = match classification.execution_phase {
       ActorExecutionPhase::GlobalCircuitBreaker => {
         (ActorEligibilityPhase::GlobalCircuitBreaker, None)

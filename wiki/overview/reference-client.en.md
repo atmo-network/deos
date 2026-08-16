@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Reference Client
-summary: The DEOS web client is an on-chain-first reference UI for live protocol flows. It separates product widgets from layout infrastructure, centralizes reusable UI primitives, gates ownership with Domain DAG, and keeps data provenance visible.
+description: The DEOS web client is an on-chain-first reference UI for live protocol flows. It separates product widgets from layout infrastructure, centralizes reusable UI primitives, gates ownership with Domain DAG, and keeps data provenance visible.
 locale: en
 canonical_page_id: reference-client
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../web-client/docs/architecture.en.md
-  - ../../web-client/README.md
-  - ../../web-client/src/lib/ui/README.md
-  - ../../docs/read-model.contract.en.md
-status: active
+  - resource: ../../web-client/docs/architecture.en.md
+  - resource: ../../web-client/README.md
+  - resource: ../../web-client/src/lib/ui/README.md
+  - resource: ../../docs/read-model.contract.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

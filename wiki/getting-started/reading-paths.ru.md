@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Маршруты чтения
-summary: Самодостаточные маршруты по wiki для новичков, экономических изменений, runtime-задач, governance, клиентской работы, проверки статуса и инструментов.
+description: Самостоятельные маршруты по вики для новичков, внешней оценки, экономики, среды исполнения, управления, клиента, состояния проекта и инструментов.
 locale: ru
 canonical_page_id: reading-paths
 translation_of: reading-paths.en.md
@@ -10,27 +10,27 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/README.md
-  - ../../README.md
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../web-client/README.md
-  - ../../template/README.md
-  - ../../scripts/README.md
-status: active
+  - resource: ../../docs/README.md
+  - resource: ../../README.md
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../web-client/README.md
+  - resource: ../../template/README.md
+  - resource: ../../scripts/README.md
+status: stable
 audience: newcomer
 tags:
   - onboarding
   - reading-path
   - documentation
 related:
-  - Начните здесь
+  - С чего начать
   - Карта доменов
   - Первые шаги
-  - Generated Wiki
+  - Собранная вики
   - Статус разработки
   - Обзор фреймворка DEOS
-  - Экономика $BLDR
+  - Экономика созидателей $BLDR
   - Базовые термины
 last_compiled: 2026-07-20
 confidence: 0.85
@@ -40,16 +40,16 @@ confidence: 0.85
 
 ## Кратко
 
-У DEOS есть несколько связанных доменов: идентичность фреймворка, экономическая физика, автономные акторы, маршрутизация, governance, стейкинг, модели чтения, клиент, инструменты и будущие внешние условия. Не нужно читать все за один проход.
+DEOS объединяет несколько связанных областей: устройство фреймворка, экономическую физику, автономных Actors, маршрутизацию, управление, стейкинг, проекции данных для чтения, клиент, инструменты и условия будущего развития. Необязательно изучать всё за один раз.
 
-Если нужен самый короткий вход, сначала используйте [Начните здесь](start-here.ru.md). Эта страница нужна после выбора onboarding-пути, когда требуется более широкий role-based маршрут чтения.
+Для самого короткого знакомства сначала откройте [С чего начать](start-here.ru.md). Эта страница поможет подобрать более подробный маршрут по вашей роли или задаче.
 
-## Если вы совсем новичок
+## Если вы совсем не знакомы с DEOS
 
-1. [Начните здесь](start-here.ru.md)
+1. [С чего начать](start-here.ru.md)
 2. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-3. [Partner Pitch](partner-pitch.ru.md)
-4. [Executive Summary](executive-summary.ru.md)
+3. [Предложение для партнёров](partner-pitch.ru.md)
+4. [Краткое резюме](executive-summary.ru.md)
 5. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 6. [Карта доменов](../concepts/domain-map.ru.md)
 7. [Архитектурные схемы](../concepts/architecture-diagrams.ru.md)
@@ -57,24 +57,24 @@ confidence: 0.85
 9. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
 10. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 11. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-12. [FAQ для новичков](../faq/newcomer-faq.ru.md)
+12. [Вопросы новичков](../faq/newcomer-faq.ru.md)
 
-Этот маршрут дает словарь проекта до того, как появятся имена pallet-ов, детали runtime или термины конкретной реализации.
+Этот маршрут знакомит со словарём проекта до появления названий пакетов, подробностей среды исполнения и терминов конкретной реализации.
 
-## Если вы оцениваете DEOS извне
+## Если вы оцениваете DEOS для внешнего проекта
 
 1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-2. [Partner Pitch](partner-pitch.ru.md)
-3. [Executive Summary](executive-summary.ru.md)
-4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
-5. [Экономика $BLDR](../concepts/builder-economy.ru.md)
+2. [Предложение для партнёров](partner-pitch.ru.md)
+3. [Краткое резюме](executive-summary.ru.md)
+4. [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
+5. [Экономика созидателей $BLDR](../concepts/builder-economy.ru.md)
 6. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 7. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
 8. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-9. [Форк DEOS](../usage/forking-deos.ru.md)
+9. [Создание форка DEOS](../usage/forking-deos.ru.md)
 10. [Эталонный клиент](../overview/reference-client.ru.md)
 
-Этот маршрут для партнеров, ecosystem readers и technical evaluators, которым сначала нужны мем, границы, карта рисков и обязанности форка, а уже потом topology реализации.
+Этот маршрут предназначен для партнёров, представителей экосистем и технических специалистов. Он сначала объясняет главную идею, границы, модель рисков и обязанности производного проекта, а затем — устройство реализации.
 
 ## Если вы меняете экономику
 
@@ -84,82 +84,82 @@ confidence: 0.85
 4. [Экономические пороги](../concepts/economic-thresholds.ru.md)
 5. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
 6. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-7. [Сценарии TOL buckets](../concepts/tol-bucket-scenarios.ru.md)
+7. [Сценарии корзин TOL](../concepts/tol-bucket-scenarios.ru.md)
 8. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
 9. [Token Minting Curve](../overview/token-minting-curve.ru.md)
 10. [DEOS Router](../overview/router.ru.md)
-11. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
+11. [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
 
-Экономическая работа должна сохранять различие между формулами, поведением runtime и интеграционными эффектами. Маршрут wiki должен показать, какой домен вы меняете, до запуска более глубокого набора проверок.
+При работе с экономикой важно различать формулы, поведение среды исполнения и последствия интеграции. Сначала определите затронутую область, а затем запускайте более глубокие проверки.
 
-## Если вы меняете поведение runtime
+## Если вы меняете поведение среды исполнения
 
-1. [Паттерны runtime](../overview/runtime-patterns.ru.md)
+1. [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
 2. [Система Actors](../overview/actor-system.ru.md)
 3. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
 4. [Идентичность активов](../overview/asset-identity.ru.md)
-5. [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
-6. [Разделение read-model](../concepts/read-model-split.ru.md)
-7. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
+5. [Контур маршрутизации и эмиссии](../concepts/routing-and-minting-loop.ru.md)
+6. [Разделение данных для чтения](../concepts/read-model-split.ru.md)
+7. [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
 
-Работа с runtime сначала должна определить затронутый домен, затем понять, является ли изменение только математическим, локальным для pallet-а, интегрированным в runtime или видимым в клиенте.
+Сначала определите затронутую область, затем выясните, ограничено ли изменение математикой или одним пакетом, затрагивает ли всю среду исполнения либо становится видимым в клиенте.
 
-## Если вы меняете governance
+## Если вы меняете управление
 
-1. [Governance](../overview/governance.ru.md)
-2. [Домены Governance](../concepts/governance-domains.ru.md)
-3. [Экономика $BLDR](../concepts/builder-economy.ru.md)
-4. [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
+1. [Управление](../overview/governance.ru.md)
+2. [Домены управления](../concepts/governance-domains.ru.md)
+3. [Экономика созидателей $BLDR](../concepts/builder-economy.ru.md)
+4. [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
 5. [Стейкинг](../overview/staking.ru.md)
-6. [Разделение read-model](../concepts/read-model-split.ru.md)
+6. [Разделение данных для чтения](../concepts/read-model-split.ru.md)
 7. [Базовые термины](../glossary/core-terms.ru.md)
 
-Работа с governance должна держать отдельно конституционную защиту, primary tracks, типизированные семейства payload и полномочия исполнения.
+Не смешивайте конституционную защиту, основные контуры принятия решений, типизированные семейства предложений и полномочия на исполнение.
 
 ## Если вы меняете веб-клиент
 
 1. [Эталонный клиент](../overview/reference-client.ru.md)
-2. [Разделение read-model](../concepts/read-model-split.ru.md)
-3. [Generated Wiki](../concepts/generated-wiki.ru.md)
+2. [Разделение данных для чтения](../concepts/read-model-split.ru.md)
+3. [Собранная вики](../concepts/generated-wiki.ru.md)
 4. [Слой скриптов](../usage/scripts-layer.ru.md)
 5. [Статус разработки](../development/status.ru.md)
 
-Работа с клиентом должна сохранять повторное использование UI Kit, правила владения Domain DAG, честное происхождение данных в read-model и доверенную границу рендеринга wiki.
+При работе с клиентом сохраняйте повторное использование UI Kit, распределение ответственности по Domain DAG, честное указание источников данных и доверенную границу отображения вики.
 
-## Если вы проверяете текущий статус или историю релизов
+## Если вы проверяете состояние проекта или историю выпусков
 
 1. [Статус разработки](../development/status.ru.md)
 2. [Карта доменов](../concepts/domain-map.ru.md)
-3. [FAQ для новичков](../faq/newcomer-faq.ru.md)
-4. [Generated Wiki](../concepts/generated-wiki.ru.md)
+3. [Вопросы новичков](../faq/newcomer-faq.ru.md)
+4. [Собранная вики](../concepts/generated-wiki.ru.md)
 5. [Базовые термины](../glossary/core-terms.ru.md)
 
-Работа со статусом должна отделять поставленную базовую линию, открытый backlog, завершенные поставки и будущие внешне-зависимые задачи. Wiki объясняет эту границу, но не превращается в заметки к релизам.
+Отделяйте реализованную основу, открытые задачи, завершённые изменения и работу, зависящую от будущих условий. Вики объясняет эти границы, но не заменяет журнал выпусков.
 
-## Если вы работаете со скриптами или локальными инструментами
+## Если вы работаете со сценариями или локальными инструментами
 
 1. [Слой скриптов](../usage/scripts-layer.ru.md)
-2. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
-3. [Паттерны runtime](../overview/runtime-patterns.ru.md)
+2. [Трёхуровневая проверка](../development/three-layer-validation.ru.md)
+3. [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
 4. [Статус разработки](../development/status.ru.md)
 5. [Структура репозитория](../implementation/repository-structure.ru.md)
 6. [Технологический стек](../implementation/tech-stack.ru.md)
-7. [Parachain context](../concepts/parachain-context.ru.md)
-8. [Форк DEOS](../usage/forking-deos.ru.md)
+7. [DEOS в экосистеме парачейнов](../concepts/parachain-context.ru.md)
+8. [Создание форка DEOS](../usage/forking-deos.ru.md)
 
-Работа с инструментами и fork work должна оставаться ограниченной, явной и честной по требованиям запуска, сохраненным framework contracts и поведению.
+Работа с инструментами и производными проектами должна оставаться ограниченной и явной, а требования к запуску, сохранённые контракты фреймворка и фактическое поведение — описываться честно.
 
 ## Связанные страницы
 
-- [Начните здесь](start-here.ru.md)
+- [С чего начать](start-here.ru.md)
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-- [Partner Pitch](partner-pitch.ru.md)
-- [Executive Summary](executive-summary.ru.md)
-- [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
+- [Предложение для партнёров](partner-pitch.ru.md)
+- [Краткое резюме](executive-summary.ru.md)
+- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
 - [Карта доменов](../concepts/domain-map.ru.md)
 - [Первые шаги](first-steps.ru.md)
-- [Generated Wiki](../concepts/generated-wiki.ru.md)
+- [Собранная вики](../concepts/generated-wiki.ru.md)
 - [Статус разработки](../development/status.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Экономика $BLDR](../concepts/builder-economy.ru.md)
+- [Экономика созидателей $BLDR](../concepts/builder-economy.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Governance Domains
-summary: A governance domain is one typed governance cell inside the larger governance system. It binds the governed subject, voting and protection surfaces, valid payload families, cadence, and execution authority.
+description: A governance domain is one typed governance cell inside the larger governance system. It binds the governed subject, voting and protection surfaces, valid payload families, cadence, and execution authority.
 locale: en
 canonical_page_id: governance-domains
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/staking/docs/specification.en.md
-status: active
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+status: stable
 audience: newcomer
 tags:
   - concept

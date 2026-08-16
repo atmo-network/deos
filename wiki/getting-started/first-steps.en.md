@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: First Steps
-summary: A short self-contained entry route for understanding DEOS, choosing a domain, and running the right validation surface.
+description: A short self-contained entry route for understanding DEOS, choosing a domain, and running the right validation surface.
 locale: en
 canonical_page_id: first-steps
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../docs/read-model.contract.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/read-model.contract.en.md
+status: stable
 audience: newcomer
 tags:
   - getting-started

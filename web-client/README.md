@@ -104,7 +104,7 @@ The wiki is trusted reviewed repository content, not arbitrary user input. Safet
 npm run validate:wiki
 ```
 
-That guard rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed wiki frontmatter before content is rendered in the browser.
+That guard validates `/wiki` as a strict OKF v0.2 bundle, then rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before content is rendered in the browser.
 
 The widget consumes:
 
@@ -171,7 +171,7 @@ For wiki-rendering/content changes, also run:
 npm run validate:wiki
 ```
 
-`validate:wiki` runs the trusted markdown validator and the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
+`validate:wiki` runs strict OKF and trusted-markdown validation before the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
 
 To run every configured client-adjacent gate:
 

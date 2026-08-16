@@ -10,9 +10,121 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
 jobs:
-  fast:
-    name: Fast Release Validation
-    uses: ./.github/workflows/_validate.yml
-    with:
-      profile: fast
+  validation-gate:
+    name: validation-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: 0
+      SKIP_WASM_BUILD: 1
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation prerequisites
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: web-client/package.json
+
+      - name: Restore validation caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.npm
+            /tmp/deos-assurance-bin
+            template/target
+          key: ${{ runner.os }}-fast-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml', 'web-client/package.json', 'web-client/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-fast-
+            ${{ runner.os }}-
+
+      - name: Prepare canonical validation environment
+        run: |
+          ./scripts/setup-environment.sh rust
+          ./scripts/setup-environment.sh node
+          ./scripts/setup-environment.sh client
+
+      - name: Discover trusted PR evidence
+        id: discover
+        if: ${{ !cancelled() && github.event_name == 'push' }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node ./scripts/validation-ci-evidence.mjs discover \
+            --repository "${{ github.repository }}" \
+            --repository-id "${{ github.event.repository.id }}" \
+            --main-sha "${{ github.sha }}" \
+            --output "${{ runner.temp }}/deos-validation-discovery.json" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Download trusted PR evidence
+        id: download
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.discover.outcome == 'success' && steps.discover.outputs.found == 'true' }}
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.discover.outputs.artifact-id }}
+          path: ${{ runner.temp }}/deos-validation-artifact
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.discover.outputs.run-id }}
+          merge-multiple: true
+
+      - name: Verify trusted PR evidence
+        id: decide
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.download.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          node ./scripts/validation-ci-evidence.mjs decide \
+            --repo . \
+            --repository "${{ github.repository }}" \
+            --repository-id "${{ github.event.repository.id }}" \
+            --discovery "${{ runner.temp }}/deos-validation-discovery.json" \
+            --artifact-directory "${{ runner.temp }}/deos-validation-artifact" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Run canonical fast profile
+        if: ${{ !cancelled() && (github.event_name == 'pull_request' || steps.decide.outcome != 'success' || steps.decide.outputs.reuse != 'true') }}
+        run: ./scripts/validate-local.sh --fresh fast
+
+      - name: Export trusted PR evidence
+        id: export
+        if: github.event_name == 'pull_request' && success()
+        run: |
+          node ./scripts/validation-ci-evidence.mjs export \
+            --repo . \
+            --output "${{ runner.temp }}/evidence.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --repository "${{ github.repository }}" \
+            --repository-id "${{ github.event.repository.id }}" \
+            --workflow-path ".github/workflows/ci.yml" \
+            --event "${{ github.event_name }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --job "validation-gate" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --head-repository "${{ github.event.pull_request.head.repo.full_name }}" \
+            --head-repository-id "${{ github.event.pull_request.head.repo.id }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}"
+
+      - name: Upload trusted PR evidence
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.export.outputs.artifact-name }}
+          path: ${{ runner.temp }}/evidence.json
+          if-no-files-found: error
+          retention-days: 7

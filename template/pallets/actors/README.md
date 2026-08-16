@@ -12,7 +12,7 @@ The 2606 upgrade did not require pallet-local semantic changes here; the relevan
 The current kernel/runtime slice provides:
 
 - User and System Actor creation with deterministic sovereign accounts
-- Bounded execution plans whose steps own one canonical `Preconditions::{Unconditional, AnyOf}` DNF with explicit Opening/Current timed predicates and one typed task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.)
+- Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF with explicit Opening/Current timed Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
 - One scheduler over a canonical paged FIFO with monotonic `NextQueueTicket`, common block cutoff, exact physical occupancy, one actor-local live ticket, strict global ticket order across actor types, and shared time-ordered wakeup storage
 - Timer, manual, `OnAddressEvent`, and typed `OnObservationChange` sources; observation subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
@@ -21,7 +21,7 @@ The current kernel/runtime slice provides:
 - A bounded `simulate_current_contract` rollback core and versioned `ActorSimulationApi` declaration that require exact stored-contract identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
 - A read-only `actor_eligibility` projection behind the versioned `ActorEligibilityApi` declaration that reports current readiness, the scheduler-owned phase, and the next eligible block by reusing the same cadence/cooldown/window/backoff/breaker/latch owners as admission
 - Runtime-configured adapters for assets, swaps, liquidity, staking, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `ActorType` through a minimal execution context
-- Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to the single `WeightInfo` interface
+- Exhaustive package-owned instruction contracts for every Task, Predicate, amount resolution, and error policy, with weight ownership delegated to the single `WeightInfo` interface
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
@@ -31,7 +31,7 @@ Actors execute declarative plans against runtime adapters under explicit queue, 
 
 `PercentageAtOpening` reads a typed balance/share snapshot captured when a fresh cycle opens. Its values remain independent of trigger kind, signal payload, and AddressEvent amount.
 
-Active Actor Contracts choose `Persistent` or `CloseAfterProductiveCycle`. Productive closure requires successful logical-cycle completion with at least one committed effectful task; false conditions, skips, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
+Active Actor Contracts choose `Persistent` or `CloseAfterProductiveCycle`. Productive closure requires successful logical-cycle completion with at least one committed effectful task; false Precondition results, skipped Steps, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 
 `StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary, funding, and auto-close handling, and cannot select a cursor or mutate actor lifecycle.
 
@@ -46,7 +46,7 @@ Readiness and execution must stay deterministic and bounded:
 
 - Future eligibility goes through the wakeup layer rather than ad hoc scans
 - Hot-path execution happens only under configured per-block limits
-- Timer readiness uses deterministic cadence and bounded actor-stable jitter; Actors exposes no probability or entropy contract
+- Timer readiness uses exact deterministic cadence with no actor-specific phase, probability, or entropy contract
 - `on_idle` does useful work only with remaining block budget
 - Continuation retries reuse the same FIFO/wakeup substrate and admit only the unresolved suffix; they create no second scheduler, inbox, or off-chain correctness dependency
 
@@ -70,7 +70,7 @@ Minimal checklist:
 - Bind governance/system origins, owner-slot limits, queue/wakeup bounds, fee constants, task weight classes, and native asset identity.
 - Decide which tasks are allowed for User vs System actors and keep any chain-specific policy in adapters or genesis actor configuration, not in pallet core.
 - Provide deterministic genesis System Actor definitions only for actor roles the runtime actually wants to ship.
-- Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System Actor catalog as one runtime's topology, not as the pallet's required deployment shape.
+- Treat example Actor Contracts as reusable Task-language patterns; treat the DEOS/TMCTOL System Actor catalog as one runtime's topology, not as the pallet's required deployment shape.
 - Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
 - Bind `MaxOpeningSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
 - Validate adapter failure atomicity and Mutable User/System Continuation with runtime-local tests when adapters perform multi-step mutations.

@@ -1,0 +1,31 @@
+{
+  "format": "deos.actors.timer-jitter-decision",
+  "formatVersion": 1,
+  "profile": {
+    "actorIds": "1..=10000",
+    "cadenceBlocks": 4096,
+    "periods": 2,
+    "serviceCapacityPerBlock": 3,
+    "historicalPhase": "blake2_256(SCALE(actor_id))[0..8] little-endian modulo min(cadence/4, 64)"
+  },
+  "zeroPhase": {
+    "distinctTemporalTargets": 2,
+    "tailServiceBlock": 7429,
+    "passExhaustedBlocks": 6666,
+    "servicedWeightUnits": 20000,
+    "peakQueue": 10000
+  },
+  "historicalJitter": {
+    "distinctTemporalTargets": 128,
+    "tailServiceBlock": 7429,
+    "passExhaustedBlocks": 6666,
+    "servicedWeightUnits": 20000,
+    "peakQueueReductionLessThan": 250
+  },
+  "invariantMetrics": {
+    "fifoOrderChanged": false,
+    "retryRecoveryChanged": false,
+    "suspensionSemanticsChanged": false
+  },
+  "decision": "remove-timer-jitter"
+}

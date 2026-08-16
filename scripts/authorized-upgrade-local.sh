@@ -340,12 +340,12 @@ const client = createWsClient(wsUri);
 try {
   const api = client.getTypedApi(deos);
   const finalizedBlock = await client.getFinalizedBlock();
-  const [authorization, runtimeVersion, liveCodeHex, submissionAuthority, vetoAssetDetails] =
+  const [authorization, runtimeVersion, liveCodeHex, admissionPolicy, vetoAssetDetails] =
     await Promise.all([
       api.view.Governance.authorized_runtime_upgrade({ at: finalizedBlock.hash }),
       api.apis.Core.version({ at: finalizedBlock.hash }),
       client._request("state_getStorage", ["0x3a636f6465", finalizedBlock.hash]),
-      api.view.Governance.proposal_submission_authority(
+      api.view.Governance.proposal_admission_policy_view(
         governanceDomainId,
         PapiEnum("L1RootAction"),
         { at: finalizedBlock.hash },
@@ -358,7 +358,7 @@ try {
   const liveCodeHash = blake2AsHex(liveCodeHex, 256);
   const liveCodeMatchesLocalCandidate =
     liveCodeHash.toLowerCase() === localCodeHash.toLowerCase();
-  const submissionAuthorityType = submissionAuthority.type;
+  const submissionAuthorityType = admissionPolicy.authority.type;
   const vetoSupply = vetoAssetDetails?.supply ?? null;
   const strategicIngressPhase = !liveCodeMatchesLocalCandidate
     ? "different-runtime-code"
@@ -390,7 +390,6 @@ try {
       proposalStatus,
       preimageStatus,
       preimageNoteCost,
-      openingFee,
       proposerNativeAssetBalance,
       proposerReceiptBalance,
       stakingPool,
@@ -405,11 +404,6 @@ try {
       api.view.Governance.payload_preimage_note_cost(strategicPayloadBytes.length, {
         at: finalizedBlock.hash,
       }),
-      api.view.Governance.proposal_opening_fee(
-        governanceDomainId,
-        PapiEnum("L1RootAction"),
-        { at: finalizedBlock.hash },
-      ),
       api.view.Assets.balance_of(proposerAddress, governanceDomainId, {
         at: finalizedBlock.hash,
       }),
@@ -423,6 +417,7 @@ try {
         at: finalizedBlock.hash,
       }),
     ]);
+    const openingFee = admissionPolicy.opening_fee;
     const nativeAssetBalance = proposerNativeAssetBalance ?? 0n;
     const receiptBalance = proposerReceiptBalance ?? 0n;
     const systemFreeBalance = proposerSystemAccount.data.free;
@@ -447,8 +442,8 @@ try {
       creationCalls.push(await encoded(
         "establish nonzero protocol primary-track stake",
         "Signed proposer",
-        api.tx.Staking.stake_native,
-        { amount: strategicStakeAmount },
+        api.tx.Staking.stake,
+        { asset_id: governanceDomainId, amount: strategicStakeAmount },
       ));
     }
     if (!preimageAlreadyNoted) {

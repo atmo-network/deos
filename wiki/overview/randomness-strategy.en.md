@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Randomness Strategy
-summary: DEOS keeps randomness outside the current Actors contract. The local VRF line was retired, Actors timers now use deterministic cadence only, and any future probabilistic trigger requires a real financially secure entropy contract.
+description: DEOS keeps randomness outside the current Actors contract. The local VRF line was retired, Actors timers now use deterministic cadence only, and any future probabilistic trigger requires a real financially secure entropy contract.
 locale: en
 canonical_page_id: randomness-strategy
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/randomness.strategy.en.md
-  - ../../docs/manifesto.en.md
-status: active
+  - resource: ../../docs/randomness.strategy.en.md
+  - resource: ../../docs/manifesto.en.md
+status: stable
 audience: newcomer
 tags:
   - overview

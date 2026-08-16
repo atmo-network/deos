@@ -1,7 +1,7 @@
 ---
-page_type: concept
-title: Токеновые поверхности
-summary: Краткая карта главных token surfaces DEOS/TMCTOL, включая Native, VETO, BLDR, stNTVE, LP tokens и роли токенов в экономике, governance, staking и read-model boundaries.
+type: concept
+title: Роли токенов
+description: Краткая карта ролей `$NTVE`, `$VETO`, `$BLDR`, `stNTVE`, LP и `stXXX` в экономике, управлении, стейкинге и данных для чтения DEOS/TMCTOL.
 locale: ru
 canonical_page_id: token-surfaces
 translation_of: token-surfaces.en.md
@@ -10,11 +10,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/staking/docs/specification.en.md
-  - ../../template/primitives/src/ecosystem.rs
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../template/primitives/src/ecosystem.rs
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -24,72 +24,72 @@ tags:
 related:
   - Стандарт TMCTOL
   - Стейкинг
-  - Домены Governance
-  - Экономика $BLDR
-  - Token Minting Curve
-  - Разделение read-model
+  - Домены управления
+  - Экономика созидателей $BLDR
+  - Кривая эмиссии токенов
+  - Разделение данных для чтения
 last_compiled: 2026-07-20
 confidence: 0.9
 ---
 
-# Токеновые поверхности
+# Роли токенов
 
 ## Кратко
 
-DEOS одновременно использует несколько token surfaces. Они не взаимозаменяемы. Одни токены выражают экономику протокола, другие отвечают за protection или tactical governance, третьи являются receipts для позиций в staking или liquidity systems.
+DEOS одновременно использует несколько видов токенов, и они не взаимозаменяемы. Одни выражают экономику протокола, другие дают защитные или тактические полномочия управления, третьи удостоверяют долю в стейкинге или ликвидности.
 
-Эта страница — компактная карта. Она не заменяет точные формулы, governance rules или runtime constants, которыми владеют другие страницы.
+Эта страница служит краткой картой и не заменяет точные формулы, правила управления и константы среды исполнения.
 
-## Главные токены
+## Основные токены
 
-### Native / `$NTVE`
+### Нативный токен / `$NTVE`
 
-`$NTVE` — sovereign base token текущей эталонной линии. Он якорит native staking, может входить в пару с `stNTVE` для collator-security LP custody и участвует в protocol/network governance hierarchy.
+`$NTVE` — базовый суверенный токен текущей эталонной линии. Он лежит в основе нативного стейкинга, образует с `stNTVE` LP-позицию для обеспечения коллаторов и участвует в иерархии управления протоколом и сетью.
 
 ### `$VETO`
 
-`$VETO` — protection token, а не второй ordinary governance token. Его задача — constitutional safety: он может блокировать или защищать стратегические protocol/network changes, но не должен становиться позитивной daily-control surface.
+`$VETO` — токен защиты, а не второй обычный токен управления. Он предназначен для конституционной безопасности: может блокировать или защищать стратегические изменения протокола и сети, но не предоставляет самостоятельных положительных полномочий повседневного управления.
 
 ### `$BLDR`
 
-`$BLDR` — флагманский токен тактического управления для координации созидателей. В текущей линии он связан с управлением через счета-заявки, финансированием труда, ликвидностью под контролем протокола и специализированными контурами координации BLDR. Полный паттерн описывает [Экономика $BLDR](builder-economy.ru.md). Его ценность не сводится к эмиссии: она зависит от того, создаст ли производная экосистема реальный спрос на эту поверхность координации.
+`$BLDR` — основной токен тактического управления для координации созидателей. В текущей линии он связан с оценкой счетов-заявок, финансированием труда, ликвидностью во владении протокола и отдельными контурами BLDR. Полную схему описывает [Экономика созидателей $BLDR](builder-economy.ru.md). Ценность `$BLDR` зависит не только от эмиссии, но и от того, создаст ли производная экосистема реальный спрос на такую координацию.
 
-## Receipt и position tokens
+## Квитанции и токены позиций
 
 ### `stNTVE`
 
-`stNTVE` — native liquid staking receipt. Он представляет share-vault ownership, а не прямую collator nomination сам по себе. Collator security использует явную locked `NTVE/stNTVE` LP custody.
+`stNTVE` — ликвидная квитанция нативного стейкинга. Она удостоверяет долю в пуле, но сама по себе не означает номинацию коллатора. Безопасность коллаторов опирается на явно заблокированные LP пары `NTVE/stNTVE`.
 
-### LP tokens
+### LP-токены
 
-LP tokens представляют позиции в AMM pools. Некоторые LP tokens могут стать входом для protocol automation: actor может получить LP, выполнить unwind, разделить outputs или использовать позицию в treasury/staking flows согласно execution plan.
+LP-токены удостоверяют позиции в пулах AMM. Некоторые из них могут служить входом для автоматизации протокола: актор принимает LP, выводит базовые активы, распределяет результат или использует его в казначейских и стейкинговых потоках согласно своему `Actor Contract`.
 
 ### `stXXX`
 
-`stXXX` — общее семейство staking receipt assets. Native receipts и foreign receipts используют разные namespaces, чтобы derivation receipts не конфликтовали друг с другом.
+`stXXX` — общее обозначение семейства квитанций стейкинга. Нативные, локальные и иностранные квитанции используют разные пространства идентификаторов, чтобы их вывод оставался однозначным.
 
-## Границы monetary policy
+## Границы денежной политики
 
-Текущая wiki специально разделяет три вопроса:
+Вики намеренно разделяет четыре вопроса:
 
-- **Emission math**: [Token Minting Curve](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md).
-- **Governance power**: [Домены Governance](governance-domains.ru.md).
-- **Координация созидателей**: [Экономика $BLDR](builder-economy.ru.md).
-- **Receipt value**: [Стейкинг](../overview/staking.ru.md) и учет liquidity positions.
+- **Математика эмиссии**: [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md);
+- **Полномочия управления**: [Домены управления](governance-domains.ru.md);
+- **Координация созидателей**: [Экономика созидателей $BLDR](builder-economy.ru.md);
+- **Стоимость квитанций**: [Стейкинг](../overview/staking.ru.md) и учёт позиций ликвидности.
 
-Не выводите полную monetary policy каждого токена только из governance-role. Например, `$BLDR` может быть важен для tactical governance, но wiki не должна притворяться, что downstream demand, launch allocation или ecosystem product-market fit уже решены внутри framework.
+Нельзя выводить полную денежную политику токена только из его роли в управлении. Например, `$BLDR` может быть важен для тактического управления, но DEOS не утверждает, что спрос производной экосистемы, распределение при запуске или соответствие продукта рынку уже обеспечены фреймворком.
 
-## Правило read-model
+## Правило данных для чтения
 
-Token balances и ограниченные receipt/projection data могут быть прямой runtime truth. Long-range holder analytics, historical valuation, portfolio discovery по множеству assets и нарративы спроса — materialized или downstream-product concerns.
+Балансы токенов и ограниченные данные о квитанциях или позициях могут быть прямой истиной среды исполнения. Долгосрочная аналитика держателей, историческая оценка, поиск портфеля по множеству активов и предположения о спросе относятся к материализованным представлениям или продуктам производной экосистемы.
 
-Используйте [Разделение read-model](read-model-split.ru.md), чтобы решить, к какой поверхности относится token datum.
+[Разделение данных для чтения](read-model-split.ru.md) помогает определить владельца конкретного показателя.
 
 ## Связанные страницы
 
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Стейкинг](../overview/staking.ru.md)
-- [Домены Governance](governance-domains.ru.md)
-- [Экономика $BLDR](builder-economy.ru.md)
-- [Token Minting Curve](../overview/token-minting-curve.ru.md)
-- [Разделение read-model](read-model-split.ru.md)
+- [Домены управления](governance-domains.ru.md)
+- [Экономика созидателей $BLDR](builder-economy.ru.md)
+- [Кривая эмиссии токенов](../overview/token-minting-curve.ru.md)
+- [Разделение данных для чтения](read-model-split.ru.md)

@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Economic Thresholds
-summary: A wiki-level explanation of the main TMCTOL economic threshold concepts, including Gravity Well, Elasticity Inversion, compression, floor/ceiling spread, and why these claims must name their metric.
+description: A wiki-level explanation of the main TMCTOL economic threshold concepts, including Gravity Well, Elasticity Inversion, compression, floor/ceiling spread, and why these claims must name their metric.
 locale: en
 canonical_page_id: economic-thresholds
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.en.md
-  - ../../simulator/README.md
-  - ../../AGENTS.md
-status: active
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../simulator/README.md
+  - resource: ../../AGENTS.md
+status: stable
 audience: newcomer
 tags:
   - concept

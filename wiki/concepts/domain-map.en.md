@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Domain Map
-summary: A self-contained map of the major DEOS knowledge domains and how they link together inside the wiki.
+description: A self-contained map of the major DEOS knowledge domains and how they link together inside the wiki.
 locale: en
 canonical_page_id: domain-map
 translation_status: source
@@ -9,12 +9,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/README.md
-  - ../../docs/core.architecture.en.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../web-client/docs/architecture.en.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/README.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../web-client/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - domain-map

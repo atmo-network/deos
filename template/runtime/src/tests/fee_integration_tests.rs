@@ -72,12 +72,12 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
     let actor = Actors::active_actor_view(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
       .expect("Fee Sink actor remains active");
     assert_eq!(actor.cycle_nonce, 3);
-    assert_eq!(actor.consecutive_failures, 0);
+    assert_eq!(actor.unsuccessful_attempt_streak, 0);
   });
 }
 
 #[test]
-fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
+fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
   new_test_ext().execute_with(|| {
     let native_asset_id = 0;
     assert_ok!(Assets::force_create(
@@ -97,7 +97,11 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       BOB.into(),
       1_000,
     ));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(
+      RuntimeOrigin::signed(BOB),
+      native_asset_id,
+      500
+    ));
     let staked_asset_id = Staking::staked_asset_id(native_asset_id).expect("stNTVE must resolve");
     let base_asset = AssetKind::Local(native_asset_id);
     let staked_asset = AssetKind::Local(staked_asset_id);

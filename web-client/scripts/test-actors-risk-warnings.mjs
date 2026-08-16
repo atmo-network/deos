@@ -99,7 +99,7 @@ function step({
   onError = 'AbortCycle',
 } = {}) {
   return {
-    preconditions: { type: 'Unconditional', value: undefined },
+    precondition: undefined,
     task: { type: task, value: taskValue(task, amount) },
     on_error:
       onError === 'RetryLater'

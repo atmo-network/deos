@@ -1,7 +1,7 @@
 ---
-page_type: implementation
+type: implementation
 title: Tech Stack
-summary: Overview of the underlying technologies that power the DEOS framework, including Polkadot SDK and SvelteKit.
+description: Overview of the underlying technologies that power the DEOS framework, including Polkadot SDK and SvelteKit.
 locale: en
 canonical_page_id: tech-stack
 translation_status: source
@@ -9,14 +9,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/core.architecture.en.md
-  - ../../template/Cargo.toml
-  - ../../template/runtime/src/lib.rs
-  - ../../web-client/package.json
-  - ../../web-client/src/lib/read-model.ts
-  - ../../simulator/README.md
-  - ../../scripts/README.md
-status: active
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/Cargo.toml
+  - resource: ../../template/runtime/src/lib.rs
+  - resource: ../../web-client/package.json
+  - resource: ../../web-client/src/lib/read-model.ts
+  - resource: ../../simulator/README.md
+  - resource: ../../scripts/README.md
+status: stable
 audience: developer
 tags:
   - implementation

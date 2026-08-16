@@ -300,7 +300,9 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
       selectedSubmitPayloadKind == null ||
       !submitItemReady ||
       !submitPayloadReady ||
-      advisoryReview.payloadHashLoading,
+      advisoryReview.payloadHashLoading ||
+      advisoryReview.payloadHashPreimageStatusLoading ||
+      advisoryReview.payloadHashPreimageStatus?.havePreimage !== true,
   );
   const notePreimageDisabled = $derived(
     preimageWriteAvailability.providerStatus !== 'available' ||
@@ -315,7 +317,9 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
       treasurySubmissionOption == null ||
       !treasurySubmitItemReady ||
       !treasurySubmitPayloadReady ||
-      treasuryReview.payloadHashLoading,
+      treasuryReview.payloadHashLoading ||
+      treasuryReview.payloadHashPreimageStatusLoading ||
+      treasuryReview.payloadHashPreimageStatus?.havePreimage !== true,
   );
   const treasuryNotePreimageDisabled = $derived(
     preimageWriteAvailability.providerStatus !== 'available' ||
@@ -344,6 +348,12 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     }
     if (advisoryReview.payloadHashLoading) {
       return 'Computing the advisory payload hash';
+    }
+    if (advisoryReview.payloadHashPreimageStatusLoading) {
+      return 'Checking required preimage availability';
+    }
+    if (advisoryReview.payloadHashPreimageStatus?.havePreimage !== true) {
+      return 'Note these exact payload bytes before signed submission';
     }
     if (submitWriteAvailability.providerStatus !== 'available') {
       return submitWriteAvailability.reason;
@@ -374,9 +384,9 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
       return preimageWriteAvailability.reason;
     }
     if (advisoryReview.payloadHashPreimageStatus?.preimageRequested) {
-      return 'Optional separate note path can satisfy an existing request';
+      return 'Required preimage note can satisfy the existing request';
     }
-    return 'Optional separate preimage note path is available';
+    return 'Required preimage must be noted before signed submission';
   }
 
   function submitReviewSummaryLine() {
@@ -394,7 +404,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
       return 'No extra preimage note is needed';
     }
-    return `Optional Preimage.note_preimage on ${advisoryPayloadDraft.encoding.payloadByteLength} bytes`;
+    return `Required Preimage.note_preimage on ${advisoryPayloadDraft.encoding.payloadByteLength} bytes`;
   }
 
   function submitReviewResultLine() {
@@ -405,7 +415,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
       return `Creates proposal #${itemId} with payload hash ${advisoryReview.payloadHash} and already-noted bytes`;
     }
-    return `Creates proposal #${itemId} with payload hash ${advisoryReview.payloadHash} only`;
+    return `Submission blocked until bytes for ${advisoryReview.payloadHash} are noted`;
   }
 
   function preimageReviewResultLine() {
@@ -447,6 +457,12 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (treasuryReview.payloadHashLoading) {
       return 'Computing the treasury payload hash';
     }
+    if (treasuryReview.payloadHashPreimageStatusLoading) {
+      return 'Checking required preimage availability';
+    }
+    if (treasuryReview.payloadHashPreimageStatus?.havePreimage !== true) {
+      return 'Note these exact payload bytes before signed submission';
+    }
     if (submitWriteAvailability.providerStatus !== 'available') {
       return submitWriteAvailability.reason;
     }
@@ -476,9 +492,9 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
       return preimageWriteAvailability.reason;
     }
     if (treasuryReview.payloadHashPreimageStatus?.preimageRequested) {
-      return 'Optional separate note path can satisfy an existing request';
+      return 'Required preimage note can satisfy the existing request';
     }
-    return 'Optional separate preimage note path is available';
+    return 'Required preimage must be noted before signed submission';
   }
 
   function treasurySubmitReviewResultLine() {
@@ -489,7 +505,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
       return `Creates proposal #${itemId} with payload hash ${treasuryReview.payloadHash} and already-noted bytes`;
     }
-    return `Creates proposal #${itemId} with payload hash ${treasuryReview.payloadHash} only`;
+    return `Submission blocked until bytes for ${treasuryReview.payloadHash} are noted`;
   }
 
   function treasuryPreimageReviewResultLine() {
@@ -512,7 +528,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
       return 'No extra preimage note is needed';
     }
-    return `Optional Preimage.note_preimage on ${treasuryPayloadDraft.encoding.payloadByteLength} bytes`;
+    return `Required Preimage.note_preimage on ${treasuryPayloadDraft.encoding.payloadByteLength} bytes`;
   }
 
   function applySuggestedSubmitItemId() {
@@ -528,7 +544,8 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (
       selectedSubmitPayloadKind == null ||
       itemId == null ||
-      advisoryReview.payloadHash == null
+      advisoryReview.payloadHash == null ||
+      advisoryReview.payloadHashPreimageStatus?.havePreimage !== true
     ) {
       return;
     }
@@ -553,7 +570,8 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     if (
       treasurySubmissionOption == null ||
       itemId == null ||
-      treasuryReview.payloadHash == null
+      treasuryReview.payloadHash == null ||
+      treasuryReview.payloadHashPreimageStatus?.havePreimage !== true
     ) {
       return;
     }
@@ -809,8 +827,8 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
                 readonly
               />
               <Notice variant="muted"
-                >The chain stores only the payload hash unless these same
-                bounded payload bytes are separately noted as a preimage</Notice
+                >Signed admission requires these exact bounded payload bytes to
+                be noted as an available preimage before submission</Notice
               >
               <Notice variant="muted"
                 >`Intent` stays inside the current governance domain, while
@@ -818,7 +836,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
                 without dispatching privileged state transitions by itself</Notice
               >
               <Notice variant="muted"
-                >Optional preimage noting uses the generic Preimage pallet and
+                >Required preimage noting uses the generic Preimage pallet and
                 the quoted note cost is reserved against the noting account
                 until the preimage is requested or cleared under pallet rules</Notice
               >
@@ -1012,8 +1030,8 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
                 readonly
               />
               <Notice variant="muted"
-                >The chain stores only the payload hash unless these same
-                bounded payload bytes are separately noted as a preimage.</Notice
+                >Signed admission requires these exact bounded treasury bytes to
+                be noted as an available preimage before submission.</Notice
               >
             {/if}
             {#if treasuryReview.payloadHashPreimageStatus?.havePreimage}

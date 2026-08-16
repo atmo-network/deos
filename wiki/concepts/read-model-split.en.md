@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Read-Model Split
-summary: DEOS classifies user-facing data as either bounded on-chain canonical projection or indexed/materialized view. The split exists to avoid both silent indexer dependency and pushing dashboard history into consensus state.
+description: DEOS classifies user-facing data as either bounded on-chain canonical projection or indexed/materialized view. The split exists to avoid both silent indexer dependency and pushing dashboard history into consensus state.
 locale: en
 canonical_page_id: read-model-split
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/read-model.contract.en.md
-  - ../../docs/core.architecture.en.md
-status: active
+  - resource: ../../docs/read-model.contract.en.md
+  - resource: ../../docs/core.architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - concept

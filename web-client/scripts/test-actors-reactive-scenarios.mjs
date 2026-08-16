@@ -75,11 +75,10 @@ function activeContract({
     steps: [
       {
         key: 'reaction',
-        preconditions:
+        precondition:
           predicates.length === 0
-            ? { type: 'Unconditional' }
+            ? null
             : {
-                type: 'AnyOf',
                 clauses: [
                   predicates.map((predicate) => ({
                     timing: 'Current',
@@ -261,7 +260,7 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
   assert.deepEqual(
     descendingBuyBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].preconditions.clauses[0][0].predicate
+        scenario.contract.steps[0].precondition.clauses[0][0].predicate
           .threshold,
     ),
     ['900000000000', '800000000000', '700000000000'],
@@ -269,7 +268,7 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
   assert.deepEqual(
     ascendingSellBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].preconditions.clauses[0][0].predicate
+        scenario.contract.steps[0].precondition.clauses[0][0].predicate
           .threshold,
     ),
     ['1100000000000', '1200000000000', '1300000000000'],
@@ -323,7 +322,7 @@ test('partial reaction cores lower without inventing reserve-ratio or depth pred
       weightModel,
     });
     assert.equal(
-      analysis.steps[0].preconditions.mode,
+      analysis.steps[0].precondition.mode,
       'Unconditional',
       scenario.name,
     );
