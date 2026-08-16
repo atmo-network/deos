@@ -99,6 +99,15 @@ fn prepare_lp_backed_selection<T: Config>() {
   );
 }
 
+fn empty_security_snapshot<T: Config>(epoch: SecurityEpoch) -> NativeSecurityEpochSnapshotOf<T> {
+  NativeSecurityEpochSnapshot {
+    epoch,
+    participants: Default::default(),
+    eligible_operators: Default::default(),
+    total_reward_weight: Zero::zero(),
+  }
+}
+
 fn setup_finalized_reward<T: Config>(
   caller: &T::AccountId,
   epoch: SecurityEpoch,
@@ -304,10 +313,6 @@ mod benches {
       lp_asset_id,
       amount,
       operator.clone(),
-    );
-    assert_eq!(
-      AccountNativeCollatorLpLocked::<T>::get(&caller),
-      amount + amount
     );
   }
 
@@ -563,12 +568,13 @@ mod benches {
     let amount = T::NativeCurrency::minimum_balance().saturating_mul(benchmark_amount::<T>(1_000));
     prepare_lp_backed_selection::<T>();
     <T as Config>::BenchmarkHelper::set_security_epoch(c + 1);
+    let epoch_count = c.min(T::MaxSecurityRewardClaimsPerCall::get());
     let mut epochs = BoundedVec::default();
-    for epoch in 0..c {
+    for epoch in 0..epoch_count {
       setup_finalized_reward::<T>(&caller, epoch, amount);
       epochs.try_push(epoch).expect("benchmark epoch must fit");
     }
-    let total = amount.saturating_mul(c.into());
+    let total = amount.saturating_mul(epoch_count.into());
     NativeSecurityRewardLiability::<T>::put(total);
     let reward_account = Pallet::<T>::native_security_reward_account();
     <T as Config>::BenchmarkHelper::fund_native_account(
@@ -611,42 +617,142 @@ mod benches {
     let epoch = 0;
     let amount = benchmark_amount::<T>(1_000);
     setup_finalized_reward::<T>(&caller, epoch, amount);
+    for participant_index in 0..T::MaxNativeSecurityParticipants::get() {
+      let participant: T::AccountId = account("expired-participant", participant_index, 0);
+      NativeSecurityRewardClaims::<T>::insert(epoch, participant, ());
+    }
     <T as Config>::BenchmarkHelper::set_security_epoch(
       T::SecurityRewardClaimHorizon::get().saturating_add(1),
     );
     #[extrinsic_call]
     expire_native_security_reward(RawOrigin::Signed(caller), epoch);
-    assert_eq!(
-      NativeSecurityRewardPots::<T>::get(epoch)
-        .expect("expired pot retained")
-        .status,
-      NativeSecurityRewardPotStatus::Expired
-    );
-  }
-
-  #[benchmark]
-  fn cleanup_expired_native_security_reward() {
-    let caller: T::AccountId = whitelisted_caller();
-    let epoch = 0;
-    let amount = benchmark_amount::<T>(1_000);
-    setup_finalized_reward::<T>(&caller, epoch, amount);
-    NativeSecurityRewardPots::<T>::mutate(epoch, |pot| {
-      pot.as_mut().expect("pot exists").status = NativeSecurityRewardPotStatus::Expired;
-    });
-    NativeSecurityRewardClaims::<T>::insert(epoch, &caller, ());
-    #[extrinsic_call]
-    cleanup_expired_native_security_reward(RawOrigin::Signed(caller), epoch);
     assert!(!NativeSecurityRewardPots::<T>::contains_key(epoch));
+    assert!(!NativeSecurityEpochSnapshots::<T>::contains_key(epoch));
   }
 
   #[benchmark(pov_mode = Measured)]
-  fn open_native_security_epoch(p: Linear<1, 100>) {
+  fn settle_due_native_security_reward(r: Linear<1, 14>) {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(1_000);
+    setup_finalized_reward::<T>(&caller, 0, amount);
+    for participant_index in 0..T::MaxNativeSecurityParticipants::get() {
+      let participant: T::AccountId = account("retained-participant", participant_index, 0);
+      NativeSecurityRewardClaims::<T>::insert(0, participant, ());
+    }
+    let retained_epochs = r.min(T::SecurityRewardClaimHorizon::get().saturating_add(2));
+    for epoch in 1..retained_epochs {
+      NativeSecurityEpochSnapshots::<T>::insert(epoch, empty_security_snapshot::<T>(epoch));
+      NativeSecurityRewardPots::<T>::insert(
+        epoch,
+        NativeSecurityRewardPot {
+          total_reward_weight: Zero::zero(),
+          credited: Zero::zero(),
+          claimed: Zero::zero(),
+          status: NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    <T as Config>::BenchmarkHelper::set_security_epoch(
+      T::SecurityRewardClaimHorizon::get().saturating_add(1),
+    );
+    #[block]
+    {
+      Pallet::<T>::settle_due_native_security_reward()
+        .expect("oldest due reward must settle atomically");
+    }
+    assert!(!NativeSecurityRewardPots::<T>::contains_key(0));
+  }
+
+  #[benchmark]
+  fn cancel_native_security_epoch_plan() {
+    let epoch = 7;
+    NativeSecurityEpochSnapshots::<T>::insert(epoch, empty_security_snapshot::<T>(epoch));
+    NativeSecurityRewardPots::<T>::insert(
+      epoch,
+      NativeSecurityRewardPot {
+        total_reward_weight: Zero::zero(),
+        credited: Zero::zero(),
+        claimed: Zero::zero(),
+        status: NativeSecurityRewardPotStatus::Planned,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::cancel_native_security_epoch_plan(epoch)
+        .expect("unactivated plan must cancel atomically");
+    }
+    assert!(!NativeSecurityRewardPots::<T>::contains_key(epoch));
+  }
+
+  #[benchmark]
+  fn contract_native_security_obligations() {
+    let active_epoch = 0;
+    let planned_epoch = 1;
+    let active = empty_security_snapshot::<T>(active_epoch);
+    ActiveNativeSecurityEpochSnapshot::<T>::put(&active);
+    NativeSecurityEpochSnapshots::<T>::insert(active_epoch, active);
+    NativeSecurityRewardPots::<T>::insert(
+      active_epoch,
+      NativeSecurityRewardPot {
+        total_reward_weight: Zero::zero(),
+        credited: <T as Config>::Balance::one(),
+        claimed: Zero::zero(),
+        status: NativeSecurityRewardPotStatus::Open,
+      },
+    );
+    NativeSecurityEpochSnapshots::<T>::insert(
+      planned_epoch,
+      empty_security_snapshot::<T>(planned_epoch),
+    );
+    NativeSecurityRewardPots::<T>::insert(
+      planned_epoch,
+      NativeSecurityRewardPot {
+        total_reward_weight: Zero::zero(),
+        credited: Zero::zero(),
+        claimed: Zero::zero(),
+        status: NativeSecurityRewardPotStatus::Planned,
+      },
+    );
+    <T as Config>::BenchmarkHelper::set_security_epoch(planned_epoch);
+    #[block]
+    {
+      Pallet::<T>::do_contract_native_security_obligations()
+        .expect("trusted-mode obligations must contract atomically");
+    }
+    assert!(ActiveNativeSecurityEpochSnapshot::<T>::get().is_none());
+    assert_eq!(
+      NativeSecurityRewardPots::<T>::get(active_epoch)
+        .expect("active pot becomes claimable")
+        .status,
+      NativeSecurityRewardPotStatus::Finalized
+    );
+    assert!(!NativeSecurityRewardPots::<T>::contains_key(planned_epoch));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn open_native_security_epoch(p: Linear<1, 100>, r: Linear<1, 13>) {
     prepare_lp_backed_selection::<T>();
     register_native_pool::<T>();
     let amount = benchmark_amount::<T>(1);
     let governance_domain = T::NativeGovernanceDomainId::get();
     let mut eligible_operators = alloc::vec::Vec::new();
-    for participant_index in 0..p {
+    <T as Config>::BenchmarkHelper::set_security_epoch(0);
+    let retained_epochs = r.min(T::SecurityRewardClaimHorizon::get().saturating_add(1));
+    for retained_index in 0..retained_epochs {
+      let epoch = 1_000u32.saturating_add(retained_index);
+      NativeSecurityEpochSnapshots::<T>::insert(epoch, empty_security_snapshot::<T>(epoch));
+      NativeSecurityRewardPots::<T>::insert(
+        epoch,
+        NativeSecurityRewardPot {
+          total_reward_weight: Zero::zero(),
+          credited: Zero::zero(),
+          claimed: Zero::zero(),
+          status: NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    let participant_count = p.min(T::MaxNativeSecurityParticipants::get());
+    for participant_index in 0..participant_count {
       let participant: T::AccountId = account("security-participant", participant_index, 0);
       let operator: T::AccountId = account("security-operator", participant_index, 0);
       T::GovernanceParticipationCoefficientProvider::benchmark_prepare_positive_coefficient(
@@ -674,8 +780,11 @@ mod benches {
     let snapshot = NativeSecurityEpochSnapshots::<T>::get(7)
       .expect("benchmark planned security snapshot must exist");
     assert_eq!(snapshot.epoch, 7);
-    assert_eq!(snapshot.participants.len(), p as usize);
-    assert_eq!(snapshot.eligible_operators.len(), p as usize);
+    assert_eq!(snapshot.participants.len(), participant_count as usize);
+    assert_eq!(
+      snapshot.eligible_operators.len(),
+      participant_count as usize
+    );
     assert_eq!(
       NativeSecurityRewardPots::<T>::get(7)
         .expect("benchmark planned security pot must exist")

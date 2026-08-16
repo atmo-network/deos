@@ -55,7 +55,14 @@ impl<T: Config> Pallet<T> {
     outcome: FinalizedProposalOutcome<T::Epoch>,
     current_epoch: T::Epoch,
   ) -> DispatchResult {
-    FinalizedProposalOutcomes::<T>::insert(domain, item_id, outcome);
+    FinalizedProposals::<T>::insert(
+      domain,
+      item_id,
+      FinalizedProposalRecord {
+        outcome,
+        execution_detail: None,
+      },
+    );
     let retention = T::FinalizedProposalOutcomeRetentionEpochs::get();
     let expiry_epoch_u32 = current_epoch
       .saturated_into::<u32>()
@@ -106,19 +113,20 @@ impl<T: Config> Pallet<T> {
     });
     Ok(true)
   }
-  pub(crate) fn set_finalized_proposal_outcome(
+  pub(crate) fn update_finalized_proposal(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     outcome: FinalizedProposalOutcome<T::Epoch>,
-  ) {
-    FinalizedProposalOutcomes::<T>::insert(domain, item_id, outcome);
-  }
-  pub(crate) fn set_proposal_execution_detail(
-    domain: T::DomainId,
-    item_id: T::WinningVoteItemId,
-    detail: crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash, T::Epoch>,
-  ) {
-    ProposalExecutionDetails::<T>::insert(domain, item_id, detail);
+    execution_detail: Option<crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash>>,
+  ) -> DispatchResult {
+    FinalizedProposals::<T>::try_mutate(domain, item_id, |maybe_record| -> DispatchResult {
+      let record = maybe_record
+        .as_mut()
+        .ok_or(Error::<T>::FinalizedProposalMissing)?;
+      record.outcome = outcome;
+      record.execution_detail = execution_detail;
+      Ok(())
+    })
   }
   pub(crate) fn maybe_execute_proposal_payload(
     domain: T::DomainId,
@@ -131,24 +139,21 @@ impl<T: Config> Pallet<T> {
       .ok_or(Error::<T>::ProposalMetadataMissing)?;
     match metadata.payload_kind {
       ProposalPayloadKind::Intent | ProposalPayloadKind::L2SignalToL1 => {
-        Self::set_finalized_proposal_outcome(
+        Self::update_finalized_proposal(
           domain,
           item_id,
-          FinalizedProposalOutcome::AdvisoryFinalized {
-            approved_epoch,
-            finalized_epoch: execution_epoch,
-            winner_count,
+          FinalizedProposalOutcome::Approved {
+            approval: ProposalApproval {
+              approved_epoch,
+              winner_count,
+            },
+            enactment: ProposalEnactmentOutcome::AdvisoryFinalized {
+              epoch: execution_epoch,
+            },
           },
-        );
+          None,
+        )?;
         ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-        Self::set_proposal_execution_detail(
-          domain,
-          item_id,
-          crate::ProposalExecutionDetail::AdvisoryFinalized {
-            payload_kind: metadata.payload_kind,
-            finalized_epoch: execution_epoch,
-          },
-        );
         Self::deposit_event(Event::ProposalAdvisoryFinalized {
           domain,
           item_id,
@@ -164,26 +169,23 @@ impl<T: Config> Pallet<T> {
         }
         let authority = Self::proposal_execution_authority_for_payload_kind(metadata.payload_kind);
         if !T::ProposalPayloadPreimageProvider::have_preimage(&metadata.payload_hash) {
-          Self::set_finalized_proposal_outcome(
+          Self::update_finalized_proposal(
             domain,
             item_id,
-            FinalizedProposalOutcome::ExecutionFailed {
-              approved_epoch,
-              failed_epoch: execution_epoch,
-              winner_count,
+            FinalizedProposalOutcome::Approved {
+              approval: ProposalApproval {
+                approved_epoch,
+                winner_count,
+              },
+              enactment: ProposalEnactmentOutcome::ExecutionFailed {
+                epoch: execution_epoch,
+              },
             },
-          );
+            Some(crate::ProposalExecutionDetail::Failed(
+              crate::ProposalExecutionFailureReason::MissingPreimage,
+            )),
+          )?;
           ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-          Self::set_proposal_execution_detail(
-            domain,
-            item_id,
-            crate::ProposalExecutionDetail::ExecutionFailed {
-              payload_kind: metadata.payload_kind,
-              authority,
-              failed_epoch: execution_epoch,
-              reason: crate::ProposalExecutionFailureReason::MissingPreimage,
-            },
-          );
           Self::deposit_event(Event::ProposalExecutionFailed {
             domain,
             item_id,
@@ -202,15 +204,6 @@ impl<T: Config> Pallet<T> {
           metadata.payload_hash,
         ) {
           Ok(receipt) => {
-            Self::set_finalized_proposal_outcome(
-              domain,
-              item_id,
-              FinalizedProposalOutcome::Enacted {
-                approved_epoch,
-                executed_epoch: execution_epoch,
-                winner_count,
-              },
-            );
             ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
             let execution_detail = match receipt {
               crate::ProposalExecutionReceipt::Generic => {
@@ -269,16 +262,20 @@ impl<T: Config> Pallet<T> {
                 }
               }
             };
-            Self::set_proposal_execution_detail(
+            Self::update_finalized_proposal(
               domain,
               item_id,
-              crate::ProposalExecutionDetail::Executed {
-                payload_kind: metadata.payload_kind,
-                authority,
-                executed_epoch: execution_epoch,
-                detail: execution_detail,
+              FinalizedProposalOutcome::Approved {
+                approval: ProposalApproval {
+                  approved_epoch,
+                  winner_count,
+                },
+                enactment: ProposalEnactmentOutcome::Enacted {
+                  epoch: execution_epoch,
+                },
               },
-            );
+              Some(crate::ProposalExecutionDetail::Succeeded(execution_detail)),
+            )?;
             Self::deposit_event(Event::ProposalExecuted {
               domain,
               item_id,
@@ -290,26 +287,21 @@ impl<T: Config> Pallet<T> {
             Ok(())
           }
           Err(reason) => {
-            Self::set_finalized_proposal_outcome(
+            Self::update_finalized_proposal(
               domain,
               item_id,
-              FinalizedProposalOutcome::ExecutionFailed {
-                approved_epoch,
-                failed_epoch: execution_epoch,
-                winner_count,
+              FinalizedProposalOutcome::Approved {
+                approval: ProposalApproval {
+                  approved_epoch,
+                  winner_count,
+                },
+                enactment: ProposalEnactmentOutcome::ExecutionFailed {
+                  epoch: execution_epoch,
+                },
               },
-            );
+              Some(crate::ProposalExecutionDetail::Failed(reason)),
+            )?;
             ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-            Self::set_proposal_execution_detail(
-              domain,
-              item_id,
-              crate::ProposalExecutionDetail::ExecutionFailed {
-                payload_kind: metadata.payload_kind,
-                authority,
-                failed_epoch: execution_epoch,
-                reason,
-              },
-            );
             Self::deposit_event(Event::ProposalExecutionFailed {
               domain,
               item_id,
@@ -327,29 +319,43 @@ impl<T: Config> Pallet<T> {
   }
   pub(crate) fn finalized_outcome_epoch(outcome: &FinalizedProposalOutcome<T::Epoch>) -> T::Epoch {
     match outcome {
-      FinalizedProposalOutcome::Resolved { epoch, .. }
-      | FinalizedProposalOutcome::Rejected { epoch, .. }
-      | FinalizedProposalOutcome::VetoCancelled { epoch, .. } => *epoch,
-      FinalizedProposalOutcome::Enacted { executed_epoch, .. } => *executed_epoch,
-      FinalizedProposalOutcome::ExecutionFailed { failed_epoch, .. } => *failed_epoch,
-      FinalizedProposalOutcome::AdvisoryFinalized {
-        finalized_epoch, ..
-      } => *finalized_epoch,
+      FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: ProposalEnactmentOutcome::NotAttempted,
+      } => approval.approved_epoch,
+      FinalizedProposalOutcome::Approved {
+        enactment:
+          ProposalEnactmentOutcome::Enacted { epoch }
+          | ProposalEnactmentOutcome::ExecutionFailed { epoch }
+          | ProposalEnactmentOutcome::AdvisoryFinalized { epoch },
+        ..
+      }
+      | FinalizedProposalOutcome::Rejected {
+        finalized_epoch: epoch,
+        ..
+      }
+      | FinalizedProposalOutcome::VetoCancelled {
+        finalized_epoch: epoch,
+        ..
+      } => *epoch,
     }
   }
   pub(crate) fn do_recent_finalized_proposals(
     domain: T::DomainId,
   ) -> BoundedVec<
-    RecentFinalizedProposal<T::WinningVoteItemId, T::Epoch>,
+    RecentFinalizedProposal<T::AccountId, T::DomainId, T::WinningVoteItemId, T::Hash, T::Epoch>,
     T::MaxRecentFinalizedProposalsPerDomain,
   > {
-    let mut proposals = FinalizedProposalOutcomes::<T>::iter_prefix(domain)
-      .map(|(item_id, outcome)| RecentFinalizedProposal { item_id, outcome })
+    let mut proposals = FinalizedProposals::<T>::iter_prefix(domain)
+      .map(|(item_id, finalization)| RecentFinalizedProposal {
+        identity: ProposalIdentity { domain, item_id },
+        finalization,
+      })
       .collect::<Vec<_>>();
     proposals.sort_by(|left, right| {
-      Self::finalized_outcome_epoch(&right.outcome)
-        .cmp(&Self::finalized_outcome_epoch(&left.outcome))
-        .then_with(|| left.item_id.cmp(&right.item_id))
+      Self::finalized_outcome_epoch(&right.finalization.outcome)
+        .cmp(&Self::finalized_outcome_epoch(&left.finalization.outcome))
+        .then_with(|| left.identity.item_id.cmp(&right.identity.item_id))
     });
     proposals
       .into_iter()

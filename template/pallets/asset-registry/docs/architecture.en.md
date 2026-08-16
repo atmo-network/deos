@@ -65,7 +65,7 @@ graph TD
 
 ### Registration Flow
 
-`Phase 1 — ID Generation (Deterministic)`:
+`ID Generation (Deterministic)`:
 
 1. Encode XCM `Location` to SCALE bytes
 2. Hash with BLAKE2-256 → 32-byte digest
@@ -73,18 +73,18 @@ graph TD
 4. Apply FOREIGN type mask: `TYPE_FOREIGN | (derived_id & MASK_INDEX)`
    - Result: `0xF000_0000 | 28-bit index` → `0xFXXX_XXXX`
 
-`Phase 2 — Validation`:
+`Validation`:
 
 1. Verify `(asset_id & MASK_TYPE) == TYPE_FOREIGN` → ensures 0xF... namespace
 2. Check `!ForeignAssetMapping::contains_key(location)` → no duplicate Location
 3. Check `!pallet_assets::asset_exists(asset_id)` → no ID collision
 
-`Phase 3 — Asset Creation (Delegation)`:
+`Asset Creation (Delegation)`:
 
 1. Call `pallet_assets::force_create(asset_id, AssetOwner, ...)` via Root origin
 2. Call `pallet_assets::force_set_metadata(asset_id, symbol, ...)` for XCM metadata
 
-`Phase 4 — Persistence`:
+`Persistence`:
 
 1. Store `ForeignAssetMapping[location] = asset_id`
 2. Store `ForeignAssetLocationByAssetId[asset_id] = location`
@@ -284,7 +284,7 @@ The Burn Actor processes foreign assets via:
 
 1. Check if asset is in `BurnableAssets` registry
 2. If `asset.is_foreign()` → swap to Native
-3. Burn Native in Phase 2
+3. Burn Native through the configured Burn Actor Step
 
 Foreign assets must be registered before the Burn Actor can process them.
 

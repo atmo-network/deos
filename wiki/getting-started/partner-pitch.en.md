@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Partner Pitch
-summary: A concise external pitch for partner teams evaluating DEOS as a forkable foundation for deterministic protocol economies.
+description: A concise external pitch for partner teams evaluating DEOS as a forkable foundation for deterministic protocol economies.
 locale: en
 canonical_page_id: partner-pitch
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../AGENTS.md
-  - ../../docs/manifesto.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: partner
 tags:
   - onboarding

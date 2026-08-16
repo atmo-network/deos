@@ -31,33 +31,30 @@ const runtime = {
   transactionVersion: 1,
 };
 const step = {
-  preconditions: {
-    type: 'AnyOf',
-    value: [
-      [
-        {
-          timing: { type: 'Opening', value: undefined },
-          predicate: {
-            type: 'ObservationBelow',
-            value: {
-              feed: {
-                asset_in: { type: 'Native', value: undefined },
-                asset_out: { type: 'Local', value: 7 },
-                method: { type: 'PreExecutionSpot', value: undefined },
-                aggregation: {
-                  type: 'Ema',
-                  value: { half_life_blocks: 100 },
-                },
-                scale: 12,
+  precondition: [
+    [
+      {
+        timing: { type: 'Opening', value: undefined },
+        predicate: {
+          type: 'ObservationBelow',
+          value: {
+            feed: {
+              asset_in: { type: 'Native', value: undefined },
+              asset_out: { type: 'Local', value: 7 },
+              method: { type: 'PreExecutionSpot', value: undefined },
+              aggregation: {
+                type: 'Ema',
+                value: { half_life_blocks: 100 },
               },
-              threshold: 1n,
-              max_age_blocks: 12,
+              scale: 12,
             },
+            threshold: 1n,
+            max_age_blocks: 12,
           },
         },
-      ],
+      },
     ],
-  },
+  ],
   task: {
     type: 'Stake',
     value: {
@@ -114,14 +111,13 @@ const suspendedRuntimeValue = {
   value: {
     status: { type: 'Suspended', value: undefined },
     cycle_nonce: 7n,
-    attempt: 1,
     start_cursor: 0,
     continuation_cursor: 1,
     unsuccessful_attempts_at_cursor: 2,
     cumulative_outcomes: {
       executed_steps: 3,
       committed_effectful_tasks: 3,
-      skipped_conditions: 0,
+      precondition_skips: 0,
       skipped_resolution: 0,
       skipped_funding_unavailable: 0,
       failed_steps: 0,
@@ -133,10 +129,7 @@ const suspendedRuntimeValue = {
       },
       {
         step_index: 1,
-        outcome: {
-          type: 'Suspended',
-          value: { type: 'FundingUnavailable', value: undefined },
-        },
+        outcome: { type: 'FundingUnavailable', value: undefined },
       },
     ],
   },
@@ -145,14 +138,13 @@ const suspendedOutcome = {
   status: 'Suspended',
   closeReason: null,
   cycleNonce: 7n,
-  attempt: 1,
   startCursor: 0,
   continuationCursor: 1,
   unsuccessfulAttemptsAtCursor: 2,
   cumulativeOutcomes: {
     executedSteps: 3,
     committedEffectfulTasks: 3,
-    skippedConditions: 0,
+    preconditionSkips: 0,
     skippedResolution: 0,
     skippedFundingUnavailable: 0,
     failedSteps: 0,
@@ -161,7 +153,7 @@ const suspendedOutcome = {
     { stepIndex: 0, outcome: { type: 'Executed' } },
     {
       stepIndex: 1,
-      outcome: { type: 'Suspended', reason: 'FundingUnavailable' },
+      outcome: { type: 'FundingUnavailable' },
     },
   ],
   resultScale: encodeActorRuntimeSimulationResult(
@@ -185,13 +177,12 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
     value: {
       status: { type: 'Completed', value: undefined },
       cycle_nonce: 8n,
-      attempt: 0,
       start_cursor: 0,
       continuation_cursor: undefined,
       cumulative_outcomes: {
         executed_steps: 1,
         committed_effectful_tasks: 0,
-        skipped_conditions: 0,
+        precondition_skips: 0,
         skipped_resolution: 0,
         skipped_funding_unavailable: 0,
         failed_steps: 0,

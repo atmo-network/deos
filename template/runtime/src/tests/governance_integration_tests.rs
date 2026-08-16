@@ -2,13 +2,15 @@ use super::common::{
   ALICE, BOB, actor_fee_sink_account, create_test_asset, mint_tokens, new_test_ext,
 };
 use crate::configs::governance_config::{
-  StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
+  RuntimeProposalPayloadExecutor, StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource,
+  TacticalTreasuryInvoicePayload,
 };
 use crate::{
-  Actors, Assets, Balances, DeosRouter, Governance, Preimage, Runtime, RuntimeEvent, RuntimeOrigin,
-  Staking, System,
+  Actors, Assets, Balances, DeosRouter, Governance, Preimage, Runtime, RuntimeCall, RuntimeEvent,
+  RuntimeOrigin, Staking, System,
 };
 use codec::Encode;
+use pallet_governance::ProposalPayloadExecutor;
 use polkadot_sdk::frame_support::traits::{
   Hooks,
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
@@ -32,6 +34,20 @@ impl ReadRuntimeVersion for RejectRuntimeVersionRead {
 
 const PROTOCOL_GOVERNANCE_DOMAIN: u32 = 0;
 const TACTICAL_GOVERNANCE_DOMAIN: u32 = primitives::ecosystem::protocol_tokens::BLDR_ASSET_ID;
+
+fn approved_outcome(
+  approved_epoch: u32,
+  winner_count: u32,
+  enactment: pallet_governance::ProposalEnactmentOutcome<u32>,
+) -> pallet_governance::FinalizedProposalOutcome<u32> {
+  pallet_governance::FinalizedProposalOutcome::Approved {
+    approval: pallet_governance::ProposalApproval {
+      approved_epoch,
+      winner_count,
+    },
+    enactment,
+  }
+}
 
 fn submit_root_action_proposal(item_id: u32, payload_hash: crate::Hash) {
   assert_ok!(Governance::submit_proposal(
@@ -128,11 +144,13 @@ fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
     resolve_root_action_proposal(100);
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 100),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted {
+      Some(approved_outcome(
         approved_epoch,
-        executed_epoch,
-        winner_count: 1,
-      })
+        1,
+        pallet_governance::ProposalEnactmentOutcome::Enacted {
+          epoch: executed_epoch
+        },
+      ))
     );
     let authorized_upgrade = crate::System::authorized_upgrade();
     assert!(authorized_upgrade.is_some());
@@ -146,14 +164,9 @@ fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
     );
     assert_eq!(
       Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, 100),
-      Some(pallet_governance::ProposalExecutionDetail::Executed {
-        payload_kind: pallet_governance::ProposalPayloadKind::L1RootAction,
-        authority: pallet_governance::ProposalExecutionAuthority::Root,
-        executed_epoch,
-        detail: pallet_governance::ProposalExecutionSuccessDetail::RuntimeUpgradeAuthorized {
-          code_hash,
-        },
-      })
+      Some(pallet_governance::ProposalExecutionDetail::Succeeded(
+        pallet_governance::ProposalExecutionSuccessDetail::RuntimeUpgradeAuthorized { code_hash },
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -216,7 +229,7 @@ fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let bob_before = Balances::free_balance(BOB);
     let fee_sink_before = Balances::free_balance(actor_fee_sink_account());
     assert_ok!(Governance::submit_signed_proposal(
@@ -271,7 +284,7 @@ fn signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserv
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let code_hash = crate::Hash::repeat_byte(247);
     let encoded_payload = StrategicRuntimeUpgradePayload { code_hash }.encode();
     let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_payload);
@@ -316,7 +329,10 @@ fn signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserv
     );
     assert!(matches!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 1_000),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted { .. })
+      Some(pallet_governance::FinalizedProposalOutcome::Approved {
+        enactment: pallet_governance::ProposalEnactmentOutcome::Enacted { .. },
+        ..
+      })
     ));
 
     System::set_block_number(System::block_number().saturating_add(1));
@@ -396,11 +412,13 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
     assert_eq!(DeosRouter::router_fee(), new_fee);
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 102),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted {
+      Some(approved_outcome(
         approved_epoch,
-        executed_epoch,
-        winner_count: 1,
-      })
+        1,
+        pallet_governance::ProposalEnactmentOutcome::Enacted {
+          epoch: executed_epoch
+        },
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -418,7 +436,6 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
 #[test]
 fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
   new_test_ext().execute_with(|| {
-    let failed_epoch = ordinary_enactment_epoch(1);
     let initial_fee = DeosRouter::router_fee();
     let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(2);
     let call: crate::RuntimeCall =
@@ -442,14 +459,9 @@ fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
     assert_eq!(DeosRouter::router_fee(), initial_fee);
     assert_eq!(
       Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, 113),
-      Some(
-        pallet_governance::ProposalExecutionDetail::ExecutionFailed {
-          payload_kind: pallet_governance::ProposalPayloadKind::L2ParameterChange,
-          authority: pallet_governance::ProposalExecutionAuthority::DomainParameters,
-          failed_epoch,
-          reason: pallet_governance::ProposalExecutionFailureReason::DispatchFailed,
-        }
-      )
+      Some(pallet_governance::ProposalExecutionDetail::Failed(
+        pallet_governance::ProposalExecutionFailureReason::DispatchFailed,
+      ))
     );
   });
 }
@@ -480,13 +492,13 @@ fn l2_signal_to_l1_finalizes_with_explicit_advisory_kind() {
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 101);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 101),
-      Some(
-        pallet_governance::FinalizedProposalOutcome::AdvisoryFinalized {
-          approved_epoch,
-          finalized_epoch,
-          winner_count: 1,
-        }
-      )
+      Some(approved_outcome(
+        approved_epoch,
+        1,
+        pallet_governance::ProposalEnactmentOutcome::AdvisoryFinalized {
+          epoch: finalized_epoch,
+        },
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -564,11 +576,13 @@ fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 103);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 103),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted {
+      Some(approved_outcome(
         approved_epoch,
-        executed_epoch,
-        winner_count: 1,
-      })
+        1,
+        pallet_governance::ProposalEnactmentOutcome::Enacted {
+          epoch: executed_epoch
+        },
+      ))
     );
     assert_eq!(
       Assets::balance(TACTICAL_GOVERNANCE_DOMAIN, &BOB),
@@ -576,11 +590,8 @@ fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
     );
     assert_eq!(
       Governance::proposal_execution_detail(TACTICAL_GOVERNANCE_DOMAIN, 103),
-      Some(pallet_governance::ProposalExecutionDetail::Executed {
-        payload_kind: pallet_governance::ProposalPayloadKind::L2TreasurySpend,
-        authority: pallet_governance::ProposalExecutionAuthority::DomainTreasury,
-        executed_epoch,
-        detail: pallet_governance::ProposalExecutionSuccessDetail::TreasurySpendExecuted {
+      Some(pallet_governance::ProposalExecutionDetail::Succeeded(
+        pallet_governance::ProposalExecutionSuccessDetail::TreasurySpendExecuted {
           funding_source: treasury_account.clone(),
           beneficiary: BOB,
           payout_asset: TACTICAL_GOVERNANCE_DOMAIN,
@@ -590,7 +601,7 @@ fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
           settlement_kind:
             pallet_governance::ProposalTreasurySpendSettlementKind::InvoiceScalarTransfer,
         },
-      })
+      ))
     );
     assert_eq!(
       Governance::retained_proposal_winning_primary_option(TACTICAL_GOVERNANCE_DOMAIN, 103,),
@@ -677,11 +688,13 @@ fn l2_treasury_spend_transfers_non_bldr_asset_from_same_treasury_account() {
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 104);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 104),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted {
+      Some(approved_outcome(
         approved_epoch,
-        executed_epoch,
-        winner_count: 1,
-      })
+        1,
+        pallet_governance::ProposalEnactmentOutcome::Enacted {
+          epoch: executed_epoch
+        },
+      ))
     );
     assert_eq!(
       Assets::balance(foreign_asset, &BOB),
@@ -761,24 +774,19 @@ fn l2_treasury_spend_fails_without_winning_primary_option_reason() {
     service_pending_enactment(TACTICAL_GOVERNANCE_DOMAIN, 108);
     assert_eq!(
       Governance::finalized_proposal_outcome(TACTICAL_GOVERNANCE_DOMAIN, 108),
-      Some(
-        pallet_governance::FinalizedProposalOutcome::ExecutionFailed {
-          approved_epoch: 1,
-          failed_epoch: ordinary_enactment_epoch(1),
-          winner_count: 1,
-        }
-      )
+      Some(approved_outcome(
+        1,
+        1,
+        pallet_governance::ProposalEnactmentOutcome::ExecutionFailed {
+          epoch: ordinary_enactment_epoch(1),
+        },
+      ))
     );
     assert_eq!(
       Governance::proposal_execution_detail(TACTICAL_GOVERNANCE_DOMAIN, 108),
-      Some(
-        pallet_governance::ProposalExecutionDetail::ExecutionFailed {
-          payload_kind: pallet_governance::ProposalPayloadKind::L2TreasurySpend,
-          authority: pallet_governance::ProposalExecutionAuthority::DomainTreasury,
-          failed_epoch: ordinary_enactment_epoch(1),
-          reason: pallet_governance::ProposalExecutionFailureReason::MissingWinningPrimaryOption,
-        }
-      )
+      Some(pallet_governance::ProposalExecutionDetail::Failed(
+        pallet_governance::ProposalExecutionFailureReason::MissingWinningPrimaryOption,
+      ))
     );
   });
 }
@@ -792,24 +800,19 @@ fn l1_root_action_fails_with_missing_preimage_reason() {
     resolve_root_action_proposal(108);
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 108),
-      Some(
-        pallet_governance::FinalizedProposalOutcome::ExecutionFailed {
-          approved_epoch: 1,
-          failed_epoch,
-          winner_count: 1,
-        }
-      )
+      Some(approved_outcome(
+        1,
+        1,
+        pallet_governance::ProposalEnactmentOutcome::ExecutionFailed {
+          epoch: failed_epoch
+        },
+      ))
     );
     assert_eq!(
       Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, 108),
-      Some(
-        pallet_governance::ProposalExecutionDetail::ExecutionFailed {
-          payload_kind: pallet_governance::ProposalPayloadKind::L1RootAction,
-          authority: pallet_governance::ProposalExecutionAuthority::Root,
-          failed_epoch,
-          reason: pallet_governance::ProposalExecutionFailureReason::MissingPreimage,
-        }
-      )
+      Some(pallet_governance::ProposalExecutionDetail::Failed(
+        pallet_governance::ProposalExecutionFailureReason::MissingPreimage,
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -840,13 +843,13 @@ fn l1_root_action_rejects_invalid_upgrade_payload_bytes() {
     resolve_root_action_proposal(101);
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 101),
-      Some(
-        pallet_governance::FinalizedProposalOutcome::ExecutionFailed {
-          approved_epoch: 1,
-          failed_epoch,
-          winner_count: 1,
-        }
-      )
+      Some(approved_outcome(
+        1,
+        1,
+        pallet_governance::ProposalEnactmentOutcome::ExecutionFailed {
+          epoch: failed_epoch
+        },
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -860,6 +863,51 @@ fn l1_root_action_rejects_invalid_upgrade_payload_bytes() {
           reason: pallet_governance::ProposalExecutionFailureReason::InvalidPreimage,
         })
     }));
+  });
+}
+
+#[test]
+fn runtime_executor_reaches_domain_and_call_failures_from_valid_preimages() {
+  new_test_ext().execute_with(|| {
+    let upgrade_payload = StrategicRuntimeUpgradePayload {
+      code_hash: crate::Hash::repeat_byte(42),
+    }
+    .encode();
+    let upgrade_hash = <Runtime as frame_system::Config>::Hashing::hash(&upgrade_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      upgrade_payload,
+    ));
+    assert_eq!(
+      RuntimeProposalPayloadExecutor::execute(
+        TACTICAL_GOVERNANCE_DOMAIN,
+        200,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+        upgrade_hash,
+      )
+      .err(),
+      Some(pallet_governance::ProposalExecutionFailureReason::UnsupportedDomain)
+    );
+
+    let unsupported_call = RuntimeCall::System(frame_system::Call::remark {
+      remark: vec![1, 2, 3],
+    })
+    .encode();
+    let call_hash = <Runtime as frame_system::Config>::Hashing::hash(&unsupported_call);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      unsupported_call,
+    ));
+    assert_eq!(
+      RuntimeProposalPayloadExecutor::execute(
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        201,
+        pallet_governance::ProposalPayloadKind::L2ParameterChange,
+        call_hash,
+      )
+      .err(),
+      Some(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall)
+    );
   });
 }
 
@@ -931,18 +979,16 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
       RuntimeOrigin::root(),
       requested_payload_hash,
     ));
+    let protocol_intent = Governance::proposal_admission_policy_view(
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::Intent,
+    );
     assert_eq!(
-      Governance::proposal_submission_authority(
-        PROTOCOL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::Intent,
-      ),
+      protocol_intent.authority,
       pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
     assert_eq!(
-      Governance::proposal_opening_fee(
-        PROTOCOL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::Intent,
-      ),
+      protocol_intent.opening_fee,
       Some(10 * crate::EXISTENTIAL_DEPOSIT)
     );
     assert_eq!(
@@ -969,53 +1015,48 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
       Governance::payload_preimage_note_cost(5),
       Some(crate::EXISTENTIAL_DEPOSIT + 5 * (10 * crate::MICRO_UNIT))
     );
+    let protocol_root = Governance::proposal_admission_policy_view(
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+    );
     assert_eq!(
-      Governance::proposal_submission_authority(
-        PROTOCOL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L1RootAction,
-      ),
+      protocol_root.authority,
       pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
     assert_eq!(
-      Governance::proposal_opening_fee(
-        PROTOCOL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L1RootAction,
-      ),
+      protocol_root.opening_fee,
       Some(10 * crate::EXISTENTIAL_DEPOSIT)
     );
     assert_eq!(
-      Governance::proposal_submission_authority(
+      Governance::proposal_admission_policy_view(
         TACTICAL_GOVERNANCE_DOMAIN,
         pallet_governance::ProposalPayloadKind::L1RootAction,
-      ),
+      )
+      .authority,
       pallet_governance::ProposalSubmissionAuthority::AdminOnly
     );
+    let tactical_signal = Governance::proposal_admission_policy_view(
+      TACTICAL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L2SignalToL1,
+    );
     assert_eq!(
-      Governance::proposal_submission_authority(
-        TACTICAL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L2SignalToL1,
-      ),
+      tactical_signal.authority,
       pallet_governance::ProposalSubmissionAuthority::Signed
     );
     assert_eq!(
-      Governance::proposal_opening_fee(
-        TACTICAL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L2SignalToL1,
-      ),
+      tactical_signal.opening_fee,
       Some(10 * crate::EXISTENTIAL_DEPOSIT)
     );
+    let tactical_treasury = Governance::proposal_admission_policy_view(
+      TACTICAL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+    );
     assert_eq!(
-      Governance::proposal_submission_authority(
-        TACTICAL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
-      ),
+      tactical_treasury.authority,
       pallet_governance::ProposalSubmissionAuthority::Signed
     );
     assert_eq!(
-      Governance::proposal_opening_fee(
-        TACTICAL_GOVERNANCE_DOMAIN,
-        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
-      ),
+      tactical_treasury.opening_fee,
       Some(10 * crate::EXISTENTIAL_DEPOSIT)
     );
   });
@@ -1027,7 +1068,7 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
     let fee_sink = actor_fee_sink_account();
     let fee_sink_before = Balances::free_balance(&fee_sink);
     let payload_hash = note_advisory_preimage(BOB, b"protocol intent");
@@ -1144,11 +1185,11 @@ fn unanimous_veto_pass_executes_runtime_upgrade_immediately() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 112),
-      Some(pallet_governance::FinalizedProposalOutcome::Enacted {
-        approved_epoch: 1,
-        executed_epoch: 1,
-        winner_count: 0,
-      })
+      Some(approved_outcome(
+        1,
+        0,
+        pallet_governance::ProposalEnactmentOutcome::Enacted { epoch: 1 },
+      ))
     );
     assert_eq!(
       Governance::authorized_runtime_upgrade(),

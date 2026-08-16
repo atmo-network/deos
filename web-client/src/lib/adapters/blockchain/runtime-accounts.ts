@@ -35,7 +35,11 @@ export const TOL_BUCKETS: readonly TolBucket[] = [
 ];
 export const KNOWN_SYSTEM_ACTORS: readonly KnownSystemActor[] = [
   { actorId: 0, label: 'Burn Actor', role: 'Protocol fee burn' },
-  { actorId: 1, label: 'Fee Sink', role: 'Unified fee collector' },
+  {
+    actorId: 1,
+    label: 'Fee Sink',
+    role: 'Canonical fee collection destination',
+  },
   { actorId: 2, label: 'Liquidity Actor', role: 'Native/foreign LP composer' },
   { actorId: 3, label: 'TOL Bucket A', role: 'Anchor LP' },
   { actorId: 4, label: 'TOL Bucket B', role: 'Building unwind' },

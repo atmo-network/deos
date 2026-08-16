@@ -52,7 +52,7 @@ Zone: Governance presentation component; consumes typed governance contracts and
     const detail = proposal.executionDetail;
     if (
       !detail ||
-      detail.kind !== 'Executed' ||
+      detail.kind !== 'Succeeded' ||
       detail.detail.kind !== 'RuntimeUpgradeAuthorized'
     ) {
       return null;

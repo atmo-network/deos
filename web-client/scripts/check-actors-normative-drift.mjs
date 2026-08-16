@@ -99,7 +99,7 @@ function splitTopLevel(value) {
 
 function specTypeBlock(name) {
   // Match the exact enum name, not a longer identifier such as ConditionSet
-  // when searching for Condition, then extract its balanced body.
+  // when searching for Predicate, then extract its balanced body.
   const marker = new RegExp(`enum ${name}(?:<[^>]*>)?\\s*\\{`);
   const match = spec.match(marker);
   assert.ok(match, `spec enum not found: ${name}`);
@@ -255,7 +255,6 @@ for (const typeName of [
   'Task',
   'Predicate',
   'AmountResolution',
-  'Preconditions',
 ]) {
   const repeated = duplicates(specTypeVariants(typeName));
   if (repeated.length > 0) {
@@ -307,7 +306,12 @@ orderedDiff(
   manifest.pallet.errors.map((entry) => entry.name),
 );
 
-for (const structName of ['Schedule', 'ActiveContractInput']) {
+for (const structName of [
+  'Schedule',
+  'ActiveContractInput',
+  'Step',
+  'Precondition',
+]) {
   const matches = manifest.types.filter(
     (entry) =>
       entry.path?.join('::') === `pallet_deos_actors::types::${structName}`,
@@ -365,7 +369,7 @@ for (const [specEnumName, metadataEnumName] of [
   }
 }
 
-const forbiddenTypeNames = new Set(['ResolutionSurface']);
+const forbiddenTypeNames = new Set(['ResolutionSurface', 'ExecutionPlanOf']);
 const staleTypePaths = manifest.types
   .filter((entry) => entry.path?.some((part) => forbiddenTypeNames.has(part)))
   .map((entry) => entry.path.join('::'));
@@ -375,30 +379,18 @@ if (staleTypePaths.length > 0) {
   );
 }
 
-const conditionSetExpected = specTypeVariants('Preconditions');
-function variantNamesOfType(typeEntry) {
-  const def = typeEntry?.def;
-  return def?.tag === 'variant'
-    ? (def.value ?? []).map((variant) => variant.name)
-    : [];
-}
-const conditionSetTypes = manifest.types.filter(
-  (entry) =>
-    entry.path?.join('::') === 'pallet_deos_actors::types::Preconditions',
+const pluralPreconditionTypes = manifest.types.filter((entry) =>
+  entry.path?.includes('Preconditions'),
 );
-if (conditionSetTypes.length !== 1) {
-  failures.push(
-    `Preconditions metadata path must resolve exactly once, found ${conditionSetTypes.length}`,
-  );
+if (pluralPreconditionTypes.length > 0) {
+  failures.push('plural Preconditions compatibility type remains in metadata');
 }
-const conditionSetActual = variantNamesOfType(conditionSetTypes[0]);
-orderedDiff('Preconditions variants', conditionSetExpected, conditionSetActual);
 
 const constantNames = new Set(
   manifest.pallet.constants.map((entry) => entry.name),
 );
 const expectedConstants = new Set([
-  'MaxExecutionPlanSteps',
+  'MaxContractSteps',
   'MaxRetryAttempts',
   'MaxOwnerSlots',
   'MaxActiveActors',
@@ -410,7 +402,7 @@ const expectedConstants = new Set([
   'MaxOpeningPredicateResults',
   'MaxPreconditionClauses',
   'MaxPredicatesPerClause',
-  'MaxConditionsPerStep',
+  'MaxPredicatesPerStep',
   'MinUserBalance',
   'MinWindowLength',
   'MaxExecutionDelayBlocks',
@@ -425,7 +417,10 @@ if (missingConstants.length > 0) {
     `runtime constants: missing from metadata: ${missingConstants.join(', ')}`,
   );
 }
-const forbiddenConstants = ['MaxContinuationSnapshotEntries'];
+const forbiddenConstants = [
+  'MaxContinuationSnapshotEntries',
+  'MaxExecutionPlanSteps',
+];
 const staleConstants = forbiddenConstants.filter((name) =>
   constantNames.has(name),
 );

@@ -2,7 +2,7 @@
 
 ## Purpose and Ownership
 
-This document maps how the DEOS reference runtime composes reusable `pallet-deos-actors` with deterministic System identities, TMCTOL execution-plan families, DEOS Router, Oracle, assets, staking, fee collection, XCM, governance, generated weights, and browser/control-plane surfaces.
+This document maps how the DEOS reference runtime composes reusable `pallet-deos-actors` with deterministic System identities, TMCTOL Actor Contract families, DEOS Router, Oracle, assets, staking, fee collection, XCM, governance, generated weights, and browser/control-plane surfaces.
 
 The portable actor contract and crate implementation remain in [`template/pallets/actors/docs/specification.en.md`](../template/pallets/actors/docs/specification.en.md), [`template/pallets/actors/docs/architecture.en.md`](../template/pallets/actors/docs/architecture.en.md), and [`template/pallets/actors/docs/embedding.md`](../template/pallets/actors/docs/embedding.md). This document owns only concrete DEOS composition.
 
@@ -21,7 +21,7 @@ The portable actor contract and crate implementation remain in [`template/pallet
 
 ## Temporal Binding
 
-The six-second DEOS slot binds `ActorMaxExecutionDelayBlocks` to `52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. `ten_julian_year_horizon_matches_six_second_runtime_binding` derives the value from `SLOT_DURATION`; package boundary tests reject unrepresentable exact-next-block, cooldown, cadence-plus-jitter, retry, and window-terminal targets without mutation.
+The six-second DEOS slot binds `ActorMaxExecutionDelayBlocks` to `52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. `ten_julian_year_horizon_matches_six_second_runtime_binding` derives the value from `SLOT_DURATION`; package boundary tests reject unrepresentable exact-next-block, cooldown, exact cadence, retry, and window-terminal targets without mutation.
 
 ## Namespace and Sovereign Accounts
 
@@ -68,26 +68,28 @@ The complete DEOS deterministic System account map follows.
 
 Active genesis actors use the runtime System cooldown, `ActorType::System`, `Mutability::Mutable`, and no schedule window. Dormant entries occupy `ActorIdentities` and `SovereignIndex` without hot program, queue, wakeup, funding, fee, or Active-epoch state. Custody-only accounts occupy no actor identity.
 
-The reference runtime configures no System Immutable actor, so `0.7.11` has no actor-specific emergency migration or custody disposition to execute. A downstream runtime that admits an indefinite System Immutable actor must ship its migration-specific source/target actor set, bounded Close or Deactivate disposition, custody handling, terminal invariant, and Continuation policy with the same upgrade. The ordinary DEOS Governance path exposes 3-day lead-in, 7-day vote, 7-day protection, and 3-day enactment delay—20 days before bounded maturity/operational delay. Protocol `L1RootAction` can use the separately governed 24-hour urgent path only with unanimous raw protection-track `Pass`; Actors promises neither path completes within a finite time.
+The reference runtime configures no System Immutable actor, so it has no actor-specific emergency migration or custody disposition to execute. A downstream runtime that admits an indefinite System Immutable actor must ship its migration-specific source/target actor set, bounded Close or Deactivate disposition, custody handling, terminal invariant, and Continuation policy with the same upgrade. The ordinary DEOS Governance path exposes 3-day lead-in, 7-day vote, 7-day protection, and 3-day enactment delay—20 days before bounded maturity/operational delay. Protocol `L1RootAction` can use the separately governed 24-hour urgent path only with unanimous raw protection-track `Pass`; Actors promises neither path completes within a finite time.
 
 `ActorIdentityCount` covers thirteen active plus dormant identities. `NextActorId = 15` preserves the reserved address range. Every expected small-native-flow System or custody account receives one persistent free-balance ED anchor because a provider or reserved balance alone does not make a zero-free account eligible for sub-ED native ingress under `pallet-balances` v50.
 
-## Execution-Plan Families
+## Actor Contract Families
 
 The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs`.
 
 | Builder | Actor family | Composition |
 | --- | --- | --- |
-| `build_burn_execution_plan` | Burn Actor | Foreign balances → Native swap → burn |
-| `build_zap_execution_plan` | Liquidity Actor | Add LP → surplus swap → split LP to buckets |
-| `build_bucket_lp_transfer_execution_plan` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
-| `build_treasury_lp_unwind_execution_plan` | Treasuries B/C/D | Remove configured LP into Treasury custody |
-| `build_bldr_splitter_execution_plan` | BLDR Splitter | Split minted BLDR share between liquidity and treasury lanes |
-| `build_bldr_liquidity_execution_plan` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
-| `build_treasury_b_buyback_execution_plan` | Treasury B | Optional NTVE buyback → burn acquired target |
-| `build_native_staking_liquidity_execution_plan` | Native Staking Liquidity Actor | Donate balanced `NTVE/stNTVE` without minting LP |
+| `build_burn_contract_steps` | Burn Actor | Foreign balances → Native swap → burn |
+| `build_zap_contract_steps` | Liquidity Actor | Add LP → surplus swap → split LP to buckets |
+| `build_bucket_lp_transfer_contract_steps` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
+| `build_treasury_lp_unwind_contract_steps` | Treasuries B/C/D | Remove configured LP into Treasury custody |
+| `build_bldr_splitter_contract_steps` | BLDR Splitter | Split minted BLDR share between liquidity and treasury lanes |
+| `build_bldr_liquidity_contract_steps` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
+| `build_treasury_b_buyback_contract_steps` | Treasury B | Optional NTVE buyback → burn acquired target |
+| `build_native_staking_liquidity_contract_steps` | Native Staking Liquidity Actor | Donate balanced `NTVE/stNTVE` without minting LP |
 
 These builders configure the reusable task language; they do not create pallet-level roles or Actors-id policy branches.
+
+The package architecture owns the exhaustive public reachability matrix. DEOS production builders currently instantiate the reference topology subset, while typed creation/update calls and the independent embedding runtime keep the remaining portable variants executable. Constructor-free runtime-upgrade cancellation and context-free amount dependency placeholders are absent; adding any public variant requires its constructor, evaluator/adapter branch, and executable evidence in the same change.
 
 ## Governance Activation Flows
 
@@ -101,7 +103,7 @@ Emergency policy pauses one actor through `pause_actor` or stops cycle execution
 
 ## Market Adapter Composition
 
-`TmctolDexOps` routes exact-input and exact-output swaps through DEOS Router with `ExecutionContext { actor, actor_type }` and returns actual `DexSwapOutcome { total_amount_in, recipient_amount_out }` facts to Actors. The accepted full production generation measures the Native-anchored maximum at `550,009,000 / 19,253` for exact-input and `551,126,000 / 19,253` for exact-output. Actors supplies immutable actor authority; the adapter uses it only for typed market protection and never infers System status from the sovereign catalog.
+`TmctolDexOps` routes exact-input and exact-output swaps through DEOS Router with `ExecutionContext { actor, actor_type }` and returns actual `DexSwapOutcome { total_amount_in, recipient_amount_out }` facts to Actors. The accepted full production generation measures the Native-anchored maximum at `561,393,000 / 19,253` for exact-input and `563,139,000 / 19,253` for exact-output. Actors supplies immutable actor authority; the adapter uses it only for typed market protection and never infers System status from the sovereign catalog.
 
 Exact input derives `min_out` from the caller-aware quote and binds zero tolerance to that quote. Exact output obtains one reverse quote, adds authored tolerance with ceiling arithmetic, intersects it with live preservable input capacity, and executes under the explicit total-input cap.
 
@@ -127,7 +129,7 @@ Task-scoped storage transactions preserve committed earlier steps while rolling 
 
 `pallet-balances` v50 rejects a new zero-free account below ED even when FRAME already holds a provider. DEOS therefore endows expected small-flow System, custody, and staking-ingress accounts with one persistent free ED anchor and preserves it through amount resolution.
 
-`TmctolLiquidityOps` delegates add/remove/donation to Asset Conversion while retaining ratio, LP receipt, and native-special-case policy in the adapter. `TmctolStakingOps` maps native staking to `stake_native`, other assets to generic staking, and resolves stable share assets through the staking receipt index.
+`TmctolLiquidityOps` delegates add/remove/donation to Asset Conversion while retaining ratio, LP receipt, and native-special-case policy in the adapter. `TmctolStakingOps` maps every Actor staking asset to the generic `stake(asset_id, amount)` call and resolves stable share assets through the staking receipt index.
 
 Runtime adapters use typed failure classification. Explicit route, liquidity, slippage, oracle, and temporary-capacity failures may retry; malformed, forbidden, funding, fee, and unknown downstream failures remain Permanent.
 
@@ -205,7 +207,7 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 | `WakeupPageSize` | 32 temporal entries per page |
 | `MaxQueueEntriesScannedPerBlock` | 10,000 physical inspections |
 | `MaxExecutionsPerBlock` | 1,000 defense-in-depth attempt ceiling |
-| `MaxExecutionPlanSteps` | Configurable shared `1..=255` bound; DEOS baseline is 8 for both classes |
+| `MaxContractSteps` | Configurable shared `1..=255` bound; DEOS baseline is 8 for both classes |
 | `MaxRetryAttempts` | 10 cursor-local unsuccessful attempts |
 | `MaxConsecutiveFailures` | 10 |
 | `MaxAutoCloseNonceHorizon` | 10,000 |
@@ -228,19 +230,15 @@ The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanou
 | One revision restart after quiescence | At most 314 | 63 |
 | Persistently saturated queue | Unbounded | Unbounded |
 
-A fanout service unit is one occupied-page attempt or one cursorless restart/cleanup transition; final-page completion may clear or restart within its page unit. The finite rows require stable active topology, no newer selected-feed revision, available configured RefTime/ProofSize budget, eventual queue capacity, and same-finalized-block runtime/code/metadata/constants matching generated client evidence. Mismatch withholds the rows while retaining factual chain topology. Estimates end at fanout completion, not queue admission, condition evaluation, or actor attempt.
+A fanout service unit is one occupied-page attempt or one cursorless restart/cleanup transition; final-page completion may clear or restart within its page unit. The finite rows require stable active topology, no newer selected-feed revision, available configured RefTime/ProofSize budget, eventual queue capacity, and same-finalized-block runtime/code/metadata/constants matching generated client evidence. Mismatch withholds the rows while retaining factual chain topology. Estimates end at fanout completion, not queue admission, Predicate evaluation, or actor attempt.
 
-Production fanout base is `31,565,000 / 1,543` (`6,565,000` benchmark RefTime plus one DbWeight read); the completing dense unit is `12,135,545,000 / 167,454` (`1,460,545,000` benchmark RefTime plus 139 reads and 72 writes). A saturated dense diagnostic is lower in RefTime and equal in ProofSize, so one conservative unit class remains sufficient.
+Production fanout base is `31,565,000 / 1,543` (`6,565,000` benchmark RefTime plus one DbWeight read); the completing dense unit is `12,136,381,000 / 166,430` (`1,461,381,000` benchmark RefTime plus 139 reads and 72 writes). ProofSize therefore remains the active five-unit limit under the configured budget.
 
-The final corrective Actors production run used `frame-omni-bencher 0.22.0`, production Wasm, 50 steps, and 20 repeats. Existing-page enqueue is `59,925,000 / 6,474` with 7 reads and 5 writes; new-page enqueue is `60,483,000 / 8,890` with 8 reads and 5 writes. Preserve-page consume is `31,220,000 / 4,095` with 5 reads and 3 writes; delete-page consume is `32,895,000 / 4,077` with 5 reads and 5 writes.
-
-Accepted wakeup values are `scheduler_wakeup_replace_exact = 64,814,000 / 6,664` with 6 reads and 7 writes; middle-page invalidation is `60,064,000 / 10,165` with 6 reads and 5 writes; exact cursor removal is `452,928,000 / 55,800` with 33 reads and 25 writes.
-
-Tombstone drain is `7,057,781 + 2,132,168 × n` RefTime and `2,982 + 2,492 × n` ProofSize, with `5 + n` reads and 4 writes. Cycle orchestration is `44,699,000 / 9,667` with 3 reads and 2 writes; step orchestration is `44,555,323 + 215,321 × n` RefTime with 3 reads and 2 writes and covers the complete cycle execution over `n` inert steps. The scheduler base is `20,463,000 / 1,543` with 7 reads and 1 write. These values price measured bounded topology only; they imply no throughput promise.
+The accepted Actors production run used `frame-omni-bencher 0.22.0`, production Wasm, 50 steps, and 20 repeats. `template/runtime/src/weights/pallet_deos_actors.rs` owns the complete current scheduler, wakeup, ingress, task, predicate, and orchestration coefficients. Those values price measured bounded topology only; they imply no throughput promise.
 
 ## Generated Evidence and Artifacts
 
-`scripts/actors-assurance.sh` owns pre-release freshness checks for Actors semantic, fee-envelope, ABI, observation, ingress, weight, and metadata evidence. The deterministic final `release-evidence.json` owns candidate Wasm, metadata, descriptor, weight-tree, and specification hashes after semantic freeze; this integration document does not copy those release identities.
+`scripts/actors-assurance.sh` owns freshness checks for Actors semantic, fee-envelope, ABI, observation, ingress, weight, and metadata evidence. Production Wasm, metadata, descriptors, and generated client evidence remain owned by their build/export commands and checked directly by the `full` validation profile.
 
 `template/runtime/src/weights/pallet_deos_actors.rs` owns complete generated methods and storage annotations. Architecture records only load-bearing admission values; benchmark-host timing never becomes a chain-throughput claim.
 
@@ -261,6 +259,8 @@ The corpus intentionally omits block numbers, balances, and exhaustive step fiel
 ## Control Plane and Read Surfaces
 
 Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorContract` at one finalized block; funding details require the separately bounded `ActorFunding` value. Dormant identity, queue/wakeup membership, active-dirty topology, and bounded simulation results remain canonical-chain truth.
+
+The runtime simulation API executes the same package evaluator and finalizer used by scheduler service. Its bounded records carry canonical `StepOutcome` values, including concrete failure cause plus retry disposition, and its status is the shared `AttemptDisposition`; DEOS adds no adapter-side simulation model.
 
 The read-only `ActorEligibilityApi::actor_eligibility` projection reports the scheduler-owned readiness phase, a typed `CloseDue(CloseReason)` terminal projection, and `next_eligible_block` at one finalized block, reusing the exact scheduler arithmetic so the browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 

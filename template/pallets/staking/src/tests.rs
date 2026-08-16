@@ -104,11 +104,32 @@ fn try_state_rejects_native_security_reward_claim_drift() {
         total_reward_weight: 0,
         credited: 0,
         claimed: 0,
-        status: crate::NativeSecurityRewardPotStatus::Expired,
+        status: crate::NativeSecurityRewardPotStatus::Finalized,
       },
     );
     crate::NativeSecurityRewardClaims::<Test>::insert(0, 1, ());
     set_security_epoch(1);
+    assert!(Staking::do_try_state().is_err());
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_rejects_native_security_reward_retention_above_the_hard_bound() {
+  new_test_ext().execute_with(|| {
+    for epoch in 1..=SecurityRewardClaimHorizon::get() + 3 {
+      crate::NativeSecurityEpochSnapshots::<Test>::insert(epoch, empty_security_snapshot(epoch));
+      crate::NativeSecurityRewardPots::<Test>::insert(
+        epoch,
+        crate::NativeSecurityRewardPot {
+          total_reward_weight: 0,
+          credited: 0,
+          claimed: 0,
+          status: crate::NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 10);
     assert!(Staking::do_try_state().is_err());
   });
 }
@@ -215,20 +236,27 @@ fn try_state_reconciles_pending_unlocks_with_physical_lp_custody() {
 fn native_security_boundary_diagnostic_is_one_overwritten_bounded_value() {
   new_test_ext().execute_with(|| {
     assert_eq!(Staking::last_native_security_boundary_diagnostic(), None);
-    Staking::note_native_security_boundary(7, crate::NativeSecurityReadiness::NativePoolMissing);
+    Staking::note_native_security_boundary(
+      7,
+      crate::NativeSecurityBoundaryOutcome::NotReady(
+        crate::NativeSecurityReadiness::NativePoolMissing,
+      ),
+    );
     assert_eq!(
       Staking::last_native_security_boundary_diagnostic(),
       Some(crate::NativeSecurityBoundaryDiagnostic {
         planned_epoch: 7,
-        readiness: crate::NativeSecurityReadiness::NativePoolMissing,
+        outcome: crate::NativeSecurityBoundaryOutcome::NotReady(
+          crate::NativeSecurityReadiness::NativePoolMissing,
+        ),
       }),
     );
-    Staking::note_native_security_boundary(8, crate::NativeSecurityReadiness::Ready);
+    Staking::note_native_security_boundary(8, crate::NativeSecurityBoundaryOutcome::SnapshotOpened);
     assert_eq!(
       Staking::last_native_security_boundary_diagnostic(),
       Some(crate::NativeSecurityBoundaryDiagnostic {
         planned_epoch: 8,
-        readiness: crate::NativeSecurityReadiness::Ready,
+        outcome: crate::NativeSecurityBoundaryOutcome::SnapshotOpened,
       }),
     );
   });
@@ -250,6 +278,94 @@ fn native_security_readiness_is_mode_aware_and_fail_closed() {
     assert_eq!(
       Staking::native_security_readiness(),
       crate::NativeSecurityReadiness::Inactive
+    );
+  });
+}
+
+fn native_security_view_error_name(error: crate::NativeSecurityViewError) -> &'static str {
+  match error {
+    crate::NativeSecurityViewError::RetentionBoundExceeded => "RetentionBoundExceeded",
+    crate::NativeSecurityViewError::MultiplePlannedEpochs => "MultiplePlannedEpochs",
+  }
+}
+
+#[test]
+fn native_security_view_signature_and_errors_are_compiler_exhaustive() {
+  let _: fn() -> Result<crate::NativeSecurityView, crate::NativeSecurityViewError> =
+    Staking::native_security_view;
+  assert_eq!(
+    native_security_view_error_name(crate::NativeSecurityViewError::RetentionBoundExceeded),
+    "RetentionBoundExceeded"
+  );
+  assert_eq!(
+    native_security_view_error_name(crate::NativeSecurityViewError::MultiplePlannedEpochs),
+    "MultiplePlannedEpochs"
+  );
+}
+
+#[test]
+fn native_security_view_owns_mode_readiness_epoch_plan_and_obligation_truth() {
+  new_test_ext().execute_with(|| {
+    let view = Staking::native_security_view().expect("empty bounded view is valid");
+    assert_eq!(view.mode, crate::NativeSecurityMode::LpBackedSelection);
+    assert_eq!(
+      view.readiness,
+      crate::NativeSecurityReadiness::NativePoolMissing
+    );
+    assert_eq!(view.current_epoch, 0);
+    assert_eq!(view.planned_epoch, None);
+    assert!(!view.settlement_obligations_remain);
+
+    crate::NativeSecurityRewardPots::<Test>::insert(
+      1,
+      crate::NativeSecurityRewardPot {
+        total_reward_weight: 0,
+        credited: 0,
+        claimed: 0,
+        status: crate::NativeSecurityRewardPotStatus::Planned,
+      },
+    );
+    let planned = Staking::native_security_view().expect("one planned epoch is valid");
+    assert_eq!(planned.planned_epoch, Some(1));
+    assert!(!planned.settlement_obligations_remain);
+
+    crate::NativeSecurityRewardPots::<Test>::mutate(1, |pot| {
+      pot.as_mut().expect("pot exists").status = crate::NativeSecurityRewardPotStatus::Open;
+    });
+    let open = Staking::native_security_view().expect("one open epoch is valid");
+    assert_eq!(open.planned_epoch, None);
+    assert!(open.settlement_obligations_remain);
+
+    for epoch in [2, 3] {
+      crate::NativeSecurityRewardPots::<Test>::insert(
+        epoch,
+        crate::NativeSecurityRewardPot {
+          total_reward_weight: 0,
+          credited: 0,
+          claimed: 0,
+          status: crate::NativeSecurityRewardPotStatus::Planned,
+        },
+      );
+    }
+    assert_eq!(
+      Staking::native_security_view(),
+      Err(crate::NativeSecurityViewError::MultiplePlannedEpochs)
+    );
+
+    for epoch in 2..=6 {
+      crate::NativeSecurityRewardPots::<Test>::insert(
+        epoch,
+        crate::NativeSecurityRewardPot {
+          total_reward_weight: 0,
+          credited: 0,
+          claimed: 0,
+          status: crate::NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    assert_eq!(
+      Staking::native_security_view(),
+      Err(crate::NativeSecurityViewError::RetentionBoundExceeded)
     );
   });
 }
@@ -439,7 +555,7 @@ fn eligible_operator_changes_after_planning_affect_only_later_epoch() {
 }
 
 #[test]
-fn finalized_security_reward_claims_pay_frozen_weight_and_conserve_liability() {
+fn finalized_security_reward_claims_survive_trusted_mode_and_conserve_liability() {
   new_test_ext().execute_with(|| {
     let mut snapshot = empty_security_snapshot(0);
     snapshot
@@ -479,6 +595,11 @@ fn finalized_security_reward_claims_pay_frozen_weight_and_conserve_liability() {
         101,
       );
     let account_before = Balances::free_balance(1);
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
+    assert_noop!(
+      Staking::claim_and_compound_native_security_reward(RuntimeOrigin::signed(1), 0, 99, 1),
+      Error::<Test>::NativeSecurityModeInactive
+    );
 
     assert_ok!(Staking::claim_native_security_reward(
       RuntimeOrigin::signed(1),
@@ -681,6 +802,17 @@ fn batch_security_reward_claims_share_validation_and_roll_back_on_failure() {
       epochs,
     ));
     assert_eq!(Staking::native_security_reward_liability(), 0);
+    let event_liabilities = System::events()
+      .iter()
+      .filter_map(|record| match &record.event {
+        RuntimeEvent::Staking(crate::Event::NativeSecurityRewardClaimed {
+          outstanding_liability,
+          ..
+        }) => Some(*outstanding_liability),
+        _ => None,
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(event_liabilities, vec![10, 0]);
     assert_eq!(
       Staking::native_security_reward_pot(0)
         .expect("pot retained")
@@ -761,10 +893,10 @@ fn security_reward_claims_reject_open_zero_weight_zero_pot_and_expired_epochs() 
 }
 
 #[test]
-fn expiry_returns_unclaimed_and_rounding_dust_once_then_cleanup_removes_state() {
+fn expiry_atomically_settles_in_trusted_mode_and_removes_state() {
   new_test_ext().execute_with(|| {
     let mut snapshot = empty_security_snapshot(0);
-    for account in [1, 2] {
+    for account in [1, 2, 3] {
       snapshot
         .participants
         .try_push(crate::NativeSecurityAccountSnapshot {
@@ -782,53 +914,200 @@ fn expiry_returns_unclaimed_and_rounding_dust_once_then_cleanup_removes_state() 
       crate::NativeSecurityRewardPot {
         total_reward_weight: 3,
         credited: 10,
-        claimed: 3,
+        claimed: 9,
         status: crate::NativeSecurityRewardPotStatus::Finalized,
       },
     );
-    crate::NativeSecurityRewardClaims::<Test>::insert(0, 1, ());
-    crate::NativeSecurityRewardLiability::<Test>::put(7);
+    for account in [1, 2, 3] {
+      crate::NativeSecurityRewardClaims::<Test>::insert(0, account, ());
+    }
+    crate::NativeSecurityRewardLiability::<Test>::put(1);
     let reward_account = Staking::native_security_reward_account();
     let source = SecurityRewardFundingSource::get();
     let _ =
       <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
         &reward_account,
-        8,
+        2,
       );
     let source_before = Balances::free_balance(source);
     set_security_epoch(SecurityRewardClaimHorizon::get() + 1);
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
 
     assert_ok!(Staking::expire_native_security_reward(
       RuntimeOrigin::signed(3),
       0
     ));
-    assert_eq!(Balances::free_balance(source), source_before + 7);
+    assert_eq!(Balances::free_balance(source), source_before + 1);
     assert_eq!(Balances::free_balance(reward_account), 1);
     assert_eq!(Staking::native_security_reward_liability(), 0);
-    assert_eq!(
-      Staking::native_security_reward_pot(0)
-        .expect("expired pot retained")
-        .status,
-      crate::NativeSecurityRewardPotStatus::Expired
-    );
-    assert_noop!(
-      Staking::expire_native_security_reward(RuntimeOrigin::signed(3), 0),
-      Error::<Test>::NativeSecurityRewardExpiryInvalid
-    );
-    assert_eq!(Balances::free_balance(source), source_before + 7);
-
-    assert_ok!(Staking::cleanup_expired_native_security_reward(
-      RuntimeOrigin::signed(3),
-      0
-    ));
     assert!(Staking::native_security_epoch_snapshot(0).is_none());
     assert!(Staking::native_security_reward_pot(0).is_none());
-    assert!(Staking::native_security_reward_claimed(0, 1).is_none());
+    for account in [1, 2, 3] {
+      assert!(Staking::native_security_reward_claimed(0, account).is_none());
+    }
     assert_noop!(
-      Staking::cleanup_expired_native_security_reward(RuntimeOrigin::signed(3), 0),
+      Staking::expire_native_security_reward(RuntimeOrigin::signed(3), 0),
       Error::<Test>::NativeSecurityEpochNotOpen
     );
-    assert_eq!(Balances::free_balance(source), source_before + 7);
+    assert_eq!(Balances::free_balance(source), source_before + 1);
+  });
+}
+
+#[test]
+fn session_retention_settles_exactly_the_epoch_crossing_the_horizon() {
+  new_test_ext().execute_with(|| {
+    crate::NativeSecurityEpochSnapshots::<Test>::insert(0, empty_security_snapshot(0));
+    crate::NativeSecurityRewardPots::<Test>::insert(
+      0,
+      crate::NativeSecurityRewardPot {
+        total_reward_weight: 1,
+        credited: 10,
+        claimed: 0,
+        status: crate::NativeSecurityRewardPotStatus::Finalized,
+      },
+    );
+    crate::NativeSecurityRewardLiability::<Test>::put(10);
+    let reward_account = Staking::native_security_reward_account();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        &reward_account,
+        11,
+      );
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
+    set_security_epoch(SecurityRewardClaimHorizon::get());
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(None));
+    assert!(Staking::native_security_reward_pot(0).is_some());
+
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 1);
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(0)));
+    assert!(Staking::native_security_reward_pot(0).is_none());
+    assert_eq!(Staking::native_security_reward_liability(), 0);
+  });
+}
+
+#[test]
+fn session_retention_runs_four_claim_horizons_without_external_cleanup() {
+  new_test_ext().execute_with(|| {
+    let horizon = SecurityRewardClaimHorizon::get();
+    let last_epoch = horizon.saturating_add(1).saturating_mul(4);
+    let source = SecurityRewardFundingSource::get();
+    let source_initial = Balances::free_balance(source);
+    let reward_account = Staking::native_security_reward_account();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        &reward_account,
+        <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::minimum_balance(),
+      );
+    assert_ok!(Staking::open_native_security_epoch(0, &[]));
+
+    for epoch in 0..=last_epoch {
+      set_security_epoch(epoch);
+      let source_before_retention = Balances::free_balance(source);
+      let settled =
+        Staking::settle_due_native_security_reward().expect("session retention must remain live");
+      if let Some(settled_epoch) = settled {
+        assert_eq!(settled_epoch, epoch - horizon - 1);
+        assert_eq!(Balances::free_balance(source), source_before_retention + 1);
+        assert_eq!(Staking::settle_due_native_security_reward(), Ok(None));
+      }
+      assert_ok!(Staking::activate_native_security_epoch(epoch));
+      assert_ok!(Staking::fund_native_security_reward(
+        RuntimeOrigin::root(),
+        1,
+      ));
+      assert_ok!(Staking::open_native_security_epoch(epoch + 1, &[]));
+      assert!(
+        crate::NativeSecurityRewardPots::<Test>::iter().count()
+          <= horizon.saturating_add(2) as usize
+      );
+      assert_eq!(
+        Staking::native_security_reward_liability(),
+        epoch.min(horizon).saturating_add(1) as Balance
+      );
+    }
+
+    assert_eq!(
+      Balances::free_balance(source),
+      source_initial - Staking::native_security_reward_liability()
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Staking::do_try_state());
+  });
+}
+
+#[test]
+fn retention_recovers_the_oldest_missed_epoch_before_a_newer_due_epoch() {
+  new_test_ext().execute_with(|| {
+    for epoch in [0, 1] {
+      crate::NativeSecurityEpochSnapshots::<Test>::insert(epoch, empty_security_snapshot(epoch));
+      crate::NativeSecurityRewardPots::<Test>::insert(
+        epoch,
+        crate::NativeSecurityRewardPot {
+          total_reward_weight: 1,
+          credited: 10,
+          claimed: 0,
+          status: crate::NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    crate::NativeSecurityRewardLiability::<Test>::put(20);
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 2);
+    assert_noop!(
+      Staking::settle_due_native_security_reward(),
+      Error::<Test>::NativeSecurityRewardAccountingOverflow
+    );
+    assert!(Staking::native_security_reward_pot(0).is_some());
+    assert!(Staking::native_security_reward_pot(1).is_some());
+
+    let reward_account = Staking::native_security_reward_account();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        &reward_account,
+        21,
+      );
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(0)));
+    assert!(Staking::native_security_reward_pot(0).is_none());
+    assert!(Staking::native_security_reward_pot(1).is_some());
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 3);
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(1)));
+    assert!(Staking::native_security_reward_pot(1).is_none());
+    assert_eq!(Staking::native_security_reward_liability(), 0);
+  });
+}
+
+#[test]
+fn planning_rejects_a_full_retention_window_or_an_existing_plan() {
+  new_test_ext().execute_with(|| {
+    for epoch in 1..=SecurityRewardClaimHorizon::get() + 2 {
+      crate::NativeSecurityEpochSnapshots::<Test>::insert(epoch, empty_security_snapshot(epoch));
+      crate::NativeSecurityRewardPots::<Test>::insert(
+        epoch,
+        crate::NativeSecurityRewardPot {
+          total_reward_weight: 0,
+          credited: 0,
+          claimed: 0,
+          status: crate::NativeSecurityRewardPotStatus::Finalized,
+        },
+      );
+    }
+    assert_noop!(
+      Staking::open_native_security_epoch(9, &[]),
+      Error::<Test>::NativeSecurityRetentionBlocked
+    );
+
+    crate::NativeSecurityEpochSnapshots::<Test>::remove(SecurityRewardClaimHorizon::get() + 2);
+    crate::NativeSecurityRewardPots::<Test>::remove(SecurityRewardClaimHorizon::get() + 2);
+    crate::NativeSecurityRewardPots::<Test>::mutate(1, |pot| {
+      pot.as_mut().expect("pot exists").status = crate::NativeSecurityRewardPotStatus::Planned;
+    });
+    assert_noop!(
+      Staking::open_native_security_epoch(9, &[]),
+      Error::<Test>::NativeSecurityRetentionBlocked
+    );
+    assert_ok!(Staking::cancel_native_security_epoch_plan(1));
+    assert!(Staking::native_security_epoch_snapshot(1).is_none());
+    assert!(Staking::native_security_reward_pot(1).is_none());
   });
 }
 
@@ -1241,7 +1520,7 @@ fn lock_native_lp_for_collator_moves_lp_into_lock_account() {
     );
     assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 40);
     assert_eq!(Staking::account_native_lp_locked(1), 40);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 40);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 40);
     assert_eq!(Staking::total_native_lp_locked(), 40);
     assert_eq!(Staking::native_security_participants().as_slice(), &[1]);
     assert_eq!(Staking::native_nomination_operators(1).as_slice(), &[99]);
@@ -1357,7 +1636,7 @@ fn native_lp_unlock_lifecycle_releases_after_delay() {
     );
     assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 25);
     assert_eq!(Staking::account_native_lp_locked(1), 25);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 25);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 25);
     assert_eq!(Staking::total_native_lp_locked(), 25);
     assert_noop!(
       Staking::withdraw_unlocked_native_lp(RuntimeOrigin::signed(1), 99),
@@ -1491,6 +1770,175 @@ fn full_unlock_then_new_nomination_keeps_pending_custody_separate() {
 }
 
 #[test]
+fn trusted_mode_contracts_open_and_planned_state_without_losing_liability() {
+  new_test_ext().execute_with(|| {
+    let reward_account = Staking::native_security_reward_account();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        &reward_account,
+        <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::minimum_balance(),
+      );
+    assert_ok!(Staking::open_native_security_epoch(0, &[]));
+    assert_ok!(Staking::activate_native_security_epoch(0));
+    assert_ok!(Staking::fund_native_security_reward(
+      RuntimeOrigin::root(),
+      10,
+    ));
+    assert_ok!(Staking::open_native_security_epoch(1, &[]));
+    set_security_epoch(1);
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
+
+    assert_ok!(Staking::contract_native_security_obligations_for_trusted_mode());
+    assert!(Staking::active_native_security_epoch_snapshot().is_none());
+    assert_eq!(
+      Staking::native_security_reward_pot(0)
+        .expect("open obligation becomes finalized")
+        .status,
+      crate::NativeSecurityRewardPotStatus::Finalized
+    );
+    assert!(Staking::native_security_reward_pot(1).is_none());
+    assert_eq!(Staking::native_security_reward_liability(), 10);
+
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 1);
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(0)));
+    assert_eq!(Staking::native_security_reward_liability(), 0);
+  });
+}
+
+#[test]
+fn lp_backed_to_trusted_transition_preserves_every_retained_obligation() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 40));
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    assert_ok!(Staking::request_unlock_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+      10,
+    ));
+
+    let mut finalized = empty_security_snapshot(0);
+    for (account, reward_weight) in [(1, 40), (2, 60)] {
+      finalized
+        .participants
+        .try_push(crate::NativeSecurityAccountSnapshot {
+          account,
+          conservative_native_value: reward_weight,
+          governance_coefficient: FixedU128::one(),
+          reward_weight,
+        })
+        .expect("participant fits");
+    }
+    finalized.total_reward_weight = 100;
+    crate::NativeSecurityEpochSnapshots::<Test>::insert(0, finalized);
+    crate::NativeSecurityRewardPots::<Test>::insert(
+      0,
+      crate::NativeSecurityRewardPot {
+        total_reward_weight: 100,
+        credited: 101,
+        claimed: 0,
+        status: crate::NativeSecurityRewardPotStatus::Finalized,
+      },
+    );
+    let active = empty_security_snapshot(1);
+    crate::ActiveNativeSecurityEpochSnapshot::<Test>::put(&active);
+    crate::NativeSecurityEpochSnapshots::<Test>::insert(1, active);
+    crate::NativeSecurityRewardPots::<Test>::insert(
+      1,
+      crate::NativeSecurityRewardPot {
+        total_reward_weight: 0,
+        credited: 50,
+        claimed: 0,
+        status: crate::NativeSecurityRewardPotStatus::Open,
+      },
+    );
+    crate::NativeSecurityEpochSnapshots::<Test>::insert(2, empty_security_snapshot(2));
+    crate::NativeSecurityRewardPots::<Test>::insert(
+      2,
+      crate::NativeSecurityRewardPot {
+        total_reward_weight: 0,
+        credited: 0,
+        claimed: 0,
+        status: crate::NativeSecurityRewardPotStatus::Planned,
+      },
+    );
+    crate::NativeSecurityRewardLiability::<Test>::put(151);
+    let reward_account = Staking::native_security_reward_account();
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        &reward_account,
+        159,
+      );
+    set_security_epoch(2);
+    assert_ok!(Staking::claim_native_security_reward(
+      RuntimeOrigin::signed(1),
+      0,
+    ));
+    assert_eq!(Staking::native_security_reward_liability(), 111);
+
+    set_native_security_mode(crate::NativeSecurityMode::TrustedSet);
+    assert_ok!(Staking::contract_native_security_obligations_for_trusted_mode());
+    assert!(Staking::active_native_security_epoch_snapshot().is_none());
+    assert!(Staking::native_security_reward_pot(2).is_none());
+    assert_eq!(
+      Staking::native_security_reward_pot(1)
+        .expect("open pot becomes finalized")
+        .status,
+      crate::NativeSecurityRewardPotStatus::Finalized
+    );
+    assert_eq!(Staking::native_security_reward_liability(), 111);
+    assert_noop!(
+      Staking::claim_and_compound_native_security_reward(RuntimeOrigin::signed(2), 0, 99, 1),
+      Error::<Test>::NativeSecurityModeInactive
+    );
+    assert_ok!(Staking::claim_native_security_reward(
+      RuntimeOrigin::signed(2),
+      0,
+    ));
+    assert_eq!(Staking::native_security_reward_liability(), 51);
+
+    let unlock_block = Staking::pending_native_lp_unlock(1, 99)
+      .expect("pending custody exit survives mode contraction")
+      .unlock_block;
+    System::set_block_number(unlock_block);
+    assert_ok!(Staking::withdraw_unlocked_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+    ));
+    assert_eq!(Assets::balance(LP_ASSET, &1), 10);
+    assert_eq!(
+      Staking::native_lp_lock(1, 99)
+        .expect("active lock remains")
+        .amount,
+      30
+    );
+
+    let source = SecurityRewardFundingSource::get();
+    let source_before = Balances::free_balance(source);
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 1);
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(0)));
+    assert_eq!(Balances::free_balance(source), source_before + 8);
+    assert_eq!(Staking::native_security_reward_liability(), 50);
+    set_security_epoch(SecurityRewardClaimHorizon::get() + 2);
+    assert_eq!(Staking::settle_due_native_security_reward(), Ok(Some(1)));
+    assert_eq!(Balances::free_balance(source), source_before + 58);
+    assert_eq!(Staking::native_security_reward_liability(), 0);
+  });
+}
+
+#[test]
 fn trusted_mode_stops_new_nomination_but_preserves_unlock_and_withdrawal() {
   const LP_ASSET: AssetId = 0x7000_0001;
   new_test_ext().execute_with(|| {
@@ -1524,7 +1972,7 @@ fn trusted_mode_stops_new_nomination_but_preserves_unlock_and_withdrawal() {
       40,
     ));
     assert_eq!(Staking::operator_native_lp_locked(99), 0);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 0);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 0);
     assert_eq!(Staking::total_native_lp_locked(), 0);
     assert!(Staking::native_security_participants().is_empty());
     assert!(Staking::native_nomination_operators(1).is_empty());
@@ -1601,14 +2049,14 @@ fn native_governance_lp_lock_unlock_lifecycle_updates_vote_power_aggregates() {
       40
     );
     assert_eq!(Staking::account_native_lp_locked(1), 40);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 0);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 0);
     assert_eq!(Staking::total_native_lp_locked(), 40);
     assert_ok!(Staking::request_unlock_native_lp_for_governance(
       RuntimeOrigin::signed(1),
       15,
     ));
     assert_eq!(Staking::account_native_lp_locked(1), 25);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 0);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 0);
     assert_eq!(Staking::total_native_lp_locked(), 25);
     assert_eq!(
       Staking::pending_native_governance_lp_unlock(1)
@@ -1776,7 +2224,7 @@ fn redelegation_after_planning_preserves_frozen_epoch_and_changes_later_epoch() 
     assert_eq!(later.eligible_operators[0].operator, 100);
     assert_eq!(later.participants[0].conservative_native_value, 40);
     assert_eq!(Staking::account_native_lp_locked(1), 40);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 40);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 40);
     assert_eq!(Staking::total_native_lp_locked(), 40);
   });
 }
@@ -1820,7 +2268,7 @@ fn native_lp_redelegate_moves_backing_between_operators() {
     assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 25);
     assert_eq!(OperatorNativeLpLocked::<Test>::get(100), 15);
     assert_eq!(Staking::account_native_lp_locked(1), 40);
-    assert_eq!(Staking::account_native_collator_lp_locked(1), 40);
+    assert_eq!(Staking::native_locked_lp_position(1).collator_locked_lp, 40);
     assert_eq!(Staking::total_native_lp_locked(), 40);
     assert_eq!(Staking::native_security_participants().as_slice(), &[1]);
     assert_eq!(
@@ -2313,11 +2761,11 @@ fn recover_unowned_pool_rejects_non_empty_pool() {
 }
 
 #[test]
-fn stake_native_mints_liquid_receipt_without_binding() {
+fn generic_stake_mints_liquid_native_receipt_without_binding() {
   const TYPE_STAKED: AssetId = 0x5000_0000;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 1, 100));
     assert_eq!(
       <Assets as Inspect<AccountId>>::balance(TYPE_STAKED, &1),
       100
@@ -2326,23 +2774,12 @@ fn stake_native_mints_liquid_receipt_without_binding() {
 }
 
 #[test]
-fn generic_native_stake_requires_dedicated_native_call() {
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_noop!(
-      Staking::stake(RuntimeOrigin::signed(1), 1, 100),
-      Error::<Test>::NativeStakeRequiresDedicatedCall
-    );
-  });
-}
-
-#[test]
-fn native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
+fn generic_stake_value_tracks_transferable_native_receipts() {
   const TYPE_STAKED: AssetId = 0x5000_0000;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(2), 50));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 1, 100));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(2), 1, 50));
     assert_ok!(<Assets as Mutate<AccountId>>::transfer(
       TYPE_STAKED,
       &2,
@@ -2350,44 +2787,8 @@ fn native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
       20,
       polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
     ));
-    assert_eq!(Staking::native_stake_value(&1), Some(100));
-    assert_eq!(Staking::passive_native_stake_value(&1), Some(100));
-    assert_eq!(Staking::delegated_native_stake_value(&1), None);
-    assert_eq!(
-      Staking::stake_exposure(1, &1),
-      Some(crate::StakeExposure {
-        total_value: 100,
-        passive_value: 100,
-        delegated_value: 0,
-        delegated_operator: None,
-      })
-    );
-    assert_eq!(Staking::native_stake_value(&2), Some(30));
-    assert_eq!(Staking::passive_native_stake_value(&2), Some(30));
-    assert_eq!(Staking::delegated_native_stake_value(&2), None);
-    assert_eq!(Staking::native_stake_value(&3), Some(20));
-    assert_eq!(Staking::passive_native_stake_value(&3), Some(20));
-    assert_eq!(Staking::delegated_native_stake_value(&3), None);
-  });
-}
-
-#[test]
-fn non_native_stake_exposure_stays_passive_even_when_native_position_is_delegated() {
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
-    assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 250));
-    assert_eq!(Staking::passive_stake_value(2, &1), Some(250));
-    assert_eq!(Staking::delegated_stake_value(2, &1), None);
-    assert_eq!(
-      Staking::stake_exposure(2, &1),
-      Some(crate::StakeExposure {
-        total_value: 250,
-        passive_value: 250,
-        delegated_value: 0,
-        delegated_operator: None,
-      })
-    );
+    assert_eq!(Staking::stake_value(1, &1), Some(100));
+    assert_eq!(Staking::stake_value(1, &2), Some(30));
+    assert_eq!(Staking::stake_value(1, &3), Some(20));
   });
 }

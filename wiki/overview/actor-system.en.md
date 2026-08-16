@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Actors System
-summary: Actors is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors while keeping domain logic in adapters and pallets.
+description: Actors is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors while keeping domain logic in adapters and pallets.
 locale: en
 canonical_page_id: actor-system
 translation_status: source
@@ -9,14 +9,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../docs/actors.integration.en.md
-  - ../../docs/oracle.integration.en.md
-  - ../../docs/actors-control-plane.contract.en.md
-  - ../../template/pallets/actors/docs/embedding.md
-  - ../../docs/core.architecture.en.md
-status: active
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../docs/actors.integration.en.md
+  - resource: ../../docs/oracle.integration.en.md
+  - resource: ../../docs/actors-control-plane.contract.en.md
+  - resource: ../../template/pallets/actors/docs/embedding.md
+  - resource: ../../docs/core.architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -30,7 +30,7 @@ related:
   - Routing and Minting Loop
   - Governance
   - Core Terms
-last_compiled: 2026-07-27
+last_compiled: 2026-08-14
 confidence: 0.95
 ---
 
@@ -38,13 +38,13 @@ confidence: 0.95
 
 ## Summary
 
-`Actors` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-deos-actor`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
+`Actors` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-deos-actors`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
 
 An [AA-Actor](actor.en.md) is one concrete instance inside that system. This page explains the system-level contract.
 
 ## System Contract
 
-Actors gives the runtime one reusable way to run bounded execution plans instead of hardcoding every recurring workflow into a dedicated pallet.
+Actors gives the runtime one reusable way to run bounded Actor Contracts instead of hardcoding every recurring flow into a dedicated pallet.
 
 The normative system contract requires:
 
@@ -55,7 +55,7 @@ The normative system contract requires:
 - Lifecycle rules for identity-only dormancy, atomic activation/deactivation, pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
 - Adapter boundaries with runtime-derived worst-case weights so Actors orchestrates mechanics without owning DEX, staking, or asset logic.
 
-Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it. `OnObservationChange { feed }` now declares reconsideration against one exact typed feed without threshold, callback, payload, or per-revision execution semantics; Actors derives a duplicate-free bounded subscriber index from that source, and the Oracle hook now coalesces only the latest changed revision into reusable dirty-feed state without reading subscribers. An independently metered deferred worker traverses bounded subscriber pages, binds that state to the same latch, and leaves execution to the existing queue/wakeup scheduler. Observation, Manual, periodic-only, and mixed source sets cannot author `PercentageOfTrigger`; only applicable AddressEvent-only sources establish its exact cycle-start balance snapshot contract.
+Actor balances can function like trigger messages: an asset arriving on an actor account can wake the Actor Contract, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it. `OnObservationChange { feed }` now declares reconsideration against one exact typed feed without threshold, callback, payload, or per-revision execution semantics; Actors derives a duplicate-free bounded subscriber index from that source, and the Oracle hook now coalesces only the latest changed revision into reusable dirty-feed state without reading subscribers. An independently metered deferred worker traverses bounded subscriber pages, binds that state to the same latch, and leaves execution to the existing queue/wakeup scheduler. Observation, Manual, periodic-only, and mixed source sets cannot author `PercentageOfTrigger`; only applicable AddressEvent-only sources establish its exact cycle-start balance snapshot contract.
 
 The Automation Observe view reads the bounded feed registry and one selected feed at a finalized block. It shows exact directional identity, scale-formatted scalar, producer/provenance, aggregation, lifecycle, update block, revision, authored age, and Fresh/Stale/Unavailable/Uninitialized status. It also states latest-state coalescing and warns that local pre-execution pool reserves provide neither external fair price nor MEV/ordering protection; history remains materialized.
 
@@ -63,25 +63,29 @@ Funding uses ordinary inbound transfers rather than a dedicated value-transfer c
 
 ## Verifiable Straight-Line Composition
 
-Each plan remains an ordered list of typed steps. A step uses `Preconditions::Unconditional` or bounded `AnyOf` DNF: outer clauses compose with OR and timed predicates inside each clause compose with AND. Every admitted predicate is visited, any predicate error fails the whole expression, and false preconditions only advance to the next fixed step. `Opening` results freeze for the logical cycle and survive Continuation; `Current` reads run immediately before the step and observe successful earlier effects. No precondition introduces jumps, loops, callbacks, arbitrary calls, or authored successors.
+Each Actor Contract is represented publicly by bounded `ContractSteps`; `MaxContractSteps` limits the ordered `steps` field for both User and System actors. An absent Step `precondition` is unconditional; a present `Precondition` is one bounded DNF whose outer clauses compose with OR and timed predicates inside each clause compose with AND. Every admitted predicate is visited, any predicate error fails the whole expression, and a false precondition only advances to the next fixed step. `Opening` results freeze for the logical cycle and survive Continuation; `Current` reads run immediately before the step and observe successful earlier effects. No precondition introduces jumps, loops, callbacks, arbitrary calls, or authored successors.
 
-Fieldless `StopCycle` provides one explicit successful terminal operation after condition evaluation and ordinary User fee collection. It commits no task-local economic effect and leaves the suffix unreachable. Its pre-execution failures still obey `on_error`: `ContinueNextStep` can bypass the intended stop, execute the suffix, and later reach ordinary success, so authoring and analysis expose that fall-through.
+Fieldless `StopCycle` provides one explicit successful terminal operation after precondition evaluation and ordinary User fee collection. It commits no task-local economic effect and leaves the suffix unreachable. Its pre-execution failures still obey `on_error`: `ContinueNextStep` can bypass the intended stop, execute the suffix, and later reach ordinary success, so authoring and analysis expose that fall-through.
 
-An Active Actor Contract chooses `Persistent` or `CloseAfterProductiveCycle`. The latter closes only after successful logical-cycle completion with at least one committed effectful task, including a committed prefix resumed through Continuation. False latest-state conditions, skips, rolled-back failures, suspension, abort, retry exhaustion, and bare `StopCycle` leave the one-shot policy unconsumed.
+An Active Actor Contract chooses `Persistent` or `CloseAfterProductiveCycle`. The latter closes only after successful logical-cycle completion with at least one committed effectful task, including a committed prefix resumed through Continuation. False latest-state preconditions, skips, rolled-back failures, suspension, abort, retry exhaustion, and bare `StopCycle` leave the one-shot policy unconsumed.
 
 Canonical SCALE `ContractInput` remains the source of truth across metadata-bound authoring, structural diff, static analysis, simulation, and governance composition. Visual blocks or neural proposals may project or propose this finite AST, but deterministic validation, human approval, encoding, and runtime execution stay authoritative.
+
+Production and rollback-only runtime simulation share one Step evaluator. Its `StepOutcome` retains a concrete failure cause separately from retry disposition, and one `AttemptDisposition` owns completion, failure, suspension, or close; simulation adds only bounded trace records, requested-mode checks, transaction-depth protection, and rollback.
+
+The public language is reachability-closed: each retained Predicate, Task, amount, trigger, funding/completion policy, event, error, view, and adapter result has a typed constructor, an evaluator or adapter branch, and executable package, DEOS runtime, or independent-runtime evidence. Constructor-free runtime-upgrade cancellation and context-free amount-dependency placeholders are not encoded as future options.
 
 The control-plane corpus models descending buy and ascending sell buckets as independent bounded one-shot actors over directional local-pool observations. It does not mislabel those price feeds as treasury reserve ratios or absolute liquidity depth: only the manual execution cores exist for those reactions until typed producers and meanings ship. A block-height release demonstrates an available non-price scalar strategy using runtime-owned current block truth.
 
 ## Progress-Preserving Continuation
 
-A Mutable actor may mark a step `RetryLater { max_attempts }` with a nonzero `u32` limit. Temporary adapter failure or unavailable funding increments the unsuccessful-attempt count at the unresolved cursor; the initial failure counts as `1`, and advancing to a later cursor resets the local count. Actors keeps one sparse Continuation with that count, the logical-cycle-wide attempt, last-attempt block, frozen typed suffix inputs, and cumulative outcomes.
+A Mutable actor may mark a step `RetryLater { max_attempts }` with a nonzero `u32` limit. Temporary adapter failure or unavailable funding increments the unsuccessful-attempt count at the unresolved cursor; the initial failure counts as `1`, and advancing to a later cursor resets the local count. Actors keeps one sparse Continuation with that count, last-attempt block, frozen typed suffix inputs, and cumulative outcomes.
 
 Retries reuse the same logical-cycle nonce and FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix. Reaching the local limit closes the actor with `RetryAttemptsExhausted`; a simultaneous actor-wide failure cutoff does not replace that more precise reason.
 
 Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use bounded `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Incoming signals during suspension remain latched for the next logical cycle.
 
-`CycleStarted` appears once. `CycleContinued` and `CycleSuspended` identify attempts with `(actor_id, cycle_nonce, attempt)`, while one cumulative `CycleSummary` terminates the logical cycle. Current Continuation is canonical chain state. Long attempt timelines require a materialized event index.
+`CycleStarted` appears once. `CycleContinued` and `CycleSuspended` identify the cycle and unresolved cursor, while one cumulative `CycleSummary` terminates the logical cycle. Current Continuation is canonical chain state. Long attempt timelines require a materialized event index.
 
 ## Operational Observability
 
@@ -99,11 +103,11 @@ Off-chain feedback analysis separates observation-caused recurrence from shared 
 
 ## Embedding Boundary
 
-External runtimes can reuse `pallet-deos-actor` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. Actors owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside Actors. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
+External runtimes can reuse `pallet-deos-actors` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. Actors owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into Fee Sink; downstream allocation remains outside Actors. The DEOS reference Fee Sink currently applies its 50/50 staking/liquidity Actor Contract; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
 
 The independent `template/pallets/actors/embedding-runtime` external-consumer fixture makes this boundary executable. It starts with zero System Actors, uses local account/asset types and smaller scheduler pages, and proves direct Executive ingress, fresh-genesis integrity, deterministic unsupported adapters, User/System Continuation, User exact-output swaps, System-only minting, try-state, and no-std operation. It is portability evidence, not a second product or prescribed topology.
 
-The unlaunched reference chain keeps fresh-baseline storage version `1` and ships no historical migration. The independent embedding gate executes `Unconditional`, bounded DNF, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
+The unlaunched reference chain keeps fresh-baseline storage version `1` and ships no historical migration. The independent embedding gate executes absent and bounded present Precondition, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
 
 The DEOS reference runtime also owns `LpPairByTokenId` outside generic Actors, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded. Both authored minimum outputs reach Asset Conversion directly; an outer transactional balance-delta check remains as defense in depth.
 
@@ -124,7 +128,7 @@ Task::Stake { asset, amount }
 Task::Unstake { asset, shares }
 ```
 
-Actors does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic staking position means, expose its share balance, and optionally map it to a transferable share asset for last-funding resolution. That share-asset identity remains stable for the admitted position key; a runtime upgrade must introduce a new key rather than reinterpret an active plan. Execution fails closed if the mapping disappears. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
+Actors does not encode a DEOS-specific native-only staking task, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic staking position means, expose its share balance, and optionally map it to a transferable share asset for last-funding resolution. That share-asset identity remains stable for the admitted position key; a runtime upgrade must introduce a new key rather than reinterpret an active plan. Execution fails closed if the mapping disappears. In DEOS, the adapter routes native staking into generic `pallet-staking::stake` with the configured native asset id, while nomination security remains a separate locked-LP staking/governance surface.
 
 This keeps Actors useful outside one tokenomic configuration.
 
@@ -132,7 +136,7 @@ This keeps Actors useful outside one tokenomic configuration.
 
 On the current reference line, Actors is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active Actor Contracts at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These contracts react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-contract input with an explicit schedule, cycle plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
+The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active Actor Contracts at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These contracts react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no Actor Contract, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-contract input with an explicit schedule, Contract Steps, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
 Actors does not replace TMC, DEOS Router, DEOS Staking, or DEOS Governance. Those subsystems own math and domain rules. Actors gives them a deterministic way to be orchestrated together.
 

@@ -48,7 +48,7 @@ pub trait ActorContractReplacement {
   ) -> (
     pallet_deos_actors::ScheduleOf<Runtime>,
     Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::ContractSteps<Runtime>,
     pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
     pallet_deos_actors::CompletionPolicy,
   );
@@ -56,7 +56,7 @@ pub trait ActorContractReplacement {
 
 impl ActorContractReplacement
   for (
-    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::ContractSteps<Runtime>,
     pallet_deos_actors::CompletionPolicy,
   )
 {
@@ -66,7 +66,7 @@ impl ActorContractReplacement
   ) -> (
     pallet_deos_actors::ScheduleOf<Runtime>,
     Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::ContractSteps<Runtime>,
     pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
     pallet_deos_actors::CompletionPolicy,
   ) {
@@ -87,7 +87,7 @@ impl ActorContractReplacement for pallet_deos_actors::FundingSourcePolicyOf<Runt
   ) -> (
     pallet_deos_actors::ScheduleOf<Runtime>,
     Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::ContractSteps<Runtime>,
     pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
     pallet_deos_actors::CompletionPolicy,
   ) {
@@ -113,7 +113,7 @@ impl ActorContractReplacement
   ) -> (
     pallet_deos_actors::ScheduleOf<Runtime>,
     Option<pallet_deos_actors::ScheduleWindow<crate::BlockNumber>>,
-    pallet_deos_actors::ExecutionPlanOf<Runtime>,
+    pallet_deos_actors::ContractSteps<Runtime>,
     pallet_deos_actors::FundingSourcePolicyOf<Runtime>,
     pallet_deos_actors::CompletionPolicy,
   ) {

@@ -46,6 +46,8 @@ Reject low-signal entries such as bare `Gate Failed`, `Compilation Failed`, or `
 2. Which surface/boundary was affected?
 3. What should the next agent do differently?
 
+Use repository-relative paths, and garbage-collect repeated bare failures instead of preserving operator-local diagnostics as durable memory.
+
 Use the helper only when the lesson meets that bar:
 
 ```bash
@@ -74,7 +76,7 @@ Select additional leaves only when the touched contract requires them. Routing f
 | Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
 | Staking delivery | `staking-delivery` readiness ladder through the shared bootstrap script | Signing, funds, governance execution | Explicit target state and mutation approval exist |
 | Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
-| Release validation | `validate-local.sh PROFILE` | Nothing selected outside the profile | Explicit `fast`, `heavy`, or `full` boundary |
+| Repository validation | `validate-local.sh PROFILE` | Network assurance and release publication | Explicit `fast`, `heavy`, or `full` boundary |
 
 Network-backed dependency posture remains opt-in:
 
@@ -88,7 +90,14 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, fail-closed Error Narrowness discovery and typed witnesses, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+
+The Error Narrowness evidence owner recursively checks the five pallet source roots, the complete runtime source root, and the client library root. It snapshots path/exclusion, source, public-result-boundary, exact result-expression, witness/test-file, and explicit-command identities, then verifies only typed-signature, public-root execution, exhaustive-classification, and conversion-edge witnesses. The completion gate executes every declared command and every cited executable anchor. It makes no inferred constructor, universal reachability, semantic-duplication, or closure claim:
+
+```bash
+node ./.agents/skills/alignment/scripts/audit-semantic-surface.mjs --check .agents/skills/alignment/semantic-surface.v1.json
+node ./.agents/skills/alignment/scripts/audit-semantic-surface.mjs --inventory
+```
 
 ### Intensive Evolution Rule
 
@@ -121,6 +130,10 @@ Local delivery slices should pass the repo-local completion gate before continui
 ```
 
 The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, Cargo checks, runtime unit tests for runtime-source changes, Markdown table/readability checks, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
+
+Before checkpointing a release tree, run canonical formatting and the intended direct profile; changed-scope completion does not establish full-profile readiness.
+
+`scripts/validate-local.sh` directly prepares pinned repository dependencies and executes the selected `fast`, `heavy`, or `full` profile. It owns stage order and pass/fail without local evidence records, authority manifests, hidden modes, GitHub provenance discovery, or tag-bound branches. The pull-request `validation-gate` runs `fast` directly; network assurance and release publication remain separate explicit operations.
 
 `auditor.sh` and `completion-gate.sh` use compact orchestration output by default: successful runs report only the step, duration, and result. Failures retain complete temporary logs and print a bounded tail; `DEOS_VERBOSE=1` restores the full nested protocol for diagnosis.
 

@@ -276,7 +276,6 @@ pub enum ProposalParameterChangeSurface {
   Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
 pub enum ProposalTreasurySpendSettlementKind {
-  DirectTransfer,
   InvoiceScalarTransfer,
 }
 
@@ -297,8 +296,6 @@ pub enum ProposalExecutionFailureReason {
   InvalidPreimage,
   UnsupportedDomain,
   UnsupportedCall,
-  UnsupportedTarget,
-  UnsupportedPayloadKind,
   MissingWinningPrimaryOption,
   DispatchFailed,
 }
@@ -328,23 +325,9 @@ pub enum ProposalExecutionSuccessDetail<AccountId, DomainId, Hash> {
 #[derive(
   Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
-pub enum ProposalExecutionDetail<AccountId, DomainId, Hash, Epoch> {
-  Executed {
-    payload_kind: ProposalPayloadKind,
-    authority: ProposalExecutionAuthority,
-    executed_epoch: Epoch,
-    detail: ProposalExecutionSuccessDetail<AccountId, DomainId, Hash>,
-  },
-  ExecutionFailed {
-    payload_kind: ProposalPayloadKind,
-    authority: ProposalExecutionAuthority,
-    failed_epoch: Epoch,
-    reason: ProposalExecutionFailureReason,
-  },
-  AdvisoryFinalized {
-    payload_kind: ProposalPayloadKind,
-    finalized_epoch: Epoch,
-  },
+pub enum ProposalExecutionDetail<AccountId, DomainId, Hash> {
+  Succeeded(ProposalExecutionSuccessDetail<AccountId, DomainId, Hash>),
+  Failed(ProposalExecutionFailureReason),
 }
 
 pub enum ProposalExecutionReceipt<AccountId, DomainId, Hash> {
@@ -876,10 +859,62 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
+  pub struct ProposalIdentity<DomainId, ItemId> {
+    pub domain: DomainId,
+    pub item_id: ItemId,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct ProposalApproval<Epoch> {
+    pub approved_epoch: Epoch,
+    pub winner_count: u32,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub enum ProposalEnactmentOutcome<Epoch> {
+    NotAttempted,
+    Enacted { epoch: Epoch },
+    ExecutionFailed { epoch: Epoch },
+    AdvisoryFinalized { epoch: Epoch },
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub enum FinalizedProposalOutcome<Epoch> {
+    Approved {
+      approval: ProposalApproval<Epoch>,
+      enactment: ProposalEnactmentOutcome<Epoch>,
+    },
+    Rejected {
+      finalized_epoch: Epoch,
+      reason: ProposalRejectionReason,
+    },
+    VetoCancelled {
+      finalized_epoch: Epoch,
+      veto_weight: u64,
+    },
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch> {
+    pub outcome: FinalizedProposalOutcome<Epoch>,
+    pub execution_detail: Option<crate::ProposalExecutionDetail<AccountId, DomainId, Hash>>,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
   pub enum ProposalStatus<Epoch> {
     Active(ProposalResolutionState<Epoch>),
     PendingEnactment {
-      outcome: FinalizedProposalOutcome<Epoch>,
+      approval: ProposalApproval<Epoch>,
       enactment_epoch: Epoch,
     },
     Finalized(FinalizedProposalOutcome<Epoch>),
@@ -888,42 +923,9 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub enum FinalizedProposalOutcome<Epoch> {
-    Resolved {
-      epoch: Epoch,
-      winner_count: u32,
-    },
-    Rejected {
-      epoch: Epoch,
-      reason: ProposalRejectionReason,
-    },
-    VetoCancelled {
-      epoch: Epoch,
-      veto_weight: u64,
-    },
-    Enacted {
-      approved_epoch: Epoch,
-      executed_epoch: Epoch,
-      winner_count: u32,
-    },
-    ExecutionFailed {
-      approved_epoch: Epoch,
-      failed_epoch: Epoch,
-      winner_count: u32,
-    },
-    AdvisoryFinalized {
-      approved_epoch: Epoch,
-      finalized_epoch: Epoch,
-      winner_count: u32,
-    },
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  pub struct RecentFinalizedProposal<ItemId, Epoch> {
-    pub item_id: ItemId,
-    pub outcome: FinalizedProposalOutcome<Epoch>,
+  pub struct RecentFinalizedProposal<AccountId, DomainId, ItemId, Hash, Epoch> {
+    pub identity: ProposalIdentity<DomainId, ItemId>,
+    pub finalization: FinalizedProposalRecord<AccountId, DomainId, Hash, Epoch>,
   }
 
   #[derive(
@@ -1099,21 +1101,8 @@ pub mod pallet {
     pub total_protection_supply: u64,
   }
 
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  pub struct MaturingProposalTouch<DomainId, ItemId> {
-    pub domain: DomainId,
-    pub item_id: ItemId,
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  pub struct FinalizedProposalTouch<DomainId, ItemId> {
-    pub domain: DomainId,
-    pub item_id: ItemId,
-  }
+  pub type MaturingProposalTouch<DomainId, ItemId> = ProposalIdentity<DomainId, ItemId>;
+  pub type FinalizedProposalTouch<DomainId, ItemId> = ProposalIdentity<DomainId, ItemId>;
 
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
@@ -1266,25 +1255,14 @@ pub mod pallet {
   >;
 
   #[pallet::storage]
-  #[pallet::getter(fn finalized_proposal_outcome)]
-  pub type FinalizedProposalOutcomes<T: Config> = StorageDoubleMap<
+  #[pallet::getter(fn finalized_proposal)]
+  pub type FinalizedProposals<T: Config> = StorageDoubleMap<
     _,
     Blake2_128Concat,
     T::DomainId,
     Blake2_128Concat,
     T::WinningVoteItemId,
-    FinalizedProposalOutcome<T::Epoch>,
-    OptionQuery,
-  >;
-
-  #[pallet::storage]
-  pub type ProposalExecutionDetails<T: Config> = StorageDoubleMap<
-    _,
-    Blake2_128Concat,
-    T::DomainId,
-    Blake2_128Concat,
-    T::WinningVoteItemId,
-    crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash, T::Epoch>,
+    FinalizedProposalRecord<T::AccountId, T::DomainId, T::Hash, T::Epoch>,
     OptionQuery,
   >;
 
@@ -1573,6 +1551,7 @@ pub mod pallet {
     ExpiryBucketFull,
     EpochArithmeticOverflow,
     ProposalMetadataMissing,
+    FinalizedProposalMissing,
   }
 
   #[pallet::hooks]
@@ -1804,7 +1783,7 @@ pub mod pallet {
     pub fn recent_finalized_proposals(
       domain: T::DomainId,
     ) -> BoundedVec<
-      RecentFinalizedProposal<T::WinningVoteItemId, T::Epoch>,
+      RecentFinalizedProposal<T::AccountId, T::DomainId, T::WinningVoteItemId, T::Hash, T::Epoch>,
       T::MaxRecentFinalizedProposalsPerDomain,
     > {
       Self::do_recent_finalized_proposals(domain)
@@ -1876,20 +1855,6 @@ pub mod pallet {
       Self::proposal_admission_policy(domain, payload_kind)
     }
 
-    pub fn proposal_submission_authority(
-      domain: T::DomainId,
-      payload_kind: ProposalPayloadKind,
-    ) -> crate::ProposalSubmissionAuthority {
-      Self::proposal_admission_policy(domain, payload_kind).authority
-    }
-
-    pub fn proposal_opening_fee(
-      domain: T::DomainId,
-      payload_kind: ProposalPayloadKind,
-    ) -> Option<BalanceOf<T>> {
-      Self::proposal_admission_policy(domain, payload_kind).opening_fee
-    }
-
     pub fn proposal_payload_availability(
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
@@ -1930,11 +1895,18 @@ pub mod pallet {
       Self::do_proposal_urgent_eligibility(domain, item_id)
     }
 
+    pub fn finalized_proposal_outcome(
+      domain: T::DomainId,
+      item_id: T::WinningVoteItemId,
+    ) -> Option<FinalizedProposalOutcome<T::Epoch>> {
+      FinalizedProposals::<T>::get(domain, item_id).map(|record| record.outcome)
+    }
+
     pub fn proposal_execution_detail(
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
-    ) -> Option<crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash, T::Epoch>> {
-      ProposalExecutionDetails::<T>::get(domain, item_id)
+    ) -> Option<crate::ProposalExecutionDetail<T::AccountId, T::DomainId, T::Hash>> {
+      FinalizedProposals::<T>::get(domain, item_id)?.execution_detail
     }
   }
 }

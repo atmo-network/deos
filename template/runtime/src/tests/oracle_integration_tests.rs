@@ -8,8 +8,8 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::{
-  ContractInput, FundingSourcePolicy, Mutability, Preconditions, Schedule, StepErrorPolicy, Task,
-  Trigger, TriggerSource,
+  ContractInput, FundingSourcePolicy, Mutability, Schedule, StepErrorPolicy, Task, Trigger,
+  TriggerSource,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
 use polkadot_sdk::{
@@ -243,8 +243,8 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         },
         cooldown_blocks: 0,
       };
-      let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
-        preconditions: Preconditions::Unconditional,
+      let contract_steps = BoundedVec::try_from(vec![pallet_deos_actors::Step {
+        precondition: None,
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       }])
@@ -256,7 +256,7 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         ContractInput::Active(pallet_deos_actors::ActiveContractInput {
           schedule,
           schedule_window: None,
-          steps: execution_plan,
+          steps: contract_steps,
           completion: pallet_deos_actors::CompletionPolicy::Persistent,
           funding: FundingSourcePolicy::RuntimePolicy,
           auto_close_at_cycle_nonce: None,
@@ -514,8 +514,8 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       },
       cooldown_blocks: 0,
     };
-    let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
-      preconditions: Preconditions::Unconditional,
+    let contract_steps = BoundedVec::try_from(vec![pallet_deos_actors::Step {
+      precondition: None,
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
@@ -527,7 +527,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       ContractInput::Active(pallet_deos_actors::ActiveContractInput {
         schedule,
         schedule_window: None,
-        steps: execution_plan,
+        steps: contract_steps,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,

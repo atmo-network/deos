@@ -86,7 +86,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   const compactPane = $derived(viewport.width > 0 && viewport.width < 520);
   const densePane = $derived(viewport.width > 0 && viewport.width < 340);
   const validation = $derived.by(() => validateActorAuthoringContract(draft));
-  const maxSteps = DEOS_ACTORS_AUTHORING_LIMITS.maxExecutionPlanSteps;
+  const maxSteps = DEOS_ACTORS_AUTHORING_LIMITS.maxContractSteps;
   const canAddStep = $derived(draft.steps.length < maxSteps);
   const rootIssues = $derived(
     validation.issues.filter((issue) => !issue.path.startsWith('steps[')),
@@ -405,7 +405,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   <DetailRow
                     label="Run"
                     value={actor.continuation
-                      ? `#${actor.cycleNonce} · try ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1}`
+                      ? `#${actor.cycleNonce} · step ${actor.continuation.cursor + 1}`
                       : `#${actor.cycleNonce}`}
                     valueClass="tabnum text-(--mono-text)"
                   />
@@ -467,7 +467,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   <DetailRow
                     label="Continuation"
                     value={actor.continuation
-                      ? `Attempt ${actor.continuation.attempt} · unsuccessful ${actor.continuation.unsuccessfulAttemptsAtCursor} on step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
+                      ? `Unsuccessful ${actor.continuation.unsuccessfulAttemptsAtCursor} on step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
                       : 'None'}
                     valueClass="tabnum text-(--mono-text)"
                   />
@@ -624,7 +624,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
             <div
               class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
             >
-              Ordered execution plan
+              Ordered Contract Steps
             </div>
             <div class="text-xs text-(--mono-text)">
               {draft.steps.length}/{maxSteps} steps · fixed cursor order

@@ -343,9 +343,11 @@ impl AssetConversionAdapter {
     }
     let staked_before = Self::asset_balance(staked_asset, donor);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(error) =
-        crate::Staking::stake_native(RuntimeOrigin::signed(donor.clone()), stake_amount)
-      {
+      if let Err(error) = crate::Staking::stake(
+        RuntimeOrigin::signed(donor.clone()),
+        native_asset_id,
+        stake_amount,
+      ) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
           pallet_deos_actors::TaskFailure::permanent(error),
         ));

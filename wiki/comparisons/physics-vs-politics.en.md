@@ -1,7 +1,7 @@
 ---
-page_type: comparison
+type: comparison
 title: Physics-First vs Politics-First
-summary: The DEOS manifesto separates explicit protocol mechanisms from ordinary governance so politics can direct an economy without routinely renegotiating its foundations.
+description: The DEOS manifesto separates explicit protocol mechanisms from ordinary governance so politics can direct an economy without routinely renegotiating its foundations.
 locale: en
 canonical_page_id: physics-vs-politics
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/manifesto.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: newcomer
 tags:
   - comparison

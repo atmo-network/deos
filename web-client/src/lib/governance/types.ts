@@ -67,39 +67,30 @@ export type GovernanceProposalResolutionState =
       kind: 'Rejected';
       reason: GovernanceProposalRejectionReason;
     };
+export type GovernanceProposalApproval = {
+  approvedEpoch: GovernanceEpoch;
+  winnerCount: number;
+};
+export type GovernanceProposalEnactmentOutcome =
+  | { kind: 'NotAttempted' }
+  | { kind: 'Enacted'; epoch: GovernanceEpoch }
+  | { kind: 'ExecutionFailed'; epoch: GovernanceEpoch }
+  | { kind: 'AdvisoryFinalized'; epoch: GovernanceEpoch };
 export type GovernanceFinalizedProposalOutcome =
   | {
-      kind: 'Resolved';
-      epoch: GovernanceEpoch;
-      winnerCount: number;
+      kind: 'Approved';
+      approval: GovernanceProposalApproval;
+      enactment: GovernanceProposalEnactmentOutcome;
     }
   | {
       kind: 'Rejected';
-      epoch: GovernanceEpoch;
+      finalizedEpoch: GovernanceEpoch;
       reason: GovernanceProposalRejectionReason;
     }
   | {
       kind: 'VetoCancelled';
-      epoch: GovernanceEpoch;
-      vetoWeight: GovernanceWeight;
-    }
-  | {
-      kind: 'Enacted';
-      approvedEpoch: GovernanceEpoch;
-      executedEpoch: GovernanceEpoch;
-      winnerCount: number;
-    }
-  | {
-      kind: 'ExecutionFailed';
-      approvedEpoch: GovernanceEpoch;
-      failedEpoch: GovernanceEpoch;
-      winnerCount: number;
-    }
-  | {
-      kind: 'AdvisoryFinalized';
-      approvedEpoch: GovernanceEpoch;
       finalizedEpoch: GovernanceEpoch;
-      winnerCount: number;
+      vetoWeight: GovernanceWeight;
     };
 export type GovernanceProposalPayloadKind =
   | 'L1RootAction'
@@ -153,14 +144,11 @@ export type GovernanceProposalExecutionFailureReason =
   | 'InvalidPreimage'
   | 'UnsupportedDomain'
   | 'UnsupportedCall'
-  | 'UnsupportedTarget'
-  | 'UnsupportedPayloadKind'
   | 'MissingWinningPrimaryOption'
   | 'DispatchFailed';
 export type GovernanceProposalParameterChangeSurface = 'RouterFee';
 export type GovernanceProposalTreasurySpendSettlementKind =
-  | 'DirectTransfer'
-  | 'InvoiceScalarTransfer';
+  'InvoiceScalarTransfer';
 export type GovernanceProposalTreasurySpendScalar =
   | 'Amplify'
   | 'Approve'
@@ -189,23 +177,12 @@ export type GovernanceProposalExecutionSuccessDetail =
     };
 export type GovernanceProposalExecutionDetail =
   | {
-      kind: 'Executed';
-      payloadKind: GovernanceProposalPayloadKind;
-      authority: GovernanceProposalExecutionAuthority;
-      executedEpoch: GovernanceEpoch;
+      kind: 'Succeeded';
       detail: GovernanceProposalExecutionSuccessDetail;
     }
   | {
-      kind: 'ExecutionFailed';
-      payloadKind: GovernanceProposalPayloadKind;
-      authority: GovernanceProposalExecutionAuthority;
-      failedEpoch: GovernanceEpoch;
+      kind: 'Failed';
       reason: GovernanceProposalExecutionFailureReason;
-    }
-  | {
-      kind: 'AdvisoryFinalized';
-      payloadKind: GovernanceProposalPayloadKind;
-      finalizedEpoch: GovernanceEpoch;
     };
 export type GovernanceProposalStatus =
   | {
@@ -214,7 +191,7 @@ export type GovernanceProposalStatus =
     }
   | {
       kind: 'PendingEnactment';
-      outcome: GovernanceFinalizedProposalOutcome;
+      approval: GovernanceProposalApproval;
       enactmentEpoch: GovernanceEpoch;
     }
   | {
@@ -281,6 +258,7 @@ export type GovernanceProposalPrimaryTrackTally =
       leadingPositiveWeight: GovernanceWeight;
     };
 export type GovernanceRecentFinalizedProposal = {
+  domainId: GovernanceDomainId;
   itemId: GovernanceItemId;
   outcome: GovernanceFinalizedProposalOutcome;
   executionDetail: GovernanceProposalExecutionDetail | null;

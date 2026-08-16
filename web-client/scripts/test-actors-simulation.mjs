@@ -32,7 +32,7 @@ function artifact(mutability = 'Mutable') {
 const blockHash = hash('4');
 const localStep = (stepIndex, onError = 'AbortCycle', overrides = {}) => ({
   stepIndex,
-  preconditions: { type: 'Unconditional' },
+  precondition: null,
   taskControl: 'Execute',
   onError:
     onError === 'RetryLater'
@@ -47,7 +47,6 @@ const provenance = {
   model: 'fixture-adapters',
   modelVersion: '1',
   cycleNonce: 7n,
-  attempt: 0,
   startCursor: 0,
 };
 
@@ -94,13 +93,12 @@ test('productive completion closes only after one committed effectful task', () 
     initialState: { balance: 100n },
     steps: [
       localStep(0, 'AbortCycle', {
-        preconditions: {
-          type: 'AnyOf',
+        precondition: {
           clauses: [[{ timing: 'Current', predicate: 'latest-observation' }]],
         },
       }),
     ],
-    evaluateCondition() {
+    evaluatePredicate() {
       return { kind: 'Value', value: false };
     },
     runTask() {
@@ -149,7 +147,6 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
 
   const resumed = simulateActorLocally({
     ...provenance,
-    attempt: 1,
     startCursor: suspended.continuationCursor,
     unsuccessfulAttemptsAtCursor: suspended.unsuccessfulAttemptsAtCursor,
     initialState: suspended.state,
@@ -206,7 +203,6 @@ test('RetryLater closes exactly on its local bound and counts funding unavailabi
 
   const exhausted = simulateActorLocally({
     ...provenance,
-    attempt: 1,
     startCursor: 0,
     unsuccessfulAttemptsAtCursor: 1,
     initialState: suspended.state,
@@ -283,8 +279,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     initialState: { balance: 10n },
     steps: [
       localStep(0, 'ContinueNextStep', {
-        preconditions: {
-          type: 'AnyOf',
+        precondition: {
           clauses: [
             [{ timing: 'Current', predicate: 'true' }],
             [{ timing: 'Opening', predicate: 'error' }],
@@ -294,7 +289,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
       }),
       localStep(1),
     ],
-    evaluateCondition(timed) {
+    evaluatePredicate(timed) {
       observations.push(timed.predicate);
       return timed.predicate === 'error'
         ? { kind: 'Error', retry: 'Permanent', error: 'observation-failed' }
@@ -318,8 +313,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     initialState: {},
     steps: [
       localStep(0, 'AbortCycle', {
-        preconditions: {
-          type: 'AnyOf',
+        precondition: {
           clauses: [
             [true, false, true].map((predicate) => ({
               timing: 'Current',
@@ -329,7 +323,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
         },
       }),
     ],
-    evaluateCondition(_condition) {
+    evaluatePredicate(_predicate) {
       const value = [true, false, true][reads++];
       return { kind: 'Value', value };
     },
@@ -338,7 +332,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     },
   });
   assert.equal(reads, 3);
-  assert.equal(skipped.journal[0].outcome.kind, 'SkippedCondition');
+  assert.equal(skipped.journal[0].outcome.kind, 'SkippedPrecondition');
 });
 
 test('StopCycle completes after its committed prefix and leaves the suffix unreachable', () => {

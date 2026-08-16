@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
-title: Executive Summary
-summary: Одностраничное внешнее резюме о том, что такое DEOS, почему это важно, чем он отличается от discretionary DAO treasury management, почему Polkadot/Substrate подходит, что уже поставлено, что не поставлено и как начинается принятие.
+type: getting-started
+title: Краткое резюме
+description: "Одностраничный обзор DEOS: назначение, отличие от ситуативного управления казной DAO, выбор Polkadot и Substrate, текущее состояние и начало работы."
 locale: ru
 canonical_page_id: executive-summary
 translation_of: executive-summary.en.md
@@ -10,14 +10,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../AGENTS.md
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../docs/manifesto.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../AGENTS.md
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../docs/manifesto.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: partner
 tags:
   - onboarding
@@ -26,68 +26,68 @@ tags:
   - adoption
 related:
   - DEOS за 60 секунд
-  - Partner Pitch
-  - Форк DEOS
-  - Physics vs Politics
+  - Предложение для партнёров
+  - Создание форка DEOS
+  - Экономическая физика прежде политики
   - Уровни экономических утверждений
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
 
-# Executive Summary
+# Краткое резюме
 
-## Что это
+## Что такое DEOS
 
-DEOS — форкаемый runtime framework для программируемых токеновых экономик. Основная идея проста: заменить discretionary treasury operations детерминированными экономическими контурами внутри протокола.
+DEOS — фреймворк среды исполнения для программируемых токеновых экономик, который можно взять за основу собственного проекта. Его главная идея проста: заменить ситуативные операции с казной детерминированными экономическими контурами внутри протокола.
 
-TMCTOL — первый экономический стандарт на DEOS. Он соединяет mint-only token curve, treasury-owned liquidity, fee burn, bucketed policy, staking, routing, bounded governance и automated actors.
+TMCTOL — первый экономический стандарт на базе DEOS. Он сочетает однонаправленную эмиссию по кривой, ликвидность, принадлежащую казне, сжигание комиссий, правила распределения по корзинам, стейкинг, маршрутизацию, управление в заданных пределах и автоматизированных Actors.
 
 ## Почему это важно
 
-Многие токеновые экономики полагаются на будущий комитет, который должен правильно управлять ликвидностью, treasury funds, выпуском, стимулами и upgrades. DEOS сужает эту поверхность доверия, перенося повторяющееся экономическое поведение в явные runtime-механизмы.
+Многие токеновые экономики полагаются на будущий комитет, который должен разумно распоряжаться ликвидностью и казной, выпускать токены, настраивать стимулы и проводить обновления. DEOS сокращает область такого доверия: повторяющиеся экономические действия переносятся в явные механизмы среды исполнения.
 
-Результат — не обещание цены. Это более ясный контракт: эта часть управляется протоколом, эта часть управляется governance, эта часть индексируется или материализуется, а эта часть остается продуктовым и рыночным риском.
+Это не обещание цены. Контракт становится яснее: одна часть экономики управляется протоколом, другая — решениями участников, третья доступна через индексированные или материализованные данные, а остальное остаётся продуктовым и рыночным риском.
 
-## DAO treasury vs deterministic circuits
+## Казна DAO и детерминированные контуры
 
-Обычная DAO treasury часто сначала является политической поверхностью управления: voters, delegates, multisigs, committees или off-chain operators решают, когда тратить средства, делать buyback, поддерживать ликвидность, платить contributors или менять стимулы.
+Обычная казна DAO часто прежде всего служит средством политического управления: участники голосования, делегаты, группы с несколькими подписями, комитеты или внешние операторы решают, когда тратить средства, выкупать токены, поддерживать ликвидность, вознаграждать участников или менять стимулы.
 
-DEOS рассматривает базовый treasury loop сначала как экономическую инфраструктуру. Governance остается нужна для launch parameters, domain ownership, protected upgrades, границ treasury policy и emergency choices, но она не должна каждую неделю вручную воспроизводить базовый экономический цикл.
+В DEOS основной цикл казны прежде всего считается экономической инфраструктурой. Управление сохраняется для начальных параметров, распределения полномочий по областям, защищённых обновлений, границ казначейской политики и чрезвычайных решений. Но оно не должно каждую неделю вручную воспроизводить основной экономический цикл.
 
-Практический контраст простой:
+Различие можно выразить так:
 
-- DAO treasury default: “DAO будет ответственно управлять средствами”.
-- DEOS default: “этот mechanism исполняется при таких явных условиях”.
+- Обычный подход DAO: «DAO будет ответственно распоряжаться средствами»;
+- Подход DEOS: «Этот механизм срабатывает при явно заданных условиях».
 
-DEOS не против governance. Он против mystery-governance.
+DEOS не отказывается от управления. Он устраняет неясность в его полномочиях.
 
-## Почему Polkadot/Substrate
+## Почему Polkadot и Substrate
 
-DEOS нужна runtime-first среда, где economic rules, assets, automation, governance и XCM-facing asset identity можно выразить как первичную protocol logic. Substrate и Polkadot дают такую поверхность runtime construction, не превращая DEOS в обычное general-purpose smart-contract app.
+DEOS нужна среда, в которой экономические правила, активы, автоматизация, управление и связанная с XCM идентичность активов задаются как полноценная логика протокола. Substrate и Polkadot предоставляют такую основу для построения среды исполнения, не вынуждая DEOS становиться обычным приложением на универсальных смарт-контрактах.
 
-## Что уже поставлено
+## Что уже реализовано
 
-- Rust runtime workspace с DEOS pallets, primitives и runtime configuration.
-- Reference mechanics и specifications для TMCTOL.
-- Actor automation model.
-- SvelteKit reference client с domain slices и wiki rendering.
-- Operator scripts, validation gates и generated wiki metadata.
+- Рабочее пространство среды исполнения на Rust с пакетами DEOS, общими примитивами и настройками;
+- Эталонные механизмы и спецификации TMCTOL;
+- Модель автоматизации Actors;
+- Эталонный клиент на SvelteKit с разделением по предметным областям и отображением вики;
+- Операторские сценарии, контуры проверки и собранные метаданные вики.
 
-## Что не поставлено
+## Чего пока нет
 
-- Готовый consumer ecosystem product.
-- Permissionless collator onboarding как текущий выбор по умолчанию.
-- Full portfolio UX за пределами доступных сейчас chain/read-model surfaces.
-- Гарантия рыночного спроса, price appreciation или risk-free treasury behavior.
+- Законченного продукта для конечных пользователей;
+- Открытого подключения коллаторов как текущего варианта запуска по умолчанию;
+- Полного интерфейса портфеля сверх доступных сейчас данных из блокчейна и проекций для чтения;
+- Гарантий рыночного спроса, роста цены или безрисковой работы казны.
 
-## Путь принятия
+## С чего начать партнёру
 
-Партнерская команда начинает с внешних entry pages, смотрит fork profile внутри [Форка DEOS](../usage/forking-deos.ru.md), проверяет, подходит ли TMCTOL ее экосистеме, и определяет downstream product-specific dApps и user-facing philosophy.
+Партнёрской команде следует прочитать вводные страницы, изучить схему производного проекта в разделе [Создание форка DEOS](../usage/forking-deos.ru.md), проверить соответствие TMCTOL потребностям своей экосистемы, а затем определить прикладные сервисы и принципы взаимодействия с пользователями уже на уровне собственного продукта.
 
-## Следующие страницы
+## Что читать дальше
 
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-- [Partner Pitch](partner-pitch.ru.md)
-- [Форк DEOS](../usage/forking-deos.ru.md)
-- [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
+- [Предложение для партнёров](partner-pitch.ru.md)
+- [Создание форка DEOS](../usage/forking-deos.ru.md)
+- [Экономическая физика прежде политики](../comparisons/physics-vs-politics.ru.md)
 - [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)

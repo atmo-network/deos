@@ -1,7 +1,7 @@
 ---
-page_type: concept
-title: Parachain context
-summary: Как DEOS связан с Polkadot, parachains, XCM, collators, Omni Node и upstream relay-chain dependencies.
+type: concept
+title: DEOS в экосистеме парачейнов
+description: Как DEOS связан с Polkadot, парачейнами, XCM, коллаторами, Omni Node и зависимостями от ретрансляционной цепи и исходного SDK.
 locale: ru
 canonical_page_id: parachain-context
 translation_of: parachain-context.en.md
@@ -10,12 +10,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/asset-registry/docs/architecture.en.md
-  - ../../docs/randomness.strategy.en.md
-  - ../../template/README.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/asset-registry/docs/architecture.en.md
+  - resource: ../../docs/randomness.strategy.en.md
+  - resource: ../../template/README.md
+status: stable
 audience: newcomer
 tags:
   - concept
@@ -25,67 +25,67 @@ tags:
   - collators
 related:
   - Обзор фреймворка DEOS
-  - Runtime patterns
+  - Принципы среды исполнения
   - Идентичность активов
   - Технологический стек
-  - Стратегия randomness
+  - Стратегия использования случайности
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
 
-# Parachain context
+# DEOS в экосистеме парачейнов
 
 ## Кратко
 
-DEOS — parachain-oriented framework. Он не пытается быть отдельным blockchain stack с custom node внутри этого репозитория. Reference runtime рассчитан на Omni Node deployment, соглашения Polkadot SDK, local assets, XCM asset identity и controlled collator phase.
+DEOS предназначен для парачейнов. Этот репозиторий не пытается предоставить самостоятельный блокчейн со своим узлом. Эталонная среда исполнения рассчитана на развёртывание через Omni Node, соглашения Polkadot SDK, локальные активы, идентификацию активов через XCM и этап с контролируемым набором коллаторов.
 
-Короткая модель: DEOS владеет economic logic, а Polkadot дает более широкий parachain execution environment.
+Краткая модель такова: DEOS отвечает за экономическую логику, а Polkadot предоставляет более широкую среду работы парачейна.
 
-## Главные слои
+## Основные уровни
 
 ```text
-Relay / ecosystem layer
-  provides shared security, parachain context, upstream SDK constraints
+Ретрансляционная цепь и экосистема
+  предоставляют общую безопасность, контекст парачейна и ограничения исходного SDK
 
 Omni Node
-  runs the parachain without an in-repo custom node crate
+  запускает парачейн без собственного узлового пакета в репозитории
 
-DEOS runtime
-  owns pallets, assets, routing, staking, governance, and Actors
+Среда исполнения DEOS
+  отвечает за паллеты, активы, маршрутизацию, стейкинг, управление и Actors
 
-Reference client / indexers
-  read bounded chain state directly and materialized history externally
+Эталонный клиент и индексаторы
+  читают ограниченное состояние напрямую из блокчейна, а материализованную историю — из внешних источников
 ```
 
-## XCM и Asset Identity
+## XCM и идентичность активов
 
-DEOS рассматривает foreign assets как local registered assets после governance-controlled registration. Stable identity — не “как сейчас сериализуется XCM location”. Registry хранит bidirectional `Location <-> AssetId` mappings, чтобы будущие location updates не ломали balances или local economic logic.
+После регистрации под контролем управления DEOS представляет внешние активы как зарегистрированные локальные активы. Устойчивая идентичность не должна зависеть от того, как текущая версия XCM сериализует местоположение. Реестр хранит двунаправленные соответствия `Location <-> AssetId`, поэтому изменение местоположения или его представления в новой версии XCM не нарушает балансы и локальную экономическую логику.
 
-Так cross-chain asset identity остается совместимой с local bitmask-based asset model, который используют DEOS runtime primitives.
+Так межсетевой актив сохраняет устойчивую локальную идентичность и входит в отдельное пространство имён внешних активов внутри битовой классификации, заданной примитивами DEOS.
 
-## Collators и randomness
+## Коллаторы и случайность
 
-Текущая launch line использует trusted-collator simplification phase. Native binding targets остаются ограничены trusted collators, пока не появится production-ready relay/protocol beacon для parachain-consumable per-block randomness.
+В текущей линии запуска используется упрощённый этап с доверенным набором коллаторов. Цели нативной привязки остаются ограничены доверенными коллаторами, пока не появится готовый к эксплуатации маяк ретрансляционной цепи или протокола, выдающий доступную парачейнам случайность для каждого блока.
 
-Это значит, что local pseudo-random fallbacks могут поддерживать bounded reference behavior, но не заменяют будущий protocol-grade randomness source. Существующая epoch-scale relay randomness не удовлетворяет этому контракту; предпочтительная замена — будущий per-block protocol beacon, который parachains смогут потреблять через weight-accounted ingress.
+Локальные псевдослучайные резервные механизмы могут поддерживать ограниченное эталонное поведение, но не заменяют будущий протокольный источник случайности. Существующая случайность ретрансляционной цепи в масштабе эпох этому контракту не соответствует. Предпочтительная замена — будущий протокольный маяк для каждого блока с учитывающим вес способом передачи данных в парачейн.
 
-## Costs и operations
+## Эксплуатационные обязанности
 
-Downstream ecosystem все равно несет operator concerns:
+У команды экосистемы, построенной на DEOS, остаются задачи по эксплуатации:
 
-- Инфраструктура collators и monitoring;
-- Настройка endpoints и bootnodes;
-- Процедура runtime upgrade;
-- XCM asset registration и поддержка locations;
-- Archive/indexer infrastructure для unbounded history;
-- Client endpoint defaults и provider reliability.
+- Инфраструктура и наблюдение за коллаторами.
+- Настройка конечных точек и начальных узлов.
+- Процедура обновления среды исполнения.
+- Регистрация XCM-активов и поддержание их местоположений.
+- Архивная и индексирующая инфраструктура для неограниченной истории.
+- Исходные конечные точки клиента и надёжность поставщиков данных.
 
-Это deployment responsibilities, а не hidden product assumptions внутри runtime.
+Это обязанности развёртывания, а не скрытые продуктовые допущения внутри среды исполнения.
 
 ## Связанные страницы
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Runtime patterns](../overview/runtime-patterns.ru.md)
+- [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
 - [Идентичность активов](../overview/asset-identity.ru.md)
 - [Технологический стек](../implementation/tech-stack.ru.md)
-- [Стратегия randomness](../overview/randomness-strategy.ru.md)
+- [Стратегия использования случайности](../overview/randomness-strategy.ru.md)

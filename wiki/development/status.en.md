@@ -1,7 +1,7 @@
 ---
-page_type: status
+type: status
 title: Development Status
-summary: Current implementation status, roadmap context, and active backlog items for the DEOS framework, focused on shipped baseline, open boundaries, and future-gated work without treating the wiki as a release-note surface.
+description: Current implementation status, roadmap context, and active backlog items for the DEOS framework, focused on shipped baseline, open boundaries, and future-gated work without treating the wiki as a release-note surface.
 locale: en
 canonical_page_id: status
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../web-client/README.md
-  - ../../web-client/docs/architecture.en.md
-status: active
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../web-client/README.md
+  - resource: ../../web-client/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - development
@@ -23,7 +23,7 @@ related:
   - Three-Layer Validation
   - Reference Client
   - Generated Wiki
-last_compiled: 2026-07-24
+last_compiled: 2026-08-14
 confidence: 0.9
 ---
 
@@ -40,7 +40,7 @@ This page is a current-state map. It is not the release history and not the full
 The current framework baseline is best understood by domain:
 
 - **Economic physics**: TMCTOL minting, routing, treasury-owned liquidity, actor-mediated fee burning, and bounded invariants form the core economic loop.
-- **Autonomous actors**: Actors provides deterministic actor execution plus Mutable-only sparse Continuation for temporary middle-step incapacity. Retries preserve committed prefixes on the canonical bounded scheduler without whole-plan rollback.
+- **Autonomous actors**: Actors provides deterministic Actor Contract execution plus Mutable-only sparse Continuation for Temporary Step failure. Retries preserve committed prefixes on the canonical bounded scheduler without whole-contract rollback.
 - **Staking and governance**: staking uses multi-asset share-vault mechanics, while governance uses bounded domain tracks, typed payloads, and protection surfaces.
 - **Reference client**: the SvelteKit client exposes on-chain-first wallet, swap, staking, governance, wiki, chart/status, automation, and execution-feedback surfaces.
 - **Tooling and validation**: scripts, benchmarks, metadata export, wiki trust checks, client validation, and context gates support local development and release readiness.
@@ -49,14 +49,12 @@ Use [Domain Map](../concepts/domain-map.en.md) when you need the conceptual topo
 
 ## Active focus
 
-The current backlog concentrates on explicit framework boundaries:
+The current backlog concentrates on closing the contracted model with minimal release machinery:
 
-- Derive time-sensitive runtime constants from a configurable cadence profile;
-- Define a non-enabled V3 scheduling and block-bundling readiness profile;
-- Separate staking reward distribution from reward origin and define typed budget recipients;
-- Make unclaimed-reward policy explicit;
-- Preserve Phase 2 LP nomination as a runtime-upgrade boundary;
-- Allow client structure to grow only when concrete product pressure exposes a named seam.
+- Pass the direct pull-request validation gate on the final release tree;
+- Publish the runtime Wasm, metadata, descriptors, and five generated semantic/runtime evidence assets;
+- Publish one checksum file for that eight-asset payload;
+- Keep network assurance as an independently useful local operation rather than a release claim.
 
 ## Open boundaries
 

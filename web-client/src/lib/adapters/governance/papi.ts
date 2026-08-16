@@ -280,8 +280,6 @@ function mapProposalExecutionFailureReason(
     InvalidPreimage: undefined;
     UnsupportedDomain: undefined;
     UnsupportedCall: undefined;
-    UnsupportedTarget: undefined;
-    UnsupportedPayloadKind: undefined;
     MissingWinningPrimaryOption: undefined;
     DispatchFailed: undefined;
   }>,
@@ -363,7 +361,6 @@ function mapProposalParameterChangeSurface(
 
 function mapProposalTreasurySpendSettlementKind(
   settlementKind: GovernanceEnum<{
-    DirectTransfer: undefined;
     InvoiceScalarTransfer: undefined;
   }>,
 ): GovernanceProposalTreasurySpendSettlementKind {
@@ -403,7 +400,6 @@ function mapProposalExecutionSuccessDetail(
       }>;
       final_amount: bigint;
       settlement_kind: GovernanceEnum<{
-        DirectTransfer: undefined;
         InvoiceScalarTransfer: undefined;
       }>;
     };
@@ -441,83 +437,36 @@ function mapProposalExecutionSuccessDetail(
 function mapProposalExecutionDetail(
   detail:
     | GovernanceEnum<{
-        Executed: {
-          payload_kind: GovernanceEnum<{
-            L1RootAction: undefined;
-            L2TreasurySpend: undefined;
-            L2ParameterChange: undefined;
-            Intent: undefined;
-            L2SignalToL1: undefined;
-          }>;
-          authority: GovernanceEnum<{
-            Root: undefined;
-            DomainTreasury: undefined;
-            DomainParameters: undefined;
-            NonExecutable: undefined;
-          }>;
-          executed_epoch: number;
-          detail: GovernanceEnum<{
-            Generic: undefined;
-            RuntimeUpgradeAuthorized: { code_hash: string };
-            ParameterChangeExecuted: {
-              surface: GovernanceEnum<{
-                RouterFee: undefined;
-              }>;
-            };
-            TreasurySpendExecuted: {
-              funding_source: GovernanceAccountId;
-              beneficiary: GovernanceAccountId;
-              payout_asset: GovernanceDomainId;
-              base_amount: bigint;
-              scalar: GovernanceEnum<{
-                Amplify: undefined;
-                Approve: undefined;
-                Reduce: undefined;
-              }>;
-              final_amount: bigint;
-              settlement_kind: GovernanceEnum<{
-                DirectTransfer: undefined;
-                InvoiceScalarTransfer: undefined;
-              }>;
-            };
-          }>;
-        };
-        ExecutionFailed: {
-          payload_kind: GovernanceEnum<{
-            L1RootAction: undefined;
-            L2TreasurySpend: undefined;
-            L2ParameterChange: undefined;
-            Intent: undefined;
-            L2SignalToL1: undefined;
-          }>;
-          authority: GovernanceEnum<{
-            Root: undefined;
-            DomainTreasury: undefined;
-            DomainParameters: undefined;
-            NonExecutable: undefined;
-          }>;
-          failed_epoch: number;
-          reason: GovernanceEnum<{
-            MissingPreimage: undefined;
-            InvalidPreimage: undefined;
-            UnsupportedDomain: undefined;
-            UnsupportedCall: undefined;
-            UnsupportedTarget: undefined;
-            UnsupportedPayloadKind: undefined;
-            MissingWinningPrimaryOption: undefined;
-            DispatchFailed: undefined;
-          }>;
-        };
-        AdvisoryFinalized: {
-          payload_kind: GovernanceEnum<{
-            L1RootAction: undefined;
-            L2TreasurySpend: undefined;
-            L2ParameterChange: undefined;
-            Intent: undefined;
-            L2SignalToL1: undefined;
-          }>;
-          finalized_epoch: number;
-        };
+        Succeeded: GovernanceEnum<{
+          Generic: undefined;
+          RuntimeUpgradeAuthorized: { code_hash: string };
+          ParameterChangeExecuted: {
+            surface: GovernanceEnum<{ RouterFee: undefined }>;
+          };
+          TreasurySpendExecuted: {
+            funding_source: GovernanceAccountId;
+            beneficiary: GovernanceAccountId;
+            payout_asset: GovernanceDomainId;
+            base_amount: bigint;
+            scalar: GovernanceEnum<{
+              Amplify: undefined;
+              Approve: undefined;
+              Reduce: undefined;
+            }>;
+            final_amount: bigint;
+            settlement_kind: GovernanceEnum<{
+              InvoiceScalarTransfer: undefined;
+            }>;
+          };
+        }>;
+        Failed: GovernanceEnum<{
+          MissingPreimage: undefined;
+          InvalidPreimage: undefined;
+          UnsupportedDomain: undefined;
+          UnsupportedCall: undefined;
+          MissingWinningPrimaryOption: undefined;
+          DispatchFailed: undefined;
+        }>;
       }>
     | undefined,
 ): GovernanceProposalExecutionDetail | null {
@@ -525,39 +474,32 @@ function mapProposalExecutionDetail(
     return null;
   }
   switch (detail.type) {
-    case 'Executed':
+    case 'Succeeded':
       return {
-        kind: 'Executed',
-        payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
-        authority: mapProposalExecutionAuthority(detail.value.authority),
-        executedEpoch: detail.value.executed_epoch,
-        detail: mapProposalExecutionSuccessDetail(detail.value.detail),
+        kind: 'Succeeded',
+        detail: mapProposalExecutionSuccessDetail(detail.value),
       };
-    case 'ExecutionFailed':
+    case 'Failed':
       return {
-        kind: 'ExecutionFailed',
-        payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
-        authority: mapProposalExecutionAuthority(detail.value.authority),
-        failedEpoch: detail.value.failed_epoch,
-        reason: mapProposalExecutionFailureReason(detail.value.reason),
-      };
-    case 'AdvisoryFinalized':
-      return {
-        kind: 'AdvisoryFinalized',
-        payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
-        finalizedEpoch: detail.value.finalized_epoch,
+        kind: 'Failed',
+        reason: mapProposalExecutionFailureReason(detail.value),
       };
   }
 }
 
 function mapFinalizedProposalOutcome(
   outcome: GovernanceEnum<{
-    Resolved: {
-      epoch: number;
-      winner_count: number;
+    Approved: {
+      approval: { approved_epoch: number; winner_count: number };
+      enactment: GovernanceEnum<{
+        NotAttempted: undefined;
+        Enacted: { epoch: number };
+        ExecutionFailed: { epoch: number };
+        AdvisoryFinalized: { epoch: number };
+      }>;
     };
     Rejected: {
-      epoch: number;
+      finalized_epoch: number;
       reason: GovernanceEnum<{
         AdminRejected: undefined;
         NoVotes: undefined;
@@ -567,65 +509,37 @@ function mapFinalizedProposalOutcome(
       }>;
     };
     VetoCancelled: {
-      epoch: number;
-      veto_weight: bigint;
-    };
-    Enacted: {
-      approved_epoch: number;
-      executed_epoch: number;
-      winner_count: number;
-    };
-    ExecutionFailed: {
-      approved_epoch: number;
-      failed_epoch: number;
-      winner_count: number;
-    };
-    AdvisoryFinalized: {
-      approved_epoch: number;
       finalized_epoch: number;
-      winner_count: number;
+      veto_weight: bigint;
     };
   }>,
 ): GovernanceFinalizedProposalOutcome {
   switch (outcome.type) {
-    case 'Resolved':
+    case 'Approved': {
+      const enactment = outcome.value.enactment;
       return {
-        kind: 'Resolved',
-        epoch: outcome.value.epoch,
-        winnerCount: outcome.value.winner_count,
+        kind: 'Approved',
+        approval: {
+          approvedEpoch: outcome.value.approval.approved_epoch,
+          winnerCount: outcome.value.approval.winner_count,
+        },
+        enactment:
+          enactment.type === 'NotAttempted'
+            ? { kind: 'NotAttempted' }
+            : { kind: enactment.type, epoch: enactment.value.epoch },
       };
+    }
     case 'Rejected':
       return {
         kind: 'Rejected',
-        epoch: outcome.value.epoch,
+        finalizedEpoch: outcome.value.finalized_epoch,
         reason: mapRejectionReason(outcome.value.reason),
       };
     case 'VetoCancelled':
       return {
         kind: 'VetoCancelled',
-        epoch: outcome.value.epoch,
-        vetoWeight: outcome.value.veto_weight,
-      };
-    case 'Enacted':
-      return {
-        kind: 'Enacted',
-        approvedEpoch: outcome.value.approved_epoch,
-        executedEpoch: outcome.value.executed_epoch,
-        winnerCount: outcome.value.winner_count,
-      };
-    case 'ExecutionFailed':
-      return {
-        kind: 'ExecutionFailed',
-        approvedEpoch: outcome.value.approved_epoch,
-        failedEpoch: outcome.value.failed_epoch,
-        winnerCount: outcome.value.winner_count,
-      };
-    case 'AdvisoryFinalized':
-      return {
-        kind: 'AdvisoryFinalized',
-        approvedEpoch: outcome.value.approved_epoch,
         finalizedEpoch: outcome.value.finalized_epoch,
-        winnerCount: outcome.value.winner_count,
+        vetoWeight: outcome.value.veto_weight,
       };
   }
 }
@@ -946,50 +860,24 @@ function mapProposalStatus(
           };
         }>;
         PendingEnactment: {
-          outcome: GovernanceEnum<{
-            Resolved: {
-              epoch: number;
-              winner_count: number;
-            };
-            Rejected: {
-              epoch: number;
-              reason: GovernanceEnum<{
-                AdminRejected: undefined;
-                NoVotes: undefined;
-                VoteTie: undefined;
-                TurnoutBelowMinimum: undefined;
-                ApprovalThresholdNotMet: undefined;
-              }>;
-            };
-            VetoCancelled: {
-              epoch: number;
-              veto_weight: bigint;
-            };
-            Enacted: {
-              approved_epoch: number;
-              executed_epoch: number;
-              winner_count: number;
-            };
-            ExecutionFailed: {
-              approved_epoch: number;
-              failed_epoch: number;
-              winner_count: number;
-            };
-            AdvisoryFinalized: {
-              approved_epoch: number;
-              finalized_epoch: number;
-              winner_count: number;
-            };
-          }>;
+          approval: {
+            approved_epoch: number;
+            winner_count: number;
+          };
           enactment_epoch: number;
         };
         Finalized: GovernanceEnum<{
-          Resolved: {
-            epoch: number;
-            winner_count: number;
+          Approved: {
+            approval: { approved_epoch: number; winner_count: number };
+            enactment: GovernanceEnum<{
+              NotAttempted: undefined;
+              Enacted: { epoch: number };
+              ExecutionFailed: { epoch: number };
+              AdvisoryFinalized: { epoch: number };
+            }>;
           };
           Rejected: {
-            epoch: number;
+            finalized_epoch: number;
             reason: GovernanceEnum<{
               AdminRejected: undefined;
               NoVotes: undefined;
@@ -999,23 +887,8 @@ function mapProposalStatus(
             }>;
           };
           VetoCancelled: {
-            epoch: number;
-            veto_weight: bigint;
-          };
-          Enacted: {
-            approved_epoch: number;
-            executed_epoch: number;
-            winner_count: number;
-          };
-          ExecutionFailed: {
-            approved_epoch: number;
-            failed_epoch: number;
-            winner_count: number;
-          };
-          AdvisoryFinalized: {
-            approved_epoch: number;
             finalized_epoch: number;
-            winner_count: number;
+            veto_weight: bigint;
           };
         }>;
       }>
@@ -1033,7 +906,10 @@ function mapProposalStatus(
     case 'PendingEnactment':
       return {
         kind: 'PendingEnactment',
-        outcome: mapFinalizedProposalOutcome(status.value.outcome),
+        approval: {
+          approvedEpoch: status.value.approval.approved_epoch,
+          winnerCount: status.value.approval.winner_count,
+        },
         enactmentEpoch: status.value.enactment_epoch,
       };
     case 'Finalized':
@@ -1184,19 +1060,14 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
         domainId,
         { at: snapshot.at },
       );
-    return Promise.all(
-      proposals.map(async (proposal) => ({
-        itemId: proposal.item_id,
-        outcome: mapFinalizedProposalOutcome(proposal.outcome),
-        executionDetail: mapProposalExecutionDetail(
-          await snapshot.typedApi.view.Governance.proposal_execution_detail(
-            domainId,
-            proposal.item_id,
-            { at: snapshot.at },
-          ),
-        ),
-      })),
-    );
+    return proposals.map((proposal) => ({
+      domainId: proposal.identity.domain,
+      itemId: proposal.identity.item_id,
+      outcome: mapFinalizedProposalOutcome(proposal.finalization.outcome),
+      executionDetail: mapProposalExecutionDetail(
+        proposal.finalization.execution_detail,
+      ),
+    }));
   }
 
   async getProposalStatus(
@@ -1270,13 +1141,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     payloadKind: GovernanceProposalPayloadKind,
   ): Promise<GovernanceProposalSubmissionAuthority | null> {
     const snapshot = await this.snapshot();
-    return mapProposalSubmissionAuthority(
-      await snapshot.typedApi.view.Governance.proposal_submission_authority(
+    const policy =
+      await snapshot.typedApi.view.Governance.proposal_admission_policy_view(
         domainId,
         PapiEnum(payloadKind),
         { at: snapshot.at },
-      ),
-    );
+      );
+    return mapProposalSubmissionAuthority(policy.authority);
   }
 
   async getProposalOpeningFee(
@@ -1284,12 +1155,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     payloadKind: GovernanceProposalPayloadKind,
   ): Promise<GovernanceProposalOpeningFee | null> {
     const snapshot = await this.snapshot();
-    const fee = await snapshot.typedApi.view.Governance.proposal_opening_fee(
-      domainId,
-      PapiEnum(payloadKind),
-      { at: snapshot.at },
-    );
-    return fee ?? null;
+    const policy =
+      await snapshot.typedApi.view.Governance.proposal_admission_policy_view(
+        domainId,
+        PapiEnum(payloadKind),
+        { at: snapshot.at },
+      );
+    return policy.opening_fee ?? null;
   }
 
   async getProposalPayloadAvailability(
@@ -1564,6 +1436,14 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     if (authority === 'AdminOnly') {
       throw new Error(
         `Browser submission currently supports only runtime-signed proposal kinds; ${input.payloadKind} is admin-only for domain ${input.domainId}.`,
+      );
+    }
+    const preimageStatus = await this.getPayloadHashPreimageStatus(
+      input.payloadHash,
+    );
+    if (preimageStatus?.havePreimage !== true) {
+      throw new Error(
+        `Signed proposal submission requires an available preimage for ${input.payloadHash}. Note the exact bounded payload bytes first.`,
       );
     }
     const signer = await connectDeosSigner(

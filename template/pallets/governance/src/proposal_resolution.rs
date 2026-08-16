@@ -1028,9 +1028,12 @@ impl<T: Config> Pallet<T> {
     Self::record_finalized_proposal_outcome(
       domain,
       item_id,
-      FinalizedProposalOutcome::Resolved {
-        epoch: current_epoch,
-        winner_count,
+      FinalizedProposalOutcome::Approved {
+        approval: ProposalApproval {
+          approved_epoch: current_epoch,
+          winner_count,
+        },
+        enactment: ProposalEnactmentOutcome::NotAttempted,
       },
       current_epoch,
     )?;
@@ -1091,9 +1094,12 @@ impl<T: Config> Pallet<T> {
     Self::record_finalized_proposal_outcome(
       domain,
       item_id,
-      FinalizedProposalOutcome::Resolved {
-        epoch: current_epoch,
-        winner_count,
+      FinalizedProposalOutcome::Approved {
+        approval: ProposalApproval {
+          approved_epoch: current_epoch,
+          winner_count,
+        },
+        enactment: ProposalEnactmentOutcome::NotAttempted,
       },
       current_epoch,
     )?;
@@ -1181,7 +1187,7 @@ impl<T: Config> Pallet<T> {
       domain,
       item_id,
       FinalizedProposalOutcome::Rejected {
-        epoch: current_epoch,
+        finalized_epoch: current_epoch,
         reason,
       },
       current_epoch,
@@ -1222,7 +1228,7 @@ impl<T: Config> Pallet<T> {
       domain,
       item_id,
       FinalizedProposalOutcome::VetoCancelled {
-        epoch: current_epoch,
+        finalized_epoch: current_epoch,
         veto_weight: cancellation.veto_weight,
       },
       current_epoch,
@@ -1627,17 +1633,24 @@ impl<T: Config> Pallet<T> {
     if let Some(resolution_state) = Self::proposal_resolution_state(domain, item_id) {
       return Some(ProposalStatus::Active(resolution_state));
     }
-    let outcome = Self::finalized_proposal_outcome(domain, item_id)?;
+    let finalization = Self::finalized_proposal(domain, item_id)?;
     if let Some(enactment_epoch) = ProposalPendingEnactmentAt::<T>::get(domain, item_id) {
       if T::EpochProvider::current_epoch().saturated_into::<u32>()
         < enactment_epoch.saturated_into::<u32>()
       {
+        let FinalizedProposalOutcome::Approved {
+          approval,
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        } = &finalization.outcome
+        else {
+          return None;
+        };
         return Some(ProposalStatus::PendingEnactment {
-          outcome,
+          approval: approval.clone(),
           enactment_epoch,
         });
       }
     }
-    Some(ProposalStatus::Finalized(outcome))
+    Some(ProposalStatus::Finalized(finalization.outcome))
   }
 }

@@ -1,7 +1,7 @@
 ---
-page_type: usage
-title: Форк DEOS
-summary: Практическая карта того, что downstream-команда меняет, сохраняет и проверяет при превращении DEOS в конкретную экосистему.
+type: usage
+title: Создание форка DEOS
+description: Практическая карта решений, которые команда производной экосистемы должна изменить, сохранить и проверить, превращая DEOS в конкретный проект.
 locale: ru
 canonical_page_id: forking-deos
 translation_of: forking-deos.en.md
@@ -10,15 +10,15 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../template/pallets/actors/docs/embedding.md
-  - ../../docs/framework-instance.contract.en.md
-  - ../../template/README.md
-  - ../../web-client/README.md
-  - ../../docs/tmctol.specification.en.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../template/pallets/actors/docs/embedding.md
+  - resource: ../../docs/framework-instance.contract.en.md
+  - resource: ../../template/README.md
+  - resource: ../../web-client/README.md
+  - resource: ../../docs/tmctol.specification.en.md
+status: stable
 audience: developer
 tags:
   - usage
@@ -29,99 +29,99 @@ related:
   - Обзор фреймворка DEOS
   - Структура репозитория
   - Технологический стек
-  - Токеновые поверхности
-  - Трехуровневая валидация
+  - Роли токенов
+  - Трёхуровневая проверка
 last_compiled: 2026-07-20
 confidence: 0.85
 ---
 
-# Форк DEOS
+# Создание форка DEOS
 
 ## Кратко
 
-DEOS предназначен для форков командами, которые запускают конкретные экосистемы. Форк должен сохранять ясными reusable framework contracts и заменять то, что относится к конкретной экосистеме: продукт, токены, governance и операторскую политику.
+DEOS предназначен для команд, которые создают на его основе конкретные экосистемы. В форке следует ясно отделить переиспользуемые контракты фреймворка от заменяемых решений конкретной экосистемы: продукта, токенов, управления и работы операторов.
 
-Короткое правило: меняйте identity и policy; сохраняйте bounded mechanics и validation discipline. DEOS дает механизмы, а не обязательную моральную или бизнес-конфигурацию для каждого инстанса.
+Краткое правило: меняйте идентичность и политику, но сохраняйте ограниченность механизмов и дисциплину проверки. DEOS предоставляет механизмы, а не обязательную для каждого проекта моральную или деловую модель.
 
-## Что обычно меняется
+## Что обычно меняют
 
-Downstream fork обычно определяет:
+Команда проекта на базе DEOS обычно определяет:
 
-- Chain identity, branding, endpoints, bootnodes и operator runbooks;
-- Названия токенов, ticker presentation, launch allocation, founder economics и продуктовый нарратив;
-- Concrete governance domains, распределение protection-власти, labor culture, invoice norms и bootstrap handoff plan;
-- Продуктовые поверхности экосистемы, dApps, portfolio/indexer needs, demand strategy и materialized providers;
-- Deployment parameters, collator/operator assumptions и monitoring setup;
-- Client copy, default endpoints, wallet presets и user-facing flows.
+- Идентичность сети, оформление, точки подключения, стартовые узлы и инструкции для операторов;
+- Названия и отображение тикеров токенов, начальное распределение, экономику основателей и описание продукта;
+- Конкретные домены управления, распределение защитных полномочий, культуру труда, правила счетов-заявок и порядок передачи управления после запуска;
+- Приложения экосистемы, потребности в портфельных и индексирующих службах, стратегию спроса и поставщиков материализованных представлений;
+- Параметры развёртывания, допущения о коллаторах и операторах, а также наблюдение за системой;
+- Тексты клиента, исходные точки подключения, настройки кошельков и пользовательские сценарии.
 
-Это продуктовые и экосистемные решения. Они не должны незаметно возвращаться в DEOS как hardcoded framework assumptions.
+Это решения продукта и экосистемы. Они не должны незаметно возвращаться в DEOS в виде жёстко заданных предпосылок фреймворка.
 
-## Механизм vs политика
+## Механизм и политика
 
-DEOS-owned surfaces — это reusable mechanisms и safety contracts: primitives, invariants, bounded execution, Actors task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates и reference patterns.
+Фреймворк DEOS владеет переиспользуемыми механизмами и контрактами безопасности: примитивами, инвариантами, ограниченным исполнением, языком задач Actors, механизмами управления и защиты, правилами происхождения данных для чтения, точками настройки, контурами проверки и эталонными схемами.
 
-Instance-owned surfaces — это concrete policy: brand, dApps, launch economics, founder allocation или no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing и demand strategy.
+Конкретная экосистема владеет своей политикой: брендом, приложениями, стартовой экономикой, наличием или отсутствием доли основателей, культурой участников, правилами счетов-заявок, названиями и долями корзин, продвижением и стратегией спроса.
 
-Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection и System Actors topologies — это механизмы. Fork может сохранить, переименовать, перенастроить, отключить или заменить policy choices, если честно сохраняет те гарантии, на которые претендует.
+Счета-заявки исполнителей, распределение капитала по корзинам, ликвидность во владении протокола, защитные механизмы управления и топологии System Actors — это механизмы. Форк может сохранить, переименовать, перенастроить, отключить или заменить отдельные политические решения, если честно сохраняет все гарантии, на которые продолжает ссылаться.
 
-## Что должно оставаться стабильным
+## Что следует сохранять
 
-Форк должен сохранять базовую framework discipline, пока нет сильных причин менять ее:
+Без веских оснований для изменения форк должен сохранять основную дисциплину фреймворка:
 
-- Deterministic protocol-managed economic reactions;
-- Bounded runtime read surfaces versus materialized/indexed views;
-- Явные Actor roles и execution-plan boundaries;
-- Проверка математики TMCTOL до runtime changes;
-- Разделение governance domains и protection;
-- Staking share-vault и receipt accounting invariants;
-- Zero-warning runtime/client hygiene и trust validation для wiki content.
+- Детерминированные экономические реакции под управлением протокола;
+- Ограниченные данные для чтения из среды исполнения, отделённые от индексируемых и материализованных представлений;
+- Явные роли Actors и границы `Actor Contract`;
+- Проверку математики TMCTOL до изменений среды исполнения;
+- Разделение доменов управления и защитных механизмов;
+- Инварианты пула стейкинга с учётом долей и учёта токенов-квитанций;
+- Отсутствие предупреждений при проверке среды исполнения и клиента, а также проверку границы доверия содержимого вики.
 
-Если fork меняет эти mechanics, это уже не только rebranding DEOS. Это изменение framework contract, которое нужно проверять на economic, runtime и integration layers.
+Если форк меняет эти механизмы, речь идёт уже не о переименовании DEOS, а об изменении контракта фреймворка. Такое изменение нужно проверять на экономическом уровне, в среде исполнения и на уровне интеграции.
 
 ## Минимальный профиль форка
 
-DEOS fork не должен запускаться простой заменой названий. До launch-ready состояния downstream-команде нужны явные решения по экономическому, governance, runtime, клиентскому и операторскому профилю, который превращает framework в конкретную экосистему.
+Одной замены названий недостаточно для запуска форка DEOS. Прежде чем считать проект готовым к запуску, команда должна явно определить экономический профиль, управление, среду исполнения, клиент и работу операторов, которые превращают фреймворк в конкретную экосистему.
 
-| Область | Минимальное решение форка |
+| Область | Минимальное решение |
 | --- | --- |
-| Native asset | Название, ticker, decimals, allocation, роль в staking/governance |
-| Foreign collateral set | Какие assets можно register, route или использовать как collateral |
-| TMC curve params | Initial price, slope, supply assumptions, launch immutability policy |
-| TOL distribution | Bucket split, paired treasuries, reserve/lane semantics |
-| Bucket policies | Names, percentages, actor wakeups, thresholds, retries, treasury lanes и spend priorities |
-| Router fee | Границы fee, burn/sink routing, governance mutability |
-| Governance domain pairs | Primary/protection tokens, payload kinds, cadence, execution authority |
-| Staking receipt policy | Receipt namespaces, native receipt, LP custody, reward paths |
-| Materialized provider policy | Какие user flows требуют indexers или archive/search providers |
-| Collator/randomness posture | Trusted phase, upgrade path, relay/protocol randomness dependency |
-| Client/product surface | Default endpoints, wallet presets, copy, dApps, risk wording |
-| Validation baseline | Simulator, runtime tests, client validation, wiki trust, operator smoke checks |
+| Нативный актив | Название, тикер, число десятичных знаков, распределение, роль в стейкинге и управлении |
+| Набор иностранного обеспечения | Какие активы можно регистрировать, направлять по маршрутам или использовать как обеспечение |
+| Параметры кривой TMC | Начальная цена, наклон, допущения о предложении, неизменность стартовых параметров |
+| Распределение TOL | Доли корзин, связанные казначейства, смысл резервов и контуров |
+| Правила корзин | Названия, доли, пробуждение акторов, пороги, повторные попытки, контуры казначейства и приоритеты расходов |
+| Сбор DEOS Router | Границы сбора, направление на сжигание или в Fee Sink, возможность изменения через управление |
+| Пары доменов управления | Токены основного и защитного треков, виды полезной нагрузки, временной режим, полномочия на исполнение |
+| Правила квитанций стейкинга | Пространства имён квитанций, нативная квитанция, хранение LP, пути вознаграждений |
+| Правила внешних поставщиков данных | Какие пользовательские сценарии требуют индексатора, архива или поиска |
+| Коллаторы и случайность | Доверенный этап, путь обновления, зависимость от случайности протокола или ретрансляционной цепи |
+| Клиент и продукт | Исходные точки подключения, настройки кошельков, тексты, приложения, описание рисков |
+| Базовый набор проверок | Симулятор, тесты среды исполнения, проверка клиента и границы доверия вики, операторские проверки работоспособности |
 
-Если строка не решена, fork все еще prototype. Если строка решена, но не проверена, fork не готов к launch.
+Если по строке нет решения, форк всё ещё остаётся прототипом. Если решение принято, но не проверено, форк не готов к запуску.
 
-## Checklist форка
+## Порядок подготовки форка
 
-1. Переименуйте public identity, не переименовывая вслепую TMCTOL-specific standard concepts.
-2. Решите, какие assets и governance surfaces являются ecosystem-specific.
-3. Задайте launch parameters и считайте launch physics immutable, если только более сильный constitutional contract не говорит иначе.
-4. Проверьте System Actor roles и уберите assumptions, подходящие только reference ecosystem.
-5. Считайте builder invoices и bucket policies opt-in механизмами: решите, что ваш инстанс включает, переименовывает, финансирует или отключает.
-6. Для переиспользования Actors реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в ядре `pallet_deos_actors`.
-7. Классифицируйте каждый client datum как direct on-chain projection или materialized/indexed view.
-8. Обновите scripts, metadata export, endpoints и operator documentation.
-9. Запускайте минимально достаточную validation, затем поднимайтесь выше, если пересекаются math/runtime/client boundaries.
+1. Измените публичную идентичность, не переименовывая без разбора понятия, относящиеся к стандарту TMCTOL;
+2. Определите, какие активы и механизмы управления относятся именно к вашей экосистеме;
+3. Задайте стартовые параметры и считайте стартовую экономическую физику неизменной, если более сильный конституционный контракт прямо не допускает иного;
+4. Проверьте роли System Actors и удалите предпосылки, подходящие только эталонной экосистеме;
+5. Считайте счета-заявки исполнителей и правила корзин подключаемыми механизмами: решите, что ваш проект включает, переименовывает, финансирует или отключает;
+6. Для повторного использования Actors реализуйте адаптеры среды исполнения, а деловую политику храните в адаптерах или исходной конфигурации акторов, но не в ядре `pallet_deos_actors`;
+7. Отнесите каждый элемент клиентских данных либо к непосредственной проекции из блокчейна, либо к индексируемому или материализованному представлению;
+8. Обновите сценарии автоматизации, выгрузку метаданных, точки подключения и документацию операторов;
+9. Сначала выполните минимально достаточную проверку, затем расширяйте её, если изменение пересекает границы математики, среды исполнения или клиента.
 
-## Что можно возвращать upstream
+## Что можно вернуть в исходный DEOS
 
-Хорошие upstream contributions — это framework-hardening changes: tests, честность client read-model, safer scripts, более ясные docs/wiki, лучшие adapter boundaries, benchmark fixes и bug fixes в reusable pallets.
+Полезные изменения для исходного DEOS укрепляют сам фреймворк: тесты, честное описание происхождения клиентских данных, более безопасные сценарии автоматизации, ясные документы и страницы вики, лучшие границы адаптеров, исправления измерений производительности и ошибок в переиспользуемых паллетах.
 
-Downstream-specific business logic, dApp behavior, токеновый нарратив и ecosystem policy обычно должны оставаться в fork.
+Деловая логика производной экосистемы, поведение её приложений, позиционирование токенов и собственная политика обычно должны оставаться в форке.
 
 ## Связанные страницы
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Структура репозитория](../implementation/repository-structure.ru.md)
 - [Технологический стек](../implementation/tech-stack.ru.md)
-- [Parachain context](../concepts/parachain-context.ru.md)
-- [Токеновые поверхности](../concepts/token-surfaces.ru.md)
-- [Трехуровневая валидация](../development/three-layer-validation.ru.md)
+- [DEOS в экосистеме парачейнов](../concepts/parachain-context.ru.md)
+- [Роли токенов](../concepts/token-surfaces.ru.md)
+- [Трёхуровневая проверка](../development/three-layer-validation.ru.md)

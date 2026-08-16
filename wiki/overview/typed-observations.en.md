@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Typed Observations
-summary: Typed observations provide bounded current scalar truth while producers retain samples, Actors owns reactions, DEOS Router owns routing, and indexed providers own history.
+description: Typed observations provide bounded current scalar truth while producers retain samples, Actors owns reactions, DEOS Router owns routing, and indexed providers own history.
 locale: en
 canonical_page_id: typed-observations
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/oracle/docs/specification.en.md
-  - ../../template/pallets/oracle/docs/architecture.en.md
-  - ../../docs/oracle.integration.en.md
-status: active
+  - resource: ../../template/pallets/oracle/docs/specification.en.md
+  - resource: ../../template/pallets/oracle/docs/architecture.en.md
+  - resource: ../../docs/oracle.integration.en.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -58,7 +58,7 @@ A direction is never inferred from its reverse. The feed records pre-execution r
 
 A changed revision invokes a subscriber-independent O(1) Actors ingress hook. The hook marks only the latest dirty revision. Deferred fanout later traverses exact occupied subscriber pages and converges on the existing Actors pending latch, queue, wakeup, and scheduler.
 
-Observation triggers request latest-state reconsideration. Conditions own thresholds and evaluate freshness when an actor attempt runs. DEOS Oracle does not synchronously execute subscribers or promise one actor run per intermediate revision.
+Observation triggers request latest-state reconsideration. Predicates own thresholds and evaluate freshness when an actor attempt runs. DEOS Oracle does not synchronously execute subscribers or promise one actor run per intermediate revision.
 
 ## Read-Model Boundary
 

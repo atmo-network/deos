@@ -11,6 +11,17 @@ pub(crate) struct ProposalAdmission<Epoch, Balance> {
 }
 
 impl<T: Config> Pallet<T> {
+  pub(crate) fn proposal_preimage_admission_error(
+    error: ProposalPreimageAdmissionError,
+  ) -> Error<T> {
+    match error {
+      ProposalPreimageAdmissionError::Missing => Error::<T>::ProposalPreimageMissing,
+      ProposalPreimageAdmissionError::Oversized => Error::<T>::ProposalPreimageOversized,
+      ProposalPreimageAdmissionError::Invalid => Error::<T>::ProposalPreimageInvalid,
+      ProposalPreimageAdmissionError::Incompatible => Error::<T>::ProposalPreimageIncompatible,
+    }
+  }
+
   pub(crate) fn proposal_admission_policy(
     domain: T::DomainId,
     payload_kind: ProposalPayloadKind,
@@ -76,12 +87,7 @@ impl<T: Config> Pallet<T> {
         payload_kind,
         payload_hash,
       )
-      .map_err(|error| match error {
-        ProposalPreimageAdmissionError::Missing => Error::<T>::ProposalPreimageMissing,
-        ProposalPreimageAdmissionError::Oversized => Error::<T>::ProposalPreimageOversized,
-        ProposalPreimageAdmissionError::Invalid => Error::<T>::ProposalPreimageInvalid,
-        ProposalPreimageAdmissionError::Incompatible => Error::<T>::ProposalPreimageIncompatible,
-      })?;
+      .map_err(Self::proposal_preimage_admission_error)?;
     }
     ensure!(
       !ActiveProposals::<T>::contains_key(domain, item_id),
@@ -481,20 +487,20 @@ impl<T: Config> Pallet<T> {
         if enactment_epoch != epoch {
           continue;
         }
-        let Some(outcome) = FinalizedProposalOutcomes::<T>::get(touch.domain, touch.item_id) else {
+        let Some(finalization) = FinalizedProposals::<T>::get(touch.domain, touch.item_id) else {
           ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
           continue;
         };
-        let (approved_epoch, winner_count) = match outcome {
-          FinalizedProposalOutcome::Resolved {
-            epoch,
-            winner_count,
-          } => (epoch, winner_count),
-          _ => {
-            ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
-            continue;
-          }
+        let FinalizedProposalOutcome::Approved {
+          approval,
+          enactment: ProposalEnactmentOutcome::NotAttempted,
+        } = finalization.outcome
+        else {
+          ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
+          continue;
         };
+        let approved_epoch = approval.approved_epoch;
+        let winner_count = approval.winner_count;
         let execution_attempt = Self::maybe_execute_proposal_payload(
           touch.domain,
           touch.item_id,
@@ -537,8 +543,7 @@ impl<T: Config> Pallet<T> {
       let bucket = FinalizedProposalOutcomeExpiryBuckets::<T>::take(epoch);
       processed_entries = processed_entries.saturating_add(bucket.len() as u32);
       for touch in bucket {
-        FinalizedProposalOutcomes::<T>::remove(touch.domain, touch.item_id);
-        ProposalExecutionDetails::<T>::remove(touch.domain, touch.item_id);
+        FinalizedProposals::<T>::remove(touch.domain, touch.item_id);
         ProposalMetadataByItem::<T>::remove(touch.domain, touch.item_id);
         ProposalPendingEnactmentAt::<T>::remove(touch.domain, touch.item_id);
         ProposalWinningPrimaryOptionByItem::<T>::remove(touch.domain, touch.item_id);

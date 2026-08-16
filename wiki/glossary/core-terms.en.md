@@ -1,7 +1,7 @@
 ---
-page_type: glossary
+type: glossary
 title: Core Terms
-summary: A compact glossary for the most important DEOS and TMCTOL terms. Use this page first when project vocabulary, abbreviations, framework-versus-standard naming, frontend architecture terms, wiki roles, or status surfaces feel ambiguous.
+description: A compact glossary for the most important DEOS and TMCTOL terms. Use this page first when project vocabulary, abbreviations, framework-versus-standard naming, frontend architecture terms, wiki roles, or status surfaces feel ambiguous.
 locale: en
 canonical_page_id: core-terms
 translation_status: source
@@ -9,19 +9,21 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../README.md
-  - ../../docs/README.md
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../docs/tmctol.specification.en.md
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../docs/read-model.contract.en.md
-  - ../../web-client/docs/architecture.en.md
-  - ../../web-client/README.md
-status: active
+  - resource: ../../README.md
+  - resource: ../../docs/README.md
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/staking/docs/specification.en.md
+  - resource: ../../template/pallets/router/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../docs/read-model.contract.en.md
+  - resource: ../../web-client/docs/architecture.en.md
+  - resource: ../../web-client/README.md
+status: stable
 audience: newcomer
 tags:
   - glossary
@@ -38,7 +40,7 @@ related:
   - Reading Paths
   - Development Status
   - Newcomer FAQ
-last_compiled: 2026-07-20
+last_compiled: 2026-08-14
 confidence: 0.9
 ---
 
@@ -73,6 +75,42 @@ This glossary is a lookup surface, not a second explanation layer. Each term sta
 ### AA-Actor
 
 One concrete bounded runtime instance inside the broader Actors system.
+
+### Actor Contract
+
+The complete typed behavior installed for an Active actor: schedule, ordered `ContractSteps`, funding policy, and completion policy.
+
+### Step
+
+One fixed ordered row in `ContractSteps`, containing an optional `Precondition`, one Task, and one error policy.
+
+### Precondition
+
+The optional bounded DNF gate on one Step. Absence is the sole unconditional form.
+
+### Predicate
+
+One timed atomic truth test inside a Precondition. `Opening` truth freezes for the cycle; `Current` truth is read before its Step.
+
+### `SecurityEpoch`
+
+The staking security and reward identity, exactly equal to the host `SessionIndex`.
+
+### `NativeSecurityMode`
+
+The single code-level staking mode: `TrustedSet` or `LpBackedSelection`.
+
+### `FailureClass`
+
+The canonical concept for a typed failure-cause category. DEOS Router retains the concrete stable code identifier `RouterFailureClass`; the cause remains independent from whether another attempt is permitted.
+
+### `RetryDisposition`
+
+The canonical retry-policy fact attached to a failure. DEOS Router uses `RetryDisposition`; Actors retains its stable package-local `RetryClass` code identifier.
+
+### Fee Sink
+
+The canonical destination that collects transaction, Actor-execution, governance-opening, and XCM-execution fees before later allocation. DEOS Router trading fees instead follow the Burn Actor path.
 
 ### DEOS Router
 

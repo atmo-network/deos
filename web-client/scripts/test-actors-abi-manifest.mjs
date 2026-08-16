@@ -15,9 +15,9 @@ function graphNode(path) {
 
 test('metadata exposes the current eight-step execution-plan baseline', () => {
   const bound = manifest.pallet.constants.find(
-    (constant) => constant.name === 'MaxExecutionPlanSteps',
+    (constant) => constant.name === 'MaxContractSteps',
   );
-  assert(bound, 'MaxExecutionPlanSteps must remain public metadata');
+  assert(bound, 'MaxContractSteps must remain public metadata');
   assert.equal(bound.value, '0x08000000');
 });
 
@@ -148,7 +148,7 @@ test('CycleResult projection keeps terminal flow separate from factual counters'
   for (const counter of [
     'executed_steps',
     'committed_effectful_tasks',
-    'skipped_conditions',
+    'precondition_skips',
     'skipped_resolution',
     'skipped_funding_unavailable',
     'failed_steps',

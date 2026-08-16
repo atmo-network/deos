@@ -5,14 +5,15 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.17`
+- **Release line**: `0.7.18`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
+- **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System Actor catalog standardization, UI product flows
 
 `pallet-deos-actors` is a bounded deterministic actor kernel. A downstream runtime can embed it without inheriting DEOS governance policy, TMCTOL bucket topology, native staking design, or the current System Actor catalog.
 
-Use this guide with the normative [DEOS Actors Specification](./specification.en.md) and shipped [DEOS Actors Architecture](./architecture.en.md). The specification defines portable semantics; this package document defines the host contract; the architecture document describes the current DEOS reference binding.
+Use this guide with the normative [DEOS Actors Specification](./specification.en.md) and shipped [DEOS Actors Architecture](./architecture.en.md). The specification defines portable semantics; this package document defines the host contract; the architecture document maps the reusable package implementation and source ownership.
 
 ## Executable Portability Evidence
 
@@ -43,14 +44,14 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 - `LiquidityOps`: Addition, removal, and pair-scoped donation; donation permits reserve strengthening without LP receipt minting when supported by runtime policy.
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
-- `WeightInfo`: The single runtime-derived numeric authority covers worst-case task classes, calls, conditions, fees, ingress, scheduler work, orchestration, Continuation, finalization, and cleanup in both Weight dimensions. Transfer, Mint, and split fanout include possible synchronous address-event ingress; Burn remains independently priced without transfer-ingress proof; adapter-free `StopCycle` prices its explicit stop event.
-- `contract`: Exhaustive read-only classification of each task, condition, amount resolution, and error policy. Its task weight owner delegates to `WeightInfo`; it does not replace runtime measurement, capability configuration, or canonical task parameters.
+- `WeightInfo`: The single runtime-derived numeric authority covers worst-case Task classes, calls, Predicates, fees, ingress, scheduler work, orchestration, Continuation, finalization, and cleanup in both Weight dimensions. Transfer, Mint, and split fanout include possible synchronous address-event ingress; Burn remains independently priced without transfer-ingress proof; adapter-free `StopCycle` prices its explicit stop event.
+- `contract`: Exhaustive read-only classification of each Task, Predicate, amount resolution, and error policy. Its task weight owner delegates to `WeightInfo`; it does not replace runtime measurement, capability configuration, or canonical task parameters.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: Typed certified-ingress boundary (`AddressEventIngress::preflight`/`notify`) over the package `AddressEvent` value. Preflight is read-only (lifecycle, funding, trigger, and required placement); notify executes exactly once after movement and rejects through `IngressFailure { error, retry }` with the same closed Temporary/Permanent classification as `TaskFailure`.
 - Governance/system origins, a two-dimensional hook weight meter, runtime-reserved `ActorOnIdleReserve`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxOpeningSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
 - Canonical FIFO configuration: non-zero page size, bounded `MaxQueueLength`, `MaxQueueEntriesScannedPerBlock`, and `MaxExecutionsPerBlock`. One `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Continuation owner govern every actor. Actor class, actor id, execution share, and priority policy never change service order.
-- Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum bounded-DNF predicate count honestly; repeated keys do not establish worst-case ProofSize.
+- Under `runtime-benchmarks`, `setup_predicate_assets` must provide enough valid distinct assets to measure the maximum bounded-DNF predicate count honestly; repeated keys do not establish worst-case ProofSize.
 
 The host runtime owns those bindings. Actors core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no contract or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
 
@@ -61,7 +62,7 @@ Deterministic User and System custody derivation survives host account-provider 
 A runtime may bind unit implementations for capabilities it does not expose:
 
 - `AssetOps = ()` rejects Transfer, Burn, and Mint mutation and reports no deposit viability; it never fabricates successful ledger effects.
-- `ObservationProvider = ()` returns Unavailable for every feed and makes every observation condition false without creating a task failure.
+- `ObservationProvider = ()` returns Unavailable for every feed and makes every observation Predicate false without creating a Task failure.
 - No DEX means swap tasks fail deterministically through `StepErrorPolicy`.
 - No liquidity support means `AddLiquidity`, `RemoveLiquidity`, and `DonateLiquidity` fail through `LiquidityOps`.
 - No staking means `Stake` and `Unstake` fail through the staking adapter.
@@ -86,13 +87,13 @@ A downstream runtime decides whether to ship any genesis System actors. Genesis 
 
 ## 5. Portable Patterns vs Reference Topology
 
-Reusable execution-plan patterns include:
+Reusable Actor Contract patterns include:
 
 - Fee collection and redistribution.
 - Scheduled burn or treasury transfer.
 - Balance-ingress triggered routing.
 - Liquidity provisioning or donation through runtime adapters.
-- Ordinary final execution plans that move actor-owned balances before a later pure close.
+- Ordinary final Actor Contracts whose Steps move actor-owned balances before a later pure close.
 
 The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, treasuries, BLDR lanes, and native staking LP provisioning is one reference topology. External runtimes should copy only the task-language patterns that match their own economic standard.
 
@@ -114,7 +115,7 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 
 ## 7. Task-Scoped Atomicity Contract
 
-Actors guarantees task-scoped atomicity, not whole-plan atomicity. A failed executable task rolls back all task-local storage effects and its success event. Earlier successful steps in the same execution plan remain committed. After rollback, `StepErrorPolicy` decides whether the cycle aborts or continues.
+Actors guarantees Task-scoped atomicity, not whole-contract atomicity. A failed executable Task rolls back all Task-local storage effects and its success event. Earlier successful Steps in the same Actor Contract remain committed. After rollback, `StepErrorPolicy` decides whether the cycle aborts or continues.
 
 | Surface | Actors guarantee | Adapter/runtime obligation |
 | --- | --- | --- |

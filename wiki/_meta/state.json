@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-27",
+  "generated_at": "2026-08-14",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -197,7 +197,7 @@
       "page_type": "overview",
       "title": {
         "en": "Governance",
-        "ru": "Governance"
+        "ru": "Управление"
       },
       "status": "active",
       "audience": "newcomer",
@@ -247,7 +247,7 @@
       "page_type": "overview",
       "title": {
         "en": "Randomness Strategy",
-        "ru": "Стратегия случайности"
+        "ru": "Стратегия использования случайности"
       },
       "status": "active",
       "audience": "newcomer",
@@ -265,7 +265,7 @@
       "page_type": "overview",
       "title": {
         "en": "Runtime Patterns",
-        "ru": "Паттерны runtime"
+        "ru": "Принципы среды исполнения"
       },
       "status": "active",
       "audience": "newcomer",
@@ -315,7 +315,7 @@
       "page_type": "getting-started",
       "title": {
         "en": "Start Here",
-        "ru": "Начните здесь"
+        "ru": "С чего начать"
       },
       "status": "active",
       "audience": "newcomer",
@@ -455,7 +455,7 @@
       "page_type": "concept",
       "title": {
         "en": "Routing and Minting Loop",
-        "ru": "Контур маршрутизации и минтинга"
+        "ru": "Контур маршрутизации и эмиссии"
       },
       "status": "active",
       "audience": "newcomer",
@@ -509,7 +509,7 @@
       "page_type": "concept",
       "title": {
         "en": "Read-Model Split",
-        "ru": "Разделение read-model"
+        "ru": "Разделение данных для чтения"
       },
       "status": "active",
       "audience": "newcomer",
@@ -533,7 +533,7 @@
       "page_type": "concept",
       "title": {
         "en": "Governance Domains",
-        "ru": "Домены Governance"
+        "ru": "Домены управления"
       },
       "status": "active",
       "audience": "newcomer",
@@ -559,7 +559,7 @@
       "page_type": "concept",
       "title": {
         "en": "Generated Wiki",
-        "ru": "Generated Wiki"
+        "ru": "Собранная вики"
       },
       "status": "active",
       "audience": "newcomer",
@@ -627,7 +627,7 @@
       "page_type": "comparison",
       "title": {
         "en": "Physics-First vs Politics-First",
-        "ru": "Physics-first против politics-first"
+        "ru": "Экономическая физика прежде политики"
       },
       "status": "active",
       "audience": "newcomer",
@@ -653,7 +653,7 @@
       "page_type": "faq",
       "title": {
         "en": "Newcomer FAQ",
-        "ru": "FAQ для новичков"
+        "ru": "Вопросы новичков"
       },
       "status": "active",
       "audience": "newcomer",
@@ -733,6 +733,8 @@
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
+          "../template/pallets/router/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
@@ -747,6 +749,8 @@
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
+          "../template/pallets/router/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
@@ -821,7 +825,7 @@
       "page_type": "concept",
       "title": {
         "en": "Token Surfaces",
-        "ru": "Токеновые поверхности"
+        "ru": "Роли токенов"
       },
       "status": "active",
       "audience": "newcomer",
@@ -849,7 +853,7 @@
       "page_type": "concept",
       "title": {
         "en": "$BLDR Builder Economy",
-        "ru": "Экономика $BLDR"
+        "ru": "Экономика созидателей $BLDR"
       },
       "status": "active",
       "audience": "newcomer",
@@ -911,7 +915,7 @@
       "page_type": "usage",
       "title": {
         "en": "Forking DEOS",
-        "ru": "Форк DEOS"
+        "ru": "Создание форка DEOS"
       },
       "status": "active",
       "audience": "developer",
@@ -971,7 +975,7 @@
       "page_type": "concept",
       "title": {
         "en": "Parachain Context",
-        "ru": "Parachain context"
+        "ru": "DEOS в экосистеме парачейнов"
       },
       "status": "active",
       "audience": "newcomer",
@@ -1001,7 +1005,7 @@
       "page_type": "concept",
       "title": {
         "en": "TOL Bucket Scenarios",
-        "ru": "Сценарии TOL buckets"
+        "ru": "Сценарии корзин TOL"
       },
       "status": "active",
       "audience": "newcomer",
@@ -1183,7 +1187,7 @@
       "page_type": "development",
       "title": {
         "en": "Three-Layer Validation",
-        "ru": "Трехуровневая валидация"
+        "ru": "Трёхуровневая проверка"
       },
       "status": "active",
       "audience": "developer",
@@ -1211,7 +1215,7 @@
       "page_type": "community",
       "title": {
         "en": "Contributing Guidelines",
-        "ru": "Руководство контрибьютора"
+        "ru": "Руководство участника"
       },
       "status": "active",
       "audience": "developer",
@@ -1267,7 +1271,7 @@
       "page_type": "getting-started",
       "title": {
         "en": "Partner Pitch",
-        "ru": "Питч для партнера"
+        "ru": "Предложение для партнёров"
       },
       "status": "active",
       "audience": "partner",
@@ -1295,7 +1299,7 @@
       "page_type": "getting-started",
       "title": {
         "en": "Executive Summary",
-        "ru": "Executive Summary"
+        "ru": "Краткое резюме"
       },
       "status": "active",
       "audience": "partner",

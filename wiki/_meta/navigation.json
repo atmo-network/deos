@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-20",
+  "generated_at": "2026-08-14",
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": ["en", "ru"],
@@ -15,14 +15,14 @@
       "id": "start-here",
       "title": {
         "en": "Start Here",
-        "ru": "Начните здесь"
+        "ru": "С чего начать"
       },
       "items": [
         {
           "id": "start-here",
           "title": {
             "en": "Start Here",
-            "ru": "Начните здесь"
+            "ru": "С чего начать"
           },
           "path": {
             "en": "getting-started/start-here.en.md",
@@ -31,7 +31,7 @@
           "page_type": "getting-started",
           "summary": {
             "en": "Choose one route: understand DEOS in 10 minutes, run it locally, or fork and change the economy safely.",
-            "ru": "Выберите один путь: понять DEOS за 10 минут, поднять локально или безопасно форкнуть и изменить экономику."
+            "ru": "Короткий вводный маршрут: понять DEOS, запустить его локально или безопасно создать на его основе собственную экономику."
           }
         },
         {
@@ -47,14 +47,14 @@
           "page_type": "getting-started",
           "summary": {
             "en": "The external-facing hook before the full architecture graph.",
-            "ru": "Внешний крючок перед полным architecture graph."
+            "ru": "Краткое введение в главную идею DEOS, границы продукта, стандарт TMCTOL и назначение фреймворка."
           }
         },
         {
           "id": "partner-pitch",
           "title": {
             "en": "Partner Pitch",
-            "ru": "Питч для партнера"
+            "ru": "Предложение для партнёров"
           },
           "path": {
             "en": "getting-started/partner-pitch.en.md",
@@ -63,14 +63,14 @@
           "page_type": "getting-started",
           "summary": {
             "en": "External-facing pitch for partner teams evaluating DEOS as a forkable foundation for deterministic protocol economies.",
-            "ru": "Внешний pitch для партнерских команд, которые оценивают DEOS как форкаемый фундамент для детерминированных протокольных экономик."
+            "ru": "Краткое предложение для команд, которые рассматривают DEOS как основу собственной экономики с детерминированными правилами протокола."
           }
         },
         {
           "id": "executive-summary",
           "title": {
             "en": "Executive Summary",
-            "ru": "Executive Summary"
+            "ru": "Краткое резюме"
           },
           "path": {
             "en": "getting-started/executive-summary.en.md",
@@ -79,7 +79,7 @@
           "page_type": "getting-started",
           "summary": {
             "en": "One-page external summary of what DEOS is, why it matters, what is shipped, what is not shipped, and how adoption starts.",
-            "ru": "Одностраничное внешнее резюме: что такое DEOS, почему это важно, что уже поставлено, что не поставлено и как начинается adoption."
+            "ru": "Одностраничный обзор DEOS: назначение, отличие от ситуативного управления казной DAO, выбор Polkadot и Substrate, текущее состояние и начало работы."
           }
         },
         {
@@ -95,7 +95,7 @@
           "page_type": "overview",
           "summary": {
             "en": "DEOS is the framework identity, while TMCTOL is the current standard running on top of it.",
-            "ru": "DEOS — это идентичность фреймворка, а TMCTOL — текущий стандарт, работающий поверх него."
+            "ru": "DEOS — основа среды исполнения для суверенных программируемых экономик, которую можно адаптировать под конкретную экосистему. Она предоставляет детерминированные механизмы эмиссии, маршрутизации, автоматизации, стейкинга, управления и работы с данными для чтения; TMCTOL — действующий эталонный стандарт поверх этой основы."
           }
         },
         {
@@ -111,7 +111,7 @@
           "page_type": "getting-started",
           "summary": {
             "en": "Start with the docs hub, understand the framework-versus-standard split, then choose the right working surface for your task.",
-            "ru": "Начните с хаба документации, поймите различие между фреймворком и стандартом, а затем выберите правильную рабочую поверхность под задачу."
+            "ru": "Короткий самостоятельный маршрут для знакомства с DEOS, выбора предметной области и подходящей проверки."
           }
         },
         {
@@ -127,7 +127,7 @@
           "page_type": "glossary",
           "summary": {
             "en": "A compact glossary for the main DEOS and TMCTOL terms, including framework, runtime, governance, read-model, frontend ownership, wiki vocabulary, and release/status document roles.",
-            "ru": "Компактный глоссарий по главным терминам DEOS и TMCTOL, включая framework, runtime, governance, read-model, frontend ownership, wiki vocabulary и роли release/status documents."
+            "ru": "Краткий словарь основных терминов DEOS и TMCTOL. Начните с этой страницы, если вам пока неясны словарь проекта, сокращения, различие между фреймворком и стандартом, устройство клиентской части, роль вики или сведения о состоянии разработки."
           }
         },
         {
@@ -143,14 +143,14 @@
           "page_type": "getting-started",
           "summary": {
             "en": "Role-based reading paths for newcomers, economics work, runtime changes, governance work, web-client changes, and local tooling.",
-            "ru": "Role-based reading paths для новичков, economics work, runtime changes, governance work, web-client changes и local tooling."
+            "ru": "Самостоятельные маршруты по вики для новичков, внешней оценки, экономики, среды исполнения, управления, клиента, состояния проекта и инструментов."
           }
         },
         {
           "id": "newcomer-faq",
           "title": {
             "en": "Newcomer FAQ",
-            "ru": "FAQ для новичков"
+            "ru": "Вопросы новичков"
           },
           "path": {
             "en": "faq/newcomer-faq.en.md",
@@ -159,7 +159,7 @@
           "page_type": "faq",
           "summary": {
             "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, Actors, governance, docs/wiki navigation, UI Kit, Domain DAG, and the reference client.",
-            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, Actors, governance, docs/wiki navigation, UI Kit, Domain DAG и эталонном клиенте."
+            "ru": "Краткие ответы на основные вопросы о DEOS, TMCTOL, Actors, управлении, стейкинге, данных, устройстве вики и эталонном клиенте."
           }
         }
       ]
@@ -184,7 +184,7 @@
           "page_type": "concept",
           "summary": {
             "en": "The flagship tokenomic standard that combines a mint-only curve, treasury-owned liquidity, and fee burning.",
-            "ru": "Флагманский токеномический стандарт, который сочетает mint-only кривую, treasury-owned liquidity и сжигание комиссий."
+            "ru": "TMCTOL — флагманский экономический стандарт на базе DEOS: однонаправленная эмиссия, ликвидность во владении протокола и сжигание комиссий задают более явные правила защиты от снижения цены, чем обычный выпуск токена."
           }
         },
         {
@@ -199,15 +199,15 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "How DEOS expresses recurring protocol behavior through bounded plans triggered by balances, schedules, and typed tasks.",
-            "ru": "Как DEOS выражает повторяющееся поведение протокола через ограниченные планы, запускаемые балансами, расписаниями и типизированными задачами."
+            "en": "How DEOS expresses recurring protocol behavior through bounded Actor Contracts, ordered Steps, an optional Precondition, and typed Tasks.",
+            "ru": "В DEOS повторяющееся поведение протокола выражается ограниченными `Actor Contract`, запускаемыми балансами и расписанием. Упорядоченные шаги содержат типизированные задачи и необязательные предусловия."
           }
         },
         {
           "id": "read-model-split",
           "title": {
             "en": "Read-Model Split",
-            "ru": "Разделение read-model"
+            "ru": "Разделение данных для чтения"
           },
           "path": {
             "en": "concepts/read-model-split.en.md",
@@ -216,14 +216,14 @@
           "page_type": "concept",
           "summary": {
             "en": "How DEOS separates bounded on-chain truth from indexed or materialized views.",
-            "ru": "Как DEOS отделяет ограниченную on-chain правду от indexed или materialized представлений."
+            "ru": "DEOS относит пользовательские данные либо к ограниченным каноническим проекциям непосредственно из блокчейна, либо к индексированным и материализованным представлениям. Такое разделение не позволяет ни скрыть зависимость от индексатора, ни перенести историю для сводных панелей в состояние консенсуса."
           }
         },
         {
           "id": "governance-domains",
           "title": {
             "en": "Governance Domains",
-            "ru": "Домены Governance"
+            "ru": "Домены управления"
           },
           "path": {
             "en": "concepts/governance-domains.en.md",
@@ -232,14 +232,14 @@
           "page_type": "concept",
           "summary": {
             "en": "One typed governance cell inside DEOS Governance: it binds together the governed subject, power surfaces, valid payload families, cadence, and execution authority.",
-            "ru": "Одна типизированная governance-cell внутри DEOS Governance: она связывает управляемый subject, power surfaces, допустимые payload-family, cadence и execution authority."
+            "ru": "Домен управления — типизированная ячейка общей системы, связывающая предмет управления, основной и защитный контуры голосования, допустимые виды полезной нагрузки, временной режим и полномочия на исполнение."
           }
         },
         {
           "id": "generated-wiki",
           "title": {
             "en": "Generated Wiki",
-            "ru": "Generated Wiki"
+            "ru": "Собранная вики"
           },
           "path": {
             "en": "concepts/generated-wiki.en.md",
@@ -248,7 +248,7 @@
           "page_type": "concept",
           "summary": {
             "en": "How `/wiki` works as a self-contained domain graph with localized pages, metadata manifests, and a trusted rendering boundary.",
-            "ru": "Как `/wiki` работает как self-contained domain graph с localized pages, metadata manifests и trusted rendering boundary."
+            "ru": "Вики DEOS — самостоятельный результат осмысления проектной истины, представленный как насыщенный граф доменов для людей, агентов и эталонного клиента."
           }
         },
         {
@@ -264,7 +264,7 @@
           "page_type": "concept",
           "summary": {
             "en": "A self-contained map of the major DEOS knowledge domains and how they link together inside the wiki.",
-            "ru": "Самодостаточная карта основных knowledge-доменов DEOS и связей между ними внутри wiki."
+            "ru": "Самодостаточная карта основных областей знаний DEOS и их связей внутри вики."
           }
         },
         {
@@ -280,7 +280,7 @@
           "page_type": "concept",
           "summary": {
             "en": "Concrete walkthroughs that connect user actions, runtime routing, Actor wakeups, buckets, read-model surfaces, and validation choices.",
-            "ru": "Конкретные сценарии, связывающие пользовательские действия, runtime routing, пробуждение Actors акторов, buckets, read-model surfaces и validation."
+            "ru": "Пошаговые сценарии, связывающие действия пользователя, маршрутизацию в среде исполнения, пробуждение акторов, корзины, данные для чтения и выбор проверок в DEOS."
           }
         },
         {
@@ -296,14 +296,14 @@
           "page_type": "concept",
           "summary": {
             "en": "Compact text diagrams for subsystem relationships, routing, Actor graphs, governance/staking, and read-model boundaries.",
-            "ru": "Компактные текстовые схемы связей подсистем, routing, Actor graphs, governance/staking и read-model boundaries."
+            "ru": "Компактные текстовые схемы основных связей между подсистемами DEOS: карта доменов, контур маршрутизации, граф Actors, разделение данных для чтения и граница между управлением и стейкингом."
           }
         },
         {
           "id": "token-surfaces",
           "title": {
             "en": "Token Surfaces",
-            "ru": "Токеновые поверхности"
+            "ru": "Роли токенов"
           },
           "path": {
             "en": "concepts/token-surfaces.en.md",
@@ -312,14 +312,14 @@
           "page_type": "concept",
           "summary": {
             "en": "A compact map of Native, VETO, BLDR, stNTVE, LP tokens, and their economic/governance/staking/read-model roles.",
-            "ru": "Краткая карта Native, VETO, BLDR, stNTVE, LP tokens и их ролей в economics/governance/staking/read-model."
+            "ru": "Краткая карта ролей `$NTVE`, `$VETO`, `$BLDR`, `stNTVE`, LP и `stXXX` в экономике, управлении, стейкинге и данных для чтения DEOS/TMCTOL."
           }
         },
         {
           "id": "builder-economy",
           "title": {
             "en": "$BLDR Builder Economy",
-            "ru": "Экономика $BLDR"
+            "ru": "Экономика созидателей $BLDR"
           },
           "path": {
             "en": "concepts/builder-economy.en.md",
@@ -328,7 +328,7 @@
           "page_type": "concept",
           "summary": {
             "en": "How public invoices, tactical governance, protocol-owned liquidity, and bounded treasury payouts coordinate useful work without making founder privilege a framework entitlement.",
-            "ru": "Как публичные invoices, тактическое governance, protocol-owned liquidity и ограниченные treasury payouts координируют полезную работу без превращения статуса основателя в привилегию фреймворка."
+            "ru": "Эталонная схема координирует подтверждённую работу через публичные счета-заявки, тактическое управление, ликвидность во владении протокола и ограниченные выплаты казны без обязательной привилегии основателя."
           }
         },
         {
@@ -344,14 +344,14 @@
           "page_type": "concept",
           "summary": {
             "en": "Gravity Well, Elasticity Inversion, compression metrics, and floor/ceiling threshold discipline.",
-            "ru": "Gravity Well, Elasticity Inversion, compression metrics и дисциплина floor/ceiling thresholds."
+            "ru": "Различия между гравитационным колодцем, инверсией эластичности, сжатием, разрывом между потолком и нижней границей и правилами выбора метрики в TMCTOL."
           }
         },
         {
           "id": "parachain-context",
           "title": {
             "en": "Parachain Context",
-            "ru": "Parachain context"
+            "ru": "DEOS в экосистеме парачейнов"
           },
           "path": {
             "en": "concepts/parachain-context.en.md",
@@ -360,14 +360,14 @@
           "page_type": "concept",
           "summary": {
             "en": "How DEOS relates to Polkadot, parachains, XCM, collators, Omni Node, and upstream relay-chain dependencies.",
-            "ru": "Как DEOS связан с Polkadot, parachains, XCM, collators, Omni Node и upstream relay-chain dependencies."
+            "ru": "Как DEOS связан с Polkadot, парачейнами, XCM, коллаторами, Omni Node и зависимостями от ретрансляционной цепи и исходного SDK."
           }
         },
         {
           "id": "tol-bucket-scenarios",
           "title": {
             "en": "TOL Bucket Scenarios",
-            "ru": "Сценарии TOL buckets"
+            "ru": "Сценарии корзин TOL"
           },
           "path": {
             "en": "concepts/tol-bucket-scenarios.en.md",
@@ -376,7 +376,7 @@
           "page_type": "concept",
           "summary": {
             "en": "Concrete A/B/C/D bucket behavior, unwind paths, paired treasury lanes, and actor wakeups.",
-            "ru": "Конкретное поведение A/B/C/D buckets, unwind paths, paired treasury lanes и actor wakeups."
+            "ru": "Сценарии корзин ликвидности, принадлежащей казне: хранение в корзине A, необязательные пути вывода LP из корзин B/C/D и условия активации акторов."
           }
         },
         {
@@ -392,7 +392,7 @@
           "page_type": "concept",
           "summary": {
             "en": "Core invariants and threats mapped to owner surfaces, validation routes, governance mutability, and failure modes.",
-            "ru": "Ключевые инварианты и угрозы с owner surfaces, validation routes, governance-mutability и failure modes."
+            "ru": "Ключевые инварианты и угрозы DEOS/TMCTOL, их владельцы, способы проверки, изменяемость через управление и основные виды отказа."
           }
         },
         {
@@ -408,7 +408,7 @@
           "page_type": "concept",
           "summary": {
             "en": "A ladder separating formula-defined, simulator-supported, runtime-enforced, governance-dependent, and market-assumption claims.",
-            "ru": "Лестница claim levels для formulas, simulator, runtime enforcement, governance dependency и market assumptions."
+            "ru": "Пояснительная шкала экономических утверждений DEOS/TMCTOL: от формулы и симуляции до исполнения в блокчейне, зависимости от управления и рыночных допущений."
           }
         }
       ]
@@ -417,7 +417,7 @@
       "id": "runtime-and-product",
       "title": {
         "en": "Runtime and Product",
-        "ru": "Runtime и продукт"
+        "ru": "Среда исполнения и продукт"
       },
       "items": [
         {
@@ -433,7 +433,7 @@
           "page_type": "overview",
           "summary": {
             "en": "Actors as a bounded actor runtime with task-scoped atomicity, sparse progress-preserving Continuation, and portable host-adapter boundaries.",
-            "ru": "Actors как ограниченная среда акторов с атомарностью отдельных задач, разреженным сохранением прогресса и переносимыми границами интерфейсов."
+            "ru": "Actors — ограниченная среда исполнения акторов с атомарностью на уровне задач, разреженным состоянием Continuation, сохраняющим прогресс, и переносимыми границами адаптеров среды."
           }
         },
         {
@@ -449,7 +449,7 @@
           "page_type": "overview",
           "summary": {
             "en": "One concrete bounded execution instance inside the broader Actors system.",
-            "ru": "Один конкретный ограниченный экземпляр исполнения внутри более широкой системы Actors."
+            "ru": "Actors в DEOS — система `Account Abstraction Actors` (акторов на основе абстракции учётной записи), а AA-Актор — один конкретный ограниченный исполнитель. Каждый экземпляр следует типизированному `Actor Contract` с упорядоченными шагами."
           }
         },
         {
@@ -465,7 +465,7 @@
           "page_type": "overview",
           "summary": {
             "en": "The max-output routing engine that compares bounded market and protocol-liquidity paths and serves as the mandatory gate for canonical swap execution.",
-            "ru": "Движок маршрутизации по максимальному выходу, который сравнивает ограниченные пути через рыночную и протокольную ликвидность и служит обязательными воротами канонического обмена."
+            "ru": "DEOS Router выбирает наибольший выход среди ограниченных путей через рыночную и протокольную ликвидность и служит обязательным шлюзом для канонических обменов."
           }
         },
         {
@@ -481,7 +481,7 @@
           "page_type": "overview",
           "summary": {
             "en": "Bounded current typed observation truth for producers, Router consumers, reactive Actors, and finalized client inspection.",
-            "ru": "Ограниченная текущая истина типизированных наблюдений для producers, Router consumers, реактивного Actors и финализированной инспекции клиента."
+            "ru": "Типизированные наблюдения предоставляют ограниченные текущие скалярные данные; производители владеют образцами, Actors — реакциями, DEOS Router — маршрутизацией, а внешние индексаторы — историей."
           }
         },
         {
@@ -497,14 +497,14 @@
           "page_type": "overview",
           "summary": {
             "en": "The mint-only issuance engine that prices new supply along deterministic curve math.",
-            "ru": "Mint-only механизм эмиссии, который оценивает новое предложение по детерминированной математике кривой."
+            "ru": "TMC — механизм однонаправленной эмиссии в TMCTOL. Он задаёт детерминированный линейный ценовой потолок, рассчитывает выпуск по интегралу и сохраняет параметры запуска неизменными в текущей линии."
           }
         },
         {
           "id": "governance",
           "title": {
             "en": "Governance",
-            "ru": "Governance"
+            "ru": "Управление"
           },
           "path": {
             "en": "overview/governance.en.md",
@@ -513,7 +513,7 @@
           "page_type": "overview",
           "summary": {
             "en": "A wide-angle introduction to DEOS Governance as a subsystem that explains why it exists, how it separates strategy from tactics, and which deeper concept pages to read next.",
-            "ru": "Широкое введение в DEOS Governance как подсистему, которое объясняет, зачем он нужен, как разделяет стратегию и тактику и к каким concept-страницам идти дальше."
+            "ru": "Обзор DEOS Governance как ограниченного конституционного слоя, отделяющего экономическую физику протокола от стратегической защиты, тактической координации и текущих данных для чтения."
           }
         },
         {
@@ -529,14 +529,14 @@
           "page_type": "overview",
           "summary": {
             "en": "The foreign-asset identity layer that maps XCM locations into stable runtime asset identifiers.",
-            "ru": "Слой идентичности внешних активов, который связывает XCM-локации со стабильными runtime-идентификаторами внутри DEOS."
+            "ru": "Реестр активов — слой идентичности внешних активов в DEOS. Он преобразует местоположения XCM в устойчивые локальные идентификаторы, сохраняет соответствия при смене версии XCM и выделяет внешним активам отдельное пространство имён, чтобы вся среда исполнения могла использовать их как полноценные экономические объекты."
           }
         },
         {
           "id": "randomness-strategy",
           "title": {
             "en": "Randomness Strategy",
-            "ru": "Стратегия случайности"
+            "ru": "Стратегия использования случайности"
           },
           "path": {
             "en": "overview/randomness-strategy.en.md",
@@ -545,14 +545,14 @@
           "page_type": "overview",
           "summary": {
             "en": "The current relay-beacon-first simplification and trusted-collator fallback posture.",
-            "ru": "Текущий подход DEOS к случайности: без локального VRF, с временным fallback на доверенных collator и с ориентацией на relay-chain beacon."
+            "ru": "Случайность не входит в нынешний контракт Actors. Локальный VRF удалён, таймеры Actors работают только в детерминированном ритме, а будущий вероятностный запуск потребует надёжного и экономически защищённого источника энтропии."
           }
         },
         {
           "id": "runtime-patterns",
           "title": {
             "en": "Runtime Patterns",
-            "ru": "Паттерны runtime"
+            "ru": "Принципы среды исполнения"
           },
           "path": {
             "en": "overview/runtime-patterns.en.md",
@@ -561,14 +561,14 @@
           "page_type": "overview",
           "summary": {
             "en": "The modern Polkadot SDK runtime baseline that DEOS follows for assembly, consensus posture, and deployment.",
-            "ru": "Современный набор runtime-паттернов Polkadot SDK, на которые опирается DEOS."
+            "ru": "DEOS следует современным подходам Polkadot SDK, а не устаревшим соглашениям времён Substrate. Контракт фреймворка требует точного подключения компонентов по эталонному шаблону, исходных настроек асинхронного производства блоков, развёртывания через Omni Node и строгой дисциплины конфигурации."
           }
         },
         {
           "id": "routing-and-minting-loop",
           "title": {
             "en": "Routing and Minting Loop",
-            "ru": "Контур маршрутизации и минтинга"
+            "ru": "Контур маршрутизации и эмиссии"
           },
           "path": {
             "en": "concepts/routing-and-minting-loop.en.md",
@@ -577,7 +577,7 @@
           "page_type": "concept",
           "summary": {
             "en": "How DEOS Router and TMC work together to compare market and protocol liquidity.",
-            "ru": "Как DEOS Router и TMC вместе сравнивают рыночную и протокольную ликвидность."
+            "ru": "В текущей эталонной линии DEOS Router выбирает способ исполнения сделки, а TMC предоставляет детерминированный путь эмиссии, когда он даёт получателю лучший результат."
           }
         },
         {
@@ -593,7 +593,7 @@
           "page_type": "overview",
           "summary": {
             "en": "How DEOS staking uses share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, and native-specific reward settlement.",
-            "ru": "Как staking DEOS использует share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination и native-specific reward settlement."
+            "ru": "Стейкинг DEOS использует пулы с учётом долей, переносимые квитанции `stXXX` и явный режим нативной безопасности `TrustedSet` или `LpBackedSelection`."
           }
         },
         {
@@ -609,7 +609,7 @@
           "page_type": "overview",
           "summary": {
             "en": "The on-chain-first browser client and its discipline around widgets, layout, UI Kit primitives, Domain DAG ownership, execution feedback, wiki rendering, and data provenance.",
-            "ru": "On-chain-first браузерный клиент и его дисциплина вокруг widgets, layout, UI Kit primitives, Domain DAG ownership, execution feedback, wiki rendering и происхождения данных."
+            "ru": "Веб-клиент DEOS — эталонный интерфейс для действующих процессов протокола, прежде всего использующий данные блокчейна. Он отделяет продуктовые виджеты от инфраструктуры размещения, централизует компоненты UI Kit, проверяет границы владения через Domain DAG и показывает происхождение данных."
           }
         }
       ]
@@ -634,7 +634,7 @@
           "page_type": "implementation",
           "summary": {
             "en": "Detailed description of the DEOS framework repository directories and their purpose.",
-            "ru": "Как устроен репозиторий DEOS и за что отвечает каждая его основная директория."
+            "ru": "Устройство репозитория DEOS и назначение его основных каталогов."
           }
         },
         {
@@ -650,7 +650,7 @@
           "page_type": "implementation",
           "summary": {
             "en": "Overview of the underlying technologies that power the DEOS framework.",
-            "ru": "Ключевые технологии, на которых построен фреймворк DEOS."
+            "ru": "Основные технологии фреймворка DEOS: Polkadot SDK, Rust, SvelteKit, JavaScript с BigInt и локальные средства автоматизации."
           }
         }
       ]
@@ -675,7 +675,7 @@
           "page_type": "math",
           "summary": {
             "en": "Mathematical models defining the Token Minting Curve and TOL.",
-            "ru": "Основные математические модели TMCTOL: кривая эмиссии, интегральный расчет минтинга и поддержка пола через XYK."
+            "ru": "Математические модели TMC и ликвидности TOL: цена выпуска, интегральный расчёт, XYK-инвариант и динамика предложения."
           }
         }
       ]
@@ -700,14 +700,14 @@
           "page_type": "usage",
           "summary": {
             "en": "Operator and developer automation, including local bootstrap, metadata export, authorized-upgrade checks, and native staking bootstrap call preparation.",
-            "ru": "Автоматизация для разработчиков и операторов: local bootstrap, metadata export, authorized-upgrade checks и подготовка native staking bootstrap call data."
+            "ru": "Автоматизация для операторов и разработчиков: запуск локальной сети, экспорт метаданных, проверка обновлений среды исполнения и подготовка нативного стейкинга без неявной отправки транзакций."
           }
         },
         {
           "id": "forking-deos",
           "title": {
             "en": "Forking DEOS",
-            "ru": "Форк DEOS"
+            "ru": "Создание форка DEOS"
           },
           "path": {
             "en": "usage/forking-deos.en.md",
@@ -716,7 +716,7 @@
           "page_type": "usage",
           "summary": {
             "en": "What downstream teams change, preserve, validate, and contribute back when turning DEOS into a concrete ecosystem.",
-            "ru": "Что downstream-команды меняют, сохраняют, проверяют и возвращают upstream при превращении DEOS в concrete ecosystem."
+            "ru": "Практическая карта решений, которые команда производной экосистемы должна изменить, сохранить и проверить, превращая DEOS в конкретный проект."
           }
         },
         {
@@ -732,7 +732,7 @@
           "page_type": "usage",
           "summary": {
             "en": "How repo-local skills, ABC context files, wiki sync, and changed-scope completion gates keep work aligned.",
-            "ru": "Как repo-local skills, ABC context files, wiki sync и changed-scope completion gates держат работу aligned."
+            "ru": "Как DEOS согласует работу людей и агентов с помощью локальных навыков, контекстных файлов ABC, синхронизации вики и проверок изменённой области."
           }
         }
       ]
@@ -748,7 +748,7 @@
           "id": "three-layer-validation",
           "title": {
             "en": "Three-Layer Validation",
-            "ru": "Трехуровневая валидация"
+            "ru": "Трёхуровневая проверка"
           },
           "path": {
             "en": "development/three-layer-validation.en.md",
@@ -757,7 +757,7 @@
           "page_type": "process",
           "summary": {
             "en": "The required testing strategy for validating protocol and economic changes in DEOS.",
-            "ru": "Обязательная стратегия проверки протокольных и экономических изменений в DEOS."
+            "ru": "Обязательный порядок проверки протокольных и экономических изменений в DEOS."
           }
         },
         {
@@ -773,7 +773,7 @@
           "page_type": "status",
           "summary": {
             "en": "Current implementation status with shipped framework, reference-client, wiki, and backlog boundaries summarized for newcomers without turning wiki into release notes.",
-            "ru": "Текущий статус, где для новичков кратко сведены shipped framework, reference-client, wiki и backlog boundaries без превращения wiki в release notes."
+            "ru": "Текущее состояние реализации и открытые границы фреймворка DEOS без превращения вики в журнал релизов."
           }
         }
       ]
@@ -789,7 +789,7 @@
           "id": "physics-vs-politics",
           "title": {
             "en": "Physics-First vs Politics-First",
-            "ru": "Physics-first против politics-first"
+            "ru": "Экономическая физика прежде политики"
           },
           "path": {
             "en": "comparisons/physics-vs-politics.en.md",
@@ -798,7 +798,7 @@
           "page_type": "comparison",
           "summary": {
             "en": "The manifesto-level contrast between structural Economic Physics and politics-by-default.",
-            "ru": "Сравнение между подходом, где правила выживания закреплены в экономической «физике», и подходом, где они остаются предметом обычной политики."
+            "ru": "Манифест DEOS отделяет явные механизмы протокола от обычного управления, чтобы политика задавала направление экономики, не пересматривая постоянно её основания."
           }
         }
       ]
@@ -814,7 +814,7 @@
           "id": "contributing",
           "title": {
             "en": "Contributing Guidelines",
-            "ru": "Руководство контрибьютора"
+            "ru": "Руководство участника"
           },
           "path": {
             "en": "community/contributing.en.md",
@@ -823,7 +823,7 @@
           "page_type": "process",
           "summary": {
             "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
-            "ru": "Как вносить вклад в DEOS, понимать философию проекта и проходить нужные этапы валидации."
+            "ru": "Как вносить вклад в DEOS, выбрав правильный домен, сохранив приоритет экономических законов и выполнив проверки нужного уровня."
           }
         }
       ]

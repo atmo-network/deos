@@ -6,7 +6,7 @@ The DEOS (Deterministic Economic Operating System) framework, currently instanti
 
 The runtime remains a deterministic state machine. Actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 
-Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-actors` execution plans. The reference runtime reserves a finite System actor constellation, while TMC, routing, Oracle, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
+Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-actors` Actor Contracts with ordered Steps. The reference runtime reserves a finite System actor constellation, while TMC, routing, Oracle, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
 
 ## 2. Core Philosophy: The "Omnivorous" Machine
 
@@ -21,7 +21,7 @@ Token-driven actor flows follow this bounded coordination pattern:
 1. `Provenance-Aware Ingress`: Source/asset trigger filters and funding-source policy decide whether a deposit influences readiness or funding snapshots; ordinary balance credit remains separate from execution authority.
 2. `Plan-Local Statelessness`: Steps read current state without mutable cross-step scratch storage, while bounded lifecycle, readiness, queue, funding accumulator/snapshot, and observability state remains explicit on-chain.
 3. `Donation Sensitivity`: Assets transferred to a sovereign account remain real balances, but only configured tasks and authorized trigger/funding semantics determine whether and when they affect protocol execution. A donation is not automatically a burn or liquidity contribution.
-4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, paged FIFO readiness, and exact temporal wakeups provide bounded backpressure. Unsafe conditions may skip or abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
+4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, paged FIFO readiness, and exact temporal wakeups provide bounded backpressure. A false Precondition may skip a Step and failures may abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
 5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
 
 ## 3. Actor Architecture & Economic Topology
@@ -30,7 +30,7 @@ Token-driven actor flows follow this bounded coordination pattern:
 
 The reference runtime composes dedicated mechanism pallets with bounded System Actors and User actors. TMC owns issuance, DEOS Router owns route selection, DEOS Oracle owns current typed observations, and Actors owns admitted orchestration through host-provided adapters.
 
-The concrete DEOS System address catalog, genesis states, execution-plan families, governance activation paths, runtime bounds, and operational surfaces live in [DEOS Actors Integration](./actors.integration.en.md). DEOS Oracle publication, Router sampling, reactive Actor ingress, client provenance, and rollback composition live in [DEOS Oracle Integration](./oracle.integration.en.md).
+The concrete DEOS System address catalog, genesis states, Actor Contract families, governance activation paths, runtime bounds, and operational surfaces live in [DEOS Actors Integration](./actors.integration.en.md). DEOS Oracle publication, Router sampling, reactive Actor ingress, client provenance, and rollback composition live in [DEOS Oracle Integration](./oracle.integration.en.md).
 
 ### 3.2 Runtime Composition DAG
 
@@ -52,13 +52,15 @@ Runtime-facing failures keep cause and retry policy orthogonal. DEOS Router expo
 
 Package specifications own intended semantics; package architecture maps own shipped storage, calls, events, errors, traits, and bounded views; code and metadata own exhaustive names.
 
-| Owner | Shipped constructor or mutator family | Explicit invariant | Executable evidence |
-| --- | --- | --- | --- |
-| [Governance](../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, maturity, and strategic reserve are checked before economics or mutation | Package `general_proposal_cap_preserves_the_strategic_reserve`; runtime `signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserve` |
-| [DEOS Staking](../template/pallets/staking/docs/specification.en.md) | Pool/receipt, LP nomination, governance custody, session security, certified reward, claim, compound, expiry, and cleanup families | One mode and `SessionIndex` owner bind bounded custody, frozen rights, conservative backing, exact liability, and transactional settlement | Package `compound_security_reward_claims_roll_back_every_effect`; runtime `lp_backed_security_path_composes_sessions_funding_claim_expiry_and_cleanup` |
-| [DEOS Actors](../template/pallets/actors/docs/specification.en.md) | Actor Contract lifecycle, trigger, scheduler, simulation, sweep, and repair families | Canonical typed contracts execute bounded FIFO attempts with explicit preconditions, paid failure, atomic task effects, and one Continuation owner | Package `actor_scale_variant_names_are_stable`; generated semantic manifest; runtime temporary and permanent cross-system failure paths |
-| [DEOS Router](../template/pallets/router/docs/specification.en.md) | Pool registration, quote preparation, and atomic exact-input/output swap families | Prepared identity, maximum recipient output, concrete failure cause, retry disposition, Oracle publication, and fee ingress commit together | `adversarial_corpus_is_complete_unique_and_anchor_bound`; runtime Router/Oracle/Burn success and rollback paths |
-| [DEOS Oracle](../template/pallets/oracle/docs/specification.en.md) | Feed admission, lifecycle, typed publication, and bounded observation views | Producer authority, aggregation, semantic no-op revision rules, atomic publication, and deferred reactive fanout have one owner | Package `equal_refresh_and_rejected_producers_preserve_reactive_state`; runtime `stale_observation_subscriber_page_fails_closed_without_losing_dirty_state` |
+| Owner | Composition family | Cross-system invariant |
+| --- | --- | --- |
+| [Governance](../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, maturity, and strategic reserve are checked before economics or mutation |
+| [DEOS Staking](../template/pallets/staking/docs/specification.en.md) | Pool/receipt, LP nomination, governance custody, session security, certified reward, claim, compound, and atomic expiry | One mode and `SessionIndex` owner bind bounded custody, frozen rights, conservative backing, exact liability, and automatic transactional settlement |
+| [DEOS Actors](../template/pallets/actors/docs/specification.en.md) | Actor Contract lifecycle, trigger, scheduler, simulation, sweep, and repair | Canonical typed contracts execute bounded FIFO attempts with explicit preconditions, paid failure, atomic task effects, and one Continuation owner |
+| [DEOS Router](../template/pallets/router/docs/specification.en.md) | Pool registration, quote preparation, and atomic exact-input/output swap | Prepared identity, maximum recipient output, concrete failure cause, retry disposition, Oracle publication, and fee ingress commit together |
+| [DEOS Oracle](../template/pallets/oracle/docs/specification.en.md) | Feed admission, lifecycle, typed publication, and bounded observation views | Producer authority, aggregation, semantic no-op revision rules, atomic publication, and deferred reactive fanout have one owner |
+
+Package architecture maps keep executable anchors beside their owning invariants; repository audits validate closure without copying exhaustive symbol or test inventories into this composition map.
 
 Errors are fail-closed causes within these families, not independent mechanisms. Events report committed transitions from the same mutators. Runtime adapters may compose only these public contracts and projections; they do not create shadow storage or alternate policy.
 
@@ -195,79 +197,13 @@ Actors delegates host behavior through typed runtime contracts:
 
 Adapters own runtime-specific mechanics while Actors owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The portable contract lives in the package-owned [specification](../template/pallets/actors/docs/specification.en.md) and [embedding guide](../template/pallets/actors/docs/embedding.md); the current DEOS binding lives in [DEOS Actors Integration](./actors.integration.en.md).
 
-### 4.4 Amount Resolution
+The Actors package specification owns the exhaustive amount-resolution variants and execution semantics; this composition map owns only their runtime adapter boundary.
 
-Execution-plan steps specify amounts via `AmountResolution`, enabling both static and dynamic resolution:
-
-| Variant | Description | Use case |
-| --- | --- | --- |
-| `Fixed(Balance)` | Absolute amount | Known transfers |
-| `PercentageOfCurrent` | % of current spendable balance | Gradual unwind |
-| `PercentageOfTrigger` | % of trigger-time balance | Event-proportional |
-| `PercentageOfLastFunding` | % of last funding snapshot | DCA repeats |
-| `AllBalance` | Spendable balance | Burn/final transfer |
-
-## 5. Code Integration Patterns
-
-### 5.1 Trustless Execution Pattern
-
-The Router does not trust the return value of the AMM. It verifies the physical reality of the ledger using type-safe inspection.
-
-```rust
-// AssetConversionAdapter
-fn execute_single_pool_exact_input(...) -> Result<Balance, DispatchError> {
-    let balance_before = match target_asset {
-        AssetKind::Native => T::Currency::balance(&recipient),
-        AssetKind::Local(id) => T::Assets::balance(id, &recipient),
-    };
-    AssetConversion::swap_exact_tokens_for_tokens(...)?;
-    let balance_after = match target_asset {
-        AssetKind::Native => T::Currency::balance(&recipient),
-        AssetKind::Local(id) => T::Assets::balance(id, &recipient),
-    };
-    Ok(balance_after.saturating_sub(balance_before))
-}
-```
-
-### 5.2 Per-Leg Deviation Validation and Pre-Execution Publication
-
-Execution prepares current route truth instead of trusting a prior quote. It validates every prepared XYK leg against its directional reference, then publishes that leg's current reserve ratio immediately before executing the same leg. Native-anchored routes therefore validate and publish both actual pools in order; direct TMC mint has no XYK publication. This remains a bounded local deviation check, not an external fair-price proof or complete flash-loan/MEV defense.
-
-```rust
-pub fn execute_swap_for(...) -> Result<RouterOutcome, DispatchError> {
-    let prepared = Self::prepare_optimal_route(...)?;
-    Self::validate_prepared_legs(&prepared.legs)?;
-    for leg in prepared.legs {
-        Self::update_oracle_from_reserves(leg.asset_in, leg.asset_out)?;
-        Self::execute_single_pool_leg(leg, ...)?;
-    }
-    Self::verify_actual_intent_bounds(...)?;
-    Ok(Self::canonical_outcome(...))
-}
-```
-
-### 5.3 Declarative Execution-Plan Pattern
-
-Actors-managed automation uses ordered typed steps with explicit conditions, amount resolution, and failure policy. The scheduler admits the complete bounded attempt before mutation; runtime adapters execute the domain mechanics, and task-scoped rollback contains failed adapter effects without erasing committed prefixes.
-
-The package specification owns the reusable plan language. [DEOS Actors Integration](./actors.integration.en.md#execution-plan-families) owns the concrete Burn, Liquidity, Fee Sink, treasury, protocol-token, and staking-support plan families.
-
-### 5.4 Unified Type System Pattern
-
-Centralizing type definitions to break dependency cycles.
-
-```rust
-// All pallets and runtime use the same types from primitives crate
-pub use primitives::AssetKind;         // Bitmask-based asset classification
-pub use primitives::ecosystem;         // Constants, pallet IDs, Actors IDs
-pub use primitives::protocol_tokens;   // VETO_ASSET_ID, BLDR_ASSET_ID
-```
-
-## 6. Network Architecture: The Connected Automaton
+## 5. Network Architecture: The Connected Automaton
 
 The DEOS reference runtime extends its "Omnivorous" philosophy to the Polkadot ecosystem via XCM (Cross-Consensus Messaging), treating foreign chains as just another source of balance ingress.
 
-### 6.1 XCM Integration Strategy
+### 5.1 XCM Integration Strategy
 
 The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay Chain and Sibling Parachains after governance registration in the Asset Registry.
 
@@ -276,22 +212,22 @@ The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay C
 - `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. The reference runtime caps this register at one asset while `FixedWeightBounds` is active, so one generated saturated foreign-asset Actors deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation.
 - `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; `SafeCallFilter = Nothing` makes `Transact` fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
 
-### 6.2 Foreign Asset Transactor
+### 5.2 Foreign Asset Transactor
 
 The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridge between XCM locations and the internal `pallet-assets` registry.
 
 - `Storage Lookup`: Uses the Asset Registry mapping (O(1) storage) to resolve `Location -> AssetId` (`0xF...` namespace), with symmetric reverse lookup available when runtime integration needs `AssetId -> Location`.
 - `Governance-Gated Onboarding`: New assets are registered via registry extrinsics (deterministic ID, manual ID, or linking pre-created `0xF...`), then consumed by XCM flows.
 
-### 6.3 Cross-Chain Identity
+### 5.3 Cross-Chain Identity
 
 - `Sovereignty`: The parachain maintains sovereign accounts on other chains to manage its own liquidity reserves.
 - `Sibling Recognition`: `ForeignAssetsFromSibling` filter ensures that assets originating from sibling parachains are recognized as valid reserve assets, enabling seamless cross-chain swaps.
 - `Controller Separation`: XCMP queue control remains Root-only on the current line even though relay/sibling/account-style XCM origins can still be converted for other executor/controller plumbing; origin conversion does not itself widen queue-control authority.
 
-## 7. Economic Guarantees
+## 6. Economic Guarantees
 
-### 7.1 The Price Corridor
+### 6.1 The Price Corridor
 
 The interaction of actors creates a conditionally bounded economy:
 
@@ -299,14 +235,14 @@ The interaction of actors creates a conditionally bounded economy:
 - `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. The concrete custody accounts and active-policy lanes belong to the Actors integration map.
 - `Compression`: Burn Actor execution reduces live supply and liquidity-actor LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy liquidity accounting.
 
-### 7.2 Deflationary Velocity
+### 6.2 Deflationary Velocity
 
 `DEOS Router` acts as a vacuum for circulating supply.
 
 - `Mechanism`: High base fee (e.g., 0.5%) + Protocol Priority Routing.
 - `Outcome`: System value capture is prioritized over LP revenue. The protocol captures the spread to burn its own supply.
 
-### 7.3 Multi-Token Flywheel
+### 6.3 Multi-Token Flywheel
 
 The BLDR economy creates a self-reinforcing loop:
 
@@ -319,9 +255,9 @@ User buys BLDR (via Router TMC)
 
 BLDR floor support and ceiling pressure can compress over time when LP accumulation remains counted as support and buyback-burn execution remains live.
 
-## 8. Runtime Topology
+## 7. Runtime Topology
 
-### 8.1 Pallet Inventory
+### 7.1 Pallet Inventory
 
 | Pallet | Role | Hooks |
 | --- | --- | --- |
@@ -334,11 +270,11 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 | `pallet-assets` | Fungible asset ledger | — |
 | `pallet-balances` | Native token ledger | — |
 
-### 8.2 Composition Boundary
+### 7.2 Composition Boundary
 
 Actors replaces bespoke recurring manager loops with one bounded orchestration substrate, while dedicated pallets retain asset, market, staking, governance, and issuance mechanics. [DEOS Actors Integration](./actors.integration.en.md) owns the concrete reference composition; package documents remain reusable outside the DEOS actor catalog.
 
-## 9. Conclusion
+## 8. Conclusion
 
 The DEOS architecture transforms the blockchain from a passive ledger into an `Active Economic Automaton`.
 

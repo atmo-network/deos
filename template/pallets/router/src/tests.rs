@@ -726,11 +726,6 @@ fn every_router_error_has_stable_failure_and_retry_classes() {
       RetryDisposition::RetryLater,
     ),
     (
-      Error::<Test>::NoMultiHopRoute,
-      RouterFailureClass::NoViableRoute,
-      RetryDisposition::RetryLater,
-    ),
-    (
       Error::<Test>::RouterFeeTooHigh,
       RouterFailureClass::InvalidRequest,
       RetryDisposition::Permanent,
@@ -760,6 +755,27 @@ fn every_router_error_has_stable_failure_and_retry_classes() {
     assert_eq!(error.failure_class(), failure_class);
     assert_eq!(error.retry_disposition(), retry_disposition);
   }
+}
+
+#[test]
+fn execution_error_exposes_only_router_core_or_adapter_failure() {
+  fn boundary(error: ExecutionError<Test>) -> &'static str {
+    match error {
+      ExecutionError::Router(_) => "Router",
+      ExecutionError::Adapter(_) => "Adapter",
+    }
+  }
+
+  assert_eq!(
+    boundary(ExecutionError::from(Error::<Test>::NoRouteFound)),
+    "Router"
+  );
+  assert_eq!(
+    boundary(ExecutionError::from(AdapterFailure::unknown(
+      DispatchError::Other("UnknownAdapterFailure")
+    ))),
+    "Adapter"
+  );
 }
 
 #[test]

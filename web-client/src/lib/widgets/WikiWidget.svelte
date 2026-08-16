@@ -17,6 +17,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
     WikiNavigationManifest,
     WikiStateManifest,
   } from '$lib/wiki/metadata-contract';
+  import { formatRussianRelation } from '$lib/wiki/relation-phrases';
   import { type TrustedWikiPage, loadTrustedWikiPage } from '$lib/wiki/trusted';
 
   import aliases from '../../../../wiki/_meta/aliases.json';
@@ -80,8 +81,31 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
     return value.trim().toLocaleLowerCase(currentLocale);
   }
 
-  function formatRelationLabel(value: string) {
-    return value.replace(/-/g, ' ');
+  function formatRelation(
+    type: string,
+    sourceTitle: string,
+    targetTitle: string,
+  ) {
+    if (currentLocale === 'ru') {
+      return formatRussianRelation(type, sourceTitle, targetTitle);
+    }
+    return {
+      source: sourceTitle,
+      label: type.replace(/-/g, ' '),
+      target: targetTitle,
+    };
+  }
+
+  function formatStatus(value: string) {
+    if (currentLocale !== 'ru') return value;
+    return (
+      {
+        active: 'действует',
+        stable: 'стабильно',
+        draft: 'черновик',
+        deprecated: 'устарело',
+      }[value] ?? value
+    );
   }
 
   function formatConfidence(value: number) {
@@ -277,21 +301,35 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
       return [];
     }
     const itemsById = allItemsById;
-    const relations = new Map<string, Set<string>>();
+    const selected = itemsById.get(selectedPageId);
+    if (!selected) {
+      return [];
+    }
+    const relations = new Map<
+      string,
+      Map<string, ReturnType<typeof formatRelation>>
+    >();
     for (const edge of wikiGraph.edges) {
-      if (edge.from === selectedPageId && edge.to !== selectedPageId) {
-        const labels = relations.get(edge.to) ?? new Set<string>();
-        labels.add(formatRelationLabel(edge.type));
-        relations.set(edge.to, labels);
+      if (edge.from !== selectedPageId && edge.to !== selectedPageId) {
+        continue;
       }
-      if (edge.to === selectedPageId && edge.from !== selectedPageId) {
-        const labels = relations.get(edge.from) ?? new Set<string>();
-        labels.add(formatRelationLabel(edge.type));
-        relations.set(edge.from, labels);
+      const relatedId: string =
+        edge.from === selectedPageId ? edge.to : edge.from;
+      if (relatedId === selectedPageId || !itemsById.has(relatedId)) {
+        continue;
       }
+      const source = itemsById.get(edge.from);
+      const target = itemsById.get(edge.to);
+      if (!source || !target) continue;
+      const edgeRelations = relations.get(relatedId) ?? new Map();
+      edgeRelations.set(
+        `${edge.from}\u0000${edge.type}\u0000${edge.to}`,
+        formatRelation(edge.type, source.title, target.title),
+      );
+      relations.set(relatedId, edgeRelations);
     }
     return [...relations.entries()]
-      .map(([id, labels]) => {
+      .map(([id, edgeRelations]) => {
         const item = itemsById.get(id);
         if (!item) {
           return null;
@@ -301,7 +339,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           title: item.title,
           path: item.path,
           summary: item.summary,
-          relation: [...labels].join(' · '),
+          relations: [...edgeRelations.values()],
         };
       })
       .filter((item): item is RelatedWikiItem => item !== null)
@@ -315,35 +353,38 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   const widgetText = $derived(
     currentLocale === 'ru'
       ? {
-          title: 'Wiki',
+          title: 'Вики',
           subtitle:
-            'Сгенерированная wiki-навигация и рендер trusted repo-local markdown',
-          pages: 'Страниц',
-          search: 'Фильтр wiki',
-          searchPlaceholder: 'Искать по title, summary или path',
+            'Навигация по собранной вики и отображение Markdown из доверенного содержимого репозитория',
+          pages: 'страниц',
+          search: 'Фильтр вики',
+          searchPlaceholder: 'Искать по названию, описанию или пути',
           searchHelper:
-            'Поиск идет только по сгенерированным navigation + aliases manifest, а не по архивному full-text индексу.',
+            'Поиск охватывает только собранные манифесты навигации и псевдонимов, но не полнотекстовый архивный указатель.',
           noMatchesTitle: 'Совпадений не найдено',
           noMatchesBody:
-            'Измените запрос или очистите фильтр, чтобы снова увидеть разделы wiki.',
+            'Измените запрос или очистите фильтр, чтобы снова увидеть все разделы вики.',
           linkPreview: 'Связанная страница',
           relatedPages: 'Связанные страницы',
-          provenance: 'Собранная provenance',
+          relationSource: 'Источник',
+          relationLabel: 'Связь',
+          relationTarget: 'Цель',
+          provenance: 'Происхождение сведений',
           status: 'Статус',
-          confidence: 'Уверенность',
+          confidence: 'Степень обоснованности',
           generatedAt: 'Собрано',
           sources: 'Источники',
-          aliasMatch: 'Alias',
+          aliasMatch: 'Псевдоним',
           clearSearch: 'Очистить',
-          copyPath: 'Копировать путь',
+          copyPath: 'Скопировать путь',
           back: 'Назад к навигации',
-          loading: 'Загрузка wiki-страницы...',
+          loading: 'Загрузка страницы вики…',
           emptyTitle: 'Выберите страницу',
           emptyBody:
-            'Откройте любую wiki-страницу из навигации, чтобы увидеть её содержимое прямо в клиенте.',
-          loadError: 'Не удалось загрузить wiki-страницу',
+            'Откройте любую страницу из списка, чтобы прочитать её прямо в клиенте.',
+          loadError: 'Не удалось загрузить страницу вики',
           trustedHint:
-            'Repo-local trusted markdown rendered in-browser via marked',
+            'Markdown из доверенного содержимого репозитория отображается в браузере с помощью marked',
         }
       : {
           title: 'Wiki',
@@ -359,6 +400,9 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
             'Adjust the query or clear the filter to restore the full wiki navigation graph.',
           linkPreview: 'Linked page',
           relatedPages: 'Related pages',
+          relationSource: 'Source',
+          relationLabel: 'Relation',
+          relationTarget: 'Target',
           provenance: 'Compiled provenance',
           status: 'Status',
           confidence: 'Confidence',
@@ -621,9 +665,26 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
                             {item.title}
                           </div>
                           <div
-                            class="text-[10px] uppercase tracking-[0.08em] text-(--mono-muted)"
+                            class="grid gap-0.5 text-[10px] text-(--mono-muted)"
                           >
-                            {item.relation}
+                            {#each item.relations as relation}
+                              <div>
+                                <span class="font-medium"
+                                  >{widgetText.relationSource}:</span
+                                >
+                                {relation.source}
+                                <span aria-hidden="true"> · </span>
+                                <span class="font-medium"
+                                  >{widgetText.relationLabel}:</span
+                                >
+                                {relation.label}
+                                <span aria-hidden="true"> · </span>
+                                <span class="font-medium"
+                                  >{widgetText.relationTarget}:</span
+                                >
+                                {relation.target}
+                              </div>
+                            {/each}
                           </div>
                         </div>
                       </div>
@@ -659,7 +720,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
                       {widgetText.status}
                     </div>
                     <div class="mt-1 font-medium">
-                      {selectedPageState.status}
+                      {formatStatus(selectedPageState.status)}
                     </div>
                   </div>
                   <div

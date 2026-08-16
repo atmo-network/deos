@@ -1,7 +1,7 @@
 {
   "name": "web-client",
   "private": true,
-  "version": "0.7.17",
+  "version": "0.7.18",
   "type": "module",
   "packageManager": "npm@11.7.0",
   "volta": {
@@ -26,7 +26,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:automation": "node --test scripts/test-actors-*.mjs",
-    "validate": "npm run format:check && npm run check:actors-spec-acceptance && npm run check:actors-abi && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run check && npm run build",
+    "test:wiki-relations": "node --test scripts/test-wiki-relations.mjs",
+    "validate": "npm run format:check && npm run check:actors-spec-acceptance && npm run check:actors-abi && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run test:wiki-relations && npm run check && npm run build",
     "validate:dag": "node scripts/validate-domain-dag.mjs",
     "validate:wiki": "node scripts/validate-wiki-trust.mjs",
     "validate:all": "npm run validate && npm run validate:dag && npm run validate:wiki",

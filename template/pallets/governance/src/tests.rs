@@ -1,16 +1,151 @@
 use crate::proposal_resolution::CoreResolutionOutcome;
 use crate::{
   ActiveProposalCounts, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
-  FinalizedProposalOutcome, ProposalCadenceMode, ProposalExecutionAuthority, ProposalMetadata,
-  ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt, ProposalRejectionReason,
-  ProposalTiming, ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally,
-  ProposalVotesByItem, RecentFinalizedProposal, mock::*,
+  FinalizedProposalOutcome, FinalizedProposals, ProposalCadenceMode, ProposalExecutionAuthority,
+  ProposalMetadata, ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt,
+  ProposalPreimageAdmissionError, ProposalRejectionReason, ProposalTiming,
+  ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally, ProposalVotesByItem,
+  WinningVoteWindows, mock::*,
 };
+use codec::Encode;
 use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok, traits::Hooks};
 use polkadot_sdk::sp_core::H256;
 use polkadot_sdk::sp_runtime::FixedU128;
 
 const DEFAULT_PROPOSER: u64 = 99;
+
+#[test]
+fn preimage_admission_error_core_maps_exhaustively_to_dispatch() {
+  let cases = [
+    (
+      ProposalPreimageAdmissionError::Missing,
+      Error::<Test>::ProposalPreimageMissing,
+    ),
+    (
+      ProposalPreimageAdmissionError::Oversized,
+      Error::<Test>::ProposalPreimageOversized,
+    ),
+    (
+      ProposalPreimageAdmissionError::Invalid,
+      Error::<Test>::ProposalPreimageInvalid,
+    ),
+    (
+      ProposalPreimageAdmissionError::Incompatible,
+      Error::<Test>::ProposalPreimageIncompatible,
+    ),
+  ];
+  for (core, expected) in cases {
+    assert_eq!(
+      Governance::proposal_preimage_admission_error(core).encode(),
+      expected.encode()
+    );
+  }
+}
+
+fn approved_outcome(
+  approved_epoch: u64,
+  winner_count: u32,
+  enactment: crate::ProposalEnactmentOutcome<u64>,
+) -> FinalizedProposalOutcome<u64> {
+  FinalizedProposalOutcome::Approved {
+    approval: crate::ProposalApproval {
+      approved_epoch,
+      winner_count,
+    },
+    enactment,
+  }
+}
+
+fn rejected_outcome(
+  finalized_epoch: u64,
+  reason: ProposalRejectionReason,
+) -> FinalizedProposalOutcome<u64> {
+  FinalizedProposalOutcome::Rejected {
+    finalized_epoch,
+    reason,
+  }
+}
+
+fn veto_cancelled_outcome(finalized_epoch: u64, veto_weight: u64) -> FinalizedProposalOutcome<u64> {
+  FinalizedProposalOutcome::VetoCancelled {
+    finalized_epoch,
+    veto_weight,
+  }
+}
+
+#[test]
+fn outcome_algebra_reachability_and_projection_are_exhaustive() {
+  let outcomes = [
+    approved_outcome(1, 2, crate::ProposalEnactmentOutcome::NotAttempted),
+    approved_outcome(1, 2, crate::ProposalEnactmentOutcome::Enacted { epoch: 2 }),
+    approved_outcome(
+      1,
+      2,
+      crate::ProposalEnactmentOutcome::ExecutionFailed { epoch: 2 },
+    ),
+    approved_outcome(
+      1,
+      2,
+      crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch: 2 },
+    ),
+    rejected_outcome(2, ProposalRejectionReason::NoVotes),
+    veto_cancelled_outcome(2, 7),
+  ];
+  let projected = outcomes
+    .iter()
+    .map(|outcome| match outcome {
+      FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: crate::ProposalEnactmentOutcome::NotAttempted,
+      } => ("approved", approval.approved_epoch, approval.winner_count),
+      FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: crate::ProposalEnactmentOutcome::Enacted { epoch },
+      } => ("enacted", *epoch, approval.winner_count),
+      FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: crate::ProposalEnactmentOutcome::ExecutionFailed { epoch },
+      } => ("execution-failed", *epoch, approval.winner_count),
+      FinalizedProposalOutcome::Approved {
+        approval,
+        enactment: crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch },
+      } => ("advisory-finalized", *epoch, approval.winner_count),
+      FinalizedProposalOutcome::Rejected {
+        finalized_epoch, ..
+      } => ("rejected", *finalized_epoch, 0),
+      FinalizedProposalOutcome::VetoCancelled {
+        finalized_epoch, ..
+      } => ("veto-cancelled", *finalized_epoch, 0),
+    })
+    .collect::<Vec<_>>();
+  assert_eq!(
+    projected,
+    vec![
+      ("approved", 1, 2),
+      ("enacted", 2, 2),
+      ("execution-failed", 2, 2),
+      ("advisory-finalized", 2, 2),
+      ("rejected", 2, 0),
+      ("veto-cancelled", 2, 0),
+    ]
+  );
+}
+
+#[test]
+fn finalized_update_fails_closed_without_the_canonical_record() {
+  new_test_ext().execute_with(|| {
+    assert_noop!(
+      Governance::update_finalized_proposal(
+        7,
+        100,
+        approved_outcome(1, 1, crate::ProposalEnactmentOutcome::NotAttempted),
+        None,
+      ),
+      Error::<Test>::FinalizedProposalMissing
+    );
+    assert!(Governance::finalized_proposal(7, 100).is_none());
+  });
+}
 
 fn submit_test_proposal(
   domain: u32,
@@ -42,6 +177,33 @@ fn submit_signed_intent_proposal(
     ProposalPayloadKind::Intent,
     Default::default(),
   )
+}
+
+#[test]
+fn participation_coefficient_rotates_a_read_only_copy() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    let winners = BoundedVec::try_from(vec![10u64]).expect("one winner fits");
+    assert_ok!(Governance::resolve_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      winners,
+    ));
+    let stored_before = WinningVoteWindows::<Test>::get(7, 10).expect("window exists");
+    System::set_block_number(10);
+    assert_eq!(
+      Governance::governance_participation_coefficient(7, 10),
+      FixedU128::from_inner(0)
+    );
+    assert_eq!(
+      WinningVoteWindows::<Test>::get(7, 10)
+        .expect("window remains")
+        .encode(),
+      stored_before.encode(),
+      "read projection must not persist its local expiry rotation"
+    );
+  });
 }
 
 #[test]
@@ -128,21 +290,26 @@ fn finalized_outcome_is_stored_and_later_expires() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 1,
-        winner_count: 2,
-      })
+      Some(approved_outcome(
+        1,
+        2,
+        crate::ProposalEnactmentOutcome::NotAttempted,
+      ))
+    );
+    let recent = Governance::recent_finalized_proposals(7).into_inner();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(
+      recent[0].identity,
+      crate::ProposalIdentity {
+        domain: 7,
+        item_id: 100
+      }
     );
     assert_eq!(
-      Governance::recent_finalized_proposals(7).into_inner(),
-      vec![RecentFinalizedProposal {
-        item_id: 100,
-        outcome: FinalizedProposalOutcome::Resolved {
-          epoch: 1,
-          winner_count: 2,
-        },
-      }]
+      recent[0].finalization.outcome,
+      approved_outcome(1, 2, crate::ProposalEnactmentOutcome::NotAttempted,)
     );
+    assert_eq!(recent[0].finalization.execution_detail, None);
     System::set_block_number(4);
     Governance::on_initialize(4);
     assert!(Governance::finalized_proposal_outcome(7, 100).is_none());
@@ -157,10 +324,7 @@ fn rejected_outcome_is_stored_with_reason() {
     assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 100));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Rejected {
-        epoch: 1,
-        reason: ProposalRejectionReason::AdminRejected,
-      })
+      Some(rejected_outcome(1, ProposalRejectionReason::AdminRejected))
     );
   });
 }
@@ -190,41 +354,50 @@ fn recent_finalized_proposals_are_sorted_newest_first_per_domain() {
       102,
       winners,
     ));
+    let domain_seven = Governance::recent_finalized_proposals(7).into_inner();
     assert_eq!(
-      Governance::recent_finalized_proposals(7).into_inner(),
+      domain_seven
+        .iter()
+        .map(|proposal| proposal.identity.clone())
+        .collect::<Vec<_>>(),
       vec![
-        RecentFinalizedProposal {
-          item_id: 102,
-          outcome: FinalizedProposalOutcome::Resolved {
-            epoch: 3,
-            winner_count: 1,
-          },
+        crate::ProposalIdentity {
+          domain: 7,
+          item_id: 102
         },
-        RecentFinalizedProposal {
-          item_id: 101,
-          outcome: FinalizedProposalOutcome::Rejected {
-            epoch: 2,
-            reason: ProposalRejectionReason::AdminRejected,
-          },
+        crate::ProposalIdentity {
+          domain: 7,
+          item_id: 101
         },
-        RecentFinalizedProposal {
-          item_id: 100,
-          outcome: FinalizedProposalOutcome::Resolved {
-            epoch: 1,
-            winner_count: 1,
-          },
+        crate::ProposalIdentity {
+          domain: 7,
+          item_id: 100
         },
       ]
     );
     assert_eq!(
-      Governance::recent_finalized_proposals(8).into_inner(),
-      vec![RecentFinalizedProposal {
-        item_id: 200,
-        outcome: FinalizedProposalOutcome::Rejected {
-          epoch: 2,
-          reason: ProposalRejectionReason::AdminRejected,
-        },
-      }]
+      domain_seven
+        .iter()
+        .map(|proposal| proposal.finalization.outcome.clone())
+        .collect::<Vec<_>>(),
+      vec![
+        approved_outcome(3, 1, crate::ProposalEnactmentOutcome::NotAttempted),
+        rejected_outcome(2, ProposalRejectionReason::AdminRejected),
+        approved_outcome(1, 1, crate::ProposalEnactmentOutcome::NotAttempted),
+      ]
+    );
+    let domain_eight = Governance::recent_finalized_proposals(8).into_inner();
+    assert_eq!(domain_eight.len(), 1);
+    assert_eq!(
+      domain_eight[0].identity,
+      crate::ProposalIdentity {
+        domain: 8,
+        item_id: 200
+      }
+    );
+    assert_eq!(
+      domain_eight[0].finalization.outcome,
+      rejected_outcome(2, ProposalRejectionReason::AdminRejected)
     );
   });
 }
@@ -603,12 +776,11 @@ fn proposal_query_helpers_report_weighted_tally_and_resolution_state() {
     ));
     assert_eq!(
       Governance::proposal_status(7, 100),
-      Some(crate::ProposalStatus::Finalized(
-        FinalizedProposalOutcome::Resolved {
-          epoch: 3,
-          winner_count: 1,
-        }
-      ))
+      Some(crate::ProposalStatus::Finalized(approved_outcome(
+        3,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted,
+      )))
     );
     assert_eq!(
       Governance::proposal_vote_power_profile(7, 100, ProposalVoteKind::Aye),
@@ -713,7 +885,7 @@ fn payload_hash_preimage_status_is_explicit_and_queryable() {
 }
 
 #[test]
-fn executable_payload_stays_resolved_when_executor_is_disabled() {
+fn executable_payload_stays_approved_when_executor_is_disabled() {
   new_test_ext().execute_with(|| {
     let payload_hash = polkadot_sdk::sp_core::H256::repeat_byte(10);
     set_payload_preimage_state(payload_hash, true, false);
@@ -736,10 +908,11 @@ fn executable_payload_stays_resolved_when_executor_is_disabled() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted,
+      ))
     );
   });
 }
@@ -769,20 +942,17 @@ fn executable_payload_executes_immediately_when_executor_is_enabled() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Enacted {
-        approved_epoch: 1,
-        executed_epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 1 },
+      ))
     );
     assert_eq!(
       Governance::proposal_execution_detail(7, 100),
-      Some(crate::ProposalExecutionDetail::Executed {
-        payload_kind: ProposalPayloadKind::L1RootAction,
-        authority: ProposalExecutionAuthority::Root,
-        executed_epoch: 1,
-        detail: crate::ProposalExecutionSuccessDetail::Generic,
-      })
+      Some(crate::ProposalExecutionDetail::Succeeded(
+        crate::ProposalExecutionSuccessDetail::Generic,
+      ))
     );
     let events = System::events()
       .into_iter()
@@ -825,20 +995,17 @@ fn executable_payload_without_preimage_fails_when_executor_is_enabled() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::ExecutionFailed {
-        approved_epoch: 1,
-        failed_epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::ExecutionFailed { epoch: 1 },
+      ))
     );
     assert_eq!(
       Governance::proposal_execution_detail(7, 100),
-      Some(crate::ProposalExecutionDetail::ExecutionFailed {
-        payload_kind: ProposalPayloadKind::L1RootAction,
-        authority: ProposalExecutionAuthority::Root,
-        failed_epoch: 1,
-        reason: crate::ProposalExecutionFailureReason::MissingPreimage,
-      })
+      Some(crate::ProposalExecutionDetail::Failed(
+        crate::ProposalExecutionFailureReason::MissingPreimage,
+      ))
     );
     let events = System::events()
       .into_iter()
@@ -859,7 +1026,7 @@ fn executable_payload_without_preimage_fails_when_executor_is_enabled() {
 }
 
 #[test]
-fn advisory_payload_finalizes_without_dispatch() {
+fn advisory_payload_finalization_owns_no_parallel_execution_detail() {
   new_test_ext().execute_with(|| {
     let payload_hash = polkadot_sdk::sp_core::H256::repeat_byte(13);
     assert_ok!(Governance::submit_proposal(
@@ -881,19 +1048,13 @@ fn advisory_payload_finalizes_without_dispatch() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::AdvisoryFinalized {
-        approved_epoch: 1,
-        finalized_epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch: 1 },
+      ))
     );
-    assert_eq!(
-      Governance::proposal_execution_detail(7, 100),
-      Some(crate::ProposalExecutionDetail::AdvisoryFinalized {
-        payload_kind: ProposalPayloadKind::Intent,
-        finalized_epoch: 1,
-      })
-    );
+    assert_eq!(Governance::proposal_execution_detail(7, 100), None);
     let events = System::events()
       .into_iter()
       .map(|record| record.event)
@@ -933,11 +1094,11 @@ fn l2_signal_to_l1_payload_finalization_emits_advisory_kind() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 101),
-      Some(FinalizedProposalOutcome::AdvisoryFinalized {
-        approved_epoch: 1,
-        finalized_epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::AdvisoryFinalized { epoch: 1 },
+      ))
     );
     let events = System::events()
       .into_iter()
@@ -981,20 +1142,17 @@ fn executable_payload_records_execution_failed_when_executor_errors() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::ExecutionFailed {
-        approved_epoch: 1,
-        failed_epoch: 1,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::ExecutionFailed { epoch: 1 },
+      ))
     );
     assert_eq!(
       Governance::proposal_execution_detail(7, 100),
-      Some(crate::ProposalExecutionDetail::ExecutionFailed {
-        payload_kind: ProposalPayloadKind::L1RootAction,
-        authority: ProposalExecutionAuthority::Root,
-        failed_epoch: 1,
-        reason: crate::ProposalExecutionFailureReason::DispatchFailed,
-      })
+      Some(crate::ProposalExecutionDetail::Failed(
+        crate::ProposalExecutionFailureReason::DispatchFailed,
+      ))
     );
     let events = System::events()
       .into_iter()
@@ -1041,8 +1199,8 @@ fn pending_enactment_executes_when_due_and_executor_is_enabled() {
     assert_eq!(
       Governance::proposal_status(7, 100),
       Some(crate::ProposalStatus::PendingEnactment {
-        outcome: FinalizedProposalOutcome::Resolved {
-          epoch: 1,
+        approval: crate::ProposalApproval {
+          approved_epoch: 1,
           winner_count: 1,
         },
         enactment_epoch: 3,
@@ -1052,11 +1210,11 @@ fn pending_enactment_executes_when_due_and_executor_is_enabled() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Enacted {
-        approved_epoch: 1,
-        executed_epoch: 3,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 3 },
+      ))
     );
     assert!(!ProposalPendingEnactmentAt::<Test>::contains_key(7, 100));
   });
@@ -1267,10 +1425,11 @@ fn invoice_family_resolution_uses_lowest_scalar_tie_break_for_positive_winner() 
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(43, 103),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 3,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        3,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
     );
     assert_eq!(
       Governance::retained_proposal_winning_primary_option(43, 103),
@@ -1338,10 +1497,10 @@ fn invoice_family_resolution_rejects_when_positive_ratio_misses_threshold() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(43, 104),
-      Some(FinalizedProposalOutcome::Rejected {
-        epoch: 3,
-        reason: ProposalRejectionReason::ApprovalThresholdNotMet,
-      })
+      Some(rejected_outcome(
+        3,
+        ProposalRejectionReason::ApprovalThresholdNotMet,
+      ))
     );
   });
 }
@@ -1372,14 +1531,6 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
         opening_fee: Some(10),
       }
     );
-    assert_eq!(
-      Governance::proposal_submission_authority(44, ProposalPayloadKind::Intent),
-      crate::ProposalSubmissionAuthority::Signed
-    );
-    assert_eq!(
-      Governance::proposal_opening_fee(44, ProposalPayloadKind::Intent),
-      Some(10)
-    );
     assert_eq!(Governance::payload_preimage_note_cost(0), Some(2));
     assert_eq!(
       Governance::proposal_admission_policy_view(42, ProposalPayloadKind::L1RootAction),
@@ -1392,35 +1543,24 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
         opening_fee: Some(10),
       }
     );
+    let protocol_intent =
+      Governance::proposal_admission_policy_view(42, ProposalPayloadKind::Intent);
     assert_eq!(
-      Governance::proposal_submission_authority(42, ProposalPayloadKind::L1RootAction),
+      protocol_intent.authority,
       crate::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
-    assert_eq!(
-      Governance::proposal_submission_authority(42, ProposalPayloadKind::Intent),
-      crate::ProposalSubmissionAuthority::PrimaryEligibleSigned
-    );
-    assert_eq!(
-      Governance::proposal_opening_fee(42, ProposalPayloadKind::L1RootAction),
-      Some(10)
-    );
+    assert_eq!(protocol_intent.opening_fee, Some(10));
     assert_eq!(Governance::payload_preimage_note_cost(7), Some(9));
+    let signal = Governance::proposal_admission_policy_view(43, ProposalPayloadKind::L2SignalToL1);
+    assert_eq!(signal.authority, crate::ProposalSubmissionAuthority::Signed);
+    assert_eq!(signal.opening_fee, Some(10));
+    let admin =
+      Governance::proposal_admission_policy_view(7, ProposalPayloadKind::L2ParameterChange);
     assert_eq!(
-      Governance::proposal_submission_authority(43, ProposalPayloadKind::L2SignalToL1),
-      crate::ProposalSubmissionAuthority::Signed
-    );
-    assert_eq!(
-      Governance::proposal_opening_fee(43, ProposalPayloadKind::L2SignalToL1),
-      Some(10)
-    );
-    assert_eq!(
-      Governance::proposal_submission_authority(7, ProposalPayloadKind::L2ParameterChange),
+      admin.authority,
       crate::ProposalSubmissionAuthority::AdminOnly
     );
-    assert_eq!(
-      Governance::proposal_opening_fee(7, ProposalPayloadKind::L2ParameterChange),
-      None
-    );
+    assert_eq!(admin.opening_fee, None);
   });
 }
 
@@ -1890,11 +2030,11 @@ fn unanimous_pass_executes_root_action_immediately() {
     assert_eq!(Governance::active_proposal(42, 150), None);
     assert_eq!(
       Governance::finalized_proposal_outcome(42, 150),
-      Some(FinalizedProposalOutcome::Enacted {
-        approved_epoch: 1,
-        executed_epoch: 1,
-        winner_count: 0,
-      })
+      Some(approved_outcome(
+        1,
+        0,
+        crate::ProposalEnactmentOutcome::Enacted { epoch: 1 },
+      ))
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -2000,8 +2140,8 @@ fn proposal_status_reports_pending_enactment_until_delay_expires() {
     assert_eq!(
       Governance::proposal_status(7, 100),
       Some(crate::ProposalStatus::PendingEnactment {
-        outcome: FinalizedProposalOutcome::Resolved {
-          epoch: 1,
+        approval: crate::ProposalApproval {
+          approved_epoch: 1,
           winner_count: 1,
         },
         enactment_epoch: 3,
@@ -2010,13 +2150,32 @@ fn proposal_status_reports_pending_enactment_until_delay_expires() {
     System::set_block_number(3);
     assert_eq!(
       Governance::proposal_status(7, 100),
-      Some(crate::ProposalStatus::Finalized(
-        FinalizedProposalOutcome::Resolved {
-          epoch: 1,
-          winner_count: 1,
-        }
-      ))
+      Some(crate::ProposalStatus::Finalized(approved_outcome(
+        1,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted,
+      )))
     );
+  });
+}
+
+#[test]
+fn pending_enactment_projection_fails_closed_on_non_approval_outcome() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(2);
+    let winners = BoundedVec::try_from(vec![10u64]).expect("single winner must fit");
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::resolve_proposal(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      winners,
+    ));
+    FinalizedProposals::<Test>::mutate(7, 100, |record| {
+      record.as_mut().expect("finalized record exists").outcome =
+        rejected_outcome(1, ProposalRejectionReason::NoVotes);
+    });
+    assert_eq!(Governance::proposal_status(7, 100), None);
   });
 }
 
@@ -2051,10 +2210,11 @@ fn urgent_authorized_resolution_bypasses_final_protection_gate_and_enactment_del
     assert_eq!(ProposalPendingEnactmentAt::<Test>::get(7, 102), None);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 102),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 2,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        2,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
     );
   });
 }
@@ -3027,10 +3187,7 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
     assert!(Governance::active_proposal_ids(7).is_empty());
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::VetoCancelled {
-        epoch: 1,
-        veto_weight: 51,
-      })
+      Some(veto_cancelled_outcome(1, 51))
     );
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -3078,10 +3235,11 @@ fn sub_percent_veto_does_not_activate_final_veto_gate() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 3,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        3,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
     );
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -3120,10 +3278,7 @@ fn one_percent_veto_can_activate_final_veto_gate() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::VetoCancelled {
-        epoch: 3,
-        veto_weight: 10,
-      })
+      Some(veto_cancelled_outcome(3, 10))
     );
   });
 }
@@ -3164,10 +3319,11 @@ fn protection_votes_after_protection_window_close_are_rejected() {
     ));
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 3,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        3,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
     );
   });
 }
@@ -3209,10 +3365,7 @@ fn veto_track_blocks_at_maturity_without_immediate_threshold() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::VetoCancelled {
-        epoch: 3,
-        veto_weight: 50,
-      })
+      Some(veto_cancelled_outcome(3, 50))
     );
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalVetoCancelled {
       domain: 7,
@@ -3267,10 +3420,7 @@ fn veto_track_tie_blocks_proposal_at_maturity() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::VetoCancelled {
-        epoch: 3,
-        veto_weight: 20,
-      })
+      Some(veto_cancelled_outcome(3, 20))
     );
   });
 }
@@ -3312,10 +3462,11 @@ fn pass_outweighing_veto_allows_main_track_resolution() {
     Governance::on_initialize(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
-      Some(FinalizedProposalOutcome::Resolved {
-        epoch: 3,
-        winner_count: 1,
-      })
+      Some(approved_outcome(
+        3,
+        1,
+        crate::ProposalEnactmentOutcome::NotAttempted
+      ))
     );
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),

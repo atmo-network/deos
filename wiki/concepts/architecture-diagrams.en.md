@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Architecture Diagrams
-summary: Compact text diagrams for the main DEOS subsystem relationships, including the domain map, routing loop, Actor graph, read-model split, and governance/staking boundary.
+description: Compact text diagrams for the main DEOS subsystem relationships, including the domain map, routing loop, Actor graph, read-model split, and governance/staking boundary.
 locale: en
 canonical_page_id: architecture-diagrams
 translation_status: source
@@ -9,12 +9,12 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/core.architecture.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/staking/docs/architecture.en.md
-status: active
+  - resource: ../../docs/core.architecture.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../template/pallets/router/docs/architecture.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../template/pallets/staking/docs/architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - concept

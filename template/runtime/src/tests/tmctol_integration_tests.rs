@@ -21,8 +21,8 @@ macro_rules! update_actor_contract_partial {
 
 use crate::{Actors, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_deos_actors::{
-  ActorType, AmountResolution, AssetOps, CompletionPolicy, ContractInput, DexOps, Event,
-  ExecutionContext, ExecutionPlanOf, FundingSourcePolicy, OutcomeTotals, StepErrorPolicy, Task,
+  ActorType, AmountResolution, AssetOps, CompletionPolicy, ContractInput, ContractSteps, DexOps,
+  Event, ExecutionContext, FundingSourcePolicy, OutcomeTotals, StepErrorPolicy, Task,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
@@ -42,7 +42,7 @@ fn all_preconditions(
   predicates: alloc::vec::Vec<
     pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>,
   >,
-) -> pallet_deos_actors::PreconditionsOf<Runtime> {
+) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clause = predicates
     .into_iter()
     .map(|predicate| pallet_deos_actors::TimedPredicate {
@@ -52,14 +52,14 @@ fn all_preconditions(
     .collect::<alloc::vec::Vec<_>>()
     .try_into()
     .expect("runtime predicates fit");
-  pallet_deos_actors::Preconditions::AnyOf(
-    alloc::vec![clause].try_into().expect("runtime clause fits"),
-  )
+  Some(pallet_deos_actors::Precondition {
+    clauses: alloc::vec![clause].try_into().expect("runtime clause fits"),
+  })
 }
 
 fn activate_dormant_system(
   actor_id: pallet_deos_actors::ActorId,
-  steps: ExecutionPlanOf<Runtime>,
+  steps: ContractSteps<Runtime>,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
   Actors::activate_actor(
     RuntimeOrigin::root(),
@@ -155,7 +155,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
   seeded_test_ext().execute_with(|| {
     super::common::setup_bldr_pool(10 * crate::UNIT);
     let steps =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_b_buyback_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_b_buyback_contract_steps(
         AssetKind::Local(protocol_tokens::BLDR_ASSET_ID),
         primitives::ecosystem::params::TREASURY_B_BUYBACK_PCT,
         primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD,
@@ -197,7 +197,7 @@ fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
     pallet_deos_actors::ActorContract::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
       let contract = maybe.as_mut().expect("Burn Actor contract exists");
       contract.steps = alloc::vec![pallet_deos_actors::Step {
-        preconditions: Default::default(),
+        precondition: None,
         task: pallet_deos_actors::Task::Transfer {
           to: ALICE,
           asset: AssetKind::Native,
@@ -222,7 +222,7 @@ fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
-    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
       foreign,
       lp_asset,
       primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD,
@@ -255,9 +255,9 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
     assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
-    let malformed_plan: ExecutionPlanOf<Runtime> = alloc::vec![
+    let malformed_plan: ContractSteps<Runtime> = alloc::vec![
       pallet_deos_actors::Step {
-        preconditions: Default::default(),
+        precondition: None,
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
@@ -268,7 +268,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       pallet_deos_actors::Step {
-        preconditions: Default::default(),
+        precondition: None,
         task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
@@ -278,7 +278,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       pallet_deos_actors::Step {
-        preconditions: Default::default(),
+        precondition: None,
         task: Task::SplitTransfer {
           asset: lp_asset,
           amount: AmountResolution::AllAvailable,
@@ -366,7 +366,7 @@ fn genesis_burn_actor_has_deterministic_sovereign_and_correct_state() {
       instance.lifecycle,
       pallet_deos_actors::ActiveLifecycle::Active
     );
-    assert_eq!(instance.consecutive_failures, 0);
+    assert_eq!(instance.unsuccessful_attempt_streak, 0);
     assert!(!instance.pending_signal);
     assert_eq!(
       Actors::next_actor_id(),
@@ -603,14 +603,12 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
       price,
     ));
     let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
-    let new_steps: ExecutionPlanOf<Runtime> = alloc::vec![
+    let new_steps: ContractSteps<Runtime> = alloc::vec![
       pallet_deos_actors::Step {
-        preconditions: all_preconditions(alloc::vec![
-          pallet_deos_actors::Predicate::BalanceAbove {
-            asset: AssetKind::Local(super::common::ASSET_A),
-            threshold: dust,
-          },
-        ]),
+        precondition: all_preconditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
+          asset: AssetKind::Local(super::common::ASSET_A),
+          threshold: dust,
+        },]),
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
@@ -620,12 +618,10 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       pallet_deos_actors::Step {
-        preconditions: all_preconditions(alloc::vec![
-          pallet_deos_actors::Predicate::BalanceAbove {
-            asset: AssetKind::Native,
-            threshold: dust,
-          },
-        ]),
+        precondition: all_preconditions(alloc::vec![pallet_deos_actors::Predicate::BalanceAbove {
+          asset: AssetKind::Native,
+          threshold: dust,
+        },]),
         task: Task::Burn {
           asset: AssetKind::Native,
           amount: AmountResolution::AllAvailable,
@@ -830,8 +826,8 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
       AssetKind::Local(super::common::ASSET_A),
       price,
     ));
-    let steps: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      preconditions: Default::default(),
+    let steps: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(super::common::ASSET_A),
@@ -864,13 +860,13 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
 }
 
 #[test]
-fn swap_without_pool_fails_execution_plan() {
+fn swap_without_pool_fails_contract_steps() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let bm_id = actor_ids::BURN_ACTOR_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
-    let steps: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-      preconditions: Default::default(),
+    let steps: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+      precondition: None,
       task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(ASSET_A),
@@ -912,22 +908,26 @@ fn swap_without_pool_fails_execution_plan() {
   });
 }
 
-// --- Liquidity Actor ExecutionPlan ---
+// --- Liquidity Actor ContractSteps ---
 
 #[test]
-fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
+fn zap_contract_steps_builder_produces_valid_3_step_contract_steps() {
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = AssetKind::Local(999);
     let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
-    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
       foreign, lp_asset, dust,
     );
     assert_eq!(steps.len(), 3, "Liquidity Actor steps must have 3 steps");
     assert!(matches!(steps[0].task, Task::AddLiquidity { .. }));
     assert_eq!(
-      steps[0].preconditions.predicate_count(),
+      steps[0]
+        .precondition
+        .as_ref()
+        .expect("AddLiquidity has a precondition")
+        .predicate_count(),
       2,
       "AddLiquidity needs dual dust guard"
     );
@@ -974,7 +974,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
 }
 
 #[test]
-fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
+fn zap_contract_steps_tightens_slippage_as_native_depth_grows() {
   seeded_test_ext().execute_with(|| {
     let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let shallow_foreign = AssetKind::Local(ASSET_A);
@@ -1014,13 +1014,13 @@ fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
     let shallow_lp = get_pool_lp_asset(AssetKind::Native, shallow_foreign);
     let deep_lp = get_pool_lp_asset(AssetKind::Native, deep_foreign);
     let shallow_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
         shallow_foreign,
         shallow_lp,
         dust,
       );
     let deep_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
         deep_foreign,
         deep_lp,
         dust,
@@ -1047,7 +1047,7 @@ fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
 }
 
 #[test]
-fn zap_execution_plan_uses_max_slippage_when_pool_depth_is_unavailable() {
+fn zap_contract_steps_uses_max_slippage_when_pool_depth_is_unavailable() {
   seeded_test_ext().execute_with(|| {
     let foreign = AssetKind::Local(ASSET_A);
     assert_eq!(
@@ -1060,7 +1060,7 @@ fn zap_execution_plan_uses_max_slippage_when_pool_depth_is_unavailable() {
 }
 
 #[test]
-fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
+fn zap_contract_steps_e2e_adds_liquidity_and_splits_lp_to_buckets() {
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
@@ -1094,7 +1094,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
     let lp_asset_id = pool_info.lp_token;
     let lp_asset = AssetKind::Local(lp_asset_id);
     let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
-    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+    let steps = crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
       foreign, lp_asset, dust,
     );
     assert_ok!(activate_dormant_system(liquidity_actor_id, steps));
@@ -1222,23 +1222,23 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       foreign,
       price,
     ));
-    let burn_execution_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_burn_execution_plan(
+    let burn_contract_steps =
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_burn_contract_steps(
         alloc::vec![foreign],
         dust,
       );
-    let zap_execution_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
+    let zap_contract_steps =
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_contract_steps(
         foreign, lp_asset, dust,
       );
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       actor_ids::BURN_ACTOR_ID,
-      (burn_execution_plan, CompletionPolicy::Persistent,)
+      (burn_contract_steps, CompletionPolicy::Persistent,)
     ));
     assert_ok!(activate_dormant_system(
       actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
-      zap_execution_plan,
+      zap_contract_steps,
     ));
     // Explicitly trigger execution since we deposited funds before updating execution plans
     assert_ok!(Actors::manual_trigger(
@@ -1314,14 +1314,14 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     );
 
     let bucket_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_bucket_lp_transfer_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_bucket_lp_transfer_contract_steps(
         lp_asset,
         100,
         Perbill::from_percent(10),
         treasury_id,
       );
     let treasury_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_lp_unwind_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_lp_unwind_contract_steps(
         lp_asset, 100,
       );
     assert_ok!(activate_dormant_system(bucket_id, bucket_plan));
@@ -1388,8 +1388,8 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
     let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
     let liquidity_actor_id = actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
     let liquidity_actor = liquidity_actor_account();
-    let steps = ExecutionPlanOf::<Runtime>::try_from(vec![pallet_deos_actors::StepOf::<Runtime> {
-      preconditions: Default::default(),
+    let steps = ContractSteps::<Runtime>::try_from(vec![pallet_deos_actors::StepOf::<Runtime> {
+      precondition: None,
       task: Task::Transfer {
         to: ALICE,
         asset: AssetKind::Native,
@@ -1643,7 +1643,7 @@ fn bldr_splitter_distributes_to_liquidity_and_treasury() {
     );
     // Activate splitter steps
     let steps =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_splitter_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_splitter_contract_steps(
         bldr_asset, dust,
       );
     assert_ok!(update_actor_contract_partial!(
@@ -1709,13 +1709,13 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
     super::common::setup_bldr_pool_with_reserves(900 * precision, 10 * precision);
     // 2. Activate the BLDR Liquidity Actor execution plan (AddLiquidity + LP → Bucket A).
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, bldr_asset);
-    let liquidity_execution_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_liquidity_execution_plan(
+    let liquidity_contract_steps =
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_liquidity_contract_steps(
         bldr_asset, lp_asset, dust,
       );
     assert_ok!(activate_dormant_system(
       liquidity_id,
-      liquidity_execution_plan
+      liquidity_contract_steps
     ));
     // 3. Keep BLDR liquidity ingress-driven with no cooldown for the chained test.
     System::set_block_number(System::block_number().saturating_add(1));
@@ -1825,7 +1825,7 @@ fn treasury_b_buyback_burns_bldr() {
       <Balances as Currency<crate::AccountId>>::deposit_creating(&treasury_b_sov, fund_amount);
     // Activate buyback steps
     let steps =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_b_buyback_execution_plan(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_b_buyback_contract_steps(
         target_asset,
         buyback_pct,
         dust,
@@ -2133,8 +2133,8 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
         &bucket,
         1_000_000_000,
       ));
-      let steps: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
-        preconditions: pallet_deos_actors::Preconditions::Unconditional,
+      let steps: ContractSteps<Runtime> = alloc::vec![pallet_deos_actors::Step {
+        precondition: None,
         task: Task::RemoveLiquidity {
           lp_asset,
           asset_a,

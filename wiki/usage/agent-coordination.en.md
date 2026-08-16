@@ -1,7 +1,7 @@
 ---
-page_type: usage
+type: usage
 title: Agent Coordination
-summary: How DEOS uses repository-local agent skills, ABC context files, wiki sync, and changed-scope completion gates to keep human and agent work aligned.
+description: How DEOS uses repository-local agent skills, ABC context files, wiki sync, and changed-scope completion gates to keep human and agent work aligned.
 locale: en
 canonical_page_id: agent-coordination
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../AGENTS.md
-  - ../../docs/README.md
-  - ../../.agents/skills/wiki-sync/SKILL.md
-  - ../../.agents/skills/alignment/SKILL.md
-status: active
+  - resource: ../../AGENTS.md
+  - resource: ../../docs/README.md
+  - resource: ../../.agents/skills/wiki-sync/SKILL.md
+  - resource: ../../.agents/skills/alignment/SKILL.md
+status: stable
 audience: developer
 tags:
   - usage

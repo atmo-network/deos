@@ -24,30 +24,30 @@ export type ActorStepErrorPolicy =
   | { type: 'ContinueNextStep' }
   | { type: 'RetryLater'; maxAttempts: number };
 
-export type ActorLocalTimedPredicate<Condition> = {
+export type ActorLocalTimedPredicate<Predicate> = {
   timing: 'Opening' | 'Current';
-  predicate: Condition;
+  predicate: Predicate;
 };
 
-export type ActorLocalPreconditions<Condition> =
-  | { type: 'Unconditional' }
-  | { type: 'AnyOf'; clauses: ActorLocalTimedPredicate<Condition>[][] };
+export type ActorLocalPrecondition<Predicate> = {
+  clauses: ActorLocalTimedPredicate<Predicate>[][];
+};
 
-export type ActorLocalStep<Condition> = {
+export type ActorLocalStep<Predicate> = {
   stepIndex: number;
-  preconditions: ActorLocalPreconditions<Condition>;
+  precondition: ActorLocalPrecondition<Predicate> | null;
   taskControl: 'Execute' | 'StopCycle';
   onError: ActorStepErrorPolicy;
 };
 
-export type ActorLocalConditionOutcome =
+export type ActorLocalPredicateOutcome =
   | { kind: 'Value'; value: boolean }
   | { kind: 'Error'; retry: 'Temporary' | 'Permanent'; error: string };
 
 export type ActorLocalStepOutcome =
   | { kind: 'Executed' }
   | { kind: 'Stopped' }
-  | { kind: 'SkippedCondition' }
+  | { kind: 'SkippedPrecondition' }
   | { kind: 'SkippedResolution' }
   | { kind: 'FundingUnavailable' }
   | { kind: 'Failed'; retry: 'Temporary' | 'Permanent'; error: string };
@@ -55,7 +55,7 @@ export type ActorLocalStepOutcome =
 export type ActorLocalSimulationCounts = {
   executedSteps: number;
   committedEffectfulTasks: number;
-  skippedConditions: number;
+  preconditionSkips: number;
   skippedResolution: number;
   skippedFundingUnavailable: number;
   failedSteps: number;
@@ -72,7 +72,6 @@ export type ActorLocalSimulationResult<State> = {
   status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: 'RetryAttemptsExhausted' | 'ProductiveCycleCompleted' | null;
   cycleNonce: bigint;
-  attempt: number;
   startCursor: number;
   continuationCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
@@ -108,7 +107,7 @@ export type ActorDonationSensitivity = {
 const EMPTY_COUNTS: ActorLocalSimulationCounts = {
   executedSteps: 0,
   committedEffectfulTasks: 0,
-  skippedConditions: 0,
+  preconditionSkips: 0,
   skippedResolution: 0,
   skippedFundingUnavailable: 0,
   failedSteps: 0,
@@ -129,29 +128,27 @@ function increment(
   counts[key] = value;
 }
 
-export function simulateActorLocally<State, Condition>(input: {
+export function simulateActorLocally<State, Predicate>(input: {
   artifact: ActorContractArtifact;
   blockHash: ActorContractHex;
   model: string;
   modelVersion: string;
   cycleNonce: bigint;
-  attempt: number;
   startCursor: number;
   completionPolicy?: 'Persistent' | 'CloseAfterProductiveCycle';
   unsuccessfulAttemptsAtCursor?: number;
   initialState: State;
   initialCounts?: ActorLocalSimulationCounts;
-  steps: ActorLocalStep<Condition>[];
-  evaluateCondition?: (
-    predicate: ActorLocalTimedPredicate<Condition>,
+  steps: ActorLocalStep<Predicate>[];
+  evaluatePredicate?: (
+    predicate: ActorLocalTimedPredicate<Predicate>,
     state: Readonly<State>,
-  ) => ActorLocalConditionOutcome;
+  ) => ActorLocalPredicateOutcome;
   runTask: (
-    step: ActorLocalStep<Condition>,
+    step: ActorLocalStep<Predicate>,
     taskLocalState: State,
   ) => ActorLocalStepOutcome;
 }): ActorLocalSimulationResult<State> {
-  validateIndex(input.attempt, 'attempt');
   validateIndex(input.startCursor, 'startCursor');
   if (input.cycleNonce < 0n) throw new Error('cycleNonce must be non-negative');
   if (input.startCursor > input.steps.length) {
@@ -190,16 +187,13 @@ export function simulateActorLocally<State, Condition>(input: {
       );
     }
     if (
-      step.preconditions.type === 'AnyOf' &&
-      (step.preconditions.clauses.length === 0 ||
-        step.preconditions.clauses.some((clause) => clause.length === 0))
+      step.precondition !== null &&
+      (step.precondition.clauses.length === 0 ||
+        step.precondition.clauses.some((clause) => clause.length === 0))
     ) {
-      throw new Error('AnyOf and every clause must be non-empty');
+      throw new Error('Precondition and every clause must be non-empty');
     }
-    if (
-      step.preconditions.type === 'AnyOf' &&
-      input.evaluateCondition == null
-    ) {
+    if (step.precondition !== null && input.evaluatePredicate == null) {
       throw new Error('Timed predicates require an evaluator');
     }
   });
@@ -217,16 +211,16 @@ export function simulateActorLocally<State, Condition>(input: {
     const step = input.steps[index];
     const taskLocalState = structuredClone(state);
     const outcome = (() => {
-      if (step.preconditions.type === 'AnyOf') {
+      if (step.precondition !== null) {
         let expressionTruth = false;
         let firstError: Extract<
-          ActorLocalConditionOutcome,
+          ActorLocalPredicateOutcome,
           { kind: 'Error' }
         > | null = null;
-        for (const clause of step.preconditions.clauses) {
+        for (const clause of step.precondition.clauses) {
           let clauseTruth = true;
           for (const predicate of clause) {
-            const current = input.evaluateCondition!(predicate, state);
+            const current = input.evaluatePredicate!(predicate, state);
             if (current.kind === 'Error') {
               firstError ??= current;
               clauseTruth = false;
@@ -243,7 +237,7 @@ export function simulateActorLocally<State, Condition>(input: {
             error: firstError.error,
           } as const;
         }
-        if (!expressionTruth) return { kind: 'SkippedCondition' } as const;
+        if (!expressionTruth) return { kind: 'SkippedPrecondition' } as const;
       }
       if (step.taskControl === 'StopCycle') return { kind: 'Stopped' } as const;
       return input.runTask(step, taskLocalState);
@@ -258,8 +252,8 @@ export function simulateActorLocally<State, Condition>(input: {
         break;
       case 'Stopped':
         break;
-      case 'SkippedCondition':
-        increment(cumulative, 'skippedConditions');
+      case 'SkippedPrecondition':
+        increment(cumulative, 'preconditionSkips');
         break;
       case 'SkippedResolution':
         increment(cumulative, 'skippedResolution');
@@ -292,7 +286,6 @@ export function simulateActorLocally<State, Condition>(input: {
         status: productiveClose ? 'Closed' : 'Completed',
         closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
         cycleNonce: input.cycleNonce,
-        attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: null,
         unsuccessfulAttemptsAtCursor: null,
@@ -316,7 +309,6 @@ export function simulateActorLocally<State, Condition>(input: {
         status: exhausted ? 'Closed' : 'Suspended',
         closeReason: exhausted ? 'RetryAttemptsExhausted' : null,
         cycleNonce: input.cycleNonce,
-        attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: exhausted ? null : index,
         unsuccessfulAttemptsAtCursor: exhausted
@@ -333,7 +325,6 @@ export function simulateActorLocally<State, Condition>(input: {
         status: 'Failed',
         closeReason: null,
         cycleNonce: input.cycleNonce,
-        attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: null,
         unsuccessfulAttemptsAtCursor: null,
@@ -352,7 +343,6 @@ export function simulateActorLocally<State, Condition>(input: {
     status: productiveClose ? 'Closed' : 'Completed',
     closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
     cycleNonce: input.cycleNonce,
-    attempt: input.attempt,
     startCursor: input.startCursor,
     continuationCursor: null,
     unsuccessfulAttemptsAtCursor: null,

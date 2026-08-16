@@ -2,9 +2,9 @@
 
 ## Status and Ownership
 
-This document defines the intended reusable contract of `pallet-deos-router`. Code and tests own executable conformance. Package architecture documents describe the shipped implementation. Concrete DEOS adapters, accounts, indices, parameters, and cross-pallet composition belong in integration documentation.
+This document defines the normative reusable contract of `pallet-deos-router`. Code and tests own executable conformance. Package architecture documents describe shipped implementation truth. Concrete DEOS adapters, accounts, indices, parameters, and cross-pallet composition belong in integration documentation.
 
-The Cargo package identity is `pallet-deos-router`. The Rust crate and runtime pallet identity remain `pallet_deos_router`. This pre-launch line retains that identity explicitly and introduces no alias, duplicate pallet, migration shim, or partial rename.
+The Cargo package identity is `pallet-deos-router`. The Rust crate and runtime pallet identity are `pallet_deos_router`. The contract introduces no alias, duplicate pallet, migration shim, or partial rename.
 
 ## Purpose
 
@@ -14,17 +14,15 @@ The Router is a decision and execution mechanism. It does not own treasury polic
 
 ## Normative Vocabulary
 
-| Term | Meaning |
-| --- | --- |
-| `Intent` | Exact-input or exact-output request with its caller-authored protection bound. |
-| `Projection` | Non-mutating quote from one identified runtime state; never executable authority. |
-| `PreparedRoute` | Bounded current-state route value admitted inside the execution transaction. |
-| `Leg` | One actual market operation: XYK swap or direct TMC mint. |
-| `XYK leg` | One executed pool swap with ordered input and output assets. |
-| `Route family` | Direct XYK, direct TMC mint, or Native-anchored XYK. |
-| `Outcome` | Bounded factual result returned and emitted after committed execution. |
-| `Reference check` | Local Oracle deviation check applied to one actual XYK leg. |
-| `Weight class` | Measured execution envelope selected from the prepared route family and intent. |
+- `Intent`: Exact-input or exact-output request with its caller-authored protection bound.
+- `Projection`: Non-mutating quote from one identified runtime state; never executable authority.
+- `PreparedRoute`: Bounded current-state route value admitted inside the execution transaction.
+- `Leg`: One actual market operation: XYK swap or direct TMC mint.
+- `XYK leg`: One executed pool swap with ordered input and output assets.
+- `Route family`: Direct XYK, direct TMC mint, or Native-anchored XYK.
+- `Outcome`: Bounded factual result returned and emitted after committed execution.
+- `Reference check`: Local Oracle deviation check applied to one actual XYK leg.
+- `Weight class`: Measured execution envelope selected from the prepared route family and intent.
 
 ## Mandatory Invariants
 
@@ -263,7 +261,7 @@ pub enum RetryDisposition { Permanent, RetryLater }
 
 pub struct AdapterFailure {
     dispatch_error: DispatchError,
-    failure_class: FailureClass,
+    failure_class: RouterFailureClass,
     retry_disposition: RetryDisposition,
 }
 
@@ -326,9 +324,9 @@ Bounded quote runtime APIs return the current projection shape and state identit
 
 ## Compatibility and Upgrade Contract
 
-The pre-launch contract retains the `pallet_deos_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. `PreparedRoute` is a public Rust conformance type for deterministic package tooling but remains absent from calls, events, storage, and runtime APIs. Public semantic changes land as one coherent ABI before launch; no deprecated alias or dual event/API surface is added.
+The contract retains the `pallet_deos_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. `PreparedRoute` is a public Rust conformance type for deterministic package tooling but remains absent from calls, events, storage, and runtime APIs. Public semantic changes land as one coherent ABI; no deprecated alias or dual event/API surface is added.
 
-A downstream launched chain owns migrations and monotonic runtime-version changes. This repository's pre-launch baseline may reset storage versions and generated metadata coherently.
+A deployed downstream chain owns migrations and monotonic runtime-version changes. The reference baseline may reset storage versions and generated metadata coherently until its production genesis.
 
 ## Conformance Vectors
 

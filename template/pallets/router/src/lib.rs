@@ -538,8 +538,6 @@ pub mod pallet {
     PriceDeviationExceeded,
     /// Invalid price oracle data
     InvalidOracleData,
-    /// No viable multi-hop route found
-    NoMultiHopRoute,
     /// Router fee exceeds the configured governance mutation bound
     RouterFeeTooHigh,
     /// An LP token is already indexed to a different pool pair
@@ -560,7 +558,7 @@ pub mod pallet {
         | Self::AmountTooLow
         | Self::DeadlinePassed
         | Self::RouterFeeTooHigh => RouterFailureClass::InvalidRequest,
-        Self::NoRouteFound | Self::NoMultiHopRoute => RouterFailureClass::NoViableRoute,
+        Self::NoRouteFound => RouterFailureClass::NoViableRoute,
         Self::SlippageExceeded | Self::PriceDeviationExceeded => {
           RouterFailureClass::ProtectionRejected
         }
@@ -578,7 +576,6 @@ pub mod pallet {
     pub const fn retry_disposition(&self) -> RetryDisposition {
       match self {
         Self::NoRouteFound
-        | Self::NoMultiHopRoute
         | Self::InsufficientLiquidity
         | Self::SlippageExceeded
         | Self::PriceDeviationExceeded

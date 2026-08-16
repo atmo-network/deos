@@ -101,20 +101,17 @@ test('System Actors composition exposes exact Root call but denies current gover
       schedule_window: undefined,
       steps: [
         {
-          preconditions: {
-            type: 'AnyOf',
-            value: [
-              [
-                {
-                  timing: { type: 'Current', value: undefined },
-                  predicate: {
-                    type: 'BlockNumberAbove',
-                    value: { threshold: 1 },
-                  },
+          precondition: [
+            [
+              {
+                timing: { type: 'Current', value: undefined },
+                predicate: {
+                  type: 'BlockNumberAbove',
+                  value: { threshold: 1 },
                 },
-              ],
+              },
             ],
-          },
+          ],
           task: {
             type: 'Mint',
             value: {

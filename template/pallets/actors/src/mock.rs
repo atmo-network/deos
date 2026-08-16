@@ -840,7 +840,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
       .collect()
   }
 
-  fn setup_condition_assets(
+  fn setup_predicate_assets(
     _owner: &AccountId,
     max: u32,
   ) -> Result<alloc::vec::Vec<TestAsset>, DispatchError> {
@@ -1063,13 +1063,13 @@ impl pallet_deos_actors::Config for Test {
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
-  type MaxExecutionPlanSteps = ConstU32<8>;
+  type MaxContractSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<10>;
   type MaxOpeningSnapshotEntries = ConstU32<16>;
   type MaxOpeningPredicateResults = ConstU32<32>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
-  type MaxConditionsPerStep = ConstU32<4>;
+  type MaxPredicatesPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<255>;
   type MaxExecutionsPerBlock = ConstU32<3>;
   type MaxQueueLength = ConstU32<1024>;
@@ -1087,7 +1087,6 @@ impl pallet_deos_actors::Config for Test {
   type MaxSplitTransferLegs = ConstU32<8>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
-  type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
   type ActorOnIdleReserve = TestActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;

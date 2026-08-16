@@ -133,8 +133,8 @@ export function authoringContractToConfigurationIr(
     cooldownBlocks: contract.cooldownBlocks,
     scheduleWindow: contract.scheduleWindow,
     fundingPolicy: contract.fundingPolicy,
-    steps: contract.steps.map(({ preconditions, task, errorPolicy }) => ({
-      preconditions,
+    steps: contract.steps.map(({ precondition, task, errorPolicy }) => ({
+      precondition,
       task,
       errorPolicy,
     })),
@@ -159,7 +159,7 @@ export function configurationIrToAuthoringContract(
     fundingPolicy: ir.fundingPolicy,
     steps: ir.steps.map((step, index) => ({
       key: `genome-step-${String(index).padStart(3, '0')}`,
-      preconditions: step.preconditions,
+      precondition: step.precondition,
       task: step.task,
       errorPolicy: step.errorPolicy,
     })),

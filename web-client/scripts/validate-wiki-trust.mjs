@@ -31,7 +31,7 @@ const helpRequested = args.some((arg) => arg === '--help' || arg === '-h');
 if (helpRequested) {
   writeOut(`Usage: node scripts/validate-wiki-trust.mjs [validator args]
 
-Runs the trusted wiki markdown validator used by the browser renderer, then runs the wiki consolidation guard that prevents low-signal leaflet drift.
+Runs strict OKF v0.2 and trusted-markdown validation used by the browser renderer, then runs the wiki consolidation guard that prevents low-signal leaflet drift.
 
 Environment:
   WIKI_TRUST_VALIDATOR  Absolute path to validate-wiki-trust.sh

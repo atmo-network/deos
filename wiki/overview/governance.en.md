@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: Governance
-summary: A newcomer-facing map of DEOS Governance as a bounded constitutional layer that separates protocol physics, strategic protection, tactical coordination, and live read-model truth.
+description: A newcomer-facing map of DEOS Governance as a bounded constitutional layer that separates protocol physics, strategic protection, tactical coordination, and live read-model truth.
 locale: en
 canonical_page_id: governance
 translation_status: source
@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/governance/docs/specification.en.md
-  - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../docs/manifesto.en.md
-status: active
+  - resource: ../../template/pallets/governance/docs/specification.en.md
+  - resource: ../../template/pallets/governance/docs/architecture.en.md
+  - resource: ../../docs/manifesto.en.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -50,6 +50,7 @@ At overview level, the shape is:
 - A primary decision lane decides the proposal itself;
 - A protection lane decides whether the proposal should be blocked or allowed through;
 - Proposal payloads are typed rather than hidden inside opaque bytes;
+- Every signed proposal requires its exact bounded typed preimage before admission, while hash-first submission remains an explicit administrative bootstrap/recovery exception;
 - Live governance UX reads bounded runtime views, while archive search and long timelines belong to indexed or materialized layers.
 
 This is why DEOS Governance looks more like a constitutional layer above a deterministic kernel than a generic voting portal.
@@ -58,11 +59,12 @@ This is why DEOS Governance looks more like a constitutional layer above a deter
 
 From a newcomer perspective, a proposal should be read as a typed lifecycle, not as a single yes/no event:
 
-1. submission opens the item and its protection window;
+1. signed authoring notes the exact typed preimage before submission opens the item and its protection window;
 2. ordinary primary voting starts after the configured lead-in;
 3. approval can still wait through enactment delay;
 4. execution can fail and that failure is visible state;
-5. recent finalized outcomes remain on-chain only for bounded live observability.
+5. one approval record is reused through pending enactment and terminal enactment, while typed execution detail carries only the receipt or failure reason;
+6. recent finalized outcomes retain explicit domain-plus-item identity on-chain only for bounded live observability.
 
 The intent is honest live state, not an unbounded social archive inside runtime storage.
 

@@ -1,7 +1,7 @@
 ---
-page_type: concept
+type: concept
 title: Generated Wiki
-summary: The DEOS wiki is a self-contained interpretation product derived from project truth and shaped as a dense domain graph for humans, agents, and the reference client.
+description: The DEOS wiki is a self-contained interpretation product derived from project truth and shaped as a dense domain graph for humans, agents, and the reference client.
 locale: en
 canonical_page_id: generated-wiki
 translation_status: source
@@ -9,16 +9,16 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/README.md
-  - ../../web-client/docs/architecture.en.md
-  - ../../web-client/README.md
-  - ../../.agents/skills/wiki-sync/SKILL.md
-  - ../_meta/navigation.json
-  - ../_meta/state.json
-  - ../_meta/graph.json
-  - ../_meta/aliases.json
-  - ../_meta/locales.json
-status: active
+  - resource: ../../docs/README.md
+  - resource: ../../web-client/docs/architecture.en.md
+  - resource: ../../web-client/README.md
+  - resource: ../../.agents/skills/wiki-sync/SKILL.md
+  - resource: ../_meta/navigation.json
+  - resource: ../_meta/state.json
+  - resource: ../_meta/graph.json
+  - resource: ../_meta/aliases.json
+  - resource: ../_meta/locales.json
+status: stable
 audience: newcomer
 tags:
   - wiki
@@ -93,7 +93,7 @@ Page length, source count, and graph degree do not raise confidence. Shared `sta
 
 ## Trust Boundary and Evolution
 
-The web client renders repo-local wiki markdown directly because the wiki is trusted reviewed repository content, not user input. Safety belongs to repository validation: reject raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and frontmatter summary lines with extra value-side colons.
+The web client renders repo-local wiki markdown directly because the wiki is trusted reviewed repository content, not user input. Safety belongs to repository validation: reject raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed YAML frontmatter. YAML block scalars and quoted punctuation remain valid; ambiguous plain scalars such as an unquoted `description: Topic: details` do not.
 
 When evolving the wiki, update the owner page first, replace duplicated explanations elsewhere with owner links, keep provenance in metadata, and validate the trust contract plus link shape.
 

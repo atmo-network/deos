@@ -23,21 +23,24 @@ export type ActorRuntimeStepOutcome =
   | { type: 'Executed' }
   | { type: 'Stopped' }
   | { type: 'Skipped'; reason: string }
-  | { type: 'Failed'; retryClass: string }
-  | { type: 'Suspended'; reason: string };
+  | { type: 'FundingUnavailable' }
+  | {
+      type: 'Failed';
+      retryClass: string;
+      error: { type: string; value: unknown };
+    };
 
 export type ActorDecodedRuntimeSimulationOutcome = {
   status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: string | null;
   cycleNonce: bigint;
-  attempt: number;
   startCursor: number;
   continuationCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
   cumulativeOutcomes: {
     executedSteps: number;
     committedEffectfulTasks: number;
-    skippedConditions: number;
+    preconditionSkips: number;
     skippedResolution: number;
     skippedFundingUnavailable: number;
     failedSteps: number;
@@ -149,16 +152,16 @@ function projectStepOutcome(value: unknown): ActorRuntimeStepOutcome {
         type: 'Skipped',
         reason: asVariant(variant.value, 'step.outcome.reason').type,
       };
-    case 'Failed':
+    case 'FundingUnavailable':
+      return { type: 'FundingUnavailable' };
+    case 'Failed': {
+      const failure = asRecord(variant.value, 'step.outcome.failure');
       return {
         type: 'Failed',
-        retryClass: asVariant(variant.value, 'step.outcome.retry_class').type,
+        retryClass: asVariant(failure.retry, 'step.outcome.failure.retry').type,
+        error: asVariant(failure.error, 'step.outcome.failure.error'),
       };
-    case 'Suspended':
-      return {
-        type: 'Suspended',
-        reason: asVariant(variant.value, 'step.outcome.reason').type,
-      };
+    }
     default:
       throw new Error(`Unsupported runtime step outcome ${variant.type}`);
   }
@@ -186,7 +189,6 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
     status: status as ActorDecodedRuntimeSimulationOutcome['status'],
     closeReason,
     cycleNonce: outcome.cycle_nonce,
-    attempt: asIndex(outcome.attempt, 'attempt'),
     startCursor: asIndex(outcome.start_cursor, 'start_cursor'),
     continuationCursor: asOptionalIndex(
       outcome.continuation_cursor,
@@ -202,9 +204,9 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
         totals.committed_effectful_tasks,
         'committed_effectful_tasks',
       ),
-      skippedConditions: asIndex(
-        totals.skipped_conditions,
-        'skipped_conditions',
+      preconditionSkips: asIndex(
+        totals.precondition_skips,
+        'precondition_skips',
       ),
       skippedResolution: asIndex(
         totals.skipped_resolution,

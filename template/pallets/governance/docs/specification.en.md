@@ -1,7 +1,7 @@
 # DEOS Governance Specification
 
 - **Component**: `pallet-governance` + runtime governance integration
-- **Status**: Target Contract
+- **Status**: Normative
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 
@@ -10,15 +10,9 @@
 
 ---
 
-## 0. Specification Maintenance Meta-Layer
-
-This specification MUST stay at or below **1080 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
-
----
-
 ## 1. Purpose
 
-This specification defines how DEOS Governance for the TMCTOL standard is intended to work as a product and protocol contract, not merely as the current bounded implementation kernel.
+This specification defines the normative product and protocol contract for DEOS Governance in the TMCTOL standard.
 
 `DEOS Governance` is the DEOS-specific bounded dual-track alternative to Polkadot OpenGov. Its job is not to replace the autonomous economic kernel with politics-by-default; it governs the residual social and agent-driven domain that remains after protocol autonomy mechanizes what it can.
 
@@ -41,7 +35,7 @@ This document is the contract layer for **how governance should behave**.
 A `GovernanceDomain` is the unit within which proposals, ballots, winning memory, and governance participation coefficients are evaluated.
 
 The runtime MUST define how domain ids map to actual governed subjects.
-This specification version permits asset-scoped domain bindings, but governance is not required to remain forever identical to today's `DomainId = AssetId` style.
+The contract permits asset-scoped domain bindings, but governance is not required to remain identical to the reference runtime's `DomainId = AssetId` style.
 
 ### 2.2 Governance Item
 
@@ -60,7 +54,7 @@ Permanent history MAY live in indexers or future dedicated archival surfaces.
 
 All referenda in the system operate under the **Protected** model by default.
 
-There is no autonomous `ProposalClass` ontology in this specification version.
+There is no autonomous `ProposalClass` ontology.
 Governance behavior is expressed through four smaller axes instead:
 
 - `GovernanceDomain` — who governs and which protection surface guards that domain
@@ -68,7 +62,7 @@ Governance behavior is expressed through four smaller axes instead:
 - `ProposalPayloadKind` — what kind of action is being authorized
 - `ProtectionTrack` — `Veto / Pass` as the constitutional override surface
 
-The minimal payload-kind vocabulary for this version is:
+The payload-kind vocabulary is:
 
 - `L1RootAction` — protocol-level action executed with the governance-controlled super-user / Root-equivalent authority
 - `L2TreasurySpend` — domain-local treasury spend
@@ -134,7 +128,7 @@ The governance system MUST ensure:
 
 The governance system MUST support a runtime-configured `lead-in period` before the ordinary primary voting window opens for public referendum combinations that use ordinary cadence.
 
-For the target v1 public cadence:
+For the public cadence:
 
 1. A submitted proposal MUST open its protection track immediately on submission
 2. The lead-in duration MUST be runtime-configured and queryable
@@ -161,7 +155,7 @@ Rules:
 
 An implementation MAY also support a `confirm period` before finalization.
 If confirm is enabled for a domain + payload-kind combination, a matured proposal that currently passes ordinary policy MUST sustain that passing state continuously for the full confirm duration before finalization, and the confirm timer MUST reset if later ballots interrupt that state.
-That confirm path is optional in this contract version; the target v1 public reaction buffer is the enactment delay above, not a mandatory confirm window.
+That confirm path is optional; the public reaction buffer is the enactment delay above, not a mandatory confirm window.
 
 ### 3.3 Urgent Fast-Track Cadence
 
@@ -205,7 +199,7 @@ Its minimum contract is weighted `Aye / Nay` voting with:
 ### 4.2 Protection Track
 
 The governance system MUST support a secondary protection track for domains that need an explicit constitutional cancellation layer above the primary track.
-In this specification version, the protection lane is represented through `Veto` plus protection-track `Pass`, and its backing power surface remains domain-specific rather than universally tied to one token.
+The protection lane is represented through `Veto` plus protection-track `Pass`, and its backing power surface remains domain-specific rather than universally tied to one token.
 
 The protection-track contract MUST keep these properties:
 
@@ -224,7 +218,7 @@ The protection-track contract MUST keep these properties:
 11. `No winner-memory credit` — a veto-cancelled proposal MUST NOT mint ordinary winning-vote credit into governance reward memory unless a future domain + payload-kind policy explicitly defines a different rule
 12. `Boundedness` — protection-track participation, servicing, retention, and status storage MUST remain bounded
 
-In this specification version:
+The contract requires:
 
 - Protocol / network governance protection is backed by the well-known `$VETO` protocol asset
 - Canonical tactical `$BLDR` governance protection is backed by runtime-resolved native `NativeVotePower` from explicit native economic locks
@@ -234,11 +228,11 @@ In this specification version:
 - For the canonical `$BLDR` domain, that raw guard compares frozen native `NativeVotePower` against total eligible native `NativeVotePower`
 - The final protection-track gate requires a raw `Veto` dust floor of at least `1%` of total eligible protection supply before fail-closed blocking can activate
 - If immediate threshold veto does not happen and that raw `Veto` floor is met, the ordinary-cadence protection track is fail-closed unless decline-weighted protection-track `Pass` strictly outweighs decline-weighted `Veto`
-- All first-class proposal families in this specification version are protected by default unless a later revision declares otherwise
+- All first-class proposal families are protected by default unless a contract change explicitly declares otherwise
 
 ### 4.3 Fixed Approval and Turnout Policy
 
-This contract version intentionally uses runtime-configured fixed approval thresholds and fixed turnout floors rather than adaptive curves.
+The contract uses runtime-configured fixed approval thresholds and fixed turnout floors rather than adaptive curves.
 
 Contract rules:
 
@@ -246,10 +240,10 @@ Contract rules:
 2. Those thresholds MUST be deterministic for a given domain + payload-kind combination
 3. Different domain + payload-kind combinations MAY use different fixed thresholds, but the thresholds themselves MUST NOT change as the voting window ages
 4. Protection-track cancellation thresholds remain independent raw-supply guards per Section 4.2
-5. Any temporal asymmetry in this contract version MUST come from lead-in, Declining Power, and optional urgent fast-track cadence rather than from moving approval/support curves
+5. Any temporal asymmetry MUST come from lead-in, Declining Power, and optional urgent fast-track cadence rather than from moving approval/support curves
 
 Rationale: fixed thresholds are materially easier for participants to understand, while the time dimension is already carried by the lead-in window, the canonical Declining Power curve, and the urgent fast-track path.
-Adaptive approval/support curves are therefore intentionally excluded from this specification version.
+Adaptive approval/support curves are excluded.
 
 ### 4.4 Domain Hierarchy
 
@@ -269,7 +263,7 @@ The runtime MAY add more domains later, but this topology MUST stay explicit and
 
 L2 TOL systems introduce tactical governance domains that MUST compose with the core track model while adding domain-specific execution patterns.
 
-`Invoice Voting Pattern` (canonical tactical example and a first-class v1 target contract for `$BLDR` governance):
+`Invoice Voting Pattern` (canonical tactical example and a first-class contract for `$BLDR` governance):
 
 - Primary evaluation track = domain token (e.g. `$BLDR`)
 - Protection track = upstream strategic surface (e.g. `Native`)
@@ -277,7 +271,7 @@ L2 TOL systems introduce tactical governance domains that MUST compose with the 
 - Protection-track options: `VETO`, `PASS`
 - `NAY` on the primary track rejects the invoice without payout
 - `VETO` on the protection track cancels or invalidates the referendum at the constitutional layer
-- The winning positive option determines a discrete payout scalar; this v1 contract intentionally does **not** blend positive options into one averaged multiplier
+- The winning positive option determines a discrete payout scalar; the contract does **not** blend positive options into one averaged multiplier
 - Protection remains binary and separate from pricing
 - During ordinary cadence, the canonical Declining Power rule from Section 5.2 applies to both tracks
 - Fast-track by the Section 3.3 raw protection-track `Pass` threshold is **not** part of the default invoice contract unless a future domain + payload-kind policy explicitly opts into urgent mode
@@ -304,12 +298,6 @@ L2 TOL systems introduce tactical governance domains that MUST compose with the 
 - Transfer restrictions configurable
 - All parameters modifiable via governance unless set immutable at creation
 
-`Evolutionary Design`:
-
-- System parameters and mechanisms configurable via governance
-- Progressive feature rollout: basic configurations at launch, advanced models added via upgrades
-- Evolution by Design: continuous improvement is a core principle
-
 All L2 TOL governance MUST compose with the core track, vote-power, lifecycle, and boundedness rules defined in this specification.
 
 ---
@@ -320,7 +308,7 @@ All L2 TOL governance MUST compose with the core track, vote-power, lifecycle, a
 
 Governance MUST use runtime-configured vote-weight providers rather than hardcoding one-account-one-vote.
 
-In this specification version, the base balance surfaces are:
+The base balance surfaces are:
 
 ```text
 ordinary Aye / Nay base = same-domain Staking::stake_value(domain, account)
@@ -331,12 +319,12 @@ Canonical protection surfaces are:
 
 ```text
 protocol / network governance => live Assets::balance(VETO_ASSET_ID, account)
-canonical tactical $BLDR governance => Staking::native_stake_value(account)
+canonical tactical $BLDR governance => Staking::stake_value(NTVE_ASSET_ID, account)
 ```
 
 These base-balance surfaces are then transformed by the temporal-weighting policy rather than being exposed as the final vote-power contract directly.
 
-This specification version uses `frozen vote-power settlement` for recorded ballots.
+Recorded ballots use `frozen vote-power settlement`.
 At cast time, the implementation resolves the applicable base backing surface, applies that track's temporal policy, and stores the resulting ballot weight. Protection-track ballots also store the raw protection power needed by raw-threshold guards.
 That means:
 
@@ -387,7 +375,7 @@ Active proposal ballots MUST carry enough vote-time and frozen-weight informatio
 
 The governance contract MUST allow different enabled tracks to resolve vote power through explicit runtime-configured `TrackPowerProfile`s rather than through one irreversible global formula.
 
-At minimum, this specification version SHOULD remain able to represent these profile families:
+The contract SHOULD represent these profile families:
 
 - `DecliningDirectStake` — same-domain staking weight with ballot-time decay
 - `DecliningVetoAsset` — protocol / network protection weight backed by the well-known `$VETO` asset with ballot-time decay
@@ -404,7 +392,7 @@ Contract rules:
 
 ### 5.4 Flat Urgent-Track Exception and Future Proxy Extensions
 
-This contract version intentionally ships one explicit non-declining exception: urgent fast-track primary windows use flat `1x` weighting for `1 day` per Section 3.3.
+The contract has one explicit non-declining exception: urgent fast-track primary windows use flat `1x` weighting for `1 day` per Section 3.3.
 Any additional non-declining, delegated, or proxy-driven exception MAY be defined later only if measured product/runtime evidence proves that those extra layers are needed.
 
 If such an exception exists:
@@ -414,11 +402,11 @@ If such an exception exists:
 - It MUST be queryable and documentable
 - It MUST NOT be smuggled into the ordinary same-domain direct-holder rule
 
-This specification version defines no proxy-governed vote-power exception beyond the explicit urgent flat-`1x` primary-track exception above.
+The contract defines no proxy-governed vote-power exception beyond the explicit urgent flat-`1x` primary-track exception above.
 
 ### 5.5 GovXP Counters and Future Multipliers
 
-V1 governance MUST persist bounded on-chain GovXP input counters from day one, even though this contract version does **not** require a live GovXP vote-power multiplier.
+Governance MUST persist bounded on-chain GovXP input counters even though the contract does **not** require a live GovXP vote-power multiplier.
 
 The on-chain GovXP counter surface MUST expose these five inputs per `(domain, account)`:
 
@@ -431,20 +419,20 @@ The on-chain GovXP counter surface MUST expose these five inputs per `(domain, a
 Contract rules:
 
 - These counters MUST be queryable on-chain
-- Proposal-authorship counters MUST start accumulating in v1 so later GovXP policy can consume them without archive reconstruction
+- Proposal-authorship counters MUST accumulate canonically so a future explicit GovXP policy can consume them without archive reconstruction
 - The authored/opened counter MUST increment when a proposal is opened
 - The successful-authored counter MUST increment when that proposal reaches successful approval/finalization
 - Any saturation needed for later formula consumption MUST remain bounded and explicit
-- A live GovXP multiplier MUST NOT silently appear inside vote power in this contract version
-- If a later version enables a live GovXP multiplier, its ceiling MUST NOT exceed `3x` without a new specification revision
+- A live GovXP multiplier MUST NOT silently appear inside vote power
+- Enabling a live GovXP multiplier requires an explicit contract change, and its ceiling MUST NOT exceed `3x` without another explicit contract change
 
-The target v1 contract treats the counters as canonical and defers live multiplier policy to a later version.
+The contract treats the counters as canonical and leaves a live multiplier outside the current capability boundary.
 
 ### 5.6 Extended GovXP Policy Families
 
-This specification version intentionally keeps GovXP narrow.
-V1 requires only the chain-native counters above.
-Later versions MAY define explicit bounded multiplier formulas, authorship-quality policy, invoice-outcome credit, or delegation-linked logic, but only if each ingress family remains bounded, auditable, and domain-scoped.
+The contract keeps GovXP narrow.
+Only the chain-native counters above are required.
+A future contract change MAY define explicit bounded multiplier formulas, authorship-quality policy, invoice-outcome credit, or delegation-linked logic, but only if each ingress family remains bounded, auditable, and domain-scoped.
 
 If such a later profile exists, the contract MUST keep:
 
@@ -495,6 +483,8 @@ At minimum, proposals MUST resolve through these decision stages:
 9. If enactment dispatch fails, enter explicit `ExecutionFailed` state
 10. Retain only bounded recent outcome history
 
+Finalized projections MUST own proposal approval exactly once as one approval fact containing approval epoch and winner count. Pending enactment and later enacted, execution-failed, or advisory-finalized states MUST reuse that fact rather than repeat its fields. Typed execution detail MAY add a success receipt or failure reason, but MUST NOT duplicate payload kind, derived authority, approval epoch, or terminal epoch already owned by metadata, policy, and finalized lifecycle state. Recent bounded history MUST expose the complete domain-plus-item identity.
+
 The system MUST distinguish between:
 
 - `policy currently passes`
@@ -511,7 +501,7 @@ That distinction matters for auto-finalization, recovery, UI, and reward-memory 
 ### 6.1 Multi-Option Primary Evaluation Tracks
 
 Some tactical domains MAY use a multi-option primary track instead of bare `Aye / Nay`.
-The canonical example is invoice governance in the `$BLDR` domain, and this contract treats that invoice line as a first-class v1 target rather than a distant optional extension.
+The canonical example is invoice governance in the `$BLDR` domain, and the contract treats that invoice line as a first-class capability rather than an optional extension.
 
 Invoice or evaluation-track contract:
 
@@ -578,7 +568,7 @@ At minimum, an implementation SHOULD support this shape:
 - `summary: Bounded UTF-8 text`
 - `doc_cid: Option<Bounded CID>`
 
-Recommended bounds for this specification version:
+Recommended bounds:
 
 - `MaxIntentSummaryBytes = 128`
 - `MaxSignalSummaryBytes = 128`
@@ -608,10 +598,10 @@ The governance contract MUST distinguish:
 The specification MUST state the intended control contract honestly:
 
 1. Signed users SHOULD be able to participate in the public voting tracks enabled for their domain + payload-kind combinations
-2. Proposal submission MAY remain payload-kind-specific and runtime-configurable, but the public v1 path SHOULD move toward signed submission for the combinations that are meant to be public
+2. Proposal submission MAY remain payload-kind-specific and runtime-configurable, but combinations intended for public use SHOULD expose signed submission
 3. Submission MAY charge a runtime-configured opening fee collected into the runtime Fee Sink as economic friction only; liveness, bounded-state, and anti-DoS claims MUST rely on structural domain, strategic-reserve, per-author, maturity, enactment, ballot, and per-block service bounds rather than the fee's configured amount or market value
 4. If GovXP / reputation policy depends on proposal authorship, each live proposal MUST carry one explicit proposer / sponsor identity even when a privileged origin submits it on that account's behalf
-5. Proposal-opening and proposal-success authorship counters MUST be recorded on-chain from v1 so later GovXP policy can consume them without archive reconstruction
+5. Proposal-opening and proposal-success authorship counters MUST be recorded on-chain so a future explicit GovXP policy can consume them without archive reconstruction
 6. Narrow admin recovery / override tools MAY exist, but they MUST be explicit and limited
 7. Public governance UX MUST NOT imply powers that still belong only to admin/root
 
@@ -664,27 +654,26 @@ Contract rules:
 
 ### 7.3 Payload Preimage Admission Policy
 
-This specification version intentionally separates `payload identity` from `payload readiness`.
-A proposal always binds one `payload_hash`, but different payload kinds may require different preimage readiness at different lifecycle points.
+A proposal always binds one `payload_hash`, while signed admission requires its exact bounded typed preimage to be available before capacity, fee, event, authorship, maturity, or active-state mutation.
 
-V1 policy:
+Canonical policy:
 
-1. `L1RootAction`, `L2TreasurySpend`, and `L2ParameterChange` are executable payload kinds
-2. Executable payload kinds MAY be submitted before their full preimage is noted on-chain
-3. At submission time, executable payload kinds SHOULD have either `(a)` an already-noted preimage or `(b)` an outstanding canonical preimage request for that same `payload_hash`
-4. Executable payload kinds MUST NOT enter successful enactment unless their referenced payload is actually available to the runtime at execution time
-5. If an executable payload kind wins approval but its preimage is still unavailable when enactment should occur, the proposal MUST remain in an explicit non-enacted failure or blocked-execution state rather than pretending that approval alone already enacted it
-6. `Intent` and `L2SignalToL1` are advisory payload kinds and MAY remain hash-only for their whole lifecycle, because they are non-executable by contract
-7. The query surface MUST expose whether the stored `payload_hash` currently has a noted preimage and/or an outstanding canonical request so clients can distinguish `ready to execute`, `requested but not yet available`, and `hash-only advisory` honestly
-8. Product UX MUST NOT imply that an executable proposal is enactment-ready merely because voting approved it while payload availability is still missing
+1. Every signed payload kind, including `Intent` and `L2SignalToL1`, MUST pass the runtime's domain/payload-kind preimage validator before admission
+2. Missing, oversized, malformed, trailing-byte, and domain-incompatible signed preimages MUST fail with typed errors and exact pre-state
+3. A requested-but-unavailable preimage is not sufficient for signed admission
+4. Administrative bootstrap/recovery submission MAY remain hash-first, but it MUST use the same item, author, capacity, and maturity classifier and gains no signed authority or fee bypass
+5. Executable payload enactment MUST revalidate runtime-visible payload availability and compatibility because retained bytes or runtime policy may change after admission
+6. Advisory payloads remain non-executable, but signed advisory authors MUST still bind voting to canonical typed bytes rather than an opaque hash
+7. Query surfaces MUST expose noted/requested status so authoring clients can require the note step and inspection clients can describe administrative hash-first state honestly
+8. Product UX and write adapters MUST block signed submission until the exact preimage is available
 
-Rationale: this keeps public submission flexible and bounded without forcing every executable proposal to arrive fully materialized on day zero, while still forbidding silent enactment against missing runtime payload data.
+Rationale: hard signed admission gives one canonical typed proposal identity before economic mutation, while the explicit administrative exception preserves bounded bootstrap and recovery without weakening public authoring.
 
 ---
 
 ## 8. Runtime Upgrade Authority
 
-Governance-driven runtime upgrades are part of the v1 governance surface, and they MUST use an explicit payload kind and execution contract.
+Governance-driven runtime upgrades are part of the governance surface and MUST use an explicit payload kind and execution contract.
 
 The governance system MUST NOT treat runtime upgrades as a hidden side effect of ordinary proposal approval.
 Instead, a runtime-upgrade path MUST define:
@@ -696,11 +685,11 @@ Instead, a runtime-upgrade path MUST define:
 - The enactment rules for ordinary and urgent handling
 - The recent finalized-outcome and observability surface for that payload kind
 
-For this specification version, the runtime-upgrade payload SHOULD be a dedicated bounded structure carrying only `code_hash` rather than a generic arbitrary Root-call envelope.
+The runtime-upgrade payload SHOULD be a dedicated bounded structure carrying only `code_hash` rather than a generic arbitrary Root-call envelope.
 Malformed upgrade payload bytes MUST fail explicitly as payload invalidity rather than pretending to be another supported Root action.
 The governance system MUST be able to execute `set_code` itself after successful approval.
-The current TMCTOL line MAY also grant `L1RootAction` one additional constitutional acceleration path: unanimous protection-track `Pass` over the full eligible `$VETO` supply may authorize immediate execution without waiting for a separate primary-track ballot, because that path is treated as a tightly scoped runtime-upgrade exception rather than as a general positive-governance lane for `$VETO`.
-Retiring external superuser dependence is part of the constitutional target, not a separate optional product layer.
+The TMCTOL standard MAY also grant `L1RootAction` one constitutional acceleration path: unanimous protection-track `Pass` over the full eligible `$VETO` supply may authorize immediate execution without waiting for a separate primary-track ballot, because that path is a tightly scoped runtime-upgrade exception rather than a general positive-governance lane for `$VETO`.
+The contract requires governance-owned execution rather than external superuser dependence.
 
 ---
 
@@ -833,12 +822,11 @@ The contract MUST keep such choices explicit rather than hiding them inside one 
 
 The governance contract SHOULD distinguish at least two tactical-domain rollout lines:
 
-- `Phase 1: ecosystem tactical domains`
+- `Strategically authorized ecosystem tactical domains`
   - strategic authorization required
   - initial Native support sourced from strategic treasury allocation
   - emission model, share split, team-share policy, and governance schema declared at creation
-- `Phase 2: additional user-created tactical domains`
-  - permissionless or threshold-gated creation path
+- `Permissionless or threshold-gated tactical domains`
   - creator supplies the configured minimum Native threshold
   - the same governance-schema declaration requirements still apply
 
@@ -861,7 +849,7 @@ The governance contract SHOULD remain analyzable against at least these attack f
 - `protocol capture` — mitigated by the constitutional `$VETO` protection layer above strategic governance
 - `proposal spam or agenda flooding` — structurally bounded by domain capacity, strategic reserve, per-author capacity, bounded maturity/enactment buckets, bounded ballots, and bounded servicing; the Fee Sink-collected opening fee adds economic friction but is not a liveness or anti-DoS premise
 - `treasury drain or invoice fraud` — mitigated by domain/payload-specific thresholds, binary protection cancellation, and explicit proposal/invoice lifecycle rules
-- `GovXP farming or reputation manipulation` — mitigated in v1 by storing bounded counters while deferring any live vote-power amplification to a later explicit policy revision, and by keeping advisory payloads non-rewarding by default
+- `GovXP farming or reputation manipulation` — mitigated by storing bounded counters while excluding live vote-power amplification until an explicit contract change, and by keeping advisory payloads non-rewarding by default
 
 For richer GovXP profiles, the contract SHOULD stay honest about specific threat families such as collusion farming, sybil delegation, and elite entrenchment rather than treating them as invisible implementation details.
 
@@ -920,24 +908,22 @@ Conceptual storage SHOULD remain able to project at minimum:
 - Voting-power decay schedules and other runtime-configured policy surfaces
 - Treasury, team-vesting, and streaming state when those schedules affect governance authority
 
-## 14. Conformance Boundary of This Specification Version
+## 14. Conformance Boundary
 
-A conforming implementation of this specification version MUST preserve the lifecycle, track, vote-power, query, and boundedness rules defined above.
-Implementation status, shipped-runtime divergence, migration state, runtime bindings, and operational watchpoints are intentionally out of scope for this contract layer and belong in [`architecture.en.md`](./architecture.en.md).
-
+A conforming implementation MUST preserve the lifecycle, track, vote-power, query, and boundedness rules defined above.
 ---
 
-## 15. Non-Goals of This Specification Version
+## 15. Non-Goals
 
-This version does not try to specify:
+This contract does not specify:
 
 - Full permanent archival governance history inside one pallet
-- Full GovXP mathematics, live GovXP vote-power integration, and soulbound identity implementation in v1
-- Blended invoice settlement; the canonical v1 invoice path is discrete `Amplify / Approve / Reduce / Nay`
+- Full GovXP mathematics, live GovXP vote-power integration, and soulbound identity implementation
+- Blended invoice settlement; the canonical invoice path is discrete `Amplify / Approve / Reduce / Nay`
 - A promise that all governance payload kinds become public-submittable in the immediate next runtime slice
 - Conviction-style lock-for-weight mechanics — TMCTOL's liquid staking architecture (`stXXX` receipts) is structurally incompatible with hard token locks; the temporal-weighting role is already served by Declining Power, and commitment signals belong in later GovXP policy rather than in a separate lock multiplier
-- Per-track delegation or proxy voting — reserved for a later version, not specified here
-- Proposal bonds or refundable decision deposits as the anti-spam contract for v1; this version uses bounded structural admission/service limits and permits a Fee Sink-collected opening fee only as additional economic friction
+- Per-track delegation or proxy voting
+- Proposal bonds or refundable decision deposits as the anti-spam contract; bounded structural admission/service limits are authoritative, with a Fee Sink-collected opening fee permitted only as additional economic friction
 - Adaptive approval/support curves in any form
 
 Those remain future evolutions or explicit exclusions, but any later extension SHOULD compose with the track, vote-power, lifecycle, and boundedness rules defined here.

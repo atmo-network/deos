@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: AA-Actor
-summary: Actors is the Account Abstraction Actors system in DEOS, while an AA-Actor is one concrete bounded execution instance inside that system. Actors express recurring protocol flows as typed, schedulable execution plans instead of bespoke pallet logic.
+description: Actors is the Account Abstraction Actors system in DEOS, while an AA-Actor is one concrete bounded execution instance. Each instance follows one typed Actor Contract with ordered Steps.
 locale: en
 canonical_page_id: actor
 translation_status: source
@@ -9,11 +9,11 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../template/pallets/actors/docs/specification.en.md
-  - ../../template/pallets/actors/docs/architecture.en.md
-  - ../../docs/actors.integration.en.md
-  - ../../docs/core.architecture.en.md
-status: active
+  - resource: ../../template/pallets/actors/docs/specification.en.md
+  - resource: ../../template/pallets/actors/docs/architecture.en.md
+  - resource: ../../docs/actors.integration.en.md
+  - resource: ../../docs/core.architecture.en.md
+status: stable
 audience: newcomer
 tags:
   - overview
@@ -25,7 +25,7 @@ related:
   - Routing and Minting Loop
   - Governance
   - Core Terms
-last_compiled: 2026-07-24
+last_compiled: 2026-08-14
 confidence: 0.9
 ---
 
@@ -42,23 +42,23 @@ Use [Actors System](actor-system.en.md) for the system-level view. This page foc
 A useful mental model is:
 
 ```text
-one sovereign account + one trigger surface + one bounded plan
+one sovereign account + one trigger surface + one bounded Actor Contract
 ```
 
-An actor has its own account, schedule or trigger, execution plan, lifecycle rules, and failure behavior. Instead of scattering recurring economic logic across special-purpose pallets, DEOS can express a bounded workflow as typed actor steps under explicit runtime limits.
+An actor has its own account, schedule or trigger, Actor Contract, lifecycle rules, and failure behavior. Instead of scattering recurring economic logic across special-purpose pallets, DEOS can express bounded behavior as typed Steps under explicit runtime limits.
 
 The stable contract emphasizes:
 
 - Deterministic behavior for the same state and block context;
 - Bounded work;
-- Static execution plans without task-authored workflow memory;
+- Static ordered Steps without Task-authored workflow memory;
 - Sparse scheduler-owned progress only while a Mutable actor is suspended;
 - Predictable failure outcomes;
 - Destruction in place without automatic refund fan-out.
 
 Actors are runtime infrastructure, not loose scripting.
 
-A Mutable actor can assign `RetryLater` to a step whose adapter may report a Temporary failure. Actors then stores only the unresolved cursor and bounded attempt state, preserving successful earlier steps without turning the plan into mutable code. Permanent failure terminates; cancellation deletes progress without compensating committed effects. Immutable actors cannot use this policy.
+A Mutable actor can assign `RetryLater` to a step whose adapter may report a Temporary failure. Actors then stores only the unresolved cursor and bounded attempt state, preserving successful earlier steps without turning the Actor Contract into mutable code. Permanent failure terminates; cancellation deletes progress without compensating committed effects. Immutable actors cannot use this policy.
 
 ## Actor Classes and Uses
 
@@ -69,11 +69,11 @@ The specification distinguishes two broad classes:
 
 In the current reference line, actors support liquidity provisioning, burning/buyback flows, treasury split routing, bucket hold or unwind behavior, and user-defined bounded task pipelines. Most protocol-owned execution is realized as System actors.
 
-## Triggers and Plan Shapes
+## Triggers and Actor Contract Shapes
 
 Actors can run from schedules, manual triggers, or balance-ingress address events. Balance ingress is the key token-driven shape: an asset arriving on an actor account can also be the wake-up message.
 
-Common plan shapes include:
+Common Actor Contract shapes include:
 
 - Timer-driven burning: swap collected fees into Native, then burn;
 - Balance-triggered liquidity: react to foreign collateral arrival, swap part of it, then add liquidity;

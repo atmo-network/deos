@@ -1,7 +1,7 @@
 ---
-page_type: getting-started
+type: getting-started
 title: Reading Paths
-summary: Self-contained role-based routes through the wiki for newcomers, economics work, runtime changes, governance work, client work, status checks, and tooling.
+description: Self-contained role-based routes through the wiki for newcomers, economics work, runtime changes, governance work, client work, status checks, and tooling.
 locale: en
 canonical_page_id: reading-paths
 translation_status: source
@@ -9,14 +9,14 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/README.md
-  - ../../README.md
-  - ../../BACKLOG.md
-  - ../../CHANGELOG.md
-  - ../../web-client/README.md
-  - ../../template/README.md
-  - ../../scripts/README.md
-status: active
+  - resource: ../../docs/README.md
+  - resource: ../../README.md
+  - resource: ../../BACKLOG.md
+  - resource: ../../CHANGELOG.md
+  - resource: ../../web-client/README.md
+  - resource: ../../template/README.md
+  - resource: ../../scripts/README.md
+status: stable
 audience: newcomer
 tags:
   - onboarding

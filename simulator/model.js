@@ -1114,7 +1114,7 @@ export function collect_protocol_fee(/** @type {bigint} */ amount) {
   return { fee_sink: amount };
 }
 
-export function distribute_fee_sink_phase1(/** @type {bigint} */ amount) {
+export function distribute_fee_sink_trusted_set(/** @type {bigint} */ amount) {
   const staking_pool = amount / 2n;
   return {
     staking_pool,
@@ -1122,7 +1122,7 @@ export function distribute_fee_sink_phase1(/** @type {bigint} */ amount) {
   };
 }
 
-export function distribute_fee_sink_phase2(/** @type {bigint} */ amount) {
+export function distribute_fee_sink_permissionless_target(/** @type {bigint} */ amount) {
   const one_third = amount / 3n;
   return {
     security_rewards: one_third,

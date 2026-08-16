@@ -45,7 +45,7 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$ROOT_SCRIPT_DIR" "Root scripts directory"
     require_directory "$SCRIPT_DIR" "Alignment skill scripts directory"
-    require_commands bash find sort basename node awk grep
+    require_commands bash find sort basename node awk grep cut
     log_success "Prerequisites checked"
 }
 
@@ -99,6 +99,24 @@ audit_node_entrypoints() {
             AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
         fi
     done < <(find "$PROJECT_ROOT/web-client/scripts" -maxdepth 1 -type f -name '*.mjs' | sort)
+}
+
+audit_required_local_script_entrypoints() {
+    local name script
+    while IFS= read -r name; do
+        script="$ROOT_SCRIPT_DIR/$name"
+        if [[ ! -x "$script" ]]; then
+            log_error "require_local_script target is missing or not executable: $name"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+        if [[ "$name" == *.mjs ]]; then
+            if ! node --check "$script" >/dev/null || ! node "$script" --help >/dev/null; then
+                log_error "Required Node entrypoint syntax/help failed: $name"
+                AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            fi
+        fi
+    done < <(grep -hEo 'require_local_script "[A-Za-z0-9._-]+"' "$ROOT_SCRIPT_DIR"/*.sh | cut -d'"' -f2 | sort -u)
 }
 
 audit_atomic_script_independence() {
@@ -253,6 +271,7 @@ audit_entrypoints() {
     AUDIT_FAILURES=0
     audit_shell_entrypoints
     audit_node_entrypoints
+    audit_required_local_script_entrypoints
     audit_atomic_script_independence
     audit_audit_leaf_ownership
     audit_shell_step_status_propagation

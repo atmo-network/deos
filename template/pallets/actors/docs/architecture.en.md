@@ -6,7 +6,7 @@ This document maps the independently reusable crate implementation. A host suppl
 
 ## Executive Summary
 
-> This document records the shipped 0.7.10 package implementation; the standalone specification owns normative semantics and executable tests own conformance.
+> This document records the shipped package implementation; the standalone specification owns normative semantics and executable tests own conformance.
 
 `pallet-deos-actors` provides a deterministic scheduler, bounded execution model, typed trigger system, lifecycle state machine, and adapter-driven task runtime for User and System actors.
 
@@ -27,6 +27,19 @@ Canonical writes target `ActorIdentity`, `ActorHot`, `ActorContract`, and `Actor
 ### Host Composition Boundary
 
 Actors executes declarative plans against host-provided adapters. Ledger, market, liquidity, staking, fee, ingress, governance, and genesis policy remain outside the crate. The package never identifies a concrete pallet, asset, actor role, route, or recipient as canonical.
+
+### Type Ownership
+
+`src/types.rs` is the canonical package facade and contains only public re-exports. `src/lib.rs` declares the four owner modules privately, and each owner preserves the existing `pallet_deos_actors::types::*` metadata namespace and crate-root re-export surface; no compatibility alias or second semantic owner exists.
+
+| Module | Owned type families |
+| --- | --- |
+| `src/types/contract.rs` | Actor Contract inputs, schedule/triggers, Steps, tasks, predicates, funding policy, and certified address ingress |
+| `src/types/lifecycle.rs` | Identity/class, lifecycle, Continuation, outcomes, classification, simulation, and active read views |
+| `src/types/scheduler.rs` | FIFO tickets/pages, wakeup topology, drain statistics, and starvation phase |
+| `src/types/observation.rs` | Subscriber pages, observation revisions, and dirty-fanout ownership |
+
+Execution logic remains in `src/execution.rs`, `src/scheduler.rs`, `src/reactions.rs`, and `src/subscriptions.rs`; the type split does not move algorithms or create a mirrored model. `src/contract.rs` remains the semantic classifier and is distinct from the Actor Contract type owner at `src/types/contract.rs`.
 
 ## Execution Model
 
@@ -53,32 +66,32 @@ The package stores each actor identity once and each active actor across three a
 
 - `ActorIdentities`: durable owner, `ActorClass`, mutability, sovereign account, logical-cycle nonce, and non-optional persistent control-mutation block shared by Active and Dormant lifecycle states
 - `ActorHot`: typed Active lifecycle/run state, auto-close target, failure counter, `pending_signal`, queue/wakeup membership, terminal block, `schedule_anchor`, and optional `last_cycle_block`
-- `ActorContract`: trigger/cooldown schedule, optional execution window, cycle plan, and `Persistent | CloseAfterProductiveCycle` completion policy
+- `ActorContract`: trigger/cooldown schedule, optional execution window, ordered `ContractSteps`, and `Persistent | CloseAfterProductiveCycle` completion policy
 - `ActorFunding`: canonical funding-source policy, bounded tracked assets, and bounded `funding_accumulated[asset]` checked deltas
 
-`ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives eligibility from `schedule_anchor`, window start, cadence, and actor-stable jitter. The typed lifecycle forbids contradictory pause state.
+`ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives eligibility from `schedule_anchor`, window start, and exact cadence. The typed lifecycle forbids contradictory pause state.
 
 Package consumers compose the split state explicitly. Scheduler, execution, lifecycle, liveness, wakeup, ingress, try-state, benchmarks, and tests combine `ActorIdentities + ActorHot + ActorContract` through private helpers or the public `active_actor_view` Rust query helper. No synchronized compatibility storage mirrors those values.
 
 This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current package storage realization.
 
-### Execution-Plan Structure
+### Contract Steps Structure
 
-Each actor stores a bounded `ExecutionPlan` of ordered `Step`s. One configurable `MaxExecutionPlanSteps` binding applies identically to User and System actors across creation, activation, replacement, simulation, genesis, and benchmark construction. It must remain in `1..=255`; the current DEOS baseline is `8`. Mutable `RetryLater` admits only `2..=MaxRetryAttempts`, with the protocol-fixed metadata constant set to 10; package integrity checks both bounds and their checked composition.
+Each actor stores a bounded `ContractSteps` of ordered `Step`s. One configurable `MaxContractSteps` binding applies identically to User and System actors across creation, activation, replacement, simulation, genesis, and benchmark construction. It must remain in `1..=255`; the current DEOS baseline is `8`. Mutable `RetryLater` admits only `2..=MaxRetryAttempts`, with the protocol-fixed metadata constant set to 10; package integrity checks both bounds and their checked composition.
 
-- `preconditions: Preconditions<Predicate, MaxPreconditionClauses, MaxPredicatesPerClause>`
+- `precondition: Option<Precondition<Predicate, MaxPreconditionClauses, MaxPredicatesPerClause>>`
 - `task: Task`
 - `on_error: StepErrorPolicy` (`AbortCycle` / `ContinueNextStep` / Mutable-only `RetryLater { max_attempts }`)
 
-`Preconditions::Unconditional` owns zero predicates. `Preconditions::AnyOf` stores bounded DNF: outer clauses are OR and each inner clause is AND. Runtime admission rejects empty outer and inner vectors, caps each dimension at four and each step at four total predicates, evaluates every admitted predicate without short-circuit, and executes or skips the step exactly once.
+`None` is the sole unconditional Step form. `Some(Precondition { clauses })` stores one bounded DNF: outer clauses are OR and each inner clause is AND. Runtime admission rejects empty outer and inner vectors, caps each dimension at four and each step at four total predicates, evaluates every admitted predicate without short-circuit, and executes or skips the step exactly once.
 
-Each `TimedPredicate` names `ObservationTiming::Opening` or `Current`. Fresh-cycle opening evaluates and stores one `PredicateEvaluation` per Opening predicate before any task; Continuation retains the full bounded result vector and reuses it by canonical linear position. Current predicates evaluate immediately before their step and therefore observe successful earlier-step effects in the same attempt.
+Each `TimedPredicate` names `ObservationTiming::Opening` or `Current`. Fresh-cycle opening evaluates and stores one `Result<bool, PredicateError>` per Opening predicate before any task; Continuation retains the full bounded result vector and reuses it by canonical linear position. Current predicates evaluate immediately before their step and therefore observe successful earlier-step effects in the same attempt.
 
-Admission sorts predicates and clauses by canonical typed SCALE, removes repeated predicates within a clause, rejects clauses that become semantically identical, and stores only the canonical form. `update_contract` canonicalizes before equality and returns an exact no-op before rate limiting, cancellation, writes, placement reconstruction, or events when the resulting contract is unchanged.
+Admission sorts predicates and clauses by canonical typed SCALE, removes repeated predicates within a clause, rejects clauses that become semantically identical, absorbs exact predicate-superset clauses, and stores only the canonical form. `update_contract` canonicalizes before equality and returns an exact no-op before rate limiting, cancellation, writes, placement reconstruction, or events when the resulting contract is unchanged.
 
-Evaluation fees and cycle/suffix Weight use `evaluation_units = total predicates + Opening predicates`, accounting conservatively for opening capture plus full expression visitation. A false DNF expression emits `StepSkipped(ConditionsNotMet)` and advances one fixed cursor; evaluation errors remain task-independent failures routed through the authored step policy.
+Evaluation fees and cycle/suffix Weight use `evaluation_units = total predicates + Opening predicates`, then chunk the units by `MaxPredicatesPerStep` before calling the benchmarked component. This accounts for opening capture plus full expression visitation without relying on the generated component clamp. A false DNF expression emits `StepSkipped(PreconditionFalse)` and advances one fixed cursor; evaluation errors remain task-independent failures routed through the authored step policy.
 
-`ObservationProvider<FeedId, BlockNumber>` is the generic current-scalar boundary. The host receives `feed`, `now`, and `max_age_blocks`; `Fresh` returns both `value` and `observed_at`. Actors accepts Fresh only when `observed_at <= now` and checked age stays within the authored maximum. Future or over-age Fresh maps to `PredicateEvaluation::Invalid`, while explicit Unavailable, Uninitialized, and Stale states produce ordinary false results.
+`ObservationProvider<FeedId, BlockNumber>` is the generic current-scalar boundary. The host receives `feed`, `now`, and `max_age_blocks`; `Fresh` returns both `value` and `observed_at`. Actors accepts Fresh only when `observed_at <= now` and checked age stays within the authored maximum. Future or over-age Fresh maps to `PredicateError::InvalidObservation`, while explicit Unavailable, Uninitialized, and Stale states produce ordinary false results.
 
 Plan validation rejects zero `max_age_blocks`, fixed-zero and percentage-zero amount resolutions, self-directed Transfer/SplitTransfer recipients, zero absolute input ceilings, zero liquidity minima, and identical swap/liquidity asset pairs. Creation predicts User custody from the first available or explicitly requested slot before fee collection; update and activation validate against the stored sovereign account.
 
@@ -97,17 +110,40 @@ Task set in implementation:
 - `Unstake`
 - `StopCycle` (User/System, fieldless, adapter-free)
 
+### Public Inventory Evidence
+
+`public_reachability_inventory_is_closed_and_canonical` freezes the reviewed SCALE names and order for the listed Actors public families. Semantic-contract tests exhaustively interpret Task, Predicate, amount, and policy families, while focused production, simulation, embedding, metadata, and ABI tests cover the named seams below. This evidence does not claim universal call-graph reachability from every public variant to a production constructor.
+
+`public_api_error_signatures_use_shared_typed_cores` compiler-checks that the eligibility runtime API returns `ActorClassificationError` directly and simulation wraps that core once in `SimulationError`. Its exhaustive classification-to-dispatch match fails compilation when the shared core grows without a mapping. Focused eligibility and simulation tests cover the cited public roots; metadata/spec drift checks freeze Event and pallet Error inventories without asserting universal constructor reachability.
+
+| Family | Retained variants | Reviewed executable evidence |
+| --- | --- | --- |
+| Predicate | `BalanceAbove`, `BalanceBelow`, `BalanceEquals`, `BalanceNotEquals`, `BlockNumberAbove`, `BlockNumberBelow`, `ObservationAbove`, `ObservationBelow`, `ObservationEquals`, `ObservationNotEquals` | Active contract calls; `every_predicate_is_pure_and_bounded`, predicate evaluator and observation tests |
+| Task | `Transfer`, `SplitTransfer`, `SwapIn`, `SwapOut`, `AddLiquidity`, `RemoveLiquidity`, `Burn`, `Mint`, `Stake`, `DonateLiquidity`, `Unstake`, `StopCycle` | Active contract calls; `every_task_has_one_exhaustive_semantic_contract`, task tests, and independent runtime profiles |
+| Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`, `AllAvailable`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests and independent exact-output evidence |
+| Trigger | `Immediate`, `Cadenced`; `Always`, `WhenSignalled`; `Manual`, `OnAddressEvent`, `OnObservationChange`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Schedule constructors plus raw typed calls; manual, certified-ingress, observation-fanout, cadence, and embedding tests |
+| Funding | `OwnerOnly`, `SignedAllowlist`, `RuntimePolicy`, `AnyVerifiedIngress`; provenance `Signed`, `InternalProtocol`, `Xcm` | Active contract and certified producer constructors; funding-policy package tests and DEOS producer inventory |
+| Completion and step policy | `Persistent`, `CloseAfterProductiveCycle`; `AbortCycle`, `ContinueNextStep`, `RetryLater` | Active contract constructors; productive-close and exhaustive transition-matrix tests |
+| Attempt and step views | `AttemptDisposition::{Completed, Failed, Suspended, Closed}`; `StepOutcome::{Executed, Stopped, Skipped, FundingUnavailable, Failed}` | Shared production evaluator; production/simulation parity tests |
+| Eligibility view | `NotRegistered`, `Dormant`, `Ready`, `Paused`, `GlobalCircuitBreaker`, `CloseDue`, `WaitingSignal`, `WaitingRetry`, `WaitingTemporal` | `actor_eligibility`; `eligibility_projection_*` tests |
+| Simulation | `FreshCurrentPlan`, `CurrentContinuation`; every `SimulationError` in specification Section 7.2 | `simulate_current_contract`; package simulation and independent runtime tests |
+| Adapter result | `RetryClass::{Permanent, Temporary}`; scalar observation `Unavailable`, `Uninitialized`, `Fresh`, `Stale` | Host adapters and fail-closed unit implementations; runtime Oracle mapping, retry matrix, and embedding tests |
+| Event | Every variant in specification Section 8 and runtime metadata | Production `deposit_event` sites; event-order, task, lifecycle, ingress, scheduler, and generated ABI tests |
+| Error | Every variant in specification Section 9.2 and runtime metadata | Production `ensure!`/error branches; rejection, rollback, exact metadata/spec, package, and embedding tests |
+
+`CancellationReason::RuntimeUpgrade` and semantic-manifest `ContextDependency::None` were removed because neither had a production constructor. Runtime upgrades remain migration-specific work under specification Section 9.4 rather than a permanently encoded placeholder. Every amount classifier now reports its actual task-policy dependency.
+
 `SwapOut` groups authored output before explicit `InputLimit::{LiveQuote, Absolute(Balance)}` protection. `Absolute(0)` fails before storage; `Absolute(nonzero)` composes its ceiling with live preservable input capacity, while `LiveQuote` intentionally uses that capacity without an authored long-horizon ceiling. `DexOps::swap_exact_out` always receives the resulting finite bound.
 
 Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` reaches `LiquidityOps::add_liquidity`; the host adapter must reject a measured LP output below that bound.
 
 `RemoveLiquidity.min_amount_a` and `min_amount_b` pass directly into Asset Conversion. Its two exact withdrawal-minimum errors classify as Temporary; malformed pair identity, missing indexed topology, and unknown downstream failures remain Permanent. The outer adapter transaction retains post-call balance-delta checks as defense in depth, so no success event or partial liquidity mutation survives either enforcement layer.
 
-`StopCycle` executes only after its conditions and ordinary User fee collection succeed. It records `SimulationStepOutcome::Stopped`, emits `CycleStopped { actor_id, cycle_nonce, step_index }`, and ends the logical cycle successfully at that cursor.
+`StopCycle` executes only after its precondition and ordinary User fee collection succeed. The canonical evaluator produces `StepOutcome::Stopped`, production emits `CycleStopped { actor_id, cycle_nonce, step_index }`, and the shared policy interpreter ends the logical cycle successfully at that cursor.
 
 The shared completion path emits the cumulative summary, leaves later funding accumulation untouched, evaluates completion policy and auto-close, clears a resumed Continuation, and leaves the suffix unreachable.
 
-The instruction does not resolve an amount, invoke a runtime adapter, select a successor, or directly mutate actor lifecycle/scheduler state. It increments `executed_steps` but not `committed_effectful_tasks`, so an empty stop cannot close a one-shot productive actor. A false condition advances normally; preparation or fee failure occurs before successful stop admission and follows the step's existing error policy.
+The instruction does not resolve an amount, invoke a runtime adapter, select a successor, or directly mutate actor lifecycle/scheduler state. It increments `executed_steps` but not `committed_effectful_tasks`, so an empty stop cannot close a one-shot productive actor. A false Precondition advances normally; Predicate-evaluation or fee-collection failure occurs before successful stop admission and follows its owning runtime boundary.
 
 ### Amount Resolution
 
@@ -147,13 +183,17 @@ Resolution and charging follow these rules:
 
 Pallet boundary tests cover fixed, current/trigger/last-funding percentages, split totals, and `AllAvailable` across native, sufficient-asset, and staking-share surfaces. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
 
-Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier steps in the same execution plan remain committed.
+Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier Steps in the same Actor Contract remain committed.
 
 `src/contract.rs` is the package-owned semantic classification surface. Exhaustive matches derive task adapter/assets/recipients/effects/availability/weight ownership/bounded algorithms, typed task amount roles with dependency and retry behavior, predicate observations and purity, and error-policy controls.
 
 `TaskWeightOwner::weight` selects the corresponding method on the runtime's single `WeightInfo`; the module adds no codec, storage, runtime API, or parallel numeric weight authority. Package tests instantiate every current primitive, while a new enum variant makes its owning match non-exhaustive. The package example `semantic_manifest` verifies ordered task and amount coverage against SCALE metadata and emits one deterministic format-neutral contract projection.
 
-The control-flow firewall combines closed types with adversarial evidence. `Step` metadata exposes exactly `preconditions`, `task`, and `on_error`; exhaustive variant contracts admit no successor, nested contract, callback, generic `RuntimeCall`, or opaque dispatch field. `Preconditions` classification fixes full bounded visitation, whole-expression error, one admitted task, and false advance. Predicates and amount classifiers expose read dependencies and never a control target.
+The control-flow firewall combines closed types with adversarial evidence. `Step` metadata exposes exactly `precondition`, `task`, and `on_error`; exhaustive contracts admit no successor, nested contract, callback, generic `RuntimeCall`, or opaque dispatch field. Optional `Precondition` classification fixes full bounded visitation, whole-expression error, one admitted task, and false advance. Predicates and amount classifiers expose read dependencies and never a control target.
+
+The execution kernel produces one `StepOutcome` for each visited Step after canonical precondition, amount, fee, and task evaluation. `StepOutcome::Failed(TaskFailure)` retains the concrete `DispatchError` cause and orthogonal `RetryClass`; `resolve_step_control` interprets that outcome with the authored policy without a simulation-only failure vocabulary.
+
+One `AttemptDisposition::{Completed, Failed, Suspended, Closed}` owns final production and simulation meaning. Production emits events and commits state from it; simulation returns the same disposition and final counters while its transaction rolls back. Bounded trace records wrap shared Step outcomes and do not reconstruct task, predicate, amount, fee, failure, or finalization semantics.
 
 `resolve_step_control` remains the only runtime transition owner, with the exhaustive policy/mutability/failure matrix and same-cursor Continuation regressions pinning retry identity. Task-local transactions forbid callback-visible partial mutation. Bounded vectors, adapter capability contracts, generated worst-case weights, maximum-plan tests, and circular scheduler stress bound adapter and cross-actor work without interpreting local plans recursively.
 
@@ -191,7 +231,7 @@ A cycle is admitted only when all checks pass:
 
 Attempt Weight and User fees are derived from the current bounded contract at every use. Fresh attempts scan the full plan, while suspended attempts scan only the bounded `cursor..plan.len()` suffix and compose generated retry/suffix-admission classes.
 
-Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, attempt, cursor, funding snapshot, or task effect changes. Persistent live-head Weight blockage, fee-collection failure, or invariant stall becomes observable only through sparse starvation transition events.
+Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, cursor, funding snapshot, or task effect changes. Persistent live-head Weight blockage, fee-collection failure, or invariant stall becomes observable only through sparse starvation transition events.
 
 Deferral/terminal paths:
 
@@ -199,16 +239,16 @@ Deferral/terminal paths:
 - pure terminal cleanup prechecks every fallible identity, funding, count, reverse-index, and User-slot invariant before mutation; no close retry or requeue state exists
 - Pre-cycle close precedence is deterministic: `WindowExpired` > `BalanceExhausted` > `FeeBudgetExhausted`
 - User fee shortfall at admission → terminal `FeeBudgetExhausted` close
-- `CycleResult::Completed` means authored control reached terminal without an abort: skip-only and all-failed-`ContinueNextStep` runs remain Completed, reset `consecutive_failures`, and may satisfy nonce auto-close. Their counters remain factual; only at least one committed non-`StopCycle` task satisfies productive close. Abort emits `Failed`; explicit invalidation emits `Cancelled`.
-- Post-failure close is inclusive at `consecutive_failures >= MaxConsecutiveFailures`; an admitted cycle emits its authoritative `CycleSummary` before pure cleanup emits `ActorClosed`, matching post-success `AutoCloseNonceReached` ordering
-- Explicit, automatic, lifecycle-touch, dormant, and sweep paths share one pure cleanup routine: no task, condition, fee, funding restoration, sovereign-balance movement, or shared queue/wakeup scan occurs
+- `CycleResult::Completed` means authored control reached terminal without an abort: skip-only and all-failed-`ContinueNextStep` runs remain Completed, reset `unsuccessful_attempt_streak`, and may satisfy nonce auto-close. Their counters remain factual; only at least one committed non-`StopCycle` task satisfies productive close. Abort emits `Failed`; explicit invalidation emits `Cancelled`.
+- Post-failure close is inclusive at `unsuccessful_attempt_streak >= MaxConsecutiveFailures`; an admitted cycle emits its authoritative `CycleSummary` before pure cleanup emits `ActorClosed`, matching post-success `AutoCloseNonceReached` ordering
+- Explicit, automatic, lifecycle-touch, dormant, and sweep paths share one pure cleanup routine: no Task, Precondition, fee, funding restoration, sovereign-balance movement, or shared queue/wakeup scan occurs
 - Active close prevalidates identity, counts, reverse ownership, slot ownership, funding presence, and subscriptions, then commits cancellation, actor-store deletion, counter/locator release, and the close event in one storage transaction; any residual late error rolls back the complete terminal mutation
 - Removing `ActorHot` lazily invalidates its ticket and wakeup pointer; bounded stale records converge through ordinary page draining
 - Every bounded window validates checked `end + 1` representability, rejects overflow, and schedules that exact terminal block through `ActorHot.terminal_at`; trigger and terminal readiness share one live wakeup pointer and retain the earlier target
 - Paused actors remain hot-only before terminal time and load `ActorContract` only when closure is due
 - With `GlobalCircuitBreaker` active, normal cycles and scheduler-owned terminal cleanup defer; bounded housekeeping plus explicit lifecycle/sweep cleanup remain available
 
-`ActorContract.completion_policy` defaults to `Persistent`. `CloseAfterProductiveCycle` checks cumulative `committed_effectful_tasks` only after successful logical-cycle completion, including a resumed Continuation. False/latest-state-rejected conditions, skips, rolled-back failures, bare `StopCycle`, suspension, abort, cancellation, and retry exhaustion cannot select `ProductiveCycleCompleted`. The pure close path remains valid for Immutable System actors and preserves their sovereign balances.
+`ActorContract.completion_policy` defaults to `Persistent`. `CloseAfterProductiveCycle` checks cumulative `committed_effectful_tasks` only after successful logical-cycle completion, including a resumed Continuation. False latest-state Precondition results, skipped Steps, rolled-back failures, bare `StopCycle`, suspension, abort, cancellation, and retry exhaustion cannot select `ProductiveCycleCompleted`. The pure close path remains valid for Immutable System actors and preserves their sovereign balances.
 
 Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_cycle_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims.
 
@@ -220,8 +260,8 @@ The generic pallet collects creation and per-step User fees through one runtime-
 
 Fee collection is exact-once: one charge performs one read-only ingress preflight, one fee-native ledger movement, and one post-movement notification inside one outer transaction. The ledger-only movement primitive performs no generic transfer/transaction-extension ingress and no native-staking bridge; notifying the same movement twice is impossible, zero/no-op collection emits no ingress, and failure rolls back movement and all Actors state.
 
-- Conditions and task preparation run read-only before collection determines the step outcome.
-- Every attempted User step invokes `FeeCollector` at most once: condition/resolution/funding non-execution charges evaluation-only, while an executable step charges evaluation plus generated execution fee together.
+- Predicate and Task preparation run read-only before collection determines the Step outcome.
+- Every attempted User Step invokes `FeeCollector` at most once: false Precondition or resolution/funding non-execution charges evaluation-only, while an executable Step charges evaluation plus generated execution fee together.
 - Collection failure rolls back the complete scheduler attempt before step policy, task dispatch, queue consumption, or any persistent fee, event, counter, nonce, cursor, or snapshot mutation. Simulation reports interface-local `FeeCollectionFailed`.
 - After successful collection, adapter failure rolls back task-local effects but retains the one combined charge; `ContinueNextStep` and `AbortCycle` never alter that charge or trigger another collection.
 - `fee_native_protected_minimum` applies `max(MinUserBalance, asset minimum)` to User fee-native direct preserve-spend capacity and `SwapOut` input capacity after the selected reservation; other assets retain their adapter minimum.
@@ -234,27 +274,39 @@ Pallet regressions cover each outcome, collection failure, one-call cardinality,
 
 Attempt `0` opens one logical cycle and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater { max_attempts }` increments both global failure state and the cursor-local count. The first suspension stores `1`; same-cursor suspension increments saturatingly, while a later cursor resets to `1`.
 
+`transition_failure_streak` is the sole mutation formula: an unsuccessful attempt checked-increments, while completed execution or semantic Step replacement resets to zero. Suspension and terminal failure call that owner once, classification only reads its result, and simulation inherits the same transition through canonical execution.
+
 Post-attempt counters use checked addition. Inclusive local exhaustion closes with `RetryAttemptsExhausted`; when both cutoffs land together this reason wins, while an earlier global cutoff closes with `ConsecutiveFailures`. Exhaustion clears Continuation, emits `CycleSummary(Failed)` without `CycleCancelled`, then closes. An already-reached global cutoff closes before another `CycleStarted` or `CycleContinued`. Persisted retry reuses the nonce, omits external cadence, and executes only the suffix.
 
-`scheduler::retry_backoff_blocks` maps persisted attempt `0, 1, 2, ...` to `1, 2, 4, 8, 8...` blocks. Eligibility uses the larger of this delay and schedule cooldown, omits external cadence for the open run, then respects window start. A one-block delay uses the existing next-block FIFO ticket; longer delays use the existing paged wakeup pointer.
+`scheduler::retry_backoff_blocks` uses checked capped exponentiation to map persisted attempt `0, 1, 2, ...` to `1, 2, 4, 8, 8...` blocks.
 
-`scheduler::timer_jitter_blocks` reads the first eight Blake2-256 bytes of SCALE-encoded `actor_id` as little-endian `u64` and applies the protocol modulo window. This deterministic value spreads timer admission only; it carries no secrecy, unpredictability, targeting resistance, ordering protection, or MEV property.
+`Attempt identity proof`: `cycle_nonce` identifies the logical cycle, and the scheduler's one-execution-per-actor-per-block invariant makes `(actor_id, cycle_nonce, block_number, event_index)` unique for every opening or Continuation attempt. Cursor and `unsuccessful_attempts_at_cursor` state the semantic retry position. No cycle-global attempt ordinal is stored, emitted, simulated, or projected; executable evidence covers opening, repeated suspension, and completion coordinates.
 
-`resolve_step_control` is the private exhaustive transition owner for completed, funding-unavailable, Permanent-failure, and Temporary-failure results across both mutability modes and all three error policies. Production execution calls it for adapter and funding decisions, and `simulate_current_contract` inherits the same decision because it invokes `execute_single_cycle_traced`; a pure matrix regression pins all combinations.
+Eligibility uses the larger of this delay and schedule cooldown, omits external cadence for the open run, then respects window start. A one-block delay uses the existing next-block FIFO ticket; longer delays use the existing paged wakeup pointer.
+
+`Backoff decision evidence`: over 64 unavailable blocks at the 10,000-actor bound, capped exponential creates 100,000 due retry obligations and recovery-wait sum 210. Fixed delays of 1, 4, and 8 cause `640,000/0`, `160,000/96`, and `80,000/224` respectively. Every policy retains the same 10,000 wakeup cohort and FIFO order, and each serviced retry has the same Weight class. No fixed delay improves aggregate pressure and recovery together, so capped exponential remains canonical.
+
+`Timer phase decision`: `tests/fixtures/timer-jitter-decision.v1.json` preserves the 10,000-actor comparison. Historical jitter expanded two targets to 128 while leaving tail service, `PassExhausted`, serviced Weight, FIFO, suspension, and retry recovery unchanged; peak queue improved by less than 2.5%. The implementation therefore uses exact cadence from `schedule_anchor` with no phase constant, hash, arithmetic, metadata, or host configuration.
+
+`resolve_step_control` is the private exhaustive transition owner for executed, stopped, skipped, funding-unavailable, Permanent-failure, and Temporary-failure outcomes across all three error policies. Production execution and `simulate_current_contract` both invoke `execute_single_cycle_traced`.
+
+`canonical_step_transition_matrix_has_production_simulation_parity` runs every Section 3.4 row, Actor type, mutability, error-policy variant, Step-outcome variant, local/global bound, and fresh/Continuation attempt. Variant counts fail closed when either canonical enum grows.
+
+The matrix compares rollback-only simulation with independently observed production events, counters, cursors, failure streaks, fees, balances, custody, suffix effects, and final disposition. The protocol-coherence audit rejects specification/matrix and enum-inventory drift, and Actors assurance executes the focused matrix.
 
 Task-scoped rollback leaves earlier successful steps committed. The named `SwapIn → AddLiquidity → Transfer` and Burn-prefix regressions prove same-cursor retry, prefix non-replay, cumulative outcomes, and no cancellation compensation. The fixed-seed model `0xDE05_0730` independently checks sparse state, cursor progress, queue/wakeup uniqueness, funding accumulation, frozen cycle snapshots, and cancellation after each transition.
 
 `simulate_current_contract` is the package-owned rollback core behind versioned `ActorSimulationApi` runtime metadata. It requires exact stored Active Actor Contract, actor type, mutability, mode/run-state, readiness, liveness, and User fee budget. Simulation and production admission use the same package-owned suffix envelope and predicate: checked fee-native balance above `MinUserBalance` must cover `attempt_fee_upper`; raw balance alone never admits a User attempt.
 
-The API executes the production path with an optional bounded trace and exposes fresh or Continuation outcomes including `unsuccessful_attempts_at_cursor`. Terminal closure returns `SimulationStatus::Closed(CloseReason)`. The whole attempt runs inside `TransactionOutcome::Rollback`; package tests prove actor state, balances, events, fees, adapter effects, and stored Continuation remain unchanged.
+The API executes the production path with an optional bounded trace and exposes fresh or Continuation outcomes including `unsuccessful_attempts_at_cursor`. Terminal closure returns `AttemptDisposition::Closed(CloseReason)`. The whole attempt runs inside `TransactionOutcome::Rollback`; package tests prove actor state, balances, events, fees, adapter effects, and stored Continuation remain unchanged.
 
-Semantic execution-plan, funding-policy, schedule, window, deactivation, terminal, and close transitions share `cancel_continuation_internal`. Exact encoded plan/completion-policy, funding-policy, schedule/window, auto-close-target, and global active-limit updates return without storage or event mutation; semantic auto-close target changes preserve Continuation.
+Semantic Contract Steps, funding-policy, schedule, window, deactivation, terminal, and close transitions share `cancel_continuation_internal`. Exact encoded plan/completion-policy, funding-policy, schedule/window, auto-close-target, and global active-limit updates return without storage or event mutation; semantic auto-close target changes preserve Continuation.
 
 Every external control that invalidates or reconstructs ordinary membership shares one class-independent actor/block clock across signed-owner and governance origins; exact no-ops, internal transitions, and terminal cleanup remain exempt.
 
-Cancellation emits `CycleCancelled` before one cumulative terminal `CycleSummary(Cancelled)` without compensation or prefix rollback. The closed reason set distinguishes explicit, plan, completion-policy, funding-policy, schedule, deactivation, typed `Closing(CloseReason)`, and runtime-upgrade causes; the last two remain available to terminal cleanup and the pending upgrade manifest.
+Cancellation emits `CycleCancelled` before one cumulative terminal `CycleSummary(Cancelled)` without compensation or prefix rollback. The reason set distinguishes explicit, Steps, completion, funding, schedule, deactivation, and typed `Closing(CloseReason)` causes. Runtime-upgrade cancellation is not a public placeholder; a deployed host that needs one must ship the concrete bounded migration and its executable constructor together.
 
-`CycleStarted` appears once per nonce. `CycleContinued` and `CycleSuspended` carry `(actor_id, cycle_nonce, attempt)`; suffix step events retain the nonce and their order belongs to the surrounding attempt boundary. Current sparse state is canonical-chain truth. Unbounded attempt history remains materialized.
+`CycleStarted` appears once per nonce. `CycleContinued` and `CycleSuspended` carry `(actor_id, cycle_nonce, cursor)`; suffix step events retain the nonce and their order belongs to the surrounding attempt boundary. Current sparse state is canonical-chain truth. Unbounded attempt history remains materialized.
 
 ### Read-Only Eligibility Projection
 
@@ -333,9 +385,9 @@ Recovery is governance-operated (circuit breaker or parameter adjustment); no em
 ### Cadence
 
 - Cadence readiness is deterministic only; Actors exposes no probability field, entropy provider, secure/insecure branch, hash fallback, probability event, or probability error.
-- Delayed cadence derives actor-stable anti-storm jitter from `Blake2_256(actor_id)`, and schedule validation includes the maximum reachable jitter (`window - 1`) within `MaxExecutionDelayBlocks`.
-- Active installation and replacement prevalidate exact next-block, cooldown, maximum cadence-plus-jitter, and window-terminal targets before mutation. Runtime rearm derives cadence gates, retry backoff, and queue-capacity fallback with checked final-type arithmetic; an unrepresentable target fails closed as scheduler-index exhaustion instead of saturating into the current block or another semantic target. Saturation remains only in specification-owned observational elapsed-age calculations.
-- `Cadenced::WhenSignalled` latches work immediately but applies cadence before scheduler admission. It retains one cadence wakeup while clean; a missed gate advances arithmetically to the next actor-stable gate, so a later signal cannot execute immediately against a stale first-eligibility anchor. `Cadenced::Always` re-arms from admitted-run cadence without a source.
+- Cadence uses `schedule_anchor` as its exact origin and derives no actor-specific phase.
+- Active installation and replacement prevalidate exact next-block, cooldown, maximum cadence, and window-terminal targets before mutation. Runtime rearm derives cadence gates, retry backoff, and queue-capacity fallback with checked final-type arithmetic; an unrepresentable target fails closed as scheduler-index exhaustion instead of saturating into the current block or another semantic target. Saturation remains only in specification-owned observational elapsed-age calculations.
+- `Cadenced::WhenSignalled` latches work immediately but applies cadence before scheduler admission. It retains one cadence wakeup while clean; a missed gate advances arithmetically to the next exact cadence gate, so a later signal cannot execute immediately against a stale first-eligibility anchor. `Cadenced::Always` re-arms from admitted-run cadence without a source.
 - Any future probabilistic execution requires a separate append-only admission policy and a concrete financially secure runtime entropy contract rather than an optional field on deterministic cadence.
 
 ### Trigger Sources
@@ -350,13 +402,13 @@ Filter surface:
 Each producer event evaluates every configured source atom without short-circuit. Several atoms matching one event fold into one readiness decision; funding/provenance mutation runs once outside that fold. Distinct producer events still apply funding independently, while pending readiness shares one latch and one bounded actor-queue membership without coalescing value effects.
 When a signalled cycle starts, the latch is consumed atomically.
 
-`OnObservationChange` ships as an append-only SCALE source atom at index `2`. Its payload contains one typed feed identity only; thresholds remain Condition-owned. `note_observation_changed` enters Actors dirty-feed state without a subscriber walk, amount payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
+`OnObservationChange` ships as an append-only SCALE source atom at index `2`. Its payload contains one typed feed identity only; thresholds remain Predicate-owned. `note_observation_changed` enters Actors dirty-feed state without a subscriber walk, amount payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
 
 Opening-snapshot surface validation runs at genesis, creation, activation, and plan replacement. It requires every staking-share mapping to exist but remains independent from trigger kind, signal payload, and event amount.
 
 `ActorObservationFeeds` stores each active actor's canonical source-derived feed set. A reusable dense slot has exact `ObservationSubscriptionSlot` and reverse-owner entries. `ObservationFreeSlotPages` provides one-page LIFO allocation bounded by `MaxActiveActors`, so identity churn reuses slots rather than growing consensus keys.
 
-`ObservationSubscriberPages(feed, slot / QueuePageSize)` stores an optional actor at `slot % QueuePageSize`. Each page also stores previous/next occupied page ids, while `ObservationSubscriberPageLists(feed)` stores exact head, tail, and live page count. First insertion appends one page; last removal unlinks it through at most two neighbors. Schedule updates still touch only old/new feed differences, and execution-plan updates touch none.
+`ObservationSubscriberPages(feed, slot / QueuePageSize)` stores an optional actor at `slot % QueuePageSize`. Each page also stores previous/next occupied page ids, while `ObservationSubscriberPageLists(feed)` stores exact head, tail, and live page count. First insertion appends one page; last removal unlinks it through at most two neighbors. Schedule updates still touch only old/new feed differences, and Contract Steps updates touch none.
 
 `ObservationSubscriberCount` and `ObservationSubscriptionCount` expose bounded current cardinality. Try-state reconciles actor/feed ownership, free slots, page cells, reciprocal occupied links, list bounds, and counts. Fanout initializes from the feed-local head and follows exact page links, so an isolated subscriber in a historically high global slot costs one occupied-page unit rather than every lower page id.
 
@@ -397,7 +449,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `NextActorId`: monotonic actor ID allocator
 - `ActorIdentities`: one durable identity map for Active and Dormant actors, retaining owner, class/custody locator, mutability, sovereign account, `cycle_nonce`, and non-optional `last_control_mutation_block`
 - `ActorHot`: active/paused lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, and direct `terminal_at`
-- `ActorContract`: active schedule/window plus the bounded cycle plan; the metadata maximum is 7,144 bytes
+- `ActorContract`: active schedule/window plus bounded ordered `ContractSteps`; the generated storage descriptor maximum is 10,524 bytes
 - `ActorFunding`: active-only canonical funding-source policy, bounded tracked-asset set, and `funding_accumulated[asset] = amount`; authorized ingress adds checked deltas, fresh cycle opening atomically takes the map as its frozen snapshot, and later ingress remains accumulated for the next cycle
 - `ActorIdentityCount`: transactionally maintained O(1) `ActorIdentities` cardinality bounded by `MaxActorIdentities`
 - `ActiveActorCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorContract`, and `ActorFunding`
@@ -419,7 +471,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 The package ships a fresh-genesis storage baseline and no historical `OnRuntimeUpgrade` bridge. Pallet genesis writes the current storage version; package and independent-runtime tests reconcile current/on-chain versions with `try_state`. A live downstream host owns any later bounded migration.
 
-The independent zero-topology runtime proves exact bounded-DNF SCALE round trips, metadata names, nonempty `AnyOf` `try_state`, and one Executive-submitted `Unconditional` plus DNF plan. The package test suite uses a names-and-order SCALE contract instead of isolated numeric pins; the metadata-derived Actors ABI manifest plus PAPI descriptors own variant indices, and the pallet error surface matches the corrected spec §12.2 list in both directions. Default, try-runtime, no-std, and runtime-benchmark profiles remain independent of DEOS types.
+The independent zero-topology runtime proves exact bounded-DNF SCALE round trips, metadata names, nonempty present-Precondition `try_state`, and Executive-submitted absent and present Precondition plans. The package test suite uses a names-and-order SCALE contract instead of isolated numeric pins; the metadata-derived Actors ABI manifest plus PAPI descriptors own variant indices, and the pallet error surface matches the corrected spec §12.2 list in both directions. Default, try-runtime, no-std, and runtime-benchmark profiles remain independent of DEOS types.
 
 ## Lifecycle State Machine
 
@@ -431,30 +483,30 @@ Created Dormant ⇄ Active → Ready → Admitted → Running ⇄ Suspended → 
 
 Lifecycle calls preserve the split-store boundary:
 
-- `activate_actor` accepts typed `ContractInput::Active(ActiveContractInput)` and validates schedule/window, cycle plan, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorContract`, and `ActorFunding` entries for a Mutable identity; `ContractInput::Dormant` is rejected.
+- `activate_actor` accepts typed `ContractInput::Active(ActiveContractInput)` and validates schedule/window, Contract Steps, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorContract`, and `ActorFunding` entries for a Mutable identity; `ContractInput::Dormant` is rejected.
 - `deactivate_actor` clears queues, wakeups, pending signal, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances.
 
 Active and dormant creation normalize into one typed internal boundary. Every creation path consumes `ContractInput`; no lineage/reopen call or explicit actor-id creation path remains.
 
 Package lifecycle interpretation:
 
-- `Normal cycle`: scheduler-owned `execution_plan` run; checked-increments the stored nonce before events, so a new actor's first run emits nonce `1` and the run from `u64::MAX - 1` emits and executes nonce `u64::MAX`; a later Active installation or run at stored exhaustion executes no normal steps or cycle events and closes either class with `CycleNonceExhausted`
+- `Normal cycle`: scheduler-owned `contract_steps` run; checked-increments the stored nonce before events, so a new actor's first run emits nonce `1` and the run from `u64::MAX - 1` emits and executes nonce `u64::MAX`; a later Active installation or run at stored exhaustion executes no normal steps or cycle events and closes either class with `CycleNonceExhausted`
 - `Pure close`: prechecked actor-local state/index deletion; executes no cycle or task and emits `ActorClosed` exactly once
 - `Lifecycle touch`: extrinsics such as `manual_trigger`, `pause_actor`, `permissionless_sweep`, and plan/schedule updates may detect terminal state before their normal mutation path; ordinary deposits into expired/closed sovereign addresses remain balance-only
 
 Creation and mutability rules are explicit:
 
-- Lowest-free-slot and exact-slot User creation accept complete typed `ContractInput`: Active Actor Contracts carry one `ActiveContractInput` with schedule/window, cycle plan, completion/funding policy, and optional auto-close target; Dormant identities carry no contract.
+- Lowest-free-slot and exact-slot User creation accept complete typed `ContractInput`: Active Actor Contracts carry one `ActiveContractInput` with schedule/window, Contract Steps, completion/funding policy, and optional auto-close target; Dormant identities carry no contract.
 - Fresh System creation allocates matching actor and custody-locator ids. `create_system_actor_at_sovereign_id` requires an allocated vacant locator, creates a fresh actor id with nonce zero, and accepts complete Active or Dormant input without inheriting lineage state.
 - Mutable actors may replace the authored contract through `update_contract`; Immutable actors fix it for actor lifetime.
-- User actors cannot admit `Mint` in the cycle plan.
+- User actors cannot admit a `Mint` Task in Contract Steps.
 - Immutable System actors reject Manual sources at admission; no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, or close one. Reattachment after terminal close creates a distinct identity and does not mutate the former actor.
 
 Mandatory runtime-owned terminal transitions remain distinct from the control guard. Immutable System actors may use an execution window or another internal terminal condition; an actor with none may remain Active indefinitely under the current dispatch contract. Failure threshold and window expiry use pure cleanup. Only a runtime upgrade can replace this immutability contract.
 
 Scheduler hygiene follows the specification's bounded liveness matrix:
 
-- One `next_eligible_at` calculation combines admitted-run cooldown, deterministic cadence plus actor-stable jitter, and window start.
+- One `next_eligible_at` calculation combines admitted-run cooldown, exact deterministic cadence, and window start.
 - Execution-created late enqueues join next-block queue state only when eligibility reaches that block; later eligibility receives one wakeup.
 - Immediate sources omit cadence but retain cooldown and window gates; sources under `Cadenced::WhenSignalled` retain cadence as well.
 - Paused Cadenced actors consume no continuation after a due wakeup; resume re-primes from effective eligibility. Pending signalled actors re-prime under their configured Immediate or Cadenced gate.
@@ -471,7 +523,7 @@ This subsystem follows the project-wide [`read-model.contract.en.md`](../../../.
 The current pallet already provides chain-native bounded reads for live actor and scheduler truth through:
 
 - `actor_hot(actor_id)` for lifecycle, identity/control, queue membership, cycle state, and cached bounds
-- `actor_contract(actor_id)` for schedule/window and bounded cycle plan
+- `actor_contract(actor_id)` for schedule/window and bounded `ContractSteps`
 - `actor_funding(actor_id)` for funding policy, tracked assets, and the bounded accumulated-delta map
 - `owner_slot_bitmap(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(actor_id)` for System Actor addressing against the known runtime catalog
@@ -512,19 +564,19 @@ Actor discovery is intentionally split by use case:
 | `4` | `pause_actor` | mutable actors only |
 | `5` | `resume_actor` | mutable actors only |
 | `6` | `manual_trigger` | set flag and enqueue/schedule |
-| `7` | removed | retired pre-launch separate funding mutation; `update_contract` owns authored replacement |
+| `7` | removed | retired separate funding mutation; `update_contract` owns authored replacement |
 | `8` | `close_actor` | prechecked pure destruction in place |
 | `9` | `update_contract` | mutable actors; atomically replace schedule, window, steps, funding, and completion |
 | `10` | `set_global_circuit_breaker` | breaker control |
 | `11` | `permissionless_sweep` | liveness touchpoint, no normal cycle |
-| `12` | removed | retired pre-launch separate steps/completion mutation; `update_contract` owns authored replacement |
+| `12` | removed | retired separate steps/completion mutation; `update_contract` owns authored replacement |
 | `13` | `set_active_actor_limit` | governance operational cap tuning |
 | `14` | `permissionless_sweep_many` | bounded batch touchpoint, no direct enqueue |
 | `15` | `set_auto_close_at_cycle_nonce` | set/clear cycle lease with horizon checks |
 | `16` | `increment_auto_close_nonce` | extend cycle lease, checked and bounded |
-| `17` | removed | retired pre-launch close-plan mutation |
+| `17` | removed | retired close-plan mutation |
 | `18..=20` | reserved | retired transitional dormant creation calls; canonical User/System creation accepts `ContractInput::Dormant` |
-| `21` | `activate_actor` | typed Active Actor Contract with schedule, cycle plan, funding policy, and admission validation |
+| `21` | `activate_actor` | typed Active Actor Contract with schedule, `ContractSteps`, funding policy, and admission validation |
 | `22` | `deactivate_actor` | remove contract/scheduler state while preserving identity and balances |
 
 Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, `21`, and `22` use the class-specific control authority: signed owner for User actors, signed owner or governance for System actors. Active-only calls reject dormant identities; `close_actor` handles either lifecycle.

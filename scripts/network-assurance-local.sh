@@ -6,6 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 KEEP_NETWORK="${KEEP_NETWORK:-0}"
 SESSION_TRANSITION="${SESSION_TRANSITION:-0}"
 COMPOSED_PATH="${COMPOSED_PATH:-0}"
+PROCESS_CLEANUP_GRACE_ATTEMPTS="${PROCESS_CLEANUP_GRACE_ATTEMPTS:-10}"
 RPC_READY_TIMEOUT_SEC="${RPC_READY_TIMEOUT_SEC:-300}"
 ZOMBIENET_LOG="${ZOMBIENET_LOG:-/tmp/deos-zombienet.log}"
 DEOS_BINARY_DIR="${DEOS_BINARY_DIR:-$PROJECT_ROOT/bin}"
@@ -13,6 +14,8 @@ export DEOS_BINARY_DIR
 BIN_DIR="$DEOS_BINARY_DIR"
 ZOMBIENET_PID=""
 RESTARTED_DAVE_PID=""
+NETWORK_DIR=""
+declare -a OWNED_PIDS=()
 
 usage() {
     cat <<'EOF'
@@ -36,7 +39,7 @@ Environment:
   SESSION_TIMEOUT_SEC=28800 and other 08-session-transition.sh controls
 
 Inputs:
-  Clean repository locks/config, network access for setup, and local build capacity.
+  Repository locks/config, network access, and local build capacity.
 
 Outputs:
   Compact setup/build/network validation result plus retained Zombienet log;
@@ -44,8 +47,8 @@ Outputs:
   optional finalized composed-path evidence when COMPOSED_PATH=1.
 
 Side effects:
-  Prepares pinned tools/dependencies, builds artifacts, generates the local chain spec,
-  starts local node processes, and submits one Alice-to-Bob transfer.
+  Prepares dependencies, builds artifacts, generates a chain spec, starts local
+  processes, and submits the contracted transfers/path transactions.
 EOF
 }
 
@@ -63,20 +66,68 @@ parse_args() {
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     activate_pinned_node
-    require_commands bash node npm rustup rg pgrep kill curl jq
+    require_commands bash node npm rg pgrep kill curl jq sha256sum
     [[ "$KEEP_NETWORK" == "0" || "$KEEP_NETWORK" == "1" ]] || { log_error "KEEP_NETWORK must be 0 or 1"; exit 1; }
     [[ "$SESSION_TRANSITION" == "0" || "$SESSION_TRANSITION" == "1" ]] || { log_error "SESSION_TRANSITION must be 0 or 1"; exit 1; }
     [[ "$COMPOSED_PATH" == "0" || "$COMPOSED_PATH" == "1" ]] || { log_error "COMPOSED_PATH must be 0 or 1"; exit 1; }
+    [[ "$PROCESS_CLEANUP_GRACE_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] || { log_error "PROCESS_CLEANUP_GRACE_ATTEMPTS must be a positive integer"; exit 1; }
+    require_commands rustup
 }
 
-cleanup() {
-    local exit_code=$?
-    if [[ -n "$RESTARTED_DAVE_PID" ]] && kill -0 "$RESTARTED_DAVE_PID" 2>/dev/null; then
-        kill "$RESTARTED_DAVE_PID" 2>/dev/null || true
-        wait "$RESTARTED_DAVE_PID" 2>/dev/null || true
+collect_descendant_pids() {
+    local parent="$1" child
+    while IFS= read -r child; do
+        [[ "$child" =~ ^[1-9][0-9]*$ ]] || continue
+        OWNED_PIDS+=("$child")
+        collect_descendant_pids "$child"
+    done < <(pgrep -P "$parent" 2>/dev/null || true)
+}
+
+refresh_owned_pids() {
+    local pid
+    if [[ -n "$ZOMBIENET_PID" ]]; then OWNED_PIDS+=("$ZOMBIENET_PID"); collect_descendant_pids "$ZOMBIENET_PID"; fi
+    [[ -n "$RESTARTED_DAVE_PID" ]] && OWNED_PIDS+=("$RESTARTED_DAVE_PID")
+    if [[ -n "$NETWORK_DIR" && -f "$NETWORK_DIR/zombie.json" ]]; then
+        while IFS= read -r pid; do [[ "$pid" =~ ^[1-9][0-9]*$ ]] && OWNED_PIDS+=("$pid"); done < <(jq -r '.. | objects | .pid? // empty' "$NETWORK_DIR/zombie.json")
     fi
-    stop_background_process "$ZOMBIENET_PID" "$KEEP_NETWORK" "$ZOMBIENET_LOG" "zombienet"
-    (( exit_code == 0 )) || log_error "Local network assurance failed"
+}
+
+cleanup_owned_processes() {
+    if [[ "$KEEP_NETWORK" == "1" ]]; then
+        log_warning "KEEP_NETWORK=1, leaving the local network running"
+        return 0
+    fi
+    refresh_owned_pids
+    local -a unique=() live=()
+    local pid seen
+    for pid in "${OWNED_PIDS[@]}"; do
+        seen=0
+        local existing
+        for existing in "${unique[@]}"; do [[ "$existing" == "$pid" ]] && seen=1; done
+        (( seen == 1 )) || unique+=("$pid")
+    done
+    for pid in "${unique[@]}"; do kill -0 "$pid" 2>/dev/null && { kill -TERM "$pid" || return 1; live+=("$pid"); }; done
+    local attempt
+    for (( attempt = 1; attempt <= PROCESS_CLEANUP_GRACE_ATTEMPTS; attempt += 1 )); do
+        live=()
+        for pid in "${unique[@]}"; do kill -0 "$pid" 2>/dev/null && live+=("$pid"); done
+        (( ${#live[@]} == 0 )) && break
+        sleep 1
+    done
+    for pid in "${live[@]}"; do kill -KILL "$pid" || return 1; done
+    sleep 1
+    for pid in "${unique[@]}"; do kill -0 "$pid" 2>/dev/null && { log_error "Owned network process remains alive after SIGKILL: $pid"; return 1; }; done
+    [[ -n "$ZOMBIENET_PID" ]] && wait "$ZOMBIENET_PID" 2>/dev/null || true
+    [[ -n "$RESTARTED_DAVE_PID" ]] && wait "$RESTARTED_DAVE_PID" 2>/dev/null || true
+    log_success "Every owned Zombienet, node, and restarted process is dead"
+}
+
+failure_cleanup() {
+    local exit_code=$?
+    trap - EXIT
+    cleanup_owned_processes || exit_code=1
+    log_error "Local network assurance failed"
+    exit "$exit_code"
 }
 
 prepare() {
@@ -158,16 +209,16 @@ restart_dave_with_persisted_state() {
 }
 
 verify_collator_participation() {
-    local network_dir
-    network_dir="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
-    [[ -n "$network_dir" && -d "$network_dir" ]] || { log_error "Zombienet node-log directory not found"; exit 1; }
+    NETWORK_DIR="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
+    [[ -n "$NETWORK_DIR" && -d "$NETWORK_DIR" ]] || { log_error "Zombienet node-log directory not found"; exit 1; }
     local collator
     for collator in charlie dave; do
-        local log_path="$network_dir/$collator.log"
+        local log_path="$NETWORK_DIR/$collator.log"
         [[ -f "$log_path" ]] || { log_error "$collator node log not found"; exit 1; }
         rg -q 'Prepared block for proposing' "$log_path" || { log_error "$collator produced no block-preparation evidence"; exit 1; }
         log_success "$collator produced block-preparation evidence"
     done
+    refresh_owned_pids
 }
 
 run_network_proofs() {
@@ -182,24 +233,26 @@ run_network_proofs() {
         run_script_step "Finalized session transition" "08-session-transition.sh"
         verify_collator_participation
     fi
-    if [[ "$COMPOSED_PATH" == "1" ]]; then
-        run_script_step "Finalized composed economic path" "09-composed-economic-path.sh"
-    fi
     verify_collator_failover
     run_script_step "Signed finalized network E2E" "07-network-e2e.sh"
-    local network_dir
-    network_dir="$(rg -m1 -o "${TMPDIR:-/tmp}/zombie-[^ /]+" "$ZOMBIENET_LOG")"
-    restart_dave_with_persisted_state "$network_dir"
+    restart_dave_with_persisted_state "$NETWORK_DIR"
     DEOS_WS_ENDPOINT="ws://127.0.0.1:9999" run_script_step "Post-restart signed finalized E2E" "07-network-e2e.sh"
+    if [[ "$COMPOSED_PATH" == "1" ]]; then
+        WS_ENDPOINT="ws://127.0.0.1:9999" run_script_step "Finalized composed economic path through restarted Dave" "09-composed-economic-path.sh"
+    fi
 }
 
 main() {
     parse_args "$@"
     check_prerequisites
-    trap cleanup EXIT
+    trap failure_cleanup EXIT
     prepare
     run_network_proofs
+    cleanup_owned_processes
+    trap - EXIT
     log_success "Local network assurance passed"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

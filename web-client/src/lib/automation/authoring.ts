@@ -7,7 +7,7 @@ Zone: Automation domain capability; composes the canonical contract-artifact cod
 import { decodeAddress } from '@polkadot/util-crypto';
 
 import {
-  ACTORS_MAX_EXECUTION_PLAN_STEPS,
+  ACTORS_MAX_CONTRACT_STEPS,
   ACTORS_MAX_PRECONDITION_CLAUSES,
   ACTORS_MAX_PREDICATES_PER_CLAUSE,
   ACTORS_MAX_PREDICATES_PER_STEP,
@@ -174,13 +174,13 @@ export type ActorAuthoringTimedPredicate = {
   predicate: ActorAuthoringPredicate;
 };
 
-export type ActorAuthoringPreconditions =
-  | { type: 'Unconditional' }
-  | { type: 'AnyOf'; clauses: ActorAuthoringTimedPredicate[][] };
+export type ActorAuthoringPrecondition = {
+  clauses: ActorAuthoringTimedPredicate[][];
+};
 
 export type ActorAuthoringStep = {
   key: string;
-  preconditions: ActorAuthoringPreconditions;
+  precondition: ActorAuthoringPrecondition | null;
   task: ActorAuthoringTask;
   errorPolicy: AutomationStepErrorPolicy;
 };
@@ -232,7 +232,7 @@ export type ActorAuthoringContract = {
 };
 
 export type ActorAuthoringLimits = {
-  maxExecutionPlanSteps: number;
+  maxContractSteps: number;
   maxRetryAttempts: number;
   maxPreconditionClauses: number;
   maxPredicatesPerClause: number;
@@ -243,7 +243,7 @@ export type ActorAuthoringLimits = {
 };
 
 export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
-  maxExecutionPlanSteps: ACTORS_MAX_EXECUTION_PLAN_STEPS,
+  maxContractSteps: ACTORS_MAX_CONTRACT_STEPS,
   maxRetryAttempts: ACTORS_MAX_RETRY_ATTEMPTS,
   maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
   maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
@@ -373,7 +373,7 @@ export function createActorAuthoringStep(
 ): ActorAuthoringStep {
   return {
     key,
-    preconditions: { type: 'Unconditional' },
+    precondition: null,
     task,
     errorPolicy: { type: 'AbortCycle' },
   };
@@ -879,7 +879,7 @@ export function validateActorAuthoringContract(
   limits = DEOS_ACTORS_AUTHORING_LIMITS,
 ): ActorAuthoringValidation {
   const issues: ActorAuthoringIssue[] = [];
-  const maxSteps = limits.maxExecutionPlanSteps;
+  const maxSteps = limits.maxContractSteps;
   if (
     contract.completionPolicy !== 'Persistent' &&
     contract.completionPolicy !== 'CloseAfterProductiveCycle'
@@ -943,19 +943,16 @@ export function validateActorAuthoringContract(
       });
     }
     keys.add(step.key);
-    const clauses =
-      step.preconditions.type === 'Unconditional'
-        ? []
-        : step.preconditions.clauses;
-    if (step.preconditions.type === 'AnyOf' && clauses.length === 0) {
+    const clauses = step.precondition?.clauses ?? [];
+    if (step.precondition !== null && clauses.length === 0) {
       issues.push({
-        path: `${path}.preconditions.clauses`,
-        message: 'AnyOf requires at least one clause',
+        path: `${path}.precondition.clauses`,
+        message: 'Precondition requires at least one clause',
       });
     }
     if (clauses.length > limits.maxPreconditionClauses) {
       issues.push({
-        path: `${path}.preconditions.clauses`,
+        path: `${path}.precondition.clauses`,
         message: `A step supports at most ${limits.maxPreconditionClauses} precondition clauses`,
       });
     }
@@ -965,33 +962,33 @@ export function validateActorAuthoringContract(
     );
     if (predicateCount > limits.maxConditionsPerStep) {
       issues.push({
-        path: `${path}.preconditions.clauses`,
+        path: `${path}.precondition.clauses`,
         message: `A step supports at most ${limits.maxConditionsPerStep} predicates`,
       });
     }
     clauses.forEach((clause, clauseIndex) => {
       if (clause.length === 0) {
         issues.push({
-          path: `${path}.preconditions.clauses[${clauseIndex}]`,
+          path: `${path}.precondition.clauses[${clauseIndex}]`,
           message: 'A precondition clause must not be empty',
         });
       }
       if (clause.length > limits.maxPredicatesPerClause) {
         issues.push({
-          path: `${path}.preconditions.clauses[${clauseIndex}]`,
+          path: `${path}.precondition.clauses[${clauseIndex}]`,
           message: `A precondition clause supports at most ${limits.maxPredicatesPerClause} predicates`,
         });
       }
       clause.forEach((timed, predicateIndex) => {
         if (timed.timing !== 'Opening' && timed.timing !== 'Current') {
           issues.push({
-            path: `${path}.preconditions.clauses[${clauseIndex}][${predicateIndex}].timing`,
+            path: `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].timing`,
             message: 'Predicate timing must be Opening or Current',
           });
         }
         validatePredicate(
           timed.predicate,
-          `${path}.preconditions.clauses[${clauseIndex}][${predicateIndex}].predicate`,
+          `${path}.precondition.clauses[${clauseIndex}][${predicateIndex}].predicate`,
           issues,
         );
       });
@@ -1459,17 +1456,14 @@ export function lowerActorAuthoringContract(
             end: contract.scheduleWindow.end,
           },
     steps: contract.steps.map((step) => ({
-      preconditions:
-        step.preconditions.type === 'Unconditional'
-          ? runtimeVariant('Unconditional')
-          : runtimeVariant(
-              'AnyOf',
-              step.preconditions.clauses.map((clause) =>
-                clause.map((timed) => ({
-                  timing: runtimeVariant(timed.timing),
-                  predicate: lowerPredicate(timed.predicate),
-                })),
-              ),
+      precondition:
+        step.precondition === null
+          ? undefined
+          : step.precondition.clauses.map((clause) =>
+              clause.map((timed) => ({
+                timing: runtimeVariant(timed.timing),
+                predicate: lowerPredicate(timed.predicate),
+              })),
             ),
       task: lowerTask(step.task),
       on_error:

@@ -47,8 +47,7 @@ const canonicalContract = {
   steps: [
     {
       key: 'one-shot-buy-bucket',
-      preconditions: {
-        type: 'AnyOf',
+      precondition: {
         clauses: [
           [
             {
@@ -112,7 +111,7 @@ const weightModel = {
 function localStep() {
   return {
     stepIndex: 0,
-    preconditions: canonicalContract.steps[0].preconditions,
+    precondition: canonicalContract.steps[0].precondition,
     taskControl: 'Execute',
     onError: canonicalContract.steps[0].errorPolicy,
   };
@@ -123,14 +122,13 @@ function matchingOutcome(resultScale) {
     status: 'Closed',
     closeReason: 'ProductiveCycleCompleted',
     cycleNonce: 1n,
-    attempt: 1,
     startCursor: 0,
     continuationCursor: null,
     unsuccessfulAttemptsAtCursor: null,
     cumulativeOutcomes: {
       executedSteps: 1,
       committedEffectfulTasks: 1,
-      skippedConditions: 0,
+      preconditionSkips: 0,
       skippedResolution: 0,
       skippedFundingUnavailable: 0,
       failedSteps: 0,
@@ -161,7 +159,7 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
     'OnObservationChange',
   );
   assert.deepEqual(
-    inspection.projection.value.steps[0].preconditions.value[0].map((timed) => [
+    inspection.projection.value.steps[0].precondition[0].map((timed) => [
       timed.timing.type,
       timed.predicate.type,
     ]),
@@ -188,9 +186,9 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   });
   assert.equal(analysis.identity.contractId, artifact.contractId);
   assert.equal(analysis.trigger.sourceKinds[0], 'ObservationChange');
-  assert.equal(analysis.steps[0].preconditions.mode, 'AnyOf');
-  assert.equal(analysis.steps[0].preconditions.clauseCount, 1);
-  assert.equal(analysis.steps[0].preconditions.atomicCount, 2);
+  assert.equal(analysis.steps[0].precondition.mode, 'AnyOf');
+  assert.equal(analysis.steps[0].precondition.clauseCount, 1);
+  assert.equal(analysis.steps[0].precondition.atomicCount, 2);
   assert.equal(analysis.steps[0].task, 'SwapIn');
   assert.equal(analysis.steps[0].errorPolicy, 'RetryLater');
   assert.equal(analysis.steps[0].retryMaxAttempts, 3);
@@ -241,7 +239,6 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     model: 'reactive-authoring-fixture-adapters',
     modelVersion: '1',
     cycleNonce: 1n,
-    attempt: 0,
     startCursor: 0,
     completionPolicy: 'CloseAfterProductiveCycle',
     initialState: { nativeBalance: 100n, quoteBalance: 0n },
@@ -249,18 +246,18 @@ test('local projection preserves one-shot readiness, retry, and productive closu
   };
   const notReady = simulateActorLocally({
     ...base,
-    evaluateCondition(timed, state) {
-      const condition = timed.predicate;
-      if (condition.type === 'ObservationBelow') {
+    evaluatePredicate(timed, state) {
+      const predicate = timed.predicate;
+      if (predicate.type === 'ObservationBelow') {
         return { kind: 'Value', value: false };
       }
       return {
         kind: 'Value',
-        value: state.nativeBalance > BigInt(condition.threshold),
+        value: state.nativeBalance > BigInt(predicate.threshold),
       };
     },
     runTask() {
-      throw new Error('false latest-state condition must not execute');
+      throw new Error('false latest-state precondition must not execute');
     },
   });
   assert.equal(notReady.status, 'Completed');
@@ -268,7 +265,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
 
   const suspended = simulateActorLocally({
     ...base,
-    evaluateCondition() {
+    evaluatePredicate() {
       return { kind: 'Value', value: true };
     },
     runTask(_step, state) {
@@ -283,11 +280,10 @@ test('local projection preserves one-shot readiness, retry, and productive closu
 
   const closed = simulateActorLocally({
     ...base,
-    attempt: 1,
     unsuccessfulAttemptsAtCursor: suspended.unsuccessfulAttemptsAtCursor,
     initialState: suspended.state,
     initialCounts: suspended.cumulative,
-    evaluateCondition() {
+    evaluatePredicate() {
       return { kind: 'Value', value: true };
     },
     runTask(_step, state) {
@@ -311,14 +307,13 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
         value: { type: 'ProductiveCycleCompleted', value: undefined },
       },
       cycle_nonce: 1n,
-      attempt: 1,
       start_cursor: 0,
       continuation_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
       cumulative_outcomes: {
         executed_steps: 1,
         committed_effectful_tasks: 1,
-        skipped_conditions: 0,
+        precondition_skips: 0,
         skipped_resolution: 0,
         skipped_funding_unavailable: 0,
         failed_steps: 0,
@@ -367,7 +362,7 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
   const sources = await Promise.all(
     [
       '../src/lib/automation/AutomationTriggerEditor.svelte',
-      '../src/lib/automation/AutomationConditionEditor.svelte',
+      '../src/lib/automation/AutomationPredicateEditor.svelte',
       '../src/lib/automation/AutomationTaskEditor.svelte',
       '../src/lib/automation/AutomationStepEditor.svelte',
       '../src/lib/widgets/AutomationWidget.svelte',

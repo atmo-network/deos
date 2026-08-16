@@ -1,7 +1,7 @@
 ---
-page_type: overview
+type: overview
 title: DEOS Wiki
-summary: A self-contained knowledge map of the DEOS framework and the TMCTOL standard, organized as a dense wiki graph rather than a pointer list to docs.
+description: A self-contained knowledge map of the DEOS framework and the TMCTOL standard, organized as a dense wiki graph rather than a pointer list to docs.
 locale: en
 canonical_page_id: index
 translation_status: source
@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../docs/README.md
-  - ../README.md
-status: active
+  - resource: ../docs/README.md
+  - resource: ../README.md
+status: stable
 audience: newcomer
 tags:
   - overview

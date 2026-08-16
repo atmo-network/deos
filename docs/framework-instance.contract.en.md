@@ -56,7 +56,7 @@ The following DEOS surfaces are mechanisms, not mandatory policies for every for
 - Bucketed capital flows.
 - Protocol-owned liquidity.
 - Governance protection / veto surfaces.
-- Actors execution plans and System Actors topologies.
+- Actor Contracts and System Actor topologies.
 - Tactical-domain tokens such as a builder token in the reference line.
 
 The framework may ship reference defaults and examples. Those defaults help a fork start safely, but they do not morally bind every downstream economy.
@@ -93,7 +93,7 @@ Reusable pattern:
 - Protocol capital is segmented into explicit roles.
 - Each segment has a clear policy boundary.
 - Governance authority over each segment is bounded and named.
-- Automation moves capital only through declared execution plans.
+- Automation moves capital only through declared Actor Contracts.
 
 Reference TMCTOL semantics:
 
@@ -106,7 +106,7 @@ A fork may rename, resize, merge, remove, or add buckets if it updates the claim
 
 ## 7. Actors Extraction Rule
 
-When repeated treasury, vault, drip, buyback, burn, zap, liquidity, or distribution flows appear, prefer lifting the common behavior into bounded configurable Actors execution plans rather than multiplying bespoke pallets.
+When repeated treasury, vault, drip, buyback, burn, zap, liquidity, or distribution flows appear, prefer lifting the common behavior into bounded configurable Actor Contracts rather than multiplying bespoke pallets.
 
 This does not mean Actors should become a universal workflow engine. Actors remains a deterministic economic actor kernel with bounded tasks, explicit runtime adapters, and predictable weight/fee behavior.
 

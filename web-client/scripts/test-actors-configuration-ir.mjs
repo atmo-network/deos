@@ -58,8 +58,7 @@ const contract = {
   steps: [
     {
       key: 'presentation-key-does-not-lower',
-      preconditions: {
-        type: 'AnyOf',
+      precondition: {
         clauses: [
           [
             {

@@ -112,7 +112,6 @@ function automationContinuationSnapshot(
   const value = triggerRecord(continuation);
   if (
     typeof value?.cursor !== 'number' ||
-    typeof value.attempt !== 'number' ||
     typeof value.unsuccessful_attempts_at_cursor !== 'number' ||
     typeof value.last_attempt_block !== 'number'
   ) {
@@ -120,7 +119,6 @@ function automationContinuationSnapshot(
   }
   return {
     cursor: value.cursor,
-    attempt: value.attempt,
     unsuccessfulAttemptsAtCursor: value.unsuccessful_attempts_at_cursor,
     lastAttemptBlock: value.last_attempt_block,
   };
@@ -363,9 +361,10 @@ export class BlockchainAdapter implements Adapter {
           isAvailable: false,
           accountAddress: this.selectedAddress() || null,
           securityMode: null,
-          securityCapabilities: null,
           securityReadiness: null,
           securityEpoch: null,
+          plannedSecurityEpoch: null,
+          settlementObligationsRemain: null,
           boundaryDiagnostic: null,
           exchangeRate: null,
           pool: null,

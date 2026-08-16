@@ -364,7 +364,7 @@ fn test_economic_properties_under_load() {
 fn test_system_recovery_after_load() {
   let mut ext = setup_load_test_environment();
   ext.execute_with(|| {
-    // Phase 1: High load period
+    // High-load interval
     for block in 1..=3 {
       System::set_block_number(block);
       // High-frequency operations
@@ -381,7 +381,7 @@ fn test_system_recovery_after_load() {
       }
     }
 
-    // Phase 2: Recovery period - normal operations
+    // Recovery interval with normal operations
     for block in 4..=6 {
       System::set_block_number(block);
       // Normal operations
