@@ -33,9 +33,9 @@ jobs:
       actions: read
       contents: read
     env:
-      CANDIDATE_DIR: ${{ runner.temp }}/candidate
-      RELEASE_BIN_DIR: ${{ runner.temp }}/release-bin
-      NETWORK_SUMMARY_PATH: ${{ runner.temp }}/network-summary/network-summary.json
+      CANDIDATE_DIR: /tmp/deos-candidate
+      RELEASE_BIN_DIR: /tmp/deos-release-bin
+      NETWORK_SUMMARY_PATH: /tmp/deos-network-summary/network-summary.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -120,10 +120,10 @@ jobs:
       release-artifact-id: ${{ steps.upload-release-bundle.outputs.artifact-id }}
       release-artifact-digest: ${{ format('sha256:{0}', steps.upload-release-bundle.outputs.artifact-digest) }}
     env:
-      CANDIDATE_DIR: ${{ runner.temp }}/candidate
-      RELEASE_DIR: ${{ runner.temp }}/release-assets
-      NETWORK_SUMMARY_PATH: ${{ runner.temp }}/network-summary.json
-      SPDX_SCHEMA_PATH: ${{ runner.temp }}/spdx-schema-2.3.json
+      CANDIDATE_DIR: /tmp/deos-candidate
+      RELEASE_DIR: /tmp/deos-release-assets
+      NETWORK_SUMMARY_PATH: /tmp/deos-network-summary.json
+      SPDX_SCHEMA_PATH: /tmp/deos-spdx-schema-2.3.json
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
