@@ -251,7 +251,7 @@ impl TmctolReadModel {
     let dust_threshold = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorContract::<Runtime>::get(actor_id));
+      .zip(pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
     let (
       actor_exists,
       is_system,
@@ -261,7 +261,7 @@ impl TmctolReadModel {
       has_required_swap_step,
     ) = maybe_actor
       .map(|((identity, hot), program)| {
-        let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
+        let has_address_event_trigger = program.trigger.address_event_source_enabled();
         let has_required_burn_step = program.steps.iter().any(|step| burn_match(&step.task));
         let has_required_swap_step =
           !requires_swap || program.steps.iter().any(|step| swap_match(&step.task));
@@ -316,7 +316,7 @@ impl TmctolReadModel {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorContract::<Runtime>::get(actor_id));
+      .zip(pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
     let Some(((identity, hot), program)) = maybe_actor else {
       let status = if pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized
@@ -343,7 +343,7 @@ impl TmctolReadModel {
     };
 
     let is_system = identity.actor_class.actor_type() == ActorType::System;
-    let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
+    let has_address_event_trigger = program.trigger.address_event_source_enabled();
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
     let mut configured_lp_asset: Option<AssetKind> = None;

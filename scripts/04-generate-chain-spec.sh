@@ -6,11 +6,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
 PARA_ID="${PARA_ID:-2000}"
 RELAY_CHAIN="${RELAY_CHAIN:-rococo-local}"
-LOCAL_WEB_CLIENT_NATIVE_STAKING_ID="${LOCAL_WEB_CLIENT_NATIVE_STAKING_ID:-0}"
-LOCAL_WEB_CLIENT_FOREIGN_ID="${LOCAL_WEB_CLIENT_FOREIGN_ID:-4026531841}"
-LOCAL_WEB_CLIENT_INITIAL_PRICE="${LOCAL_WEB_CLIENT_INITIAL_PRICE:-1000000000000}"
-LOCAL_WEB_CLIENT_SLOPE="${LOCAL_WEB_CLIENT_SLOPE:-1000000}"
-LOCAL_WEB_CLIENT_FOREIGN_BALANCE="${LOCAL_WEB_CLIENT_FOREIGN_BALANCE:-1152921504606846976}"
 RUNTIME_WASM_PATH="${RUNTIME_WASM_PATH:-$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm}"
 CHAIN_SPEC_PATH="${CHAIN_SPEC_PATH:-$TEMPLATE_DIR/chain_spec.json}"
 
@@ -18,25 +13,20 @@ usage() {
     cat <<'EOF'
 Usage: 04-generate-chain-spec.sh [OPTIONS]
 
-Generates and patches template/chain_spec.json from the built runtime WASM.
+Generates template/chain_spec.json directly from a complete runtime-owned genesis preset.
 
 Options:
   -h, --help        Show this help message
 
 Environment:
-  CHAIN_TYPE=Development|Local|Live
-  PARA_ID=2000
+  CHAIN_TYPE=Development|Local
+  PARA_ID=2000 (must match the runtime-owned reference presets)
   RELAY_CHAIN=rococo-local
-  LOCAL_WEB_CLIENT_NATIVE_STAKING_ID=0
-  LOCAL_WEB_CLIENT_FOREIGN_ID=4026531841
-  LOCAL_WEB_CLIENT_INITIAL_PRICE=1000000000000
-  LOCAL_WEB_CLIENT_SLOPE=1000000
-  LOCAL_WEB_CLIENT_FOREIGN_BALANCE=1152921504606846976
   RUNTIME_WASM_PATH=template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
   CHAIN_SPEC_PATH=template/chain_spec.json
 
 Inputs:
-  Selected DEOS runtime Wasm, chain-spec-builder, Node.js, and profile values.
+  Selected DEOS runtime Wasm, chain-spec-builder, and profile values.
 
 Outputs:
   The selected CHAIN_SPEC_PATH.
@@ -45,8 +35,9 @@ Side effects:
   Replaces the generated local chain spec; never deploys or starts a network.
 
 Notes:
-  CHAIN_TYPE=Live only switches the metadata/profile surface. Final production
-  authorities/accounts still need to be replaced before deployment.
+  Runtime presets own the complete genesis state. This script selects one preset
+  and outer ChainSpec metadata without patching economic or authority policy.
+  A Live profile requires a separately implemented production runtime preset.
 EOF
 }
 
@@ -71,21 +62,22 @@ resolve_chain_profile() {
     case "$CHAIN_TYPE" in
         Development)
             PRESET="development"
+            BUILDER_CHAIN_TYPE="development"
             CHAIN_NAME="DEOS Development"
             CHAIN_ID="deos-dev"
             ;;
         Local)
             PRESET="local_testnet"
+            BUILDER_CHAIN_TYPE="local"
             CHAIN_NAME="DEOS Local Testnet"
             CHAIN_ID="deos-local"
             ;;
         Live)
-            PRESET="development"
-            CHAIN_NAME="DEOS"
-            CHAIN_ID="deos"
+            log_error "CHAIN_TYPE=Live is unavailable until the runtime owns a production genesis preset"
+            exit 1
             ;;
         *)
-            log_error "Unknown CHAIN_TYPE: $CHAIN_TYPE (expected: Development, Local, Live)"
+            log_error "Unknown CHAIN_TYPE: $CHAIN_TYPE (expected: Development or Local)"
             exit 1
             ;;
     esac
@@ -95,8 +87,11 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands chain-spec-builder node du cut mv mkdir dirname mktemp rm
-    require_local_script "patch-chain-spec.mjs"
+    require_commands chain-spec-builder du cut mv mkdir dirname mktemp rm
+    if [[ "$PARA_ID" != "2000" ]]; then
+        log_error "PARA_ID=$PARA_ID does not match the runtime-owned reference preset (2000)"
+        exit 1
+    fi
     log_success "Chain spec prerequisites checked"
 }
 
@@ -115,10 +110,6 @@ generate_chain_spec() {
     echo "  Output: $CHAIN_SPEC_PATH"
     echo ""
 
-    if [[ "$CHAIN_TYPE" == "Live" ]]; then
-        log_warning "CHAIN_TYPE=Live does not produce a final production authority set by itself"
-    fi
-
     if [[ ! -f "$RUNTIME_WASM_PATH" ]]; then
         log_error "Runtime WASM artifact not found."
         echo "  Expected: $RUNTIME_WASM_PATH"
@@ -128,9 +119,14 @@ generate_chain_spec() {
     if ! (
         cd "$generation_dir"
         chain-spec-builder create \
+            --chain-name "$CHAIN_NAME" \
+            --chain-id "$CHAIN_ID" \
+            -t "$BUILDER_CHAIN_TYPE" \
             -c "$RELAY_CHAIN" \
             -p "$PARA_ID" \
             -r "$RUNTIME_WASM_PATH" \
+            --properties tokenSymbol=NTVE,tokenDecimals=12,ss58Format=42,isEthereum=false \
+            --verify \
             named-preset "$PRESET"
     ); then
         rm -rf "$generation_dir"
@@ -147,20 +143,7 @@ generate_chain_spec() {
     mv "$generated_path" "$CHAIN_SPEC_PATH"
     rm -rf "$generation_dir"
 
-    patch_chain_spec "$CHAIN_SPEC_PATH"
-
-    log_success "Chain specification generated"
-}
-
-patch_chain_spec() {
-    local spec_path="$1"
-    log_info "Patching chain spec metadata (chainType=$CHAIN_TYPE, name=$CHAIN_NAME, id=$CHAIN_ID)"
-
-    node "$SCRIPT_DIR/patch-chain-spec.mjs" \
-        "$spec_path" "$CHAIN_TYPE" "$CHAIN_NAME" "$CHAIN_ID" \
-        "$LOCAL_WEB_CLIENT_NATIVE_STAKING_ID" "$LOCAL_WEB_CLIENT_FOREIGN_ID" \
-        "$LOCAL_WEB_CLIENT_INITIAL_PRICE" "$LOCAL_WEB_CLIENT_SLOPE" \
-        "$LOCAL_WEB_CLIENT_FOREIGN_BALANCE"
+    log_success "Chain specification generated from runtime preset"
 }
 
 verify_output() {

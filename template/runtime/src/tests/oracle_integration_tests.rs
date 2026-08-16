@@ -8,8 +8,7 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::{
-  ContractInput, FundingSourcePolicy, Mutability, Schedule, StepErrorPolicy, Task, Trigger,
-  TriggerSource,
+  ActorContract, FundingSourcePolicy, Mutability, StepErrorPolicy, Task, Trigger, TriggerSource,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
 use polkadot_sdk::{
@@ -22,6 +21,11 @@ use polkadot_sdk::{
   sp_runtime::traits::TransactionExtension,
 };
 use primitives::{AssetKind, OracleAggregationId, OracleFeedId, OracleMeaning, OracleProvenance};
+
+struct Schedule {
+  trigger: pallet_deos_actors::TriggerOf<Runtime>,
+  cooldown_blocks: u32,
+}
 
 fn directional_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out)
@@ -164,12 +168,12 @@ fn pool_registration_admits_both_directional_feeds_once() {
     assert_eq!(reverse_config.meaning, reverse.meaning());
     assert_eq!(forward_config.producer, producer);
     assert_eq!(reverse_config.producer, producer);
-    assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 2);
+    assert_eq!(pallet_oracle::FeedIds::<Runtime>::decode_len(), Some(2));
 
     assert_ok!(crate::configs::assets_config::register_pool_lp_pair(
       asset_a, asset_b,
     ));
-    assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 2);
+    assert_eq!(pallet_oracle::FeedIds::<Runtime>::decode_len(), Some(2));
 
     assert_ok!(Oracle::publish(
       RuntimeOrigin::signed(producer.clone()),
@@ -253,9 +257,10 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-          schedule,
-          schedule_window: None,
+        Some(ActorContract {
+          trigger: schedule.trigger,
+          cooldown_blocks: schedule.cooldown_blocks,
+          window: None,
           steps: contract_steps,
           completion: pallet_deos_actors::CompletionPolicy::Persistent,
           funding: FundingSourcePolicy::RuntimePolicy,
@@ -383,7 +388,7 @@ fn pair_registration_rejects_before_partial_mutation_when_capacity_is_full() {
       crate::configs::assets_config::register_pool_lp_pair(asset_a, asset_b),
       polkadot_sdk::sp_runtime::DispatchError::Other("DEOS Router pool feed capacity reached")
     );
-    assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 1_000);
+    assert_eq!(pallet_oracle::FeedIds::<Runtime>::decode_len(), Some(1_000));
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(forward));
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(reverse));
     assert_eq!(crate::DeosRouter::lp_pair_by_token_id(pool.lp_token), None);
@@ -423,7 +428,7 @@ fn pair_registration_rolls_back_first_direction_when_reverse_identity_collides()
       crate::configs::assets_config::register_pool_lp_pair(asset_a, asset_b),
       polkadot_sdk::sp_runtime::DispatchError::Other("Oracle feed identity collision")
     );
-    assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 1);
+    assert_eq!(pallet_oracle::FeedIds::<Runtime>::decode_len(), Some(1));
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(forward));
     assert!(pallet_oracle::Feeds::<Runtime>::contains_key(reverse));
     assert_eq!(crate::DeosRouter::lp_pair_by_token_id(pool.lp_token), None);
@@ -524,9 +529,10 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-        schedule,
-        schedule_window: None,
+      Some(ActorContract {
+        trigger: schedule.trigger,
+        cooldown_blocks: schedule.cooldown_blocks,
+        window: None,
         steps: contract_steps,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::RuntimePolicy,
@@ -618,7 +624,7 @@ fn runtime_binds_generated_oracle_weights_and_stable_pallet_index() {
   assert_eq!(
     crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_new_producer()
       .proof_size(),
-    44_420,
-    "runtime weight must bridge measured ProofSize above the generated estimate"
+    44_394,
+    "runtime weight must charge the accepted measured ProofSize above the generated estimate"
   );
 }

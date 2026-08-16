@@ -15,6 +15,14 @@ use polkadot_sdk::sp_runtime::Perbill;
 mod benches {
   use super::*;
 
+  #[derive(Clone)]
+  struct Schedule<Trigger> {
+    trigger: Trigger,
+    cooldown_blocks: u32,
+  }
+
+  type ScheduleOf<T> = Schedule<TriggerOf<T>>;
+
   fn ensure_creation_balance<T: Config>(owner: &T::AccountId) {
     let creation_fee = T::ActorCreationFee::get();
     if creation_fee.is_zero() {
@@ -62,10 +70,11 @@ mod benches {
   fn user_contract<T: Config>(
     schedule: ScheduleOf<T>,
     contract_steps: ContractSteps<T>,
-  ) -> ContractInputOf<T> {
-    ContractInput::Active(ActiveContractInput {
-      schedule,
-      schedule_window: None,
+  ) -> Option<ActorContractOf<T>> {
+    Some(ActorContract {
+      trigger: schedule.trigger,
+      cooldown_blocks: schedule.cooldown_blocks,
+      window: None,
       steps: contract_steps,
       completion: CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::OwnerOnly,
@@ -76,10 +85,11 @@ mod benches {
   fn system_contract<T: Config>(
     schedule: ScheduleOf<T>,
     contract_steps: ContractSteps<T>,
-  ) -> ContractInputOf<T> {
-    ContractInput::Active(ActiveContractInput {
-      schedule,
-      schedule_window: None,
+  ) -> Option<ActorContractOf<T>> {
+    Some(ActorContract {
+      trigger: schedule.trigger,
+      cooldown_blocks: schedule.cooldown_blocks,
+      window: None,
       steps: contract_steps,
       completion: CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::RuntimePolicy,
@@ -344,13 +354,8 @@ mod benches {
     let owner: T::AccountId = whitelisted_caller();
     #[block]
     {
-      Pallet::<T>::create_system_actor(
-        RawOrigin::Root.into(),
-        owner,
-        Mutability::Mutable,
-        ContractInput::Dormant,
-      )
-      .expect("dormant System identity creation must succeed");
+      Pallet::<T>::create_system_actor(RawOrigin::Root.into(), owner, Mutability::Mutable, None)
+        .expect("dormant System identity creation must succeed");
     }
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     assert!(ActorIdentities::<T>::contains_key(actor_id));
@@ -364,7 +369,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     )
     .expect("dormant System identity creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
@@ -377,7 +382,11 @@ mod benches {
       make_contract_steps::<T>(recipient),
     );
     #[extrinsic_call]
-    activate_actor(RawOrigin::Signed(owner), actor_id, contract);
+    activate_actor(
+      RawOrigin::Signed(owner),
+      actor_id,
+      contract.expect("benchmark active contract"),
+    );
     assert!(Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
   }
@@ -519,10 +528,6 @@ mod benches {
     });
     let recipient = account("recipient", 0, 0);
     let replacement = make_contract_steps::<T>(recipient);
-    let new_schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
-      cooldown_blocks: 20,
-    };
     let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
       BoundedBTreeSet::default();
     for index in 0..T::MaxWhitelistSize::get() {
@@ -535,16 +540,20 @@ mod benches {
     update_contract(
       RawOrigin::Signed(caller),
       actor_id,
-      new_schedule,
-      None,
-      replacement.clone(),
-      funding,
-      CompletionPolicy::Persistent,
+      ActorContract {
+        trigger: Trigger::immediate_manual(),
+        cooldown_blocks: 20,
+        window: None,
+        steps: replacement.clone(),
+        funding,
+        completion: CompletionPolicy::Persistent,
+        auto_close_at_cycle_nonce: None,
+      },
     );
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after update_contract");
     assert_eq!(inst.steps, replacement);
-    assert_eq!(inst.schedule.cooldown_blocks, 20);
+    assert_eq!(inst.cooldown_blocks, 20);
     assert!(
       ActorFunding::<T>::get(actor_id)
         .expect("actor funding exists")
@@ -1073,7 +1082,7 @@ mod benches {
         .expect("benchmark snapshot staking entry fits");
     }
     assert_eq!(opening_snapshot.len() as u32, bounded);
-    ActorContract::<T>::mutate(actor_id, |maybe_contract| {
+    ActorContracts::<T>::mutate(actor_id, |maybe_contract| {
       maybe_contract
         .as_mut()
         .expect("benchmark actor contract exists")
@@ -1248,7 +1257,7 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient = Pallet::<T>::sovereign_account_id_system(actor_id);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    ActorContract::<T>::mutate(actor_id, |maybe| {
+    ActorContracts::<T>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
         .expect("benchmark Actor Contract exists")
@@ -1994,11 +2003,11 @@ mod benches {
     let identity_template =
       ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
     let contract_template =
-      ActorContract::<T>::get(template_id).expect("benchmark contract template");
+      ActorContracts::<T>::get(template_id).expect("benchmark contract template");
     let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
     ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
-    ActorContract::<T>::remove(template_id);
+    ActorContracts::<T>::remove(template_id);
     ActorFunding::<T>::remove(template_id);
 
     let first_id = 41_000_000u64;
@@ -2012,7 +2021,7 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorContract::<T>::insert(actor_id, contract_template.clone());
+      ActorContracts::<T>::insert(actor_id, contract_template.clone());
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2059,7 +2068,7 @@ mod benches {
       ActorIdentities::<T>::take(system_template_id).expect("System identity template");
     let system_hot = ActorHot::<T>::take(system_template_id).expect("System hot template");
     let contract_template =
-      ActorContract::<T>::take(system_template_id).expect("System contract template");
+      ActorContracts::<T>::take(system_template_id).expect("System contract template");
     let funding_template =
       ActorFunding::<T>::take(system_template_id).expect("System funding template");
     let first_id = 43_000_000u64;
@@ -2071,7 +2080,7 @@ mod benches {
         let template_id = bench_create_user::<T>(owner);
         let identity = ActorIdentities::<T>::take(template_id).expect("User identity template");
         ActorHot::<T>::remove(template_id);
-        ActorContract::<T>::remove(template_id);
+        ActorContracts::<T>::remove(template_id);
         ActorFunding::<T>::remove(template_id);
         identity
       } else {
@@ -2084,7 +2093,7 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorContract::<T>::insert(actor_id, contract_template.clone());
+      ActorContracts::<T>::insert(actor_id, contract_template.clone());
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2448,15 +2457,15 @@ mod benches {
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("transfer contract_steps fits");
-      let contract = ActorContract::<T>::get(*actor_id).expect("Actor Contract exists");
+      let contract = ActorContracts::<T>::get(*actor_id).expect("Actor Contract exists");
       Pallet::<T>::update_contract(
         RawOrigin::Root.into(),
         *actor_id,
-        contract.schedule,
-        contract.schedule_window,
-        transfer_contract_steps,
-        contract.funding,
-        CompletionPolicy::Persistent,
+        ActorContract {
+          steps: transfer_contract_steps,
+          completion: CompletionPolicy::Persistent,
+          ..contract
+        },
       )
       .expect("update_contract must succeed");
     }

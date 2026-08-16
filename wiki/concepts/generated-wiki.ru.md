@@ -13,7 +13,6 @@ sources:
   - resource: ../../docs/README.md
   - resource: ../../web-client/docs/architecture.en.md
   - resource: ../../web-client/README.md
-  - resource: ../../.agents/skills/wiki-sync/SKILL.md
   - resource: ../_meta/navigation.json
   - resource: ../_meta/state.json
   - resource: ../_meta/graph.json
@@ -29,7 +28,6 @@ related:
   - Карта доменов
   - Эталонный клиент
   - Первые шаги
-  - Координация агентов
   - Базовые термины
 last_compiled: 2026-07-20
 confidence: 0.9
@@ -102,5 +100,4 @@ page id: token-surfaces
 - [Карта доменов](domain-map.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
 - [Первые шаги](../getting-started/first-steps.ru.md)
-- [Координация агентов](../usage/agent-coordination.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

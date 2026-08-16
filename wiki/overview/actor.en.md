@@ -1,7 +1,7 @@
 ---
 type: overview
 title: AA-Actor
-description: Actors is the Account Abstraction Actors system in DEOS, while an AA-Actor is one concrete bounded execution instance. Each instance follows one typed Actor Contract with ordered Steps.
+description: DEOS Actors is the bounded runtime actor system, while an AA-Actor is one concrete bounded execution instance. Each instance follows one typed Actor Contract with ordered Steps.
 locale: en
 canonical_page_id: actor
 translation_status: source
@@ -33,7 +33,7 @@ confidence: 0.9
 
 ## Summary
 
-`Actors` is the Account Abstraction Actors system. An `AA-Actor` is one bounded execution instance inside that system.
+`DEOS Actors` is the bounded runtime actor system. An `AA-Actor` is one bounded execution instance inside that system.
 
 Use [Actors System](actor-system.en.md) for the system-level view. This page focuses on the single actor abstraction.
 

@@ -1,7 +1,7 @@
 ---
 type: overview
 title: Actors System
-description: Actors is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors while keeping domain logic in adapters and pallets.
+description: DEOS Actors is the bounded runtime actor system — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors while keeping domain logic in adapters and pallets.
 locale: en
 canonical_page_id: actor-system
 translation_status: source
@@ -38,7 +38,7 @@ confidence: 0.95
 
 ## Summary
 
-`Actors` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-deos-actors`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
+`DEOS Actors` names the whole runtime actor system: `pallet-deos-actors`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
 
 An [AA-Actor](actor.en.md) is one concrete instance inside that system. This page explains the system-level contract.
 

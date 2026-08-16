@@ -155,11 +155,11 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
   assert.equal(
-    inspection.projection.value.schedule.trigger.value.sources[0].type,
+    inspection.projection.trigger.value.sources[0].type,
     'OnObservationChange',
   );
   assert.deepEqual(
-    inspection.projection.value.steps[0].precondition[0].map((timed) => [
+    inspection.projection.steps[0].precondition[0].map((timed) => [
       timed.timing.type,
       timed.predicate.type,
     ]),
@@ -168,13 +168,10 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
       ['Current', 'BalanceAbove'],
     ],
   );
-  assert.equal(inspection.projection.value.steps[0].task.type, 'SwapIn');
+  assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
+  assert.equal(inspection.projection.steps[0].on_error.type, 'RetryLater');
   assert.equal(
-    inspection.projection.value.steps[0].on_error.type,
-    'RetryLater',
-  );
-  assert.equal(
-    inspection.projection.value.completion.type,
+    inspection.projection.completion.type,
     'CloseAfterProductiveCycle',
   );
 
@@ -210,12 +207,12 @@ test('reactive strategy preserves topology under persistent lifecycle policy', (
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(inspection.projection.value.completion.type, 'Persistent');
+  assert.equal(inspection.projection.completion.type, 'Persistent');
   assert.equal(
-    inspection.projection.value.schedule.trigger.value.sources[0].type,
+    inspection.projection.trigger.value.sources[0].type,
     'OnObservationChange',
   );
-  assert.equal(inspection.projection.value.steps[0].task.type, 'SwapIn');
+  assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.notEqual(persistentArtifact.contractId, artifact.contractId);
 });
 

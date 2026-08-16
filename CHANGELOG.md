@@ -4,6 +4,17 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.19: Canonical Ownership and Surface Pruning
+
+- `Actors / Contract Root`: Made `ActorContract` the sole authored, stored, simulated, and client contract root; represented dormancy by contract absence; removed schedule/input/state wrappers and field-specific auto-close mutation; and preserved exact no-op, replacement, Continuation, retry, fee, custody, and bounded scheduler semantics.
+- `Actors / Runtime Surface`: Replaced phase/next-block reconstruction with canonical eligibility classifications, exposed partition-preserving `ActiveActorState`, made metadata paths follow natural Rust modules without `replace_segment`, and narrowed simulation rollback failure to the actual transaction-depth boundary.
+- `Oracle / Governance / Derived State`: Deleted Oracle `FeedCount` and Governance `ActiveProposalCounts`, derived cardinality from bounded canonical ID registries, regenerated production weights, reconciled retained reverse indexes, and consolidated proposal preimage availability into one status carrying optional byte length.
+- `Staking / Capability Algebra`: Replaced Cartesian native-security mode/readiness projection with a mode-shaped view, removed synthetic `Inactive` and redundant capability booleans, and retained exact settlement, liability, custody, epoch-plan, and Trusted Set claimability behavior.
+- `Router / Client`: Removed raw Oracle/XYK wrappers and blanket dispatch-error classification while preserving quote/prepared/committed/exact-output and cause/retry distinctions; aligned the client to canonical Contract, eligibility, staking, and preimage projections with one bounded status-label improvement.
+- `Validation / Automation`: Separated project, package, client, CI, release, and Skill ownership; removed Skill coupling, source-hash manifests, historical replay, corpus wrappers, redundant setup, and obsolete bridges; restored the contiguous atomic network ladder with a checksum-pinned Polkadot/Omni binary bootstrap; and passed full project validation plus independent Alignment, Domain DAG, and Wiki Sync checks.
+- `Documentation / Wiki`: Compressed the documentation hub, consolidated randomness policy into Core Architecture, retired the Account Abstraction Actors expansion, removed agent/Skill content from the user Wiki, and reduced duplicated scripts, fixtures, pages, graph nodes, and provenance dependencies.
+- `Runtime / Genesis Ownership`: Made named runtime presets the sole owners of complete genesis state, removed post-generation JavaScript economic mutation and override variables, routed outer ChainSpec metadata through `chain-spec-builder`, rejected mismatched para identity, and withheld a Live profile until the runtime owns a production preset.
+
 ## 0.7.18: Semantic Compression and Contract Truth
 
 - `Staking / Atomic Expiry`: Contracted native security reward expiry into one measured bounded transition that returns unclaimed and uncredited custody to Fee Sink, reconciles liability, clears all bounded claim markers, and removes the snapshot and pot without an intermediate Expired state or cleanup call.

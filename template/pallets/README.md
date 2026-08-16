@@ -4,11 +4,11 @@ This directory contains the custom pallets that implement the DEOS runtime kerne
 
 The current pallet set follows the workspace-owned Polkadot SDK dependency graph. Runtime, parachain-system, and asset-conversion integration concerns remain owned by their concrete composition surfaces rather than pallet cores.
 
-## 🏗️ Available Pallets
+## Available Pallets
 
 ### [Actors](./actors/README.md)
 
-Deterministic account-abstraction actor runtime for bounded Actor Contracts, ordered Steps, scheduling, event-driven triggers, and lifecycle management.
+Deterministic DEOS Actors runtime for bounded Actor Contracts, ordered Steps, scheduling, event-driven triggers, and lifecycle management.
 
 ### [Asset Registry](./asset-registry/README.md)
 
@@ -30,7 +30,7 @@ Unidirectional minting pallet implementing the TMCTOL standard's curve mechanics
 
 Multi-asset share-vault staking pallet with sovereign backing channels, liquid `stXXX` receipts, native `$NTVE -> stNTVE`, locked `NTVE/stNTVE` LP nomination, governance custody, and reward settlement.
 
-## 🎯 Pallet Architecture Philosophy
+## Pallet Architecture Philosophy
 
 Our pallets implement several key architectural patterns:
 
@@ -39,15 +39,14 @@ Our pallets implement several key architectural patterns:
 - **Production-Ready Design**: Economic security, error handling, and operational excellence
 - **Automated Execution**: Deterministic scheduling, bounded execution, and event-driven reaction capabilities
 
-## 📚 Technical Implementation Guides
+## Technical Implementation Guides
 
 For detailed technical implementation, architectural decisions, and production deployment patterns, see the comprehensive guides in the [documentation directory](../../docs/):
 
 - **[DEOS Router Architecture Guide](./router/docs/architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
-- **[Randomness Strategy](../../docs/randomness.strategy.en.md)** - Post-VRF simplification note covering the relay-beacon-first direction and the conditions for replacing local entropy logic with a relay-chain beacon adapter
 - **[DEOS Staking Specification](./staking/docs/specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
 
-## 🚀 Quick Start
+## Quick Start
 
 Each pallet directory contains:
 
@@ -66,7 +65,7 @@ Direct local entrypoints:
 
 Navigate to individual pallet directories for component-specific orientation and development guidance.
 
-## 🔧 Development Integration
+## Development Integration
 
 These pallets are designed for seamless integration with the runtime configuration located in [`../runtime/src/configs/`](../runtime/src/configs/mod.rs). The modular design enables flexible deployment scenarios while maintaining architectural consistency.
 

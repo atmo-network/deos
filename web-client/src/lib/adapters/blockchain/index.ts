@@ -522,7 +522,7 @@ export class BlockchainAdapter implements Adapter {
             continuation: automationContinuationSnapshot(continuation),
             lastCycleBlock: hot?.last_cycle_block ?? null,
             completionPolicy: program?.completion.type ?? null,
-            triggerLabel: automationTriggerLabel(program?.schedule.trigger),
+            triggerLabel: automationTriggerLabel(program?.trigger),
             nativeBalance: account?.data?.free ?? 0n,
             queueTicket: automationQueueTicket(hot),
             fundingAccumulated: automationFundingAccumulated(funding),

@@ -83,14 +83,16 @@ struct WakeupPointer<BlockNumber> {
 }
 struct ActorHot<BlockNumber> {
   lifecycle: ActiveLifecycle, cycle_state: CycleState,
-  auto_close_at_cycle_nonce: Option<u64>, unsuccessful_attempt_streak: u32,
+  unsuccessful_attempt_streak: u32,
   pending_signal: bool, queue_ticket: Option<QueueTicket>,
   wakeup_pointer: Option<WakeupPointer<BlockNumber>>, terminal_at: Option<BlockNumber>,
   schedule_anchor: BlockNumber, last_cycle_block: Option<BlockNumber>,
 }
-struct ActorContract<Schedule, BlockNumber, Steps, FundingPolicy> {
-  schedule: Schedule, schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  steps: Steps, funding: FundingPolicy, completion: CompletionPolicy,
+struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
+  trigger: Trigger, cooldown_blocks: u32,
+  window: Option<ScheduleWindow<BlockNumber>>, steps: Steps,
+  funding: FundingPolicy, completion: CompletionPolicy,
+  auto_close_at_cycle_nonce: Option<u64>,
 }
 struct ActorFunding<AssetId, Balance> {
   funding_accumulated: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
@@ -118,8 +120,7 @@ enum CloseReason {
 enum CycleResult { Completed, Failed, Cancelled }
 enum SuspensionReason { FundingUnavailable, Temporary }
 enum CancellationReason {
-  Explicit, StepsChanged, CompletionChanged, FundingChanged,
-  ScheduleChanged, Deactivated, Closing(CloseReason),
+  Explicit, ContractReplaced, Deactivated, Closing(CloseReason),
 }
 enum StepSkippedReason { PreconditionFalse, ResolutionSkipped, FundingUnavailable }
 ```
@@ -344,7 +345,7 @@ Cancellation performs no compensation, funding restoration, prefix rollback, or 
 
 If close encounters a Continuation, cancellation uses `Closing(reason)` and precedes `ActorClosed(reason)`. A pure close means no Continuation exists and emits only `ActorClosed`.
 
-`update_contract(actor_id, schedule, schedule_window, steps, funding, completion)` replaces all five authored fields atomically. Exact equality across all fields is a no-op. When multiple fields change, Continuation cancellation uses the first changed field in canonical precedence `schedule/schedule_window`, `steps`, `funding`, then `completion`; this selects `ScheduleChanged`, `StepsChanged`, `FundingChanged`, or `CompletionChanged`. One successful semantic replacement emits only `ContractUpdated { actor_id }`.
+`update_contract(actor_id, contract)` replaces the complete authored Actor Contract atomically. Exact equality returns before rate limiting, clock mutation, writes, fees, and events. When trigger/cooldown/window, Steps, or funding changes, replacement cancels Continuation with `ContractReplaced`. Completion and auto-close-only replacement preserve a live Continuation. One successful semantic replacement emits only `ContractUpdated { actor_id }`.
 
 Funding authority is independent from trigger matching:
 
@@ -376,19 +377,17 @@ A cycle completes at plan end or successful `StopCycle`; accepted `ContinueNextS
 ### 3.1 Public Types
 
 ```rust
-enum ContractInput<S, B, P, F> { Dormant, Active(ActiveContractInput<S, B, P, F>) }
-struct ActiveContractInput<S, B, Steps, F> {
-  schedule: S, schedule_window: Option<ScheduleWindow<B>>, steps: Steps,
-  funding: F, completion: CompletionPolicy,
+struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
+  trigger: Trigger, cooldown_blocks: u32,
+  window: Option<ScheduleWindow<BlockNumber>>, steps: Steps,
+  funding: FundingPolicy, completion: CompletionPolicy,
   auto_close_at_cycle_nonce: Option<u64>,
 }
-struct Schedule<Sources> { trigger: TriggerPolicy<Sources>, cooldown_blocks: u32 }
 struct ScheduleWindow<BlockNumber> { start: BlockNumber, end: BlockNumber }
-enum TriggerPolicy<Sources> {
+enum Trigger<Sources> {
   Immediate { sources: Sources },
-  Cadenced { every_blocks: u32, mode: CadenceMode<Sources> },
+  Cadenced { every_blocks: u32, sources: Option<Sources> },
 }
-enum CadenceMode<Sources> { Always, WhenSignalled(Sources) }
 enum TriggerSource<AccountId, AssetId, FeedId> {
   Manual,
   OnAddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },
@@ -487,19 +486,19 @@ Sources compose as OR and are fully evaluated without short-circuit. A trigger c
 
 `pending_signal` has no direct clear call. Fresh opening consumes it; deactivation deletes it. Mutable deactivation followed by activation is the only actor-control reset. An Immutable actor retains an accepted latch until opening or close.
 
-Fresh Active installation does not set `pending_signal`. `Immediate` and `Cadenced::WhenSignalled` remain unready until one configured source matches. `every_blocks` defines eligibility, not execution frequency.
+Fresh Active installation does not set `pending_signal`. `Immediate` and `Cadenced { sources: Some(_) }` remain unready until one configured source matches. `every_blocks` defines eligibility, not execution frequency.
 
 `Immediate` has no cadence arithmetic. Its temporal eligibility uses only cooldown and window arithmetic. `Cadenced` uses `schedule_anchor` as its exact origin and adds no actor-specific phase.
 
-Schedule admission uses:
+Contract timing admission uses:
 
 ```rust
 ensure!(
-  schedule.cooldown_blocks <= MaxExecutionDelayBlocks,
+  contract.cooldown_blocks <= MaxExecutionDelayBlocks,
   Error::ExecutionDelayTooLong
 );
 
-if let TriggerPolicy::Cadenced { every_blocks, .. } = schedule.trigger {
+if let Trigger::Cadenced { every_blocks, .. } = contract.trigger {
   ensure!(
     every_blocks > 0,
     Error::InvalidTriggerConfiguration
@@ -1030,22 +1029,22 @@ let ordinary_target = if actor.lifecycle == ActiveLifecycle::Paused {
 } else {
   match (
     actor.cycle_state,
-    actor.schedule.trigger,
+    actor.trigger,
     actor.pending_signal,
   ) {
     (CycleState::Suspended, _, _) =>
       Some(retry_eligible_at(actor)?),
 
-    (CycleState::Idle, TriggerPolicy::Immediate { .. }, true) =>
+    (CycleState::Idle, Trigger::Immediate { .. }, true) =>
       Some(temporal_eligible_at(actor, lower)?),
 
     (CycleState::Idle,
-      TriggerPolicy::Cadenced { mode: CadenceMode::WhenSignalled(_), .. },
+      Trigger::Cadenced { sources: Some(_), .. },
       true) =>
       Some(temporal_eligible_at(actor, lower)?),
 
     (CycleState::Idle,
-      TriggerPolicy::Cadenced { mode: CadenceMode::Always, .. },
+      Trigger::Cadenced { sources: None, .. },
       _) =>
       Some(temporal_eligible_at(actor, lower)?),
 
@@ -1337,8 +1336,7 @@ create_user_actor                create_user_actor_at_slot
 create_system_actor              create_system_actor_at_sovereign_id
 activate_actor / deactivate_actor  pause_actor / resume_actor
 manual_trigger                 close_actor
-update_contract                set_auto_close_at_cycle_nonce
-increment_auto_close_nonce     cancel_continuation
+update_contract                cancel_continuation
 set_global_circuit_breaker     set_active_actor_limit
 permissionless_sweep           permissionless_sweep_many
 ```
@@ -1358,9 +1356,9 @@ Authorization:
 
 When Suspended, Manual only latches readiness for the next logical cycle. It does not cancel, replace, accelerate, duplicate, or retarget the current retry path.
 
-Actor-targeting control obtains the Section 4.1 classification before semantic-equality detection and before the control-mutation rate check. `WindowExpired` substitutes close before the requested effect, including when the submitted value equals the stored value. Every other terminal reason is ignored on that control path. A classification error returns the corresponding Section 9.2 dispatch error without mutation.
+Actor-targeting control obtains the Section 4.1 classification before the control-mutation rate check. Complete Contract equality returns before expiry substitution, rate limiting, cancellation, clock mutation, placement reconstruction, writes, fees, or events. A non-equal replacement then applies expiry substitution and typed classification errors before mutation.
 
-When no expiry substitution applies, canonical-equality actor setters and updates return before rate check, mutation, or event. This includes pause on Paused, resume on Active, and unchanged contract, schedule, funding, or auto-close values. Unchanged breaker state and unchanged active limit are also exact no-ops.
+Canonical-equality pause/resume and unchanged breaker or active-limit values also return before mutation or event.
 
 Calls that may close include cleanup Weight.
 
@@ -1382,15 +1380,7 @@ Auto-close `Some(t)` requires:
 1 <= t - cycle_nonce <= MaxAutoCloseNonceHorizon
 ```
 
-For `increment_auto_close_nonce(by)`:
-
-```text
-by > 0
-base = old_target.unwrap_or(cycle_nonce)
-new_target = checked_add(base, by)
-```
-
-Overflow is `AutoCloseNonceOverflow`; the resulting target must satisfy the same horizon. `old_target == None` is valid and uses `cycle_nonce` as base.
+Auto-close is changed only through complete Mutable Contract replacement; there is no field-specific setter or increment call.
 
 Active-limit update requires nonzero:
 
@@ -1510,39 +1500,25 @@ FeeCollectionFailed
 
 `ActorNotFound` includes a valid Dormant identity because no Active Actor Contract exists. Partial Active partitions return `ActorInvariant`; malformed Continuation returns `ContinuationInvariant`. Old `expected_contract` after semantic replacement returns `ContractMismatch`. Current contract with `CurrentContinuation` after cancellation returns `ModeCycleStateMismatch`.
 
-Simulation executes the production attempt path in rollback-only storage, uses the shared predicate, amount, fee, task, `StepOutcome`, policy interpretation, counters, and `AttemptDisposition`, and persists no state/event. Simulation-specific state is limited to rollback/non-persistence, bounded trace records, transaction-depth protection, and requested mode checks. `FeeCollectionFailed` is interface-local and is not an authored step failure.
+Simulation executes the production attempt path in rollback-only storage, uses the shared predicate, amount, fee, task, `StepOutcome`, policy interpretation, counters, and `AttemptDisposition`, and persists no state/event. Simulation-specific state is limited to rollback/non-persistence, bounded trace records, explicit transaction-depth failure at the rollback boundary, and requested mode checks. `FeeCollectionFailed` is interface-local and is not an authored step failure.
 
 ### 7.3 Eligibility
 
 ```rust
-enum ActorEligibilityPhase {
-  NotRegistered, Dormant, Ready, GlobalCircuitBreaker, CloseDue(CloseReason),
-  Paused, WaitingSignal, WaitingRetry, WaitingTemporal,
-}
-struct ActorEligibilityProjection<BlockNumber> {
-  phase: ActorEligibilityPhase,
-  next_eligible_block: Option<BlockNumber>,
+enum ActorEligibility<BlockNumber> {
+  NotRegistered,
+  Dormant,
+  Active(ActorClassification<BlockNumber>),
 }
 trait ActorEligibilityApi<BlockNumber> {
   fn actor_eligibility(actor_id: ActorId)
-    -> Result<ActorEligibilityProjection<BlockNumber>, ActorClassificationError>;
+    -> Result<ActorEligibility<BlockNumber>, ActorClassificationError>;
 }
 ```
 
-Eligibility resolves absent and valid Dormant ids before invoking Section 4.1. For an Active actor, a classification error maps exactly under Section 9.2. A successful classification projects in this order:
+Eligibility resolves absent and valid Dormant ids before invoking Section 4.1. For an Active actor, a classification error maps exactly under Section 9.2 and success returns the canonical `ActorClassification` without stripping terminal reason or execution-phase payloads. `WaitingRetry(block)` and `WaitingTemporal(block)` retain their exact block; no parallel next-block field exists.
 
-1. `GlobalCircuitBreaker` projects `GlobalCircuitBreaker`, including when `terminal_reason` exists.
-2. When the breaker is clear and `terminal_reason` exists, project `CloseDue(reason)`.
-3. Otherwise project `Paused`, `WaitingRetry`, `WaitingTemporal`, `WaitingSignal`, or `Ready` from `execution_phase`.
-
-`next_eligible_block` is:
-
-- `Some(now)` for `Ready`;
-- The exact carried block for `WaitingRetry` and `WaitingTemporal`;
-- `None` for `WaitingSignal`, because no future signal block is known;
-- `None` for `GlobalCircuitBreaker`, `CloseDue`, `Paused`, `Dormant`, and `NotRegistered`.
-
-Simulation evaluates one attempt at the current block. Eligibility exposes current classification and its next computable temporal gate. Neither predicts a future signal.
+Simulation evaluates one attempt at the current block. Eligibility exposes current classification. Neither predicts a future signal.
 
 ## 8. Events and Ordering
 
@@ -1576,8 +1552,6 @@ LiquidityAdded { actor_id: ActorId, cycle_nonce: u64, step_index: u32, asset_a: 
 LiquidityRemoved { actor_id: ActorId, cycle_nonce: u64, step_index: u32, lp_asset: AssetId, lp_amount: Balance, asset_a: AssetId, asset_b: AssetId, amount_a: Balance, amount_b: Balance }
 
 ContractUpdated { actor_id: ActorId }
-AutoCloseNonceSet { actor_id: ActorId, target: Option<u64> }
-AutoCloseNonceIncremented { actor_id: ActorId, old_target: Option<u64>, new_target: u64, by: u64 }
 ActiveActorLimitSet { old_limit: u32, new_limit: u32 }
 GlobalCircuitBreakerSet { paused: bool }
 ManualTriggerSet { actor_id: ActorId }
@@ -1643,8 +1617,7 @@ enum Error {
   SovereignAccountCollision, ReservedSovereignAccount,
   TooManyContractSteps, SnapshotUnavailable, FundingAccumulatorOverflow,
   QueueTicketExhausted, SchedulerIndexExhausted,
-  AutoCloseNonceHorizonExceeded, AutoCloseNonceOverflow,
-  AutoCloseNonceIncrementZero, ControlMutationRateLimited, QueueCapacityUnavailable,
+  AutoCloseNonceHorizonExceeded, ControlMutationRateLimited, QueueCapacityUnavailable,
   RetryLaterNotAllowedForImmutableActor, ContinuationNotFound, ContinuationInvariant,
   ComputationOverflow, EmptyPrecondition, ManualSourceDisabled,
   RecipientDepositUnavailable,

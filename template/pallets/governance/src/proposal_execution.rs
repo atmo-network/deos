@@ -24,13 +24,14 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn do_proposal_payload_availability(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
-  ) -> Option<ProposalPayloadAvailability> {
+  ) -> Option<PayloadHashPreimageStatus> {
     let metadata = ProposalMetadataByItem::<T>::get(domain, item_id)?;
-    Some(ProposalPayloadAvailability {
+    Some(PayloadHashPreimageStatus {
       have_preimage: T::ProposalPayloadPreimageProvider::have_preimage(&metadata.payload_hash),
       preimage_requested: T::ProposalPayloadPreimageProvider::preimage_requested(
         &metadata.payload_hash,
       ),
+      payload_len: T::ProposalPayloadPreimageProvider::preimage_len(&metadata.payload_hash),
     })
   }
   pub(crate) fn do_proposal_primary_track_family(

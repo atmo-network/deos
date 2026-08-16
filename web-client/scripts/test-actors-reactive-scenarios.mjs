@@ -283,14 +283,14 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
     );
     assert.equal(inspection.valid, true, scenario.name);
     if (!inspection.valid) continue;
-    assert.equal(inspection.projection.value.steps.length, 1, scenario.name);
+    assert.equal(inspection.projection.steps.length, 1, scenario.name);
     assert.equal(
-      inspection.projection.value.completion.type,
+      inspection.projection.completion.type,
       'CloseAfterProductiveCycle',
       scenario.name,
     );
     assert.equal(
-      inspection.projection.value.schedule.trigger.value.sources[0].type,
+      inspection.projection.trigger.value.sources[0].type,
       'OnObservationChange',
       scenario.name,
     );

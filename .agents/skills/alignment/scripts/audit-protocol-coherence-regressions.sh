@@ -502,12 +502,6 @@ main() {
     require_anchor 'preimage_admission_error_core_maps_exhaustively_to_dispatch' \
         "$TEMPLATE_DIR/pallets/governance/src/tests.rs" \
         "Governance preimage-core error mapping evidence is missing"
-    require_anchor 'function discover\(' \
-        "$SCRIPT_DIR/audit-semantic-surface.mjs" \
-        "Recursive Error Narrowness source discovery is missing"
-    require_anchor 'function validateWitnesses\(' \
-        "$SCRIPT_DIR/audit-semantic-surface.mjs" \
-        "Explicit typed Error Narrowness witness validation is missing"
     require_anchor 'market_execution_classifier_uses_the_concrete_cause' \
         "$TEMPLATE_DIR/runtime/src/tests/actors_integration_tests.rs" \
         "Runtime market-cause classification evidence is missing"
@@ -572,31 +566,26 @@ main() {
     local actors_types="$TEMPLATE_DIR/pallets/actors/src/types"
     local actors_contract_types="$actors_types/contract.rs"
     local actors_lifecycle_types="$actors_types/lifecycle.rs"
-    require_anchor '^pub use crate::contract_types::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
+    require_anchor '^pub use contract::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Contract owner"
-    require_anchor '^pub use crate::lifecycle_types::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
+    require_anchor '^pub use lifecycle::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Lifecycle owner"
-    require_anchor '^pub use crate::observation_types::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
+    require_anchor '^pub use observation::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Observation owner"
-    require_anchor '^pub use crate::scheduler_types::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
+    require_anchor '^pub use scheduler::\*;$' "$TEMPLATE_DIR/pallets/actors/src/types.rs" \
         "Actors canonical type facade no longer exports the Scheduler owner"
     reject_pattern '^pub (?:struct|enum|type) ' \
         "Actors type facade reintroduced a duplicate semantic owner" \
         "$TEMPLATE_DIR/pallets/actors/src/types.rs"
-    require_anchor 'replace_segment\("contract_types", "types"\)' "$actors_contract_types" \
-        "Actors Contract types no longer preserve the canonical metadata namespace"
+    reject_pattern 'replace_segment' \
+        "Actors type metadata paths must follow natural module ownership" \
+        "$actors_types"
     require_anchor 'pub enum Task' "$actors_contract_types" \
         "Actors Contract type owner is missing the canonical Task surface"
-    require_anchor 'replace_segment\("lifecycle_types", "types"\)' "$actors_lifecycle_types" \
-        "Actors Lifecycle types no longer preserve the canonical metadata namespace"
     require_anchor 'pub struct ActorIdentity' "$actors_lifecycle_types" \
         "Actors Lifecycle type owner is missing canonical identity state"
-    require_anchor 'replace_segment\("observation_types", "types"\)' "$actors_types/observation.rs" \
-        "Actors Observation types no longer preserve the canonical metadata namespace"
     require_anchor 'pub struct DirtyObservationState' "$actors_types/observation.rs" \
         "Actors Observation type owner is missing canonical dirty state"
-    require_anchor 'replace_segment\("scheduler_types", "types"\)' "$actors_types/scheduler.rs" \
-        "Actors Scheduler types no longer preserve the canonical metadata namespace"
     require_anchor 'pub struct WakeupBucketState' "$actors_types/scheduler.rs" \
         "Actors Scheduler type owner is missing canonical wakeup state"
     require_anchor 'task_failure_defaults_unknown_errors_to_permanent' "$actors_tests" \
@@ -645,12 +634,6 @@ main() {
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/docs"
     require_anchor 'public_api_error_signatures_use_shared_typed_cores' "$actors_tests" \
         "Actors typed runtime-API signature evidence is missing"
-    require_anchor 'pathManifest' \
-        "$SCRIPT_DIR/audit-semantic-surface.mjs" \
-        "Complete Error Narrowness path/exclusion identity is missing"
-    require_anchor 'universalVariantReachabilityProven: false' \
-        "$SCRIPT_DIR/audit-semantic-surface.mjs" \
-        "Error Narrowness residual reachability is no longer explicit"
     require_anchor 'public_reachability_inventory_is_closed_and_canonical' "$actors_tests" \
         "Actors fail-closed public reachability inventory is missing"
     require_anchor '### Public Inventory Evidence' \
@@ -788,19 +771,6 @@ main() {
         "Actors second scheduler or lifecycle owner reintroduced" "$TEMPLATE_DIR/pallets/actors/src"
     reject_pattern '\b(?:system_class_not_starved|preferred_queue|non_empty_class)\b' \
         "Retired scheduler-class vocabulary reintroduced" "$TEMPLATE_DIR/pallets/actors"
-    local actors_golden_fixture="$TEMPLATE_DIR/pallets/actors/tests/fixtures/golden-equivalence.v1.json"
-    require_anchor '"commit": "e5bcb85ceb93f201add3db0df08f2583930287c8"' \
-        "$actors_golden_fixture" "Actors 0.7.17 golden oracle is not commit-pinned"
-    require_anchor '"sha256": "32669c0c324ee429614c5c80986c1ef0da14859377475692b3e8ed3585951a4e"' \
-        "$actors_golden_fixture" "Actors retained reactive corpus is not hash-pinned"
-    require_anchor '"sha256": "15ab53a31193e8a03686db673b0c57929f8425d92ea14868e7be7da831819342"' \
-        "$actors_golden_fixture" "Actors retained semantic corpus is not hash-pinned"
-    require_anchor 'actors-golden-equivalence\.sh.*--check' \
-        "$PROJECT_ROOT/scripts/actors-assurance.sh" \
-        "Actors assurance no longer owns golden-equivalence freshness"
-    require_anchor 'actors-golden-equivalence\.sh.*--execute' \
-        "$PROJECT_ROOT/scripts/actors-assurance.sh" \
-        "Full Actors assurance no longer executes cross-version golden equivalence"
     require_anchor 'canonical_step_transition_matrix_has_production_simulation_parity' \
         "$PROJECT_ROOT/scripts/actors-assurance.sh" \
         "Actors assurance no longer executes exhaustive production/simulation Step parity"

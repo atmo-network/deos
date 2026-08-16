@@ -462,7 +462,9 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
   fn new_session(index: SessionIndex) -> Option<Vec<AccountId>> {
     let mut collators =
       polkadot_sdk::pallet_collator_selection::Invulnerables::<Runtime>::get().into_inner();
-    if !crate::Staking::native_security_candidate_selection_available() {
+    if crate::Staking::native_security_mode()
+      != pallet_staking::NativeSecurityMode::LpBackedSelection
+    {
       log::info!(
         target: "runtime::collator-selection",
         "new_session({index}) -> trusted-collator phase active, using {} invulnerables only",
@@ -572,7 +574,9 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       );
       return;
     }
-    if !crate::Staking::native_security_candidate_selection_available() {
+    if crate::Staking::native_security_mode()
+      != pallet_staking::NativeSecurityMode::LpBackedSelection
+    {
       frame_system::Pallet::<Runtime>::register_extra_weight_unchecked(
         <Runtime as pallet_staking::Config>::WeightInfo::contract_native_security_obligations(),
         DispatchClass::Mandatory,

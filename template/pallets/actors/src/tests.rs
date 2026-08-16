@@ -1,94 +1,57 @@
 use crate::{
-  ActiveContractInput, ActiveLifecycle, ActorClass, ActorClassificationError, ActorContract,
-  ActorEligibilityPhase, ActorEligibilityProjection, ActorExecutionPhase, ActorFunding, ActorHot,
-  ActorId, ActorIdentities, ActorType, AmountResolution, AssetFilter, AssetFilterOf,
-  AttemptDisposition, CadenceMode, CancellationReason, CloseReason, ContinuationStateStore,
-  ContractInput, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
-  FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
-  IdleStarvationState, InitialLifecycle, InputLimit, Mutability, NextActorId,
+  ActiveLifecycle, ActorClass, ActorClassification, ActorClassificationError, ActorContract,
+  ActorContracts, ActorEligibility, ActorExecutionPhase, ActorFunding, ActorHot, ActorId,
+  ActorIdentities, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition,
+  CancellationReason, CloseReason, ContinuationStateStore, CycleResult, CycleState, Error, Event,
+  FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker,
+  IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit, Mutability, NextActorId,
   ObservationSubscriberPageList, ObservationTiming, OpeningSurface, OutcomeTotals,
   OwnerSlotBitmaps, Precondition, Predicate, QueueEntry, QueueHead, QueueOccupancy, QueuePages,
-  QueueTail, RetryClass, Schedule, ScheduleWindow, SimulationError, SimulationMode,
-  SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
-  SystemSovereignState, Task, TaskFailure, TaskOf, TimedPredicate, Trigger, TriggerPolicy,
-  TriggerSource, WakeupBucketState, WakeupBuckets, WakeupEntry, WakeupPage, WakeupPages,
-  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
-  mock::*, settle_attempt_fee_step,
+  QueueTail, RetryClass, ScheduleWindow, SimulationError, SimulationMode, SimulationStepRecord,
+  SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy,
+  StepOf, StepOutcome, StepSkippedReason, SuspensionReason, SystemSovereignState, Task,
+  TaskFailure, TaskOf, TimedPredicate, Trigger, TriggerSource, WakeupBucketState, WakeupBuckets,
+  WakeupEntry, WakeupPage, WakeupPages, WakeupPointer, adapters::AssetOps,
+  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
 const RETRY_LATER: StepErrorPolicy = StepErrorPolicy::RetryLater { max_attempts: 10 };
 
-fn update_contract_parts(
+fn update_contract_parts(actor_id: ActorId) -> crate::ActorContractOf<Test> {
+  ActorContracts::<Test>::get(actor_id).expect("Actor Contract exists")
+}
+
+fn replace_auto_close(
+  origin: RuntimeOrigin,
   actor_id: ActorId,
-) -> (
-  crate::ScheduleOf<crate::mock::Test>,
-  Option<crate::ScheduleWindow<u64>>,
-  crate::ContractSteps<crate::mock::Test>,
-  crate::FundingSourcePolicyOf<Test>,
-  crate::CompletionPolicy,
-) {
-  let contract = ActorContract::<Test>::get(actor_id).expect("Actor Contract exists");
-  (
-    contract.schedule,
-    contract.schedule_window,
-    contract.steps,
-    contract.funding,
-    contract.completion,
-  )
+  target: Option<u64>,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  let mut contract = update_contract_parts(actor_id);
+  contract.auto_close_at_cycle_nonce = target;
+  Actors::update_contract(origin, actor_id, contract)
 }
 
 macro_rules! update_contract_partial {
   ($origin:expr, $actor_id:expr, $funding:expr $(,)?) => {{
-    let (schedule, schedule_window, steps, _, completion) =
-      crate::tests::update_contract_parts($actor_id);
-    crate::mock::Actors::update_contract(
-      $origin,
-      $actor_id,
-      schedule,
-      schedule_window,
-      steps,
-      $funding,
-      completion,
-    )
+    let mut contract = crate::tests::update_contract_parts($actor_id);
+    contract.funding = $funding;
+    crate::mock::Actors::update_contract($origin, $actor_id, contract)
   }};
   ($origin:expr, $actor_id:expr, $first:expr, $second:expr $(,)?) => {{
-    let (schedule, schedule_window, steps, funding, completion) =
-      crate::tests::update_contract_parts($actor_id);
     trait PartialContractUpdate {
-      fn apply(
-        self,
-        schedule: crate::ScheduleOf<crate::mock::Test>,
-        schedule_window: Option<crate::ScheduleWindow<u64>>,
-        steps: crate::ContractSteps<crate::mock::Test>,
-        completion: crate::CompletionPolicy,
-      ) -> (
-        crate::ScheduleOf<crate::mock::Test>,
-        Option<crate::ScheduleWindow<u64>>,
-        crate::ContractSteps<crate::mock::Test>,
-        crate::CompletionPolicy,
-      );
+      fn apply(self, contract: &mut crate::ActorContractOf<crate::mock::Test>);
     }
     impl PartialContractUpdate
       for (
-        crate::ScheduleOf<crate::mock::Test>,
+        crate::tests::RuntimeSchedule,
         Option<crate::ScheduleWindow<u64>>,
       )
     {
-      fn apply(
-        self,
-        _: crate::ScheduleOf<crate::mock::Test>,
-        _: Option<crate::ScheduleWindow<u64>>,
-        steps: crate::ContractSteps<crate::mock::Test>,
-        completion: crate::CompletionPolicy,
-      ) -> (
-        crate::ScheduleOf<crate::mock::Test>,
-        Option<crate::ScheduleWindow<u64>>,
-        crate::ContractSteps<crate::mock::Test>,
-        crate::CompletionPolicy,
-      ) {
-        (self.0, self.1, steps, completion)
+      fn apply(self, contract: &mut crate::ActorContractOf<crate::mock::Test>) {
+        contract.trigger = self.0.trigger;
+        contract.cooldown_blocks = self.0.cooldown_blocks;
+        contract.window = self.1;
       }
     }
     impl PartialContractUpdate
@@ -97,32 +60,14 @@ macro_rules! update_contract_partial {
         crate::CompletionPolicy,
       )
     {
-      fn apply(
-        self,
-        schedule: crate::ScheduleOf<crate::mock::Test>,
-        schedule_window: Option<crate::ScheduleWindow<u64>>,
-        _: crate::ContractSteps<crate::mock::Test>,
-        _: crate::CompletionPolicy,
-      ) -> (
-        crate::ScheduleOf<crate::mock::Test>,
-        Option<crate::ScheduleWindow<u64>>,
-        crate::ContractSteps<crate::mock::Test>,
-        crate::CompletionPolicy,
-      ) {
-        (schedule, schedule_window, self.0, self.1)
+      fn apply(self, contract: &mut crate::ActorContractOf<crate::mock::Test>) {
+        contract.steps = self.0;
+        contract.completion = self.1;
       }
     }
-    let (schedule, schedule_window, steps, completion) =
-      ($first, $second).apply(schedule, schedule_window, steps, completion);
-    crate::mock::Actors::update_contract(
-      $origin,
-      $actor_id,
-      schedule,
-      schedule_window,
-      steps,
-      funding,
-      completion,
-    )
+    let mut contract = crate::tests::update_contract_parts($actor_id);
+    ($first, $second).apply(&mut contract);
+    crate::mock::Actors::update_contract($origin, $actor_id, contract)
   }};
 }
 use codec::{Decode, Encode, MaxEncodedLen};
@@ -141,7 +86,12 @@ use polkadot_sdk::{
 };
 use scale_info::{TypeDef, TypeInfo};
 
-type RuntimeSchedule = crate::ScheduleOf<crate::mock::Test>;
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Schedule {
+  trigger: crate::TriggerOf<Test>,
+  cooldown_blocks: u32,
+}
+type RuntimeSchedule = Schedule;
 type RuntimeSourceFilter = SourceFilterOf<Test>;
 type RuntimeAssetFilter = AssetFilterOf<Test>;
 type RuntimeTriggerSource = TriggerSource<
@@ -150,23 +100,10 @@ type RuntimeTriggerSource = TriggerSource<
   <Test as crate::Config>::MaxWhitelistSize,
   <Test as crate::Config>::ObservationFeedId,
 >;
-type RuntimeCadenceMode = CadenceMode<
-  AccountId,
-  TestAsset,
-  <Test as crate::Config>::MaxWhitelistSize,
-  <Test as crate::Config>::MaxTriggerSources,
-  <Test as crate::Config>::ObservationFeedId,
->;
-type RuntimeTriggerPolicy = TriggerPolicy<
-  AccountId,
-  TestAsset,
-  <Test as crate::Config>::MaxWhitelistSize,
-  <Test as crate::Config>::MaxTriggerSources,
-  <Test as crate::Config>::ObservationFeedId,
->;
+type RuntimeTrigger = crate::TriggerOf<Test>;
 type RuntimeTask = TaskOf<Test>;
 type RuntimeStep = StepOf<Test>;
-type RuntimeContractInput = crate::ContractInputOf<Test>;
+type RuntimeActorContract = crate::ActorContractOf<Test>;
 type RuntimeContinuationState = crate::ContinuationStateOf<Test>;
 type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>;
 type TestWeightInfo = crate::weights::TestWeightInfo;
@@ -250,7 +187,7 @@ fn assert_variant_names<T: TypeInfo>(expected: &[&str]) {
 }
 
 #[test]
-fn trigger_policy_grammar_is_bounded_and_non_nested() {
+fn trigger_grammar_is_bounded_and_non_nested() {
   let manual = RuntimeTriggerSource::Manual;
   let address = RuntimeTriggerSource::OnAddressEvent {
     source_filter: SourceFilter::OwnerOnly,
@@ -264,9 +201,9 @@ fn trigger_policy_grammar_is_bounded_and_non_nested() {
     observation.clone(),
   ])
   .expect("two trigger sources fit the runtime bound");
-  let policy = RuntimeTriggerPolicy::Cadenced {
+  let policy = RuntimeTrigger::Cadenced {
     every_blocks: 10,
-    mode: RuntimeCadenceMode::WhenSignalled(sources),
+    sources: Some(sources),
   };
   assert!(policy.has_canonical_sources());
   assert!(policy.manual_source_enabled());
@@ -274,22 +211,22 @@ fn trigger_policy_grammar_is_bounded_and_non_nested() {
   assert!(policy.observation_source_enabled());
   assert_eq!(policy.cadence_blocks(), Some(10));
   let encoded = policy.encode();
-  assert!(encoded.len() <= RuntimeTriggerPolicy::max_encoded_len());
-  assert_eq!(RuntimeTriggerPolicy::decode(&mut &encoded[..]), Ok(policy));
+  assert!(encoded.len() <= RuntimeTrigger::max_encoded_len());
+  assert_eq!(RuntimeTrigger::decode(&mut &encoded[..]), Ok(policy));
 
-  let empty = RuntimeTriggerPolicy::Immediate {
+  let empty = RuntimeTrigger::Immediate {
     sources: BoundedVec::default(),
   };
   assert!(!empty.has_canonical_sources());
-  let duplicate = RuntimeTriggerPolicy::Immediate {
+  let duplicate = RuntimeTrigger::Immediate {
     sources: BoundedVec::try_from(vec![manual.clone(), manual.clone()]).expect("within bound"),
   };
   assert!(!duplicate.has_canonical_sources());
-  let duplicate_observation = RuntimeTriggerPolicy::Immediate {
+  let duplicate_observation = RuntimeTrigger::Immediate {
     sources: BoundedVec::try_from(vec![observation.clone(), observation]).expect("within bound"),
   };
   assert!(!duplicate_observation.has_canonical_sources());
-  let reverse = RuntimeTriggerPolicy::Immediate {
+  let reverse = RuntimeTrigger::Immediate {
     sources: BoundedVec::try_from(vec![
       RuntimeTriggerSource::OnAddressEvent {
         source_filter: SourceFilter::OwnerOnly,
@@ -300,7 +237,7 @@ fn trigger_policy_grammar_is_bounded_and_non_nested() {
     .expect("within bound"),
   };
   assert!(!reverse.has_canonical_sources());
-  let non_canonical_filter = RuntimeTriggerPolicy::Immediate {
+  let non_canonical_filter = RuntimeTrigger::Immediate {
     sources: BoundedVec::try_from(vec![RuntimeTriggerSource::OnAddressEvent {
       source_filter: SourceFilter::Whitelist(
         BoundedVec::try_from(vec![2, 1]).expect("within whitelist bound"),
@@ -310,9 +247,9 @@ fn trigger_policy_grammar_is_bounded_and_non_nested() {
     .expect("within source bound"),
   };
   assert!(!non_canonical_filter.has_canonical_sources());
-  let always = RuntimeTriggerPolicy::Cadenced {
+  let always = RuntimeTrigger::Cadenced {
     every_blocks: 5,
-    mode: RuntimeCadenceMode::Always,
+    sources: None,
   };
   assert!(always.has_canonical_sources());
   assert!(!always.manual_source_enabled());
@@ -434,14 +371,18 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ContractInput::Active(ActiveContractInput {
-        schedule: observation_schedule(vec![4]),
-        schedule_window: None,
-        steps: inert_contract_steps(),
-        completion: crate::CompletionPolicy::Persistent,
-        funding: FundingSourcePolicy::OwnerOnly,
-        auto_close_at_cycle_nonce: None,
-      }),
+      {
+        let schedule = observation_schedule(vec![4]);
+        ActorContract {
+          trigger: schedule.trigger,
+          cooldown_blocks: schedule.cooldown_blocks,
+          window: None,
+          steps: inert_contract_steps(),
+          completion: crate::CompletionPolicy::Persistent,
+          funding: FundingSourcePolicy::OwnerOnly,
+          auto_close_at_cycle_nonce: None,
+        }
+      },
     ));
     assert_eq!(Actors::observation_subscription_slot(actor_id), Some(slot));
     assert_eq!(crate::ObservationFreeSlotLen::<Test>::get(), 0);
@@ -523,7 +464,7 @@ fn duplicate_observation_subscriptions_fail_before_actor_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: RuntimeTriggerPolicy::Immediate {
+      trigger: RuntimeTrigger::Immediate {
         sources: BoundedVec::try_from(vec![
           RuntimeTriggerSource::OnObservationChange { feed: 1 },
           RuntimeTriggerSource::OnObservationChange { feed: 1 },
@@ -1590,13 +1531,13 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 
 #[test]
 fn public_api_error_signatures_use_shared_typed_cores() {
-  let _: fn(ActorId) -> Result<ActorEligibilityProjection<u64>, ActorClassificationError> =
+  let _: fn(ActorId) -> Result<ActorEligibility<u64>, ActorClassificationError> =
     Actors::actor_eligibility;
   let _: fn(
     ActorId,
     ActorType,
     Mutability,
-    RuntimeContractInput,
+    RuntimeActorContract,
     SimulationMode,
   ) -> Result<crate::SimulationResultOf<Test>, SimulationError> = Actors::simulate_current_contract;
 
@@ -1667,8 +1608,7 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "OnAddressEvent",
     "OnObservationChange",
   ]);
-  assert_variant_names::<RuntimeCadenceMode>(&["Always", "WhenSignalled"]);
-  assert_variant_names::<RuntimeTriggerPolicy>(&["Immediate", "Cadenced"]);
+  assert_variant_names::<RuntimeTrigger>(&["Immediate", "Cadenced"]);
   assert_variant_names::<
     Trigger<
       AccountId,
@@ -1681,7 +1621,6 @@ fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<ActorClass>(&["User", "System"]);
   assert_variant_names::<Mutability>(&["Mutable", "Immutable"]);
   assert_variant_names::<crate::CompletionPolicy>(&["Persistent", "CloseAfterProductiveCycle"]);
-  assert_variant_names::<RuntimeContractInput>(&["Dormant", "Active"]);
   assert_variant_names::<ActiveLifecycle>(&["Active", "Paused"]);
   assert_variant_names::<CycleState>(&["Idle", "Suspended"]);
   assert_variant_names::<AttemptDisposition>(&["Completed", "Failed", "Suspended", "Closed"]);
@@ -1712,10 +1651,7 @@ fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<SuspensionReason>(&["FundingUnavailable", "Temporary"]);
   assert_variant_names::<CancellationReason>(&[
     "Explicit",
-    "StepsChanged",
-    "CompletionChanged",
-    "FundingChanged",
-    "ScheduleChanged",
+    "ContractReplaced",
     "Deactivated",
     "Closing",
   ]);
@@ -1740,17 +1676,7 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "Fresh",
     "Stale",
   ]);
-  assert_variant_names::<ActorEligibilityPhase>(&[
-    "NotRegistered",
-    "Dormant",
-    "Ready",
-    "Paused",
-    "GlobalCircuitBreaker",
-    "CloseDue",
-    "WaitingSignal",
-    "WaitingRetry",
-    "WaitingTemporal",
-  ]);
+  assert_variant_names::<ActorEligibility<u64>>(&["NotRegistered", "Dormant", "Active"]);
   assert_variant_names::<SimulationMode>(&["FreshCurrentPlan", "CurrentContinuation"]);
   assert_variant_names::<SimulationError>(&[
     "TransactionDepthExceeded",
@@ -2871,12 +2797,12 @@ fn actor_storage_schema_is_explicit() {
   let entries = &metadata.entries;
   assert_plain_storage_type::<u64>(&entries[0]);
   assert_map_storage_types::<u64, crate::ActorHotStateOf<Test>>(&entries[1]);
-  assert_map_storage_types::<u64, crate::ActorContractStateOf<Test>>(&entries[2]);
+  assert_map_storage_types::<u64, crate::ActorContractOf<Test>>(&entries[2]);
   assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[3]);
 
   let mut registry = scale_info::Registry::new();
   let contract_type =
-    registry.register_type(&scale_info::meta_type::<crate::ActorContractStateOf<Test>>());
+    registry.register_type(&scale_info::meta_type::<crate::ActorContractOf<Test>>());
   let (_, contract) = registry
     .types()
     .find(|(symbol, _)| symbol.id == contract_type.id)
@@ -2891,11 +2817,13 @@ fn actor_storage_schema_is_explicit() {
       .map(|field| field.name.as_deref().expect("named Actor Contract field"))
       .collect::<Vec<_>>(),
     [
-      "schedule",
-      "schedule_window",
+      "trigger",
+      "cooldown_blocks",
+      "window",
       "steps",
       "funding",
-      "completion"
+      "completion",
+      "auto_close_at_cycle_nonce"
     ]
   );
   assert_map_storage_types::<u64, RuntimeContinuationState>(&entries[4]);
@@ -3200,7 +3128,7 @@ fn observation_schedule(feeds: Vec<u32>) -> RuntimeSchedule {
     .collect::<Vec<_>>();
   sources.sort_by_key(Encode::encode);
   Schedule {
-    trigger: RuntimeTriggerPolicy::Immediate {
+    trigger: RuntimeTrigger::Immediate {
       sources: BoundedVec::try_from(sources).expect("observation sources fit"),
     },
     cooldown_blocks: 0,
@@ -3287,13 +3215,14 @@ fn transfer_contract_steps(
 
 fn user_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<crate::ScheduleWindow<u64>>,
-  contract_steps: crate::ContractSteps<crate::mock::Test>,
-) -> crate::ContractInputOf<Test> {
-  ContractInput::Active(ActiveContractInput {
-    schedule,
-    schedule_window,
-    steps: contract_steps,
+  window: Option<crate::ScheduleWindow<u64>>,
+  steps: crate::ContractSteps<crate::mock::Test>,
+) -> Option<crate::ActorContractOf<Test>> {
+  Some(ActorContract {
+    trigger: schedule.trigger,
+    cooldown_blocks: schedule.cooldown_blocks,
+    window,
+    steps,
     completion: crate::CompletionPolicy::Persistent,
     funding: FundingSourcePolicy::OwnerOnly,
     auto_close_at_cycle_nonce: None,
@@ -3389,28 +3318,29 @@ fn age_fixture_control_clock(actor_id: ActorId) {
 
 fn system_active_contract(
   schedule: RuntimeSchedule,
-  schedule_window: Option<crate::ScheduleWindow<u64>>,
-  contract_steps: crate::ContractSteps<crate::mock::Test>,
-) -> crate::ContractInputOf<Test> {
+  window: Option<crate::ScheduleWindow<u64>>,
+  steps: crate::ContractSteps<crate::mock::Test>,
+) -> Option<crate::ActorContractOf<Test>> {
   system_active_contract_with_completion(
     schedule,
-    schedule_window,
-    contract_steps,
+    window,
+    steps,
     crate::CompletionPolicy::Persistent,
   )
 }
 
 fn system_active_contract_with_completion(
   schedule: RuntimeSchedule,
-  schedule_window: Option<crate::ScheduleWindow<u64>>,
-  contract_steps: crate::ContractSteps<crate::mock::Test>,
-  completion_policy: crate::CompletionPolicy,
-) -> crate::ContractInputOf<Test> {
-  ContractInput::Active(ActiveContractInput {
-    schedule,
-    schedule_window,
-    steps: contract_steps,
-    completion: completion_policy,
+  window: Option<crate::ScheduleWindow<u64>>,
+  steps: crate::ContractSteps<crate::mock::Test>,
+  completion: crate::CompletionPolicy,
+) -> Option<crate::ActorContractOf<Test>> {
+  Some(ActorContract {
+    trigger: schedule.trigger,
+    cooldown_blocks: schedule.cooldown_blocks,
+    window,
+    steps,
+    completion,
     funding: FundingSourcePolicy::RuntimePolicy,
     auto_close_at_cycle_nonce: None,
   })
@@ -3644,13 +3574,13 @@ fn both_user_creation_calls_charge_dormant_admission_fee_before_identity_mutatio
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     assert_ok!(Actors::create_user_actor_at_slot(
       RuntimeOrigin::signed(CHARLIE),
       2,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
 
     assert_eq!(native_balance(&ALICE), alice_before.saturating_sub(fee));
@@ -3694,7 +3624,7 @@ fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     assert_eq!(native_balance(&Actors::sovereign_account_id(&ALICE, 0)), 0);
   });
@@ -3741,7 +3671,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     let plan = transfer_contract_steps(BOB, 1);
@@ -3750,7 +3680,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        user_active_contract(manual_schedule(), None, plan.clone()),
+        user_active_contract(manual_schedule(), None, plan.clone()).expect("direct Actor Contract"),
       ),
       Error::<Test>::InsufficientBalance
     );
@@ -3766,7 +3696,7 @@ fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_contract(manual_schedule(), None, plan),
+      user_active_contract(manual_schedule(), None, plan).expect("direct Actor Contract"),
     ));
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert_eq!(Actors::active_actor_count(), 1);
@@ -3789,14 +3719,14 @@ fn create_system_does_not_charge_creation_fee() {
 }
 
 #[test]
-fn system_creation_accepts_dormant_contract_input() {
+fn system_creation_accepts_absent_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let identity = Actors::actor_identities(0).expect("dormant identity exists");
     assert_eq!(identity.actor_class, ActorClass::System { sovereign_id: 0 });
@@ -3807,7 +3737,7 @@ fn system_creation_accepts_dormant_contract_input() {
 }
 
 #[test]
-fn exact_slot_user_creation_accepts_dormant_contract_input() {
+fn exact_slot_user_creation_accepts_absent_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let owner_slot = 2;
@@ -3815,7 +3745,7 @@ fn exact_slot_user_creation_accepts_dormant_contract_input() {
       RuntimeOrigin::signed(ALICE),
       owner_slot,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let identity = Actors::actor_identities(0).expect("dormant identity exists");
     assert_eq!(identity.actor_class, ActorClass::User { owner_slot });
@@ -3833,7 +3763,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let actor_id = 0;
     let identity = Actors::actor_identities(actor_id).expect("dormant identity exists");
@@ -3857,7 +3787,8 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        ContractInput::Dormant,
+        user_active_contract(manual_schedule(), None, BoundedVec::default())
+          .expect("direct empty contract"),
       ),
       Error::<Test>::EmptyContractSteps
     );
@@ -3867,17 +3798,18 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        ContractInput::Active(ActiveContractInput {
-          schedule: manual_schedule(),
-          schedule_window: None,
-          steps: contract_steps_with_step(make_step(Task::Mint {
-            asset: TestAsset::Native,
-            amount: AmountResolution::Fixed(1),
-          })),
-          completion: crate::CompletionPolicy::Persistent,
+        ActorContract {
           funding: FundingSourcePolicy::AnyVerifiedIngress,
-          auto_close_at_cycle_nonce: None,
-        }),
+          ..user_active_contract(
+            manual_schedule(),
+            None,
+            contract_steps_with_step(make_step(Task::Mint {
+              asset: TestAsset::Native,
+              amount: AmountResolution::Fixed(1),
+            })),
+          )
+          .expect("direct Actor Contract")
+        },
       ),
       Error::<Test>::MintNotAllowedForUserActor
     );
@@ -3887,19 +3819,16 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ContractInput::Active(ActiveContractInput {
-        schedule: manual_schedule(),
-        schedule_window: None,
-        steps: transfer_contract_steps(BOB, 10),
-        completion: crate::CompletionPolicy::Persistent,
+      ActorContract {
         funding: FundingSourcePolicy::AnyVerifiedIngress,
-        auto_close_at_cycle_nonce: None,
-      }),
+        ..user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 10))
+          .expect("direct Actor Contract")
+      },
     ));
     assert!(Actors::actor_identities(actor_id).is_some());
     let _activated = Actors::active_actor_view(actor_id).expect("active Actor Contract exists");
     assert_eq!(
-      ActorContract::<Test>::get(actor_id)
+      ActorContracts::<Test>::get(actor_id)
         .expect("active Actor Contract")
         .funding,
       FundingSourcePolicy::AnyVerifiedIngress
@@ -3976,12 +3905,14 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       user_id,
-      user_active_contract(manual_schedule(), None, inert_contract_steps()),
+      user_active_contract(manual_schedule(), None, inert_contract_steps())
+        .expect("direct Actor Contract"),
     ));
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       system_id,
-      system_active_contract(manual_schedule(), None, inert_contract_steps()),
+      system_active_contract(manual_schedule(), None, inert_contract_steps())
+        .expect("direct Actor Contract"),
     ));
     for actor_id in [user_id, system_id] {
       let active = Actors::active_actor_view(actor_id).expect("reactivated actor");
@@ -4057,7 +3988,8 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      system_active_contract(schedule, None, transfer_contract_steps(BOB, 10)),
+      system_active_contract(schedule, None, transfer_contract_steps(BOB, 10))
+        .expect("direct Actor Contract"),
     ));
     let instance = Actors::active_actor_view(actor_id).expect("reactivated");
     assert_eq!(instance.cycle_nonce, 1);
@@ -4545,10 +4477,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
     );
     let initial = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(initial.actor_class.actor_type(), ActorType::User);
-    assert!(matches!(
-      initial.schedule.trigger,
-      Trigger::Immediate { .. }
-    ));
+    assert!(matches!(initial.trigger, Trigger::Immediate { .. }));
     assert_eq!(initial.lifecycle, ActiveLifecycle::Active);
     assert!(!initial.pending_signal);
     assert_eq!(initial.cycle_nonce, 0);
@@ -4587,12 +4516,12 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       None,
     ));
     let after_update = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(after_update.schedule.cooldown_blocks, 2);
+    assert_eq!(after_update.cooldown_blocks, 2);
     assert!(matches!(
-      after_update.schedule.trigger,
+      after_update.trigger,
       Trigger::Cadenced {
         every_blocks: 3,
-        mode: CadenceMode::Always
+        sources: None
       }
     ));
   });
@@ -4647,7 +4576,7 @@ fn active_actor_capacity_is_enforced() {
 }
 
 #[test]
-fn active_contract_input_installs_and_validates_auto_close_target() {
+fn actor_contract_installs_and_validates_auto_close_target() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = Actors::next_actor_id();
@@ -4655,13 +4584,10 @@ fn active_contract_input_installs_and_validates_auto_close_target() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Active(ActiveContractInput {
-        schedule: manual_schedule(),
-        schedule_window: None,
-        steps: inert_contract_steps(),
-        completion: crate::CompletionPolicy::Persistent,
-        funding: FundingSourcePolicy::RuntimePolicy,
+      Some(ActorContract {
         auto_close_at_cycle_nonce: Some(2),
+        ..system_active_contract(manual_schedule(), None, inert_contract_steps())
+          .expect("direct Actor Contract")
       }),
     ));
     assert_eq!(
@@ -4677,13 +4603,10 @@ fn active_contract_input_installs_and_validates_auto_close_target() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ContractInput::Active(ActiveContractInput {
-          schedule: manual_schedule(),
-          schedule_window: None,
-          steps: inert_contract_steps(),
-          completion: crate::CompletionPolicy::Persistent,
-          funding: FundingSourcePolicy::RuntimePolicy,
+        Some(ActorContract {
           auto_close_at_cycle_nonce: Some(0),
+          ..system_active_contract(manual_schedule(), None, inert_contract_steps())
+            .expect("direct Actor Contract")
         }),
       ),
       Error::<Test>::InvalidAutoCloseNonce
@@ -4834,7 +4757,7 @@ fn system_sovereign_reattachment_accepts_dormant_contract_input() {
       first_id,
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let identity = Actors::actor_identities(fresh_id).expect("dormant identity exists");
     assert_eq!(identity.sovereign_account, sovereign);
@@ -4935,7 +4858,7 @@ fn reserved_sovereign_account_rejects_creation_at_that_slot() {
         RuntimeOrigin::signed(ALICE),
         slot,
         Mutability::Mutable,
-        ContractInput::Dormant,
+        None,
       ),
       Error::<Test>::ReservedSovereignAccount
     );
@@ -5235,7 +5158,7 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     crate::NextQueueTicket::<Test>::put(u64::MAX);
@@ -5244,7 +5167,8 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1)),
+      user_active_contract(timer_schedule(1), None, transfer_contract_steps(BOB, 1))
+        .expect("direct Actor Contract"),
     ));
     assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
   });
@@ -5742,7 +5666,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let actor_id = Actors::next_actor_id() - 1;
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -5762,7 +5686,8 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
+        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1))
+          .expect("direct Actor Contract"),
       ),
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
@@ -5799,7 +5724,7 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
         RuntimeOrigin::signed(CHARLIE),
         2,
         Mutability::Mutable,
-        ContractInput::Dormant,
+        None,
       ),
       Error::<Test>::InsufficientFee
     );
@@ -5823,7 +5748,7 @@ fn create_rejects_duplicate_trigger_sources() {
     ])
     .expect("duplicate source fixture fits the type bound");
     let schedule = Schedule {
-      trigger: RuntimeTriggerPolicy::Immediate { sources },
+      trigger: RuntimeTrigger::Immediate { sources },
       cooldown_blocks: 0,
     };
     assert_noop!(
@@ -5904,7 +5829,7 @@ fn create_rejects_zero_cadence() {
     let schedule = Schedule {
       trigger: Trigger::Cadenced {
         every_blocks: 0,
-        mode: CadenceMode::Always,
+        sources: None,
       },
       cooldown_blocks: 0,
     };
@@ -6627,7 +6552,7 @@ fn checkpoint_a_s4_paused_head_uses_hot_only_admission() {
 #[test]
 fn manual_trigger_rejects_address_and_observation_only_policies() {
   let observation_schedule = Schedule {
-    trigger: RuntimeTriggerPolicy::Immediate {
+    trigger: RuntimeTrigger::Immediate {
       sources: BoundedVec::try_from(vec![RuntimeTriggerSource::OnObservationChange { feed: 7 }])
         .expect("one observation source fits"),
     },
@@ -8635,21 +8560,18 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let actor_id = 0;
     frame_system::Pallet::<Test>::set_block_number(10);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      ContractInput::Active(ActiveContractInput {
-        schedule: timer_schedule(20),
-        schedule_window: None,
-        steps: inert_contract_steps(),
-        completion: crate::CompletionPolicy::Persistent,
+      ActorContract {
         funding: FundingSourcePolicy::AnyVerifiedIngress,
-        auto_close_at_cycle_nonce: None,
-      }),
+        ..system_active_contract(timer_schedule(20), None, inert_contract_steps())
+          .expect("direct Actor Contract")
+      },
     ));
     let instance = Actors::active_actor_view(actor_id).expect("active Actors exists");
     // Activation anchors the fresh epoch at block 10; the first gate is one exact cadence later.
@@ -8818,9 +8740,8 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(50);
       });
-      ActorContract::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("contract").schedule_window =
-          Some(ScheduleWindow { start: 1, end: 49 });
+      ActorContracts::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("contract").window = Some(ScheduleWindow { start: 1, end: 49 });
       });
       assert_eq!(
         crate::Pallet::<Test>::do_try_state().map_err(|error| format!("{error:?}")),
@@ -8829,9 +8750,8 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(102);
       });
-      ActorContract::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("contract").schedule_window =
-          Some(ScheduleWindow { start: 1, end: 101 });
+      ActorContracts::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("contract").window = Some(ScheduleWindow { start: 1, end: 101 });
       });
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     }
@@ -9931,7 +9851,7 @@ fn stop_cycle_runs_normal_auto_close_after_the_summary() {
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       actor_id,
       Some(1),
@@ -10050,7 +9970,8 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
       }),
     ])
     .expect("two steps fit");
-    let contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let contract = system_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -10088,7 +10009,8 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = transfer_contract_steps(BOB, 10);
-    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone());
+    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
@@ -10149,7 +10071,8 @@ fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back(
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = transfer_contract_steps(BOB, 10);
-    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone());
+    let contract = user_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -12281,14 +12204,14 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
     let encoded_actor_state = |actor_id| {
       (
         ActorHot::<Test>::get(actor_id).encode(),
-        ActorContract::<Test>::get(actor_id).encode(),
+        ActorContracts::<Test>::get(actor_id).encode(),
         crate::ActorFunding::<Test>::get(actor_id).encode(),
         ContinuationStateStore::<Test>::get(actor_id).encode(),
       )
     };
     let plan_id = create_suspended_system_retry(1);
     let plan_before = encoded_actor_state(plan_id);
-    let stored_contract = ActorContract::<Test>::get(plan_id).expect("active Actor Contract");
+    let stored_contract = ActorContracts::<Test>::get(plan_id).expect("active Actor Contract");
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -12301,7 +12224,7 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
 
     let policy_id = create_suspended_system_retry(2);
     let policy_before = encoded_actor_state(policy_id);
-    let policy = ActorContract::<Test>::get(policy_id)
+    let policy = ActorContracts::<Test>::get(policy_id)
       .expect("active Actor Contract")
       .funding;
     frame_system::Pallet::<Test>::reset_events();
@@ -12315,9 +12238,12 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
 
     let schedule_id = create_suspended_system_retry(3);
     let schedule_before = encoded_actor_state(schedule_id);
-    let stored_schedule = ActorContract::<Test>::get(schedule_id).expect("active Actor Contract");
-    let schedule = stored_schedule.schedule;
-    let schedule_window = stored_schedule.schedule_window;
+    let stored_schedule = ActorContracts::<Test>::get(schedule_id).expect("active Actor Contract");
+    let schedule = RuntimeSchedule {
+      trigger: stored_schedule.trigger,
+      cooldown_blocks: stored_schedule.cooldown_blocks,
+    };
+    let schedule_window = stored_schedule.window;
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -12331,7 +12257,7 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
     let auto_close_id = create_suspended_system_retry(4);
     let continuation_before = ContinuationStateStore::<Test>::get(auto_close_id).encode();
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       auto_close_id,
       Some(2),
@@ -12346,11 +12272,11 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
     )));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::AutoCloseNonceSet { actor_id, target: Some(2) } if *actor_id == auto_close_id
+      Event::ContractUpdated { actor_id } if *actor_id == auto_close_id
     )));
     let auto_close_before = encoded_actor_state(auto_close_id);
     frame_system::Pallet::<Test>::reset_events();
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       auto_close_id,
       Some(2),
@@ -12416,13 +12342,14 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     frame_system::Pallet::<Test>::set_block_number(6);
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       dormant_id,
-      system_active_contract(manual_schedule(), None, inert_contract_steps()),
+      system_active_contract(manual_schedule(), None, inert_contract_steps())
+        .expect("direct Actor Contract"),
     ));
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::root(), dormant_id),
@@ -12432,10 +12359,11 @@ fn semantic_control_origins_share_one_queue_churn_clock() {
 }
 
 #[test]
-fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
+fn completion_policy_only_replacement_preserves_continuation() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let before = Actors::active_actor_view(actor_id).expect("suspended actor");
+    let continuation_before = Actors::continuation_state(actor_id).expect("suspended continuation");
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -12449,8 +12377,11 @@ fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
       after.completion,
       crate::CompletionPolicy::CloseAfterProductiveCycle
     );
-    assert_eq!(after.cycle_state, CycleState::Idle);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert_eq!(after.cycle_state, CycleState::Suspended);
+    assert_eq!(
+      Actors::continuation_state(actor_id).map(|state| state.encode()),
+      Some(continuation_before.encode())
+    );
     let events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -12458,24 +12389,9 @@ fn completion_policy_only_replacement_uses_its_closed_cancellation_reason() {
         _ => None,
       })
       .collect();
+    assert_eq!(events.len(), 1);
     assert!(matches!(
       events.first(),
-      Some(Event::CycleCancelled {
-        actor_id: id,
-        reason: CancellationReason::CompletionChanged,
-        ..
-      }) if *id == actor_id
-    ));
-    assert!(matches!(
-      events.get(1),
-      Some(Event::CycleSummary {
-        actor_id: id,
-        result: CycleResult::Cancelled,
-        ..
-      }) if *id == actor_id
-    ));
-    assert!(matches!(
-      events.last(),
       Some(Event::ContractUpdated { actor_id: id, .. }) if *id == actor_id
     ));
   });
@@ -12494,7 +12410,7 @@ fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
     ));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::CycleCancelled { actor_id, reason: CancellationReason::StepsChanged, .. }
+      Event::CycleCancelled { actor_id, reason: CancellationReason::ContractReplaced, .. }
         if *actor_id == plan_id
     )));
 
@@ -12507,7 +12423,7 @@ fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
     ));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::CycleCancelled { actor_id, reason: CancellationReason::FundingChanged, .. }
+      Event::CycleCancelled { actor_id, reason: CancellationReason::ContractReplaced, .. }
         if *actor_id == policy_id
     )));
 
@@ -12524,7 +12440,7 @@ fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
     ));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::CycleCancelled { actor_id, reason: CancellationReason::ScheduleChanged, .. }
+      Event::CycleCancelled { actor_id, reason: CancellationReason::ContractReplaced, .. }
         if *actor_id == schedule_id
     )));
 
@@ -12652,13 +12568,13 @@ fn user_immutable_manual_source_changes_readiness_without_mutating_contract() {
       transfer_contract_steps(BOB, 1),
     );
     fund_native(actor_id, 1_000);
-    let contract_before = ActorContract::<Test>::get(actor_id).expect("immutable contract");
+    let contract_before = ActorContracts::<Test>::get(actor_id).expect("immutable contract");
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     assert!(Actors::pending_signal(actor_id));
-    assert_eq!(ActorContract::<Test>::get(actor_id), Some(contract_before));
+    assert_eq!(ActorContracts::<Test>::get(actor_id), Some(contract_before));
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -13406,7 +13322,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     ActorHot::<Test>::mutate(continue_id, |maybe| {
       maybe.as_mut().expect("actor hot state exists").unsuccessful_attempt_streak = 2;
     });
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       continue_id,
       Some(2)
@@ -13458,7 +13374,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       None,
       BoundedVec::try_from(vec![skip_step]).expect("one step fits"),
     );
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       skip_id,
       Some(1)
@@ -13493,7 +13409,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       .expect("two steps fit"),
     );
     fund_native(abort_id, 100);
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::root(),
       abort_id,
       Some(1)
@@ -14782,7 +14698,7 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     ));
     let sys_inst = actor_funding(system_actor);
     assert!(matches!(
-      ActorContract::<Test>::get(system_actor)
+      ActorContracts::<Test>::get(system_actor)
         .expect("system Actor Contract")
         .funding,
       FundingSourcePolicy::RuntimePolicy
@@ -14793,7 +14709,7 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     );
     let user_inst = actor_funding(user_actor);
     assert!(matches!(
-      ActorContract::<Test>::get(user_actor)
+      ActorContracts::<Test>::get(user_actor)
         .expect("user Actor Contract")
         .funding,
       FundingSourcePolicy::OwnerOnly
@@ -15684,11 +15600,11 @@ fn governance_can_manage_system_actor_control_surface() {
       updated_schedule.clone(),
       None,
     ));
+    let updated_view = Actors::active_actor_view(actor_id).expect("system actor");
+    assert_eq!(updated_view.trigger, updated_schedule.trigger);
     assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("system actor")
-        .schedule,
-      updated_schedule
+      updated_view.cooldown_blocks,
+      updated_schedule.cooldown_blocks
     );
     ActorHot::<Test>::mutate(actor_id, |maybe| {
       maybe
@@ -15708,11 +15624,7 @@ fn governance_can_manage_system_actor_control_surface() {
     assert_eq!(updated.steps, updated_plan);
     assert_eq!(updated.unsuccessful_attempt_streak, 0);
     frame_system::Pallet::<Test>::set_block_number(5);
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
-      RuntimeOrigin::root(),
-      actor_id,
-      Some(5),
-    ));
+    assert_ok!(replace_auto_close(RuntimeOrigin::root(), actor_id, Some(5),));
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("system actor")
@@ -15720,11 +15632,7 @@ fn governance_can_manage_system_actor_control_surface() {
       Some(5)
     );
     frame_system::Pallet::<Test>::set_block_number(6);
-    assert_ok!(Actors::increment_auto_close_nonce(
-      RuntimeOrigin::root(),
-      actor_id,
-      2,
-    ));
+    assert_ok!(replace_auto_close(RuntimeOrigin::root(), actor_id, Some(7),));
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("system actor")
@@ -15813,7 +15721,7 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
     let funding_before = actor_funding(actor_id);
-    let funding_policy_before = ActorContract::<Test>::get(actor_id)
+    let funding_policy_before = ActorContracts::<Test>::get(actor_id)
       .expect("active Actor Contract")
       .funding;
     System::reset_events();
@@ -15825,8 +15733,11 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      before.schedule.clone(),
-      before.schedule_window,
+      RuntimeSchedule {
+        trigger: before.trigger.clone(),
+        cooldown_blocks: before.cooldown_blocks,
+      },
+      before.window,
     ));
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
@@ -16937,11 +16848,10 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
     assert_ok!(Actors::update_contract(
       RuntimeOrigin::root(),
       actor_id,
-      stored.schedule.clone(),
-      stored.schedule_window,
-      raw_plan(),
-      stored.funding.clone(),
-      stored.completion,
+      ActorContract {
+        steps: raw_plan(),
+        ..stored.clone()
+      },
     ));
     assert_eq!(frame_system::Pallet::<Test>::event_count(), event_count);
     assert_eq!(
@@ -17480,7 +17390,7 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
     let dormant = Actors::actor_identities(dormant_id).expect("dormant identity");
     let self_leg_plan = contract_steps_with_step(make_step(Task::SplitTransfer {
@@ -17502,7 +17412,8 @@ fn self_transfer_rejection_covers_create_update_and_activation_paths() {
       Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         dormant_id,
-        system_active_contract(manual_schedule(), None, self_leg_plan),
+        system_active_contract(manual_schedule(), None, self_leg_plan)
+          .expect("direct Actor Contract"),
       ),
       Error::<Test>::SelfTransferNotAllowed
     );
@@ -20568,7 +20479,7 @@ fn auto_close_threshold_reached_closes_actor_after_successful_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       Some(2),
@@ -20599,43 +20510,6 @@ fn auto_close_threshold_reached_closes_actor_after_successful_cycle() {
 }
 
 #[test]
-fn increment_auto_close_nonce_enforces_bounds_and_overflow_rules() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_noop!(
-      Actors::increment_auto_close_nonce(RuntimeOrigin::signed(ALICE), actor_id, 0),
-      Error::<Test>::AutoCloseNonceIncrementZero
-    );
-    let horizon = TestMaxAutoCloseNonceHorizon::get();
-    assert_noop!(
-      Actors::increment_auto_close_nonce(
-        RuntimeOrigin::signed(ALICE),
-        actor_id,
-        horizon.saturating_add(1)
-      ),
-      Error::<Test>::AutoCloseNonceHorizonExceeded
-    );
-    assert_ok!(Actors::increment_auto_close_nonce(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      5,
-    ));
-    let inst = Actors::active_actor_view(actor_id).expect("Actors must exist");
-    assert_eq!(inst.auto_close_at_cycle_nonce, Some(5));
-    ActorHot::<Test>::mutate(actor_id, |maybe| {
-      if let Some(hot) = maybe.as_mut() {
-        hot.auto_close_at_cycle_nonce = Some(u64::MAX);
-      }
-    });
-    assert_noop!(
-      Actors::increment_auto_close_nonce(RuntimeOrigin::signed(ALICE), actor_id, 1),
-      Error::<Test>::AutoCloseNonceOverflow
-    );
-  });
-}
-
-#[test]
 fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -20647,12 +20521,12 @@ fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
       inert_contract_steps(),
     );
     assert_noop!(
-      Actors::set_auto_close_at_cycle_nonce(RuntimeOrigin::signed(ALICE), immutable_id, Some(2)),
+      replace_auto_close(RuntimeOrigin::signed(ALICE), immutable_id, Some(2)),
       Error::<Test>::ImmutableActor
     );
     let mutable_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_noop!(
-      Actors::set_auto_close_at_cycle_nonce(RuntimeOrigin::signed(BOB), mutable_id, Some(2)),
+      replace_auto_close(RuntimeOrigin::signed(BOB), mutable_id, Some(2)),
       Error::<Test>::NotOwner
     );
     assert_ok!(Actors::manual_trigger(
@@ -20661,12 +20535,12 @@ fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
     ));
     run_idle(Weight::MAX);
     assert_noop!(
-      Actors::set_auto_close_at_cycle_nonce(RuntimeOrigin::signed(ALICE), mutable_id, Some(1)),
+      replace_auto_close(RuntimeOrigin::signed(ALICE), mutable_id, Some(1)),
       Error::<Test>::InvalidAutoCloseNonce
     );
     let horizon = TestMaxAutoCloseNonceHorizon::get();
     assert_noop!(
-      Actors::set_auto_close_at_cycle_nonce(
+      replace_auto_close(
         RuntimeOrigin::signed(ALICE),
         mutable_id,
         Some(1u64.saturating_add(horizon).saturating_add(1)),
@@ -20674,16 +20548,22 @@ fn auto_close_configuration_enforces_origin_mutability_and_target_rules() {
       Error::<Test>::AutoCloseNonceHorizonExceeded
     );
     let boundary_target = 1u64.saturating_add(horizon);
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::signed(ALICE),
       mutable_id,
       Some(boundary_target),
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_noop!(
-      Actors::increment_auto_close_nonce(RuntimeOrigin::signed(ALICE), mutable_id, 1),
+      replace_auto_close(
+        RuntimeOrigin::signed(ALICE),
+        mutable_id,
+        Some(boundary_target.saturating_add(1)),
+      ),
       Error::<Test>::AutoCloseNonceHorizonExceeded
     );
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::signed(ALICE),
       mutable_id,
       None,
@@ -20702,7 +20582,7 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::set_auto_close_at_cycle_nonce(
+    assert_ok!(replace_auto_close(
       RuntimeOrigin::signed(ALICE),
       actor_id,
       Some(1),
@@ -20743,7 +20623,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
       Mutability::Immutable
     );
     assert_noop!(
-      update_contract_partial!(RuntimeOrigin::root(), actor_id, timer_schedule(1), None),
+      update_contract_partial!(RuntimeOrigin::root(), actor_id, timer_schedule(2), None),
       Error::<Test>::ImmutableActor
     );
     assert_noop!(
@@ -20751,7 +20631,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
         RuntimeOrigin::root(),
         actor_id,
         contract_steps.clone(),
-        crate::CompletionPolicy::Persistent,
+        crate::CompletionPolicy::CloseAfterProductiveCycle,
       ),
       Error::<Test>::ImmutableActor
     );
@@ -20909,10 +20789,10 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
         ActorIdentities::<Test>::mutate(actor_id, |maybe| {
           maybe.as_mut().expect("actor identity exists").cycle_nonce = 1;
         });
-        ActorHot::<Test>::mutate(actor_id, |maybe| {
+        ActorContracts::<Test>::mutate(actor_id, |maybe| {
           maybe
             .as_mut()
-            .expect("actor hot state exists")
+            .expect("actor contract exists")
             .auto_close_at_cycle_nonce = Some(1);
         });
       }
@@ -20923,11 +20803,9 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       actor_id
     ));
     if reason == CloseReason::WindowExpired {
-      ActorContract::<Test>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("actor contract exists")
-          .schedule_window = Some(ScheduleWindow { start: 0, end: 0 });
+      ActorContracts::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("actor contract exists").window =
+          Some(ScheduleWindow { start: 0, end: 0 });
       });
     }
     let before = Actors::actor_hot(actor_id)
@@ -21027,16 +20905,17 @@ fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
 
 #[cfg(test)]
 mod proptest_actor {
+  use super::Schedule;
   use super::{
     RETRY_LATER, all_conditions, asset_balance, create_system_with, fund_native, make_step,
     manual_schedule, native_balance, prefund_active_user_creation, run_idle, set_asset_balance,
     setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorContract, ActorFunding, ActorHot, ActorIdentities, AmountResolution, AssetFilter,
+    ActorContracts, ActorFunding, ActorHot, ActorIdentities, AmountResolution, AssetFilter,
     ContinuationStateStore, CycleState, Event, FundingSourcePolicy, Mutability, QueueOccupancy,
-    QueuePages, Schedule, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState,
-    SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages, mock::*,
+    QueuePages, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns,
+    Task, Trigger, WakeupBuckets, WakeupPages, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -21049,7 +20928,7 @@ mod proptest_actor {
   };
   use proptest::prelude::*;
 
-  type RuntimeSchedule = crate::ScheduleOf<crate::mock::Test>;
+  type RuntimeSchedule = Schedule;
   type RuntimeStep = StepOf<Test>;
 
   fn timer_schedule_pt(every_blocks: u32) -> RuntimeSchedule {
@@ -21075,14 +20954,18 @@ mod proptest_actor {
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(owner),
       Mutability::Mutable,
-      crate::ContractInput::Active(crate::ActiveContractInput {
-        schedule: timer_schedule_pt(every_blocks),
-        schedule_window: None,
-        steps: plan,
-        completion: crate::CompletionPolicy::Persistent,
-        funding: crate::FundingSourcePolicy::OwnerOnly,
-        auto_close_at_cycle_nonce: None,
-      }),
+      {
+        let schedule = timer_schedule_pt(every_blocks);
+        Some(crate::ActorContract {
+          trigger: schedule.trigger,
+          cooldown_blocks: schedule.cooldown_blocks,
+          window: None,
+          steps: plan,
+          completion: crate::CompletionPolicy::Persistent,
+          funding: crate::FundingSourcePolicy::OwnerOnly,
+          auto_close_at_cycle_nonce: None,
+        })
+      },
     ));
     id
   }
@@ -21318,13 +21201,11 @@ mod proptest_actor {
       <Test as crate::Config>::MaxTriggerSources,
       <Test as crate::Config>::ObservationFeedId,
     >,
-  ) -> crate::ContractInputOf<Test> {
-    crate::ContractInput::Active(crate::ActiveContractInput {
-      schedule: Schedule {
-        trigger,
-        cooldown_blocks: 0,
-      },
-      schedule_window: None,
+  ) -> Option<crate::ActorContractOf<Test>> {
+    Some(crate::ActorContract {
+      trigger,
+      cooldown_blocks: 0,
+      window: None,
       steps: inert_contract_steps(),
       completion: crate::CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::AnyVerifiedIngress,
@@ -21340,7 +21221,7 @@ mod proptest_actor {
     conserved_total: Balance,
   ) {
     let hot_ids: std::collections::BTreeSet<_> = ActorHot::<Test>::iter_keys().collect();
-    let contract_ids: std::collections::BTreeSet<_> = ActorContract::<Test>::iter_keys().collect();
+    let contract_ids: std::collections::BTreeSet<_> = ActorContracts::<Test>::iter_keys().collect();
     let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
     let identity_ids: std::collections::BTreeSet<_> =
       ActorIdentities::<Test>::iter_keys().collect();
@@ -21376,7 +21257,7 @@ mod proptest_actor {
           .all(|asset| funding.funding_tracked_assets.contains(asset))
       );
       if let Some(continuation) = ContinuationStateStore::<Test>::get(actor_id) {
-        let contract = ActorContract::<Test>::get(actor_id).expect("contract key resolves");
+        let contract = ActorContracts::<Test>::get(actor_id).expect("contract key resolves");
         assert!((continuation.cursor as usize) < contract.steps.len());
         assert!(continuation.cumulative_outcomes.executed_steps <= continuation.cursor);
       }
@@ -21639,7 +21520,7 @@ mod proptest_actor {
           RuntimeOrigin::root(),
           ALICE,
           Mutability::Mutable,
-          crate::ContractInput::Dormant,
+          None,
         ));
         let mut closed = false;
         assert_model_invariants(
@@ -21670,7 +21551,7 @@ mod proptest_actor {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
-                system_contract(Trigger::immediate_manual()),
+                system_contract(Trigger::immediate_manual()).expect("direct Actor Contract"),
               );
             }
             ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
@@ -21822,7 +21703,7 @@ mod proptest_actor {
                 RuntimeOrigin::signed(ALICE),
                 0,
                 Mutability::Mutable,
-                crate::ContractInput::Dormant,
+                None,
               ));
               let user_id = Actors::next_actor_id().saturating_sub(1);
               assert_eq!(
@@ -22418,7 +22299,8 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
       let expected_contract = match case.actor_type {
         ActorType::User => user_active_contract(schedule.clone(), None, steps.clone()),
         ActorType::System => system_active_contract(schedule.clone(), None, steps.clone()),
-      };
+      }
+      .expect("direct Actor Contract");
       let actor_id = match case.actor_type {
         ActorType::User => create_user_with(ALICE, case.mutability, schedule, None, steps),
         ActorType::System => {
@@ -22653,7 +22535,8 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = transfer_contract_steps(BOB, 10);
-    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
@@ -22710,7 +22593,8 @@ fn continuation_simulation_preserves_retry_position_and_committed_state() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let expected_contract =
-      system_active_contract(manual_schedule(), None, temporary_retry_swap_plan());
+      system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
+        .expect("direct Actor Contract");
     let continuation_before = Actors::continuation_state(actor_id).expect("continuation exists");
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
@@ -22771,7 +22655,8 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
       },
       on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
     });
-    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
@@ -22810,7 +22695,8 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, contract_steps.clone()),
+        system_active_contract(manual_schedule(), None, contract_steps.clone())
+          .expect("direct Actor Contract"),
         SimulationMode::FreshCurrentPlan,
       )
       .err(),
@@ -22828,7 +22714,11 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        ContractInput::Dormant,
+        ActorContract {
+          cooldown_blocks: 1,
+          ..system_active_contract(manual_schedule(), None, contract_steps.clone())
+            .expect("direct Actor Contract")
+        },
         SimulationMode::FreshCurrentPlan,
       )
       .err(),
@@ -22839,7 +22729,8 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         actor_id,
         ActorType::System,
         Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, contract_steps),
+        system_active_contract(manual_schedule(), None, contract_steps)
+          .expect("direct Actor Contract"),
         SimulationMode::CurrentContinuation,
       )
       .err(),
@@ -22857,8 +22748,15 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
 
 // --- Eligibility Projection API (spec 7.3) ---
 
-fn eligibility_projection(actor_id: ActorId) -> ActorEligibilityProjection<u64> {
-  Actors::actor_eligibility(actor_id).expect("projection computes")
+fn eligibility(actor_id: ActorId) -> ActorEligibility<u64> {
+  Actors::actor_eligibility(actor_id).expect("eligibility computes")
+}
+
+fn active_eligibility(actor_id: ActorId) -> ActorClassification<u64> {
+  match eligibility(actor_id) {
+    ActorEligibility::Active(classification) => classification,
+    other => panic!("expected active eligibility, got {other:?}"),
+  }
 }
 
 #[test]
@@ -22866,19 +22764,15 @@ fn eligibility_projection_reports_not_registered_and_dormant() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let fresh_id = Actors::next_actor_id();
-    let p = eligibility_projection(fresh_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::NotRegistered);
-    assert_eq!(p.next_eligible_block, None);
+    assert_eq!(eligibility(fresh_id), ActorEligibility::NotRegistered);
 
     assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ContractInput::Dormant,
+      None,
     ));
-    let p = eligibility_projection(fresh_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Dormant);
-    assert_eq!(p.next_eligible_block, None);
+    assert_eq!(eligibility(fresh_id), ActorEligibility::Dormant);
   });
 }
 
@@ -22887,7 +22781,8 @@ fn eligibility_projection_rejects_partial_active_partitions() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let plan = inert_contract_steps();
-    let expected_contract = system_active_contract(manual_schedule(), None, plan.clone());
+    let expected_contract =
+      system_active_contract(manual_schedule(), None, plan.clone()).expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
     ActorFunding::<Test>::remove(actor_id);
     assert_eq!(
@@ -22916,7 +22811,8 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
     let window = ScheduleWindow { start: 1, end: 101 };
     let contract_steps = inert_contract_steps();
     let expected_contract =
-      system_active_contract(manual_schedule(), Some(window), contract_steps.clone());
+      system_active_contract(manual_schedule(), Some(window), contract_steps.clone())
+        .expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), Some(window), contract_steps);
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::set_global_circuit_breaker(
@@ -22933,10 +22829,7 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       classification.execution_phase,
       ActorExecutionPhase::GlobalCircuitBreaker
     );
-    assert_eq!(
-      eligibility_projection(actor_id).phase,
-      ActorEligibilityPhase::GlobalCircuitBreaker
-    );
+    assert_eq!(active_eligibility(actor_id), classification);
     assert_eq!(
       Actors::simulate_current_contract(
         actor_id,
@@ -22953,8 +22846,8 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       false
     ));
     assert_eq!(
-      eligibility_projection(actor_id).phase,
-      ActorEligibilityPhase::CloseDue(CloseReason::WindowExpired)
+      active_eligibility(actor_id).terminal_reason,
+      Some(CloseReason::WindowExpired)
     );
     assert_eq!(
       Actors::simulate_current_contract(
@@ -22984,7 +22877,8 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = inert_contract_steps();
-    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone());
+    let expected_contract = system_active_contract(manual_schedule(), None, contract_steps.clone())
+      .expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
     let instance = Actors::active_actor_view(actor_id).expect("actor exists");
@@ -22995,8 +22889,8 @@ fn classifier_projections_agree_on_breaker_terminal_and_paused_products() {
       ActorExecutionPhase::Paused
     );
     assert_eq!(
-      eligibility_projection(actor_id).phase,
-      ActorEligibilityPhase::Paused
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Paused
     );
     assert_eq!(
       Actors::simulate_current_contract(
@@ -23016,17 +22910,19 @@ fn eligibility_projection_ready_after_signal_and_waits_without_latch() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::WaitingSignal);
-    assert_eq!(p.next_eligible_block, Some(1));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingSignal
+    );
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Ready);
-    assert_eq!(p.next_eligible_block, Some(1));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Ready
+    );
   });
 }
 
@@ -23063,9 +22959,10 @@ fn eligibility_projection_waits_for_cooldown_and_reports_next_block() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::WaitingTemporal);
-    assert_eq!(p.next_eligible_block, Some(6));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingTemporal(6)
+    );
   });
 }
 
@@ -23082,18 +22979,20 @@ fn eligibility_projection_waits_for_schedule_window_until_gate() {
       }),
       inert_contract_steps(),
     );
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::WaitingTemporal);
-    assert_eq!(p.next_eligible_block, Some(50));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingTemporal(50)
+    );
 
     frame_system::Pallet::<Test>::set_block_number(50);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Ready);
-    assert_eq!(p.next_eligible_block, Some(50));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Ready
+    );
   });
 }
 
@@ -23104,14 +23003,16 @@ fn eligibility_projection_reports_exact_cadence_gate_without_actor_phase() {
     let cadence = 20u32;
     let actor_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_contract_steps());
 
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Ready);
-    assert_eq!(p.next_eligible_block, Some(1));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Ready
+    );
 
     frame_system::Pallet::<Test>::set_block_number(11);
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::WaitingTemporal);
-    assert_eq!(p.next_eligible_block, Some(21));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingTemporal(21)
+    );
   });
 }
 
@@ -23128,9 +23029,10 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
     );
     fund_native(actor_id, 1_000);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Paused);
-    assert_eq!(p.next_eligible_block, None);
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Paused
+    );
   });
 
   new_test_ext().execute_with(|| {
@@ -23140,9 +23042,10 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
       RuntimeOrigin::root(),
       true
     ));
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::GlobalCircuitBreaker);
-    assert_eq!(p.next_eligible_block, None);
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::GlobalCircuitBreaker
+    );
   });
 
   new_test_ext().execute_with(|| {
@@ -23157,12 +23060,10 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
       inert_contract_steps(),
     );
     frame_system::Pallet::<Test>::set_block_number(151);
-    let p = eligibility_projection(actor_id);
     assert_eq!(
-      p.phase,
-      ActorEligibilityPhase::CloseDue(CloseReason::WindowExpired)
+      active_eligibility(actor_id).terminal_reason,
+      Some(CloseReason::WindowExpired)
     );
-    assert_eq!(p.next_eligible_block, None);
   });
 }
 
@@ -23170,14 +23071,16 @@ fn eligibility_projection_reports_paused_breaker_and_window_expired() {
 fn eligibility_projection_reports_suspended_retry_then_ready_at_attempt_block() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::WaitingRetry);
-    assert_eq!(p.next_eligible_block, Some(2));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingRetry(2)
+    );
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let p = eligibility_projection(actor_id);
-    assert_eq!(p.phase, ActorEligibilityPhase::Ready);
-    assert_eq!(p.next_eligible_block, Some(2));
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::Ready
+    );
   });
 }
 
@@ -23192,12 +23095,10 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
         .expect("active actor")
         .unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
     });
-    let p = eligibility_projection(actor_id);
     assert_eq!(
-      p.phase,
-      ActorEligibilityPhase::CloseDue(CloseReason::ConsecutiveFailures)
+      active_eligibility(actor_id).terminal_reason,
+      Some(CloseReason::ConsecutiveFailures)
     );
-    assert_eq!(p.next_eligible_block, None);
   });
 
   new_test_ext().execute_with(|| {
@@ -23216,18 +23117,16 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
     );
     // A failed terminal cycle leaves the incremented nonce at the target without
     // closing; the next admission closes before any further cycle (spec 2.4).
-    ActorHot::<Test>::mutate(actor_id, |maybe| {
+    ActorContracts::<Test>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("active actor")
+        .expect("active Actor Contract")
         .auto_close_at_cycle_nonce = Some(1);
     });
-    let p = eligibility_projection(actor_id);
     assert_eq!(
-      p.phase,
-      ActorEligibilityPhase::CloseDue(CloseReason::AutoCloseNonceReached)
+      active_eligibility(actor_id).terminal_reason,
+      Some(CloseReason::AutoCloseNonceReached)
     );
-    assert_eq!(p.next_eligible_block, None);
   });
 
   new_test_ext().execute_with(|| {
@@ -23236,11 +23135,9 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
     ActorIdentities::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("identity").cycle_nonce = u64::MAX;
     });
-    let p = eligibility_projection(actor_id);
     assert_eq!(
-      p.phase,
-      ActorEligibilityPhase::CloseDue(CloseReason::CycleNonceExhausted)
+      active_eligibility(actor_id).terminal_reason,
+      Some(CloseReason::CycleNonceExhausted)
     );
-    assert_eq!(p.next_eligible_block, None);
   });
 }

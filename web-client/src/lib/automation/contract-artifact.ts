@@ -166,7 +166,7 @@ function enumDiscriminant(
 function contractCodec(metadata: UnifiedMetadata) {
   const entry = metadataEntry(
     metadata,
-    'pallet_deos_actors::types::ContractInput',
+    'pallet_deos_actors::types::contract::ActorContract',
   );
   return getDynamicBuilder(getLookupFn(metadata)).buildDefinition(entry.id);
 }
@@ -177,11 +177,19 @@ function decodeContract(
 ) {
   const codec = contractCodec(metadata);
   const sourceBytes = hexToBytes(contractScale);
-  const runtimeValue = codec.dec(sourceBytes);
-  const roundTrip = codec.enc(runtimeValue);
+  let runtimeValue: unknown;
+  let roundTrip: Uint8Array;
+  try {
+    runtimeValue = codec.dec(sourceBytes);
+    roundTrip = codec.enc(runtimeValue);
+  } catch {
+    throw new Error(
+      'ActorContract must contain exact SCALE bytes in canonical form',
+    );
+  }
   if (bytesToHex(roundTrip) !== contractScale) {
     throw new Error(
-      'ContractInput must decode and re-encode to the exact SCALE bytes',
+      'ActorContract must decode and re-encode to the exact SCALE bytes',
     );
   }
   return { runtimeValue, projection: projectRuntimeValue(runtimeValue) };
@@ -230,12 +238,12 @@ function contractIdentityBytes(
     hexToBytes(artifact.metadataHash),
     enumDiscriminant(
       metadata,
-      'pallet_deos_actors::types::ActorType',
+      'pallet_deos_actors::types::lifecycle::ActorType',
       artifact.actorType,
     ),
     enumDiscriminant(
       metadata,
-      'pallet_deos_actors::types::Mutability',
+      'pallet_deos_actors::types::lifecycle::Mutability',
       artifact.mutability,
     ),
     hexToBytes(artifact.contractScale),

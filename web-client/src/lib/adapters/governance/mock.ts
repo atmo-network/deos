@@ -23,7 +23,6 @@ import type {
   GovernanceProposalExecutionDetail,
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalPrimaryTrackTally,
@@ -54,7 +53,7 @@ type MockProposal = {
   proposerAccountId: GovernanceAccountId;
   metadata: GovernanceProposalMetadata;
   executionAuthority: GovernanceProposalExecutionAuthority;
-  payloadAvailability: GovernanceProposalPayloadAvailability;
+  payloadAvailability: GovernancePayloadHashPreimageStatus;
   tally: GovernanceProposalVoteTally;
   profiles: Record<GovernanceVoteKind, GovernanceVotePowerProfile>;
   ordinaryVotes: Partial<Record<GovernanceAccountId, OrdinaryVoteKind>>;
@@ -64,7 +63,7 @@ type MockProposal = {
 type MockRetainedFinalizedProposal = GovernanceRecentFinalizedProposal & {
   metadata: GovernanceProposalMetadata | null;
   executionAuthority: GovernanceProposalExecutionAuthority | null;
-  payloadAvailability: GovernanceProposalPayloadAvailability | null;
+  payloadAvailability: GovernancePayloadHashPreimageStatus | null;
   winningPrimaryOption: GovernancePrimaryTrackOption | null;
 };
 
@@ -110,7 +109,7 @@ function createMockProposal(input: {
   proposerAccountId: GovernanceAccountId;
   metadata: GovernanceProposalMetadata;
   executionAuthority: GovernanceProposalExecutionAuthority;
-  payloadAvailability: GovernanceProposalPayloadAvailability;
+  payloadAvailability: GovernancePayloadHashPreimageStatus;
   tally: GovernanceProposalVoteTally;
 }): MockProposal {
   return {
@@ -146,6 +145,7 @@ function seededDomainState(): MockDomainState {
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
+          byteLength: null,
         },
         tally: {
           ayeVoters: 3,
@@ -179,6 +179,7 @@ function seededDomainState(): MockDomainState {
         payloadAvailability: {
           havePreimage: false,
           preimageRequested: false,
+          byteLength: null,
         },
         tally: {
           ayeVoters: 2,
@@ -222,6 +223,7 @@ function seededDomainState(): MockDomainState {
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
+          byteLength: null,
         },
         winningPrimaryOption: null,
       },
@@ -255,6 +257,7 @@ function seededDomainState(): MockDomainState {
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
+          byteLength: null,
         },
         winningPrimaryOption: 'Approve',
       },
@@ -276,6 +279,7 @@ function seededDomainState(): MockDomainState {
         payloadAvailability: {
           havePreimage: false,
           preimageRequested: false,
+          byteLength: null,
         },
         winningPrimaryOption: null,
       },
@@ -1122,7 +1126,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
   async getProposalPayloadAvailability(
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPayloadAvailability | null> {
+  ): Promise<GovernancePayloadHashPreimageStatus | null> {
     const domain = this.domain(domainId);
     const proposal = domain.activeProposals[itemId];
     if (proposal) {
@@ -1178,6 +1182,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
+        byteLength: null,
       },
       tally: {
         ayeVoters: 0,
@@ -1237,6 +1242,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
+        byteLength: null,
       },
       tally: {
         ayeVoters: 0,
@@ -1479,6 +1485,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       payloadAvailability: {
         havePreimage: this.notedPreimageHashes.has(input.payloadHash),
         preimageRequested: false,
+        byteLength: this.notedPreimageHashes.get(input.payloadHash) ?? null,
       },
       tally: {
         ayeVoters: 0,
@@ -1516,6 +1523,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
           proposal.payloadAvailability = {
             havePreimage: true,
             preimageRequested: false,
+            byteLength: input.payloadBytes.length,
           };
         }
       }
@@ -1524,6 +1532,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
           proposal.payloadAvailability = {
             havePreimage: true,
             preimageRequested: false,
+            byteLength: input.payloadBytes.length,
           };
         }
       }

@@ -223,7 +223,14 @@ normalize_weight_file() {
     sed -i 's/ pallet_xcm::WeightInfo/ polkadot_sdk::pallet_xcm::WeightInfo/' "$file"
     sed -i "s#${TEMPLATE_DIR}#template#g" "$file"
     if [[ "$pallet_name" == "pallet_oracle" ]]; then
-        sed -i '/fn register_feed_new_producer()/,/^[[:space:]]*}/ s/Weight::from_parts(0, [0-9][0-9]*)/Weight::from_parts(0, 44420)/' "$file"
+        local measured_proof
+        measured_proof="$(sed -n '/fn register_feed_new_producer()/,/^[[:space:]]*}/p' "$file" \
+            | awk '/Measured:/ { gsub(/`/, "", $3); print $3; exit }')"
+        if [[ ! "$measured_proof" =~ ^[0-9]+$ ]]; then
+            log_error "Could not read measured Oracle new-producer ProofSize"
+            return 1
+        fi
+        sed -i "/fn register_feed_new_producer()/,/^[[:space:]]*}/ s/Weight::from_parts(0, [0-9][0-9]*)/Weight::from_parts(0, ${measured_proof})/" "$file"
     fi
     log_info "  Normalized imports, struct name, local paths, and required proof bridges"
 }
@@ -233,8 +240,13 @@ verify_weight_file_contract() {
     local output_file="$2"
 
     if [[ "$pallet_name" == "pallet_oracle" ]]; then
-        if ! grep -q 'Measured:  `44420`' "$output_file" || ! grep -q 'Weight::from_parts(0, 44420)' "$output_file"; then
-            log_error "Weight file contract check failed for pallet_oracle: new-producer registration must bridge measured ProofSize"
+        local measured_proof
+        measured_proof="$(sed -n '/fn register_feed_new_producer()/,/^[[:space:]]*}/p' "$output_file" \
+            | awk '/Measured:/ { gsub(/`/, "", $3); print $3; exit }')"
+        if [[ ! "$measured_proof" =~ ^[0-9]+$ ]] \
+            || ! sed -n '/fn register_feed_new_producer()/,/^[[:space:]]*}/p' "$output_file" \
+                | grep -q "Weight::from_parts(0, ${measured_proof})"; then
+            log_error "Weight file contract check failed for pallet_oracle: measured ProofSize is not charged"
             return 1
         fi
         return 0

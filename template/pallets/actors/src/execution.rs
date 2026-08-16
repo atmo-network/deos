@@ -253,7 +253,7 @@ impl<T: Config> Pallet<T> {
     );
     let identity = ActorIdentities::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
     if let Some(continuation) = state.as_ref() {
-      let contract = ActorContract::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
+      let contract = ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
       ensure!(
         identity.mutability == Mutability::Mutable
           && continuation.cursor < contract.steps.len() as u32,
@@ -958,7 +958,7 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     expected_type: ActorType,
     expected_mutability: Mutability,
-    expected_contract: ContractInputOf<T>,
+    expected_contract: ActorContractOf<T>,
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
     let instance = Self::active_actor_for_classification(actor_id)
@@ -980,25 +980,7 @@ impl<T: Config> Pallet<T> {
     if instance.mutability != expected_mutability {
       return Err(SimulationError::MutabilityMismatch);
     }
-    let ContractInput::Active(ActiveContractInput {
-      schedule,
-      schedule_window,
-      steps: contract_steps,
-      completion: completion_policy,
-      funding: funding_source_policy,
-      auto_close_at_cycle_nonce,
-    }) = expected_contract
-    else {
-      return Err(SimulationError::ContractMismatch);
-    };
-    if instance.schedule != schedule
-      || instance.schedule_window != schedule_window
-      || instance.steps != contract_steps
-      || instance.completion != completion_policy
-      || ActorContract::<T>::get(actor_id)
-        .is_none_or(|contract| contract.funding != funding_source_policy)
-      || instance.auto_close_at_cycle_nonce != auto_close_at_cycle_nonce
-    {
+    if ActorContracts::<T>::get(actor_id) != Some(expected_contract) {
       return Err(SimulationError::ContractMismatch);
     }
     match mode {
@@ -1054,7 +1036,7 @@ impl<T: Config> Pallet<T> {
       ActorExecutionPhase::GlobalCircuitBreaker => unreachable!("handled above"),
     }
     let now = frame_system::Pallet::<T>::block_number();
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
+    polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err(|| {
       let mut trace = alloc::vec::Vec::new();
       let attempt = Self::execute_single_cycle_traced(actor_id, instance, now, Some(&mut trace));
       if attempt.fee_collection_failed {
@@ -1086,6 +1068,7 @@ impl<T: Config> Pallet<T> {
         steps,
       }))
     })
+    .map_err(|()| SimulationError::TransactionDepthExceeded)?
   }
 
   pub(crate) fn failure_limit_reached(unsuccessful_attempt_streak: u32) -> bool {

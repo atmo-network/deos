@@ -65,14 +65,13 @@ The package MUST expose explicit `MaxFeeds` and `MaxFeedsPerProducer` constants 
 
 Canonical storage consists of:
 
-- `FeedCount`: bounded admitted-feed cardinality.
-- `FeedIds`: bounded duplicate-free forward registry used for reconciliation.
+- `FeedIds`: bounded duplicate-free forward registry used for capacity, cardinality, and reconciliation.
 - `Feeds[FeedId]`: immutable semantics plus lifecycle.
 - `ProducerIds`: bounded duplicate-free producer registry.
 - `ProducerFeeds[ProducerId]`: bounded duplicate-free IDs owned by one producer.
 - `Observations[FeedId]`: absent before first accepted sample; otherwise exactly `{ value, updated_at, revision }`.
 
-The pallet stores no sample history, revision-indexed values, subscriber set, arbitrary metadata, or time series. Try-state MUST reconcile feed count, per-producer membership, uniqueness, referenced feed existence, producer equality, lifecycle validity, observation revision nonzero, and configured cardinality bounds.
+The pallet stores no sample history, revision-indexed values, subscriber set, arbitrary metadata, or time series. Try-state MUST reconcile `FeedIds` cardinality against producer membership, uniqueness, referenced feed existence, producer equality, lifecycle validity, observation revision nonzero, and configured bounds.
 
 ## 5. Authority
 

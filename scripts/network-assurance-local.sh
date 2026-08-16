@@ -134,6 +134,7 @@ prepare() {
     phase_banner "Step 2: Pinned environment and artifacts"
     run_script_step "Pinned full environment" "setup-environment.sh" full
     add_path_if_dir "$DEOS_BINARY_DIR"
+    run_script_step "Pinned node binaries" "01-download-binaries.sh"
     run_script_step "Local network tools" "02-install-tools.sh"
     run_script_step "Production runtime" "03-build-runtime.sh"
     run_script_step "Local chain spec" "04-generate-chain-spec.sh"

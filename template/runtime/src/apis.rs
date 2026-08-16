@@ -113,14 +113,14 @@ impl_runtime_apis! {
 
     impl pallet_deos_actors::ActorSimulationApi<
         Block,
-        pallet_deos_actors::ContractInputOf<Runtime>,
+        pallet_deos_actors::ActorContractOf<Runtime>,
         pallet_deos_actors::SimulationResultOf<Runtime>,
     > for Runtime {
         fn simulate_current_contract(
             actor_id: pallet_deos_actors::ActorId,
             expected_type: pallet_deos_actors::ActorType,
             expected_mutability: pallet_deos_actors::Mutability,
-            expected_contract: pallet_deos_actors::ContractInputOf<Runtime>,
+            expected_contract: pallet_deos_actors::ActorContractOf<Runtime>,
             mode: pallet_deos_actors::SimulationMode,
         ) -> Result<pallet_deos_actors::SimulationResultOf<Runtime>, pallet_deos_actors::SimulationError> {
             Actors::simulate_current_contract(
@@ -137,7 +137,7 @@ impl_runtime_apis! {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
-            pallet_deos_actors::ActorEligibilityProjection<BlockNumber>,
+            pallet_deos_actors::ActorEligibility<BlockNumber>,
             pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)

@@ -114,28 +114,29 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     if (eligibility == null) {
       return 'Unavailable';
     }
-    if (eligibility.phase === 'Ready') {
-      return 'Ready now';
+    if (eligibility.type === 'NotRegistered') return 'Not registered';
+    if (eligibility.type === 'Dormant') return 'Dormant';
+    if (
+      eligibility.terminalReason != null &&
+      eligibility.executionPhase.type !== 'GlobalCircuitBreaker'
+    ) {
+      return `Close due · ${eligibility.terminalReason}`;
     }
-    switch (eligibility.phase) {
+    switch (eligibility.executionPhase.type) {
+      case 'Ready':
+        return 'Ready now';
       case 'WaitingTemporal':
-        return `Gated · block ${eligibility.nextEligibleBlock ?? '?'}`;
+        return `Gated · block ${eligibility.executionPhase.block}`;
       case 'WaitingRetry':
-        return `Retry · block ${eligibility.nextEligibleBlock ?? '?'}`;
+        return `Retry · block ${eligibility.executionPhase.block}`;
       case 'WaitingSignal':
         return 'Awaiting signal';
-      case 'NotRegistered':
-        return 'Not registered';
-      case 'Dormant':
-        return 'Dormant';
       case 'Paused':
         return 'Paused';
       case 'GlobalCircuitBreaker':
-        return 'Global breaker';
-      case 'CloseDue':
-        return `Close due · ${eligibility.closeReason ?? 'unknown reason'}`;
-      default:
-        return eligibility.phase;
+        return eligibility.terminalReason == null
+          ? 'Global breaker'
+          : `Global breaker · close due ${eligibility.terminalReason}`;
     }
   }
 

@@ -73,7 +73,6 @@ export type {
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
   GovernanceProposalParameterChangeSurface,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalRejectionReason,

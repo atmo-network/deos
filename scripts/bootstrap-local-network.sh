@@ -3,6 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
 SKIP_TOOLS="${SKIP_TOOLS:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_CHAINSPEC="${SKIP_CHAINSPEC:-0}"
@@ -16,16 +17,18 @@ Usage: bootstrap-local-network.sh [OPTIONS]
 Runs the local bootstrap chain for Zombienet: tools -> runtime build -> chain spec -> network spawn. Polkadot and Omni Node binaries must already be available in PATH or ./bin.
 
 Options:
+  --skip-download    Skip 01-download-binaries.sh
   --skip-tools       Skip 02-install-tools.sh
   --skip-build       Skip 03-build-runtime.sh
   --skip-chain-spec  Skip 04-generate-chain-spec.sh
   -h, --help         Show this help message
 
 Environment:
+  SKIP_DOWNLOAD=0|1
   SKIP_TOOLS=0|1
   SKIP_BUILD=0|1
   SKIP_CHAINSPEC=0|1
-  CHAIN_TYPE=Development|Local|Live
+  CHAIN_TYPE=Development|Local
   WEB_CLIENT_PORT=<port>  Web-client dev server port to display (default: 5173)
 EOF
 }
@@ -33,6 +36,9 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --skip-download)
+                SKIP_DOWNLOAD=1
+                ;;
             --skip-tools)
                 SKIP_TOOLS=1
                 ;;
@@ -74,25 +80,32 @@ display_endpoints() {
 run_bootstrap_steps() {
     export CHAIN_TYPE
 
+    if (( SKIP_DOWNLOAD == 0 )); then
+        phase_banner "1/5: Download node binaries"
+        run_script_step "Download node binaries" "01-download-binaries.sh"
+    else
+        log_warning "Skipping step 1: Download node binaries"
+    fi
+
     if (( SKIP_TOOLS == 0 )); then
-        phase_banner "1/4: Install cargo tools"
+        phase_banner "2/5: Install cargo tools"
         run_script_step "Install cargo tools" "02-install-tools.sh"
     else
-        log_warning "Skipping step 1: Install tools"
+        log_warning "Skipping step 2: Install tools"
     fi
 
     if (( SKIP_BUILD == 0 )); then
-        phase_banner "2/4: Build parachain runtime"
+        phase_banner "3/5: Build parachain runtime"
         run_script_step "Build parachain runtime" "03-build-runtime.sh"
     else
-        log_warning "Skipping step 2: Build runtime"
+        log_warning "Skipping step 3: Build runtime"
     fi
 
     if (( SKIP_CHAINSPEC == 0 )); then
-        phase_banner "3/4: Generate chain spec"
+        phase_banner "4/5: Generate chain spec"
         run_script_step "Generate chain spec" "04-generate-chain-spec.sh"
     else
-        log_warning "Skipping step 3: Generate chain spec"
+        log_warning "Skipping step 4: Generate chain spec"
     fi
 }
 
@@ -122,7 +135,7 @@ main() {
     run_bootstrap_steps
     check_spawn_prerequisites
 
-    phase_banner "6/6: Spawn Zombienet"
+    phase_banner "5/5: Spawn Zombienet"
     display_endpoints
     log_info "Starting network (Ctrl+C to stop)..."
     echo ""

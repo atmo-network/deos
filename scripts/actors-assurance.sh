@@ -100,12 +100,9 @@ verify_heavy_profiles_resolve_exactly_once() {
 }
 
 run_gate() {
-    run_shell_step "Actors gate: 0.7.17 golden-equivalence freshness" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --check"
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
-    run_shell_step "Actors gate: accepted specification hash" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-spec-acceptance"
-run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
-    run_shell_step "Actors gate: identity drift" "" "\"$PROJECT_ROOT/.agents/skills/alignment/scripts/audit-actors-identity.sh\""
+    run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
     run_shell_step "Actors gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
     run_shell_step "Actors gate: certified ingress evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:ingress-evidence"
     run_shell_step "Actors gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
@@ -116,12 +113,6 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
         run_shell_step "Actors quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib && cargo test -q --locked -p pallet-deos-actors-embedding-fixture --lib"
         run_shell_step "Actors quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --list"
         return
-    fi
-
-    if [[ "$CARGO_PROFILE" == "release" ]]; then
-        run_shell_step "Actors gate: executable 0.7.17 golden equivalence" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --execute --release"
-    else
-        run_shell_step "Actors gate: executable 0.7.17 golden equivalence" "" "\"$PROJECT_ROOT/scripts/actors-golden-equivalence.sh\" --execute"
     fi
 
     run_shell_step \

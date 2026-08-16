@@ -406,14 +406,19 @@ export class BlockchainSnapshotBuilder {
         );
       }
       const securityView = securityViewResult.value;
+      const securityState = securityView.value;
       return {
         isAvailable: pool !== null,
         accountAddress,
-        securityMode: securityView.mode.type,
-        securityReadiness: securityView.readiness.type,
-        securityEpoch: securityView.current_epoch,
-        plannedSecurityEpoch: securityView.planned_epoch ?? null,
-        settlementObligationsRemain: securityView.settlement_obligations_remain,
+        securityMode: securityView.type,
+        securityReadiness:
+          securityView.type === 'LpBackedSelection'
+            ? securityView.value.readiness.type
+            : null,
+        securityEpoch: securityState.current_epoch,
+        plannedSecurityEpoch: securityState.planned_epoch ?? null,
+        settlementObligationsRemain:
+          securityState.settlement_obligations_remain,
         boundaryDiagnostic: boundaryDiagnostic
           ? {
               plannedEpoch: boundaryDiagnostic.planned_epoch,

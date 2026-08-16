@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../docs/randomness.strategy.en.md
+  - resource: ../../docs/core.architecture.en.md
   - resource: ../../docs/manifesto.en.md
 status: stable
 audience: newcomer
@@ -22,7 +22,7 @@ related:
   - Governance
   - AA-Actor
   - Newcomer FAQ
-last_compiled: 2026-07-20
+last_compiled: 2026-08-16
 confidence: 0.95
 ---
 

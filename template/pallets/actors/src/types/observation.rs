@@ -1,4 +1,4 @@
-use crate::lifecycle_types::ActorId;
+use super::lifecycle::ActorId;
 use frame::prelude::*;
 
 pub type ObservationRevision = u64;
@@ -6,7 +6,6 @@ pub type ObservationRevision = u64;
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("observation_types", "types"))]
 pub struct ObservationSubscriberPageList {
   pub head: u32,
   pub tail: u32,
@@ -24,7 +23,6 @@ pub struct ObservationSubscriberPageList {
   TypeInfo,
   MaxEncodedLen,
 )]
-#[scale_info(replace_segment("observation_types", "types"))]
 #[scale_info(skip_type_params(MaxEntries))]
 pub struct ObservationSubscriberPage<MaxEntries: Get<u32>> {
   pub previous: Option<u32>,
@@ -59,7 +57,6 @@ impl<MaxEntries: Get<u32>> core::ops::DerefMut for ObservationSubscriberPage<Max
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("observation_types", "types"))]
 pub struct DirtyObservationState<FeedId, BlockNumber> {
   pub latest_revision: ObservationRevision,
   pub fanout_revision: ObservationRevision,
@@ -72,7 +69,6 @@ pub struct DirtyObservationState<FeedId, BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(replace_segment("observation_types", "types"))]
 pub struct DirtyObservationList<FeedId> {
   pub head: Option<FeedId>,
   pub tail: Option<FeedId>,

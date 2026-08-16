@@ -262,7 +262,7 @@ Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorContr
 
 The runtime simulation API executes the same package evaluator and finalizer used by scheduler service. Its bounded records carry canonical `StepOutcome` values, including concrete failure cause plus retry disposition, and its status is the shared `AttemptDisposition`; DEOS adds no adapter-side simulation model.
 
-The read-only `ActorEligibilityApi::actor_eligibility` projection reports the scheduler-owned readiness phase, a typed `CloseDue(CloseReason)` terminal projection, and `next_eligible_block` at one finalized block, reusing the exact scheduler arithmetic so the browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
+The read-only `ActorEligibilityApi::actor_eligibility` projection reports `NotRegistered`, `Dormant`, or the canonical Active classification at one finalized block, preserving terminal reason and exact retry/temporal block payloads so the browser never reimplements cadence, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 
 The browser's authoring, artifact, matching-Wasm, simulation, observation, and governance-composition surfaces live under `web-client/src/lib/automation/` and `web-client/src/lib/observation/`. They bind metadata and runtime identity rather than recreating pallet semantics.
 
@@ -273,10 +273,6 @@ Unbounded history, archive search, forecasting records, governance preparation h
 Package tests own executable actor, scheduler, trigger, lifecycle, storage, and try-state behavior. Runtime tests own adapters, fees, ingress, genesis topology, Oracle/Router rollback, staking, XCM, generated-weight binding, block-budget partition, and full System/User composition.
 
 `scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and occupancy proof commands. Repository toolchain authorities and canonical release profiles own environment and profile selection; this integration document does not duplicate release results or version pins.
-
-`template/runtime/src/tests/fixtures/actors-reactive-operations.v1.json` is the machine-readable reactive-operations corpus. Every scenario names initial state, ordered actions, checkpoints, terminal state, global invariants, production weight class, rollback boundary, runtime evidence identity, and an executable Rust test anchor. Seeded scenarios also name their seed.
-
-`scripts/reactive-operations-corpus.sh` validates all or one family and emits selected seed/initial-state failure artifacts. `--execute` runs every selected Rust anchor in dev or release profile; those tests remain the behavioral evidence owner. The delivery-pressure family covers seeded revision races, newer-revision restart, queue-admission retry, three simultaneously dense feeds under one-unit round robin, cursor repair, dirty-age preservation/reset, and maximum subscriber density.
 
 The runtime cross-pallet hook-rejection anchor fills Actors dirty capacity, attempts direct Oracle publication, and proves Oracle observation/revision, Actors feed/list state, and runtime events equal the captured pre-state. After capacity recovery, one producer retry commits Oracle revision `1` and Actors latest revision `1`; no replay state or Router publication path participates.
 

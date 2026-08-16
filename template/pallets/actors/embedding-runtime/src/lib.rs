@@ -234,12 +234,12 @@ pub fn transfer_and_notify_actor(
   asset: AssetId,
   amount: Balance,
 ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-  let actor = Actors::active_actor_view(actor_id)
+  let actor = Actors::active_actor_state(actor_id)
     .ok_or(pallet_deos_actors::Error::<Runtime>::ActorNotFound)?;
   let provenance = pallet_deos_actors::FundingProvenance::Signed;
   Actors::preflight_funding_event(actor_id, asset, amount, Some(source), Some(&provenance))?;
   polkadot_sdk::frame_support::storage::with_transaction(|| {
-    let result = NativeAssetOps::transfer(source, &actor.sovereign_account, asset, amount)
+    let result = NativeAssetOps::transfer(source, &actor.identity.sovereign_account, asset, amount)
       .and_then(|()| {
         Actors::notify_address_event(actor_id, asset, amount, source)
           .map_err(pallet_deos_actors::TaskFailure::permanent)
@@ -775,35 +775,31 @@ mod tests {
 
   fn prefund_active_contract(
     owner: AccountId,
-    contract: &pallet_deos_actors::ContractInputOf<Runtime>,
+    contract: &pallet_deos_actors::ActorContractOf<Runtime>,
   ) {
-    if let pallet_deos_actors::ContractInput::Active(input) = contract {
-      prefund_active_user_creation(owner, &input.steps);
-    }
+    prefund_active_user_creation(owner, &contract.steps);
   }
 
   fn contract_with_task(
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     task: pallet_deos_actors::TaskOf<Runtime>,
-  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
+  ) -> pallet_deos_actors::ActorContractOf<Runtime> {
     let plan = contract_steps(task);
-    pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-      schedule: pallet_deos_actors::Schedule {
-        trigger,
-        cooldown_blocks: 0,
-      },
-      schedule_window: None,
+    pallet_deos_actors::ActorContract {
+      trigger,
+      cooldown_blocks: 0,
+      window: None,
       steps: plan,
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
       funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
-    })
+    }
   }
 
   fn transfer_contract(
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     amount: Balance,
-  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
+  ) -> pallet_deos_actors::ActorContractOf<Runtime> {
     contract_with_task(
       trigger,
       pallet_deos_actors::Task::Transfer {
@@ -829,18 +825,16 @@ mod tests {
     trigger: pallet_deos_actors::TriggerOf<Runtime>,
     cooldown_blocks: u32,
     steps: Vec<pallet_deos_actors::StepOf<Runtime>>,
-  ) -> pallet_deos_actors::ContractInputOf<Runtime> {
-    pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-      schedule: pallet_deos_actors::Schedule {
-        trigger,
-        cooldown_blocks,
-      },
-      schedule_window: None,
+  ) -> pallet_deos_actors::ActorContractOf<Runtime> {
+    pallet_deos_actors::ActorContract {
+      trigger,
+      cooldown_blocks,
+      window: None,
       steps: BoundedVec::try_from(steps).expect("fixture plan fits"),
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
       funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
       auto_close_at_cycle_nonce: None,
-    })
+    }
   }
 
   #[cfg(feature = "dex-fixture")]
@@ -869,7 +863,6 @@ mod tests {
       b"WakeupPages".as_slice(),
       b"Precondition".as_slice(),
       b"precondition".as_slice(),
-      b"Always".as_slice(),
       b"All".as_slice(),
       b"Any".as_slice(),
       b"StopCycle".as_slice(),
@@ -920,7 +913,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       assert!(Actors::try_state(1).is_ok());
     });
@@ -948,11 +941,11 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ContractInput::Dormant,
+        None,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let identity = Actors::actor_identities(actor_id).expect("identity exists");
-      assert!(Actors::active_actor_view(actor_id).is_none());
+      assert!(Actors::active_actor_state(actor_id).is_none());
       assert_eq!(Actors::active_actor_count(), 0);
       assert!(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).is_none());
       // Spec 7.1: the existing dormant sovereign must cover the activation
@@ -983,7 +976,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      assert!(Actors::active_actor_view(actor_id).is_none());
+      assert!(Actors::active_actor_state(actor_id).is_none());
       let expected = user_prefunding_requirement(&activate_plan).saturating_add(1_000);
       assert_eq!(Balances::free_balance(identity.sovereign_account), expected);
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -1003,11 +996,12 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let actor = Actors::active_actor_view(actor_id)
+      let actor = Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .sovereign_account;
       let actor_funding = 10_000_000_000u128;
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
@@ -1024,8 +1018,9 @@ mod tests {
       let _ = Actors::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor remains")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1076,15 +1071,16 @@ mod tests {
       prefund_active_contract(ALICE, &contract);
       let create = RuntimeCall::Actors(pallet_deos_actors::Call::create_user_actor {
         mutability: pallet_deos_actors::Mutability::Mutable,
-        contract,
+        contract: Some(contract),
       });
       assert!(matches!(
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, create)),
         Ok(Ok(_))
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let actor = Actors::active_actor_view(actor_id)
+      let actor = Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .sovereign_account;
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
         &ALICE,
@@ -1116,11 +1112,12 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let sovereign = Actors::active_actor_view(actor_id)
+      let sovereign = Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .sovereign_account;
       let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
         dest: sovereign,
@@ -1151,11 +1148,12 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let sovereign = Actors::active_actor_view(actor_id)
+      let sovereign = Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .sovereign_account;
       let before = Balances::free_balance(sovereign);
       let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -1215,26 +1213,23 @@ mod tests {
         &admitted,
       );
       assert!(admission.all_lte(ActorOnIdleReserve::get()));
-      let admitted_contract =
-        pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-          schedule: pallet_deos_actors::Schedule {
-            trigger: pallet_deos_actors::Trigger::immediate_manual(),
-            cooldown_blocks: 0,
-          },
-          schedule_window: None,
-          steps: admitted.clone(),
-          completion: pallet_deos_actors::CompletionPolicy::Persistent,
-          funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
-          auto_close_at_cycle_nonce: None,
-        });
+      let admitted_contract = pallet_deos_actors::ActorContract {
+        trigger: pallet_deos_actors::Trigger::immediate_manual(),
+        cooldown_blocks: 0,
+        window: None,
+        steps: admitted.clone(),
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+        auto_close_at_cycle_nonce: None,
+      };
       prefund_active_contract(ALICE, &admitted_contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        admitted_contract,
+        Some(admitted_contract),
       ));
       assert!(
-        Actors::active_actor_view(
+        Actors::active_actor_state(
           pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1)
         )
         .is_some()
@@ -1255,7 +1250,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let bob_before = Balances::free_balance(BOB);
@@ -1271,8 +1266,9 @@ mod tests {
       let _ = Actors::on_idle(2, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor remains")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1289,7 +1285,10 @@ mod tests {
           RuntimeOrigin::root(),
           ALICE,
           pallet_deos_actors::Mutability::Mutable,
-          transfer_contract(pallet_deos_actors::Trigger::cadenced_always(20), 1),
+          Some(transfer_contract(
+            pallet_deos_actors::Trigger::cadenced_always(20),
+            1,
+          )),
         ));
         let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
         assert_ok!(transfer_and_notify_actor(
@@ -1310,8 +1309,9 @@ mod tests {
       }
       for actor_id in &actor_ids {
         assert_eq!(
-          Actors::active_actor_view(*actor_id)
+          Actors::active_actor_state(*actor_id)
             .expect("actor remains")
+            .identity
             .cycle_nonce,
           1
         );
@@ -1337,11 +1337,15 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 5),
+        Some(transfer_contract(
+          pallet_deos_actors::Trigger::immediate_manual(),
+          5,
+        )),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let sovereign = Actors::active_actor_view(actor_id)
+      let sovereign = Actors::active_actor_state(actor_id)
         .expect("system actor exists")
+        .identity
         .sovereign_account;
       let _ = <Balances as Currency<AccountId>>::deposit_creating(&sovereign, 777);
       assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor_id));
@@ -1352,7 +1356,7 @@ mod tests {
         actor_id,
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ContractInput::Dormant,
+        None,
       ));
       let identity = Actors::actor_identities(fresh_id).expect("fresh system identity reattaches");
       assert_eq!(identity.sovereign_account, sovereign);
@@ -1372,14 +1376,17 @@ mod tests {
         Actors::create_user_actor(
           RuntimeOrigin::signed(ALICE),
           pallet_deos_actors::Mutability::Mutable,
-          contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+          Some(contract_with_task(
+            pallet_deos_actors::Trigger::immediate_manual(),
+            mint_task(),
+          )),
         ),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
       );
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        pallet_deos_actors::ContractInput::Dormant,
+        None,
       ));
       let dormant_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       System::set_block_number(2);
@@ -1396,22 +1403,16 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        plan,
+        Some(plan),
       ));
       let active_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       System::set_block_number(3);
-      let contract = pallet_deos_actors::ActorContract::<Runtime>::get(active_id)
+      let mut contract = pallet_deos_actors::ActorContracts::<Runtime>::get(active_id)
         .expect("Actor Contract exists");
+      contract.steps = contract_steps(mint_task());
+      contract.completion = pallet_deos_actors::CompletionPolicy::Persistent;
       assert_noop!(
-        Actors::update_contract(
-          RuntimeOrigin::signed(ALICE),
-          active_id,
-          contract.schedule,
-          contract.schedule_window,
-          contract_steps(mint_task()),
-          contract.funding,
-          pallet_deos_actors::CompletionPolicy::Persistent,
-        ),
+        Actors::update_contract(RuntimeOrigin::signed(ALICE), active_id, contract),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
       );
 
@@ -1419,11 +1420,15 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+        Some(contract_with_task(
+          pallet_deos_actors::Trigger::immediate_manual(),
+          mint_task(),
+        )),
       ));
       let system_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let sovereign = Actors::active_actor_view(system_id)
+      let sovereign = Actors::active_actor_state(system_id)
         .expect("system mint actor exists")
+        .identity
         .sovereign_account;
       assert_ok!(Actors::manual_trigger(
         RuntimeOrigin::signed(ALICE),
@@ -1432,8 +1437,9 @@ mod tests {
       let _ = Actors::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(sovereign), 100);
       assert_eq!(
-        Actors::active_actor_view(system_id)
+        Actors::active_actor_state(system_id)
           .expect("system actor remains")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1472,7 +1478,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        plan,
+        Some(plan),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1505,8 +1511,9 @@ mod tests {
       let _ = Actors::on_idle(3, Weight::MAX);
       assert!(Actors::continuation_state(actor_id).is_none());
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor completes")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1523,11 +1530,11 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_contract(
+        Some(active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
-        ),
+        )),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1542,8 +1549,9 @@ mod tests {
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("system actor suspends")
+          .hot
           .cycle_state,
         pallet_deos_actors::CycleState::Suspended
       );
@@ -1552,8 +1560,9 @@ mod tests {
       let _ = Actors::on_idle(2, Weight::MAX);
       assert!(Actors::continuation_state(actor_id).is_none());
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("system actor completes")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1574,7 +1583,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1584,15 +1593,15 @@ mod tests {
         100_000_000_000,
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
-      let before = Actors::active_actor_view(actor_id).expect("actor suspends");
+      let before = Actors::active_actor_state(actor_id).expect("actor suspends");
       let before_hot =
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state exists");
       assert_eq!(
-        before.cycle_state,
+        before.hot.cycle_state,
         pallet_deos_actors::CycleState::Suspended
       );
 
-      let sovereign = before.sovereign_account;
+      let sovereign = before.identity.sovereign_account;
       let first_call =
         RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
           dest: sovereign,
@@ -1602,10 +1611,10 @@ mod tests {
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, first_call)),
         Ok(Ok(_))
       ));
-      let after = Actors::active_actor_view(actor_id).expect("actor remains suspended");
+      let after = Actors::active_actor_state(actor_id).expect("actor remains suspended");
       let after_hot =
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
-      assert!(after.pending_signal);
+      assert!(after.hot.pending_signal);
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
       assert!(after_hot.queue_ticket.is_some());
       let repeated_call =
@@ -1633,8 +1642,9 @@ mod tests {
       let _ = Actors::on_idle(3, Weight::MAX);
       assert!(Actors::continuation_state(actor_id).is_none());
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("latched run completes")
+          .identity
           .cycle_nonce,
         2
       );
@@ -1655,11 +1665,12 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let sovereign = Actors::active_actor_view(actor_id)
+      let sovereign = Actors::active_actor_state(actor_id)
         .expect("actor exists")
+        .identity
         .sovereign_account;
       assert_ok!(transfer_and_notify_actor(
         actor_id,
@@ -1680,7 +1691,7 @@ mod tests {
         actor_id,
       ));
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
-      assert!(Actors::active_actor_view(actor_id).is_none());
+      assert!(Actors::active_actor_state(actor_id).is_none());
       assert_eq!(Balances::free_balance(sovereign), balance_before);
     });
   }
@@ -1693,7 +1704,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_contract(
+        Some(active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           0,
           alloc::vec![step(
@@ -1703,7 +1714,7 @@ mod tests {
             },
             pallet_deos_actors::StepErrorPolicy::AbortCycle,
           )],
-        ),
+        )),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1717,9 +1728,9 @@ mod tests {
         actor_id
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
-      let actor = Actors::active_actor_view(actor_id).expect("actor remains after first failure");
-      assert_eq!(actor.unsuccessful_attempt_streak, 1);
-      assert_eq!(actor.cycle_state, pallet_deos_actors::CycleState::Idle);
+      let actor = Actors::active_actor_state(actor_id).expect("actor remains after first failure");
+      assert_eq!(actor.hot.unsuccessful_attempt_streak, 1);
+      assert_eq!(actor.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
       assert!(Actors::continuation_state(actor_id).is_none());
     });
   }
@@ -1744,7 +1755,7 @@ mod tests {
           RuntimeOrigin::root(),
           ALICE,
           pallet_deos_actors::Mutability::Immutable,
-          unsupported_retry.clone(),
+          Some(unsupported_retry.clone()),
         ),
         pallet_deos_actors::Error::<Runtime>::RetryLaterNotAllowedForImmutableActor
       );
@@ -1752,7 +1763,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        unsupported_retry,
+        Some(unsupported_retry),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1768,8 +1779,9 @@ mod tests {
       let _ = Actors::on_idle(1, Weight::MAX);
       assert!(Actors::continuation_state(actor_id).is_none());
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor remains")
+          .hot
           .cycle_state,
         pallet_deos_actors::CycleState::Idle
       );
@@ -1796,11 +1808,11 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        active_contract(
+        Some(active_contract(
           pallet_deos_actors::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
-        ),
+        )),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1844,23 +1856,20 @@ mod tests {
         },
       ])
       .expect("two-step plan fits");
-      let contract =
-        pallet_deos_actors::ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-          schedule: pallet_deos_actors::Schedule {
-            trigger: pallet_deos_actors::Trigger::immediate_manual(),
-            cooldown_blocks: 0,
-          },
-          schedule_window: None,
-          steps: plan,
-          completion: pallet_deos_actors::CompletionPolicy::Persistent,
-          funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
-          auto_close_at_cycle_nonce: None,
-        });
+      let contract = pallet_deos_actors::ActorContract {
+        trigger: pallet_deos_actors::Trigger::immediate_manual(),
+        cooldown_blocks: 0,
+        window: None,
+        steps: plan,
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: pallet_deos_actors::FundingSourcePolicy::AnyVerifiedIngress,
+        auto_close_at_cycle_nonce: None,
+      };
       prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1877,8 +1886,9 @@ mod tests {
       let _ = Actors::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor remains")
+          .identity
           .cycle_nonce,
         1
       );
@@ -1902,7 +1912,7 @@ mod tests {
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         pallet_deos_actors::Mutability::Mutable,
-        contract,
+        Some(contract),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1922,8 +1932,9 @@ mod tests {
         sink_before.saturating_add(50)
       );
       assert_eq!(
-        Actors::active_actor_view(actor_id)
+        Actors::active_actor_state(actor_id)
           .expect("actor remains")
+          .identity
           .cycle_nonce,
         1
       );

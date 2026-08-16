@@ -9,47 +9,39 @@ export const ACTORS_ELIGIBILITY_RUNTIME_API =
   'ActorEligibilityApi_actor_eligibility' as const;
 export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 1 as const;
 
-export type ActorEligibilityPhase =
-  | 'NotRegistered'
-  | 'Dormant'
-  | 'Ready'
-  | 'Paused'
-  | 'GlobalCircuitBreaker'
-  | 'CloseDue'
-  | 'WaitingSignal'
-  | 'WaitingRetry'
-  | 'WaitingTemporal';
-
 export type ActorEligibilityFailure =
   | 'ActorInvariant'
   | 'ContinuationInvariant'
   | 'ComputationOverflow';
 
-export type ActorEligibilityProjection = {
-  /** Scheduler-owned readiness or blocking phase. */
-  phase: ActorEligibilityPhase;
-  /** Terminal reason when phase is CloseDue. */
-  closeReason: string | null;
-  /** Next block at which temporal eligibility opens, or null when none is computable. */
-  nextEligibleBlock: number | null;
-};
+export type ActorExecutionPhase =
+  | { type: 'Ready' }
+  | { type: 'Paused' }
+  | { type: 'GlobalCircuitBreaker' }
+  | { type: 'WaitingSignal' }
+  | { type: 'WaitingRetry'; block: number }
+  | { type: 'WaitingTemporal'; block: number };
 
-const ELIGIBILITY_PHASES: ReadonlySet<string> = new Set([
-  'NotRegistered',
-  'Dormant',
-  'Ready',
-  'Paused',
-  'GlobalCircuitBreaker',
-  'CloseDue',
-  'WaitingSignal',
-  'WaitingRetry',
-  'WaitingTemporal',
-]);
+export type ActorEligibilityView =
+  | { type: 'NotRegistered' }
+  | { type: 'Dormant' }
+  | {
+      type: 'Active';
+      terminalReason: string | null;
+      executionPhase: ActorExecutionPhase;
+    };
 
 const ELIGIBILITY_FAILURES: ReadonlySet<string> = new Set([
   'ActorInvariant',
   'ContinuationInvariant',
   'ComputationOverflow',
+]);
+
+const SCALAR_EXECUTION_PHASES: ReadonlySet<string> = new Set([
+  'Ready',
+  'Paused',
+  'GlobalCircuitBreaker',
+  'WaitingSignal',
 ]);
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
@@ -64,25 +56,37 @@ function asVariant(value: unknown, field: string) {
   if (typeof variant.type !== 'string' || variant.type.length === 0) {
     throw new Error(`${field} must carry a runtime variant type`);
   }
-  return variant.type;
+  return variant as Record<string, unknown> & {
+    type: string;
+    value?: unknown;
+  };
 }
 
-function asOptionalBlock(value: unknown, field: string): number | null {
-  if (value === undefined) {
-    return null;
-  }
+function asBlock(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
   return value;
 }
 
-export function projectActorEligibility(
-  value: unknown,
-): ActorEligibilityProjection {
+function projectExecutionPhase(value: unknown): ActorExecutionPhase {
+  const phase = asVariant(value, 'ActorClassification.execution_phase');
+  if (SCALAR_EXECUTION_PHASES.has(phase.type)) {
+    return { type: phase.type } as ActorExecutionPhase;
+  }
+  if (phase.type === 'WaitingRetry' || phase.type === 'WaitingTemporal') {
+    return {
+      type: phase.type,
+      block: asBlock(phase.value, `${phase.type} block`),
+    };
+  }
+  throw new Error(`Unsupported runtime execution phase ${phase.type}`);
+}
+
+export function projectActorEligibility(value: unknown): ActorEligibilityView {
   const result = asRecord(value, 'runtime Result');
   if (result.success === false) {
-    const failure = asVariant(result.value, 'eligibility error');
+    const failure = asVariant(result.value, 'eligibility error').type;
     if (!ELIGIBILITY_FAILURES.has(failure)) {
       throw new Error(`Unsupported runtime eligibility error ${failure}`);
     }
@@ -93,21 +97,26 @@ export function projectActorEligibility(
   if (result.success !== true) {
     throw new Error('Runtime eligibility output must be a SCALE Result');
   }
-  const projection = asRecord(result.value, 'eligibility projection');
-  const phaseVariant = asRecord(projection.phase, 'eligibility phase');
-  const phase = asVariant(projection.phase, 'eligibility phase');
-  if (!ELIGIBILITY_PHASES.has(phase)) {
-    throw new Error(`Unsupported runtime eligibility phase ${phase}`);
+  const eligibility = asVariant(result.value, 'ActorEligibility');
+  if (eligibility.type === 'NotRegistered' || eligibility.type === 'Dormant') {
+    return { type: eligibility.type };
   }
+  if (eligibility.type !== 'Active') {
+    throw new Error(`Unsupported runtime eligibility ${eligibility.type}`);
+  }
+  const classification = asRecord(
+    eligibility.value,
+    'ActorEligibility.Active classification',
+  );
   return {
-    phase: phase as ActorEligibilityPhase,
-    closeReason:
-      phase === 'CloseDue'
-        ? asVariant(phaseVariant.value, 'eligibility close reason')
-        : null,
-    nextEligibleBlock: asOptionalBlock(
-      projection.next_eligible_block,
-      'next_eligible_block',
-    ),
+    type: 'Active',
+    terminalReason:
+      classification.terminal_reason === undefined
+        ? null
+        : asVariant(
+            classification.terminal_reason,
+            'ActorClassification.terminal_reason',
+          ).type,
+    executionPhase: projectExecutionPhase(classification.execution_phase),
   };
 }

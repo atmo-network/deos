@@ -1128,8 +1128,6 @@ fn trusted_security_path_composes_liquid_receipt_donation_governance_and_exit() 
       Staking::native_security_mode(),
       pallet_staking::NativeSecurityMode::TrustedSet
     );
-    assert!(!Staking::native_security_candidate_selection_available());
-    assert!(!Staking::native_security_reward_funding_available());
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(mint_tokens(0, &ALICE, &CHARLIE, 200));
@@ -1234,10 +1232,10 @@ fn trusted_security_path_composes_liquid_receipt_donation_governance_and_exit() 
       0
     );
     assert_eq!(Staking::operator_native_lp_locked(ALICE), 0);
-    assert_eq!(
-      Staking::native_security_readiness(),
-      pallet_staking::NativeSecurityReadiness::Inactive
-    );
+    assert!(matches!(
+      Staking::native_security_view(),
+      Ok(pallet_staking::NativeSecurityView::TrustedSet { .. })
+    ));
   });
 }
 
@@ -1902,12 +1900,10 @@ fn trusted_mode_rejects_new_collator_lp_nomination_without_custody_mutation() {
       Staking::native_locked_lp_position(BOB).collator_locked_lp,
       0
     );
-    assert_eq!(
-      Staking::native_security_readiness(),
-      pallet_staking::NativeSecurityReadiness::Inactive
-    );
-    assert!(!Staking::native_security_candidate_selection_available());
-    assert!(!Staking::native_security_reward_funding_available());
+    assert!(matches!(
+      Staking::native_security_view(),
+      Ok(pallet_staking::NativeSecurityView::TrustedSet { .. })
+    ));
   });
 }
 
@@ -2284,7 +2280,7 @@ fn security_epoch_identity_is_shared_by_runtime_planning_funding_and_claim_views
     let diagnostic = pallet_staking::NativeSecurityBoundaryDiagnostic {
       planned_epoch: provider_epoch,
       outcome: pallet_staking::NativeSecurityBoundaryOutcome::NotReady(
-        pallet_staking::NativeSecurityReadiness::Inactive,
+        pallet_staking::NativeSecurityReadiness::NativePoolMissing,
       ),
     };
     pallet_staking::LastNativeSecurityBoundaryDiagnostic::<crate::Runtime>::put(diagnostic);

@@ -85,4 +85,3 @@ confidence: 0.9
 - [Принципы среды исполнения](../overview/runtime-patterns.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
 - [Слой скриптов](../usage/scripts-layer.ru.md)
-- [Координация агентов](../usage/agent-coordination.ru.md)

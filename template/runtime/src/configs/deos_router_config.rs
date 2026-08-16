@@ -716,7 +716,7 @@ impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImp
     amount: Balance,
   ) -> Result<(), pallet_deos_router::AdapterFailure> {
     let burn_actor_account = BurnActorAccount::get();
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
+    polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err(|| {
       if let Err(failure) = RuntimeAddressEventIngress::preflight_internal_inbound(
         &burn_actor_account,
         asset,
@@ -768,6 +768,9 @@ impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImp
         }
       }
     })
+    .map_err(|()| {
+      pallet_deos_router::AdapterFailure::unknown(DispatchError::Other("TransactionDepthExceeded"))
+    })?
   }
 }
 

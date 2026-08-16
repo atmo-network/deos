@@ -399,18 +399,6 @@
       }
     },
     {
-      "id": "agent-coordination",
-      "title": {
-        "en": "Agent Coordination",
-        "ru": "Координация агентов"
-      },
-      "page_type": "usage",
-      "path": {
-        "en": "usage/agent-coordination.en.md",
-        "ru": "usage/agent-coordination.ru.md"
-      }
-    },
-    {
       "id": "parachain-context",
       "title": {
         "en": "Parachain Context",
@@ -949,11 +937,6 @@
       "type": "defines-wiki-knowledge-graph"
     },
     {
-      "from": "generated-wiki",
-      "to": "agent-coordination",
-      "type": "supports"
-    },
-    {
       "from": "domain-map",
       "to": "deos-framework",
       "type": "maps-framework-domain"
@@ -1289,31 +1272,6 @@
       "type": "relates"
     },
     {
-      "from": "agent-coordination",
-      "to": "generated-wiki",
-      "type": "uses"
-    },
-    {
-      "from": "agent-coordination",
-      "to": "three-layer-validation",
-      "type": "uses"
-    },
-    {
-      "from": "agent-coordination",
-      "to": "contributing",
-      "type": "supports"
-    },
-    {
-      "from": "scripts-layer",
-      "to": "agent-coordination",
-      "type": "relates"
-    },
-    {
-      "from": "reading-paths",
-      "to": "agent-coordination",
-      "type": "recommends"
-    },
-    {
       "from": "parachain-context",
       "to": "deos-framework",
       "type": "frames"
@@ -1434,11 +1392,6 @@
       "type": "uses"
     },
     {
-      "from": "repository-structure",
-      "to": "agent-coordination",
-      "type": "uses"
-    },
-    {
       "from": "tech-stack",
       "to": "repository-structure",
       "type": "relates"
@@ -1477,11 +1430,6 @@
       "from": "three-layer-validation",
       "to": "economic-claim-levels",
       "type": "supports"
-    },
-    {
-      "from": "contributing",
-      "to": "agent-coordination",
-      "type": "uses"
     },
     {
       "from": "contributing",

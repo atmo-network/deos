@@ -103,10 +103,6 @@ export type GovernanceProposalMetadata = {
   payloadKind: GovernanceProposalPayloadKind;
   payloadHash: string;
 };
-export type GovernanceProposalPayloadAvailability = {
-  havePreimage: boolean;
-  preimageRequested: boolean;
-};
 export type GovernancePayloadHashPreimageStatus = {
   havePreimage: boolean;
   preimageRequested: boolean;
@@ -372,7 +368,7 @@ export type GovernanceReadAdapter = {
   getProposalPayloadAvailability(
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPayloadAvailability | null>;
+  ): Promise<GovernancePayloadHashPreimageStatus | null>;
   getPayloadHashPreimageStatus(
     payloadHash: string,
   ): Promise<GovernancePayloadHashPreimageStatus | null>;

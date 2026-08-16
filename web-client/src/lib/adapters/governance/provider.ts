@@ -21,7 +21,6 @@ import type {
   GovernanceProposalExecutionDetail,
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
-  GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalPrimaryTrackTally,
@@ -162,7 +161,7 @@ export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockc
   async getProposalPayloadAvailability(
     _domainId: GovernanceDomainId,
     _itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPayloadAvailability | null> {
+  ): Promise<GovernancePayloadHashPreimageStatus | null> {
     throw new Error(this.unavailableReason);
   }
 

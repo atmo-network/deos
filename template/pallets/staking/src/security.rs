@@ -36,14 +36,6 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  pub fn native_security_candidate_selection_available() -> bool {
-    Self::native_security_operation_available(NativeSecurityOperation::CandidateSelection)
-  }
-
-  pub fn native_security_reward_funding_available() -> bool {
-    Self::native_security_operation_available(NativeSecurityOperation::RewardFunding)
-  }
-
   pub fn native_security_mode() -> NativeSecurityMode {
     T::NativeSecurityModeProvider::mode()
   }
@@ -53,9 +45,9 @@ impl<T: Config> Pallet<T> {
   }
 
   pub fn native_security_readiness() -> NativeSecurityReadiness {
-    if !Self::native_security_operation_available(NativeSecurityOperation::CandidateSelection) {
-      return NativeSecurityReadiness::Inactive;
-    }
+    debug_assert!(Self::native_security_operation_available(
+      NativeSecurityOperation::CandidateSelection
+    ));
     let native_asset_id = T::NativeStakingAssetId::get();
     if !Pools::<T>::contains_key(native_asset_id) {
       return NativeSecurityReadiness::NativePoolMissing;

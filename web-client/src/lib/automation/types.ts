@@ -8,7 +8,7 @@ import type {
   ActorContractHex,
   ActorContractRuntimeIdentity,
 } from './contract-artifact.ts';
-import type { ActorEligibilityProjection } from './eligibility.ts';
+import type { ActorEligibilityView } from './eligibility.ts';
 
 export const AUTOMATION_STEP_ERROR_POLICIES = [
   'AbortCycle',
@@ -68,9 +68,9 @@ export type AutomationActorSnapshot = {
   fundingSourcePolicy: string | null;
   /**
    * Scheduler-owned eligibility projection from the read-only runtime API
-   * (`phase`, optional close reason, and `nextEligibleBlock`), or null when the runtime API
+   * (absence, dormancy, or canonical Active classification), or null when the runtime API
    * is unavailable. Clients never reimplement cadence, cooldown, window, retry
    * backoff, breaker, or latch arithmetic.
    */
-  eligibility: ActorEligibilityProjection | null;
+  eligibility: ActorEligibilityView | null;
 };

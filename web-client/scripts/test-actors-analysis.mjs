@@ -222,22 +222,18 @@ function condition(name) {
 
 function activeContract(steps) {
   return {
-    type: 'Active',
-    value: {
-      schedule: {
-        trigger: {
-          type: 'Immediate',
-          value: {
-            sources: [{ type: 'Manual', value: undefined }],
-          },
-        },
-        cooldown_blocks: 5,
+    trigger: {
+      type: 'Immediate',
+      value: {
+        sources: [{ type: 'Manual', value: undefined }],
       },
-      schedule_window: undefined,
-      steps: steps,
-      completion: variant('Persistent'),
-      funding: variant('OwnerOnly'),
     },
+    cooldown_blocks: 5,
+    window: undefined,
+    steps,
+    completion: variant('Persistent'),
+    funding: variant('OwnerOnly'),
+    auto_close_at_cycle_nonce: undefined,
   };
 }
 
@@ -856,25 +852,15 @@ test('every error policy, actor type, and mutability has only linear controls', 
   }
 });
 
-test('Dormant and active Actor Contracts both produce complete bounded analysis', () => {
+test('installed Actor Contracts produce complete bounded analysis', () => {
   for (const actorType of ['User', 'System']) {
     for (const mutability of ['Mutable', 'Immutable']) {
-      const dormant = artifactFor({
-        contract: { type: 'Dormant', value: undefined },
-        actorType,
-        mutability,
-      });
-      const dormantResult = analyze(dormant);
-      assert.equal(dormantResult.contract, 'Dormant');
-      assert.equal(dormantResult.completionPolicy, null);
-      assert.equal(dormantResult.cooldownBlocks, null);
-      assert.equal(dormantResult.trigger, null);
-      assert.deepEqual(dormantResult.steps, []);
-      assert.equal(dormantResult.suffixEnvelopes.length, 1);
-      const active = artifactFor({ steps: [step()], actorType, mutability });
-      const activeResult = analyze(active);
-      assert.equal(activeResult.contract, 'Active');
-      assert.equal(activeResult.cooldownBlocks, 5);
+      const artifact = artifactFor({ steps: [step()], actorType, mutability });
+      const result = analyze(artifact);
+      assert.equal(result.contract, 'Installed');
+      assert.equal(result.cooldownBlocks, 5);
+      assert.equal(result.completionPolicy, 'Persistent');
+      assert.equal(result.steps.length, 1);
     }
   }
 });
@@ -893,7 +879,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
   };
   const contractWithTrigger = (trigger) => {
     const contract = activeContract([step()]);
-    contract.value.schedule.trigger = trigger;
+    contract.trigger = trigger;
     return contract;
   };
   const immediate = analyze(
@@ -941,7 +927,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     type: 'Immediate',
     value: { sources: [observationChange] },
   });
-  triggerAmountContract.value.steps = [
+  triggerAmountContract.steps = [
     step({
       amount: { type: 'PercentageAtOpening', value: 500_000_000 },
     }),
@@ -965,7 +951,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
         type: 'Cadenced',
         value: {
           every_blocks: 10,
-          mode: variant('Always'),
+          sources: undefined,
         },
       }),
     }),
@@ -990,10 +976,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
         type: 'Cadenced',
         value: {
           every_blocks: 20,
-          mode: {
-            type: 'WhenSignalled',
-            value: [addressEvent],
-          },
+          sources: [addressEvent],
         },
       }),
     }),

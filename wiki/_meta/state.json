@@ -253,8 +253,8 @@
       "audience": "newcomer",
       "confidence": 0.95,
       "sources": {
-        "en": ["../docs/randomness.strategy.en.md", "../docs/manifesto.en.md"],
-        "ru": ["../docs/randomness.strategy.en.md", "../docs/manifesto.en.md"]
+        "en": ["../docs/core.architecture.en.md", "../docs/manifesto.en.md"],
+        "ru": ["../docs/core.architecture.en.md", "../docs/manifesto.en.md"]
       }
     },
     "runtime-patterns": {
@@ -569,7 +569,6 @@
           "../docs/README.md",
           "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
           "wiki/_meta/navigation.json",
           "wiki/_meta/state.json",
           "wiki/_meta/graph.json",
@@ -580,7 +579,6 @@
           "../docs/README.md",
           "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
           "wiki/_meta/navigation.json",
           "wiki/_meta/state.json",
           "wiki/_meta/graph.json",
@@ -939,34 +937,6 @@
         ]
       }
     },
-    "agent-coordination": {
-      "path": {
-        "en": "usage/agent-coordination.en.md",
-        "ru": "usage/agent-coordination.ru.md"
-      },
-      "page_type": "usage",
-      "title": {
-        "en": "Agent Coordination",
-        "ru": "Координация агентов"
-      },
-      "status": "active",
-      "audience": "developer",
-      "confidence": 0.85,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../docs/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
-          "../.agents/skills/alignment/SKILL.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../docs/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
-          "../.agents/skills/alignment/SKILL.md"
-        ]
-      }
-    },
     "parachain-context": {
       "path": {
         "en": "concepts/parachain-context.en.md",
@@ -985,14 +955,12 @@
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/asset-registry/docs/architecture.en.md",
-          "../docs/randomness.strategy.en.md",
           "../template/README.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/asset-registry/docs/architecture.en.md",
-          "../docs/randomness.strategy.en.md",
           "../template/README.md"
         ]
       }
@@ -1076,14 +1044,12 @@
         "en": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
-          "../simulator/README.md",
-          "../.agents/skills/alignment/economic-claims.json"
+          "../simulator/README.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
-          "../simulator/README.md",
-          "../.agents/skills/alignment/economic-claims.json"
+          "../simulator/README.md"
         ]
       }
     },

@@ -1,138 +1,61 @@
 # DEOS Documentation Hub
 
-> `Comprehensive Knowledge Base` | From Mathematical Specifications to Production Deployment.
+This hub routes readers to canonical contracts and shipped architecture. `DEOS` names the reusable framework and reference stack; `TMCTOL` names its flagship economic configuration. Start with the root [`README.md`](../README.md) for orientation and [`framework-instance.contract.en.md`](./framework-instance.contract.en.md) for the mechanism/policy boundary.
 
-This directory serves as the central navigation hub for the DEOS ecosystem. It unifies the theoretical economic specifications (like the TMCTOL standard) with the concrete technical architecture of the Polkadot SDK Parachain implementation.
-
-Throughout these docs, `DEOS` names the deterministic economic operating substrate, while `TMCTOL` names the current flagship tokenomic standard running on top of that substrate. The root [`README.md`](../README.md) carries the naming rationale for the acronym itself.
-
-These docs are also the current conceptual control plane for day-to-day maintenance: start here before touching runtime, frontend, or tooling surfaces. The simulator remains the authoritative executable math reference when tokenomics, formulas, thresholds, or invariants change, but it is no longer the default entrypoint for unrelated work.
-
-These docs describe the protocol and its reference implementation, not a finished end-user product. DEOS's product layer is expected to emerge in downstream forks that pair this framework with a concrete ecosystem thesis, product philosophy, and real dApps.
-
-## Documentation Structure
-
-### 1. Essential Foundation
-
-Before contributing code or designing features, establish the project boundary and current architecture from these maintained sources:
-
-- [Framework / Instance Contract](./framework-instance.contract.en.md) — separates reusable DEOS mechanisms from downstream product and economic policy.
-- [Core Architecture](./core.architecture.en.md) — maps the token-driven runtime, actor topology, shared primitives, and integration model.
-- [Read-Model Contract](./read-model.contract.en.md) — separates bounded canonical chain projections from indexed and materialized views.
-
-For runtime changes, also read the [Template Workspace README](../template/README.md) and the specification plus architecture document owned by the affected subsystem. Current Polkadot SDK conventions belong to the runtime workspace, code, tests, and project protocol rather than to a detached release-specific reading guide.
-
-### 2. Philosophy & Vision
-
-The strategic context defining "Why" the system exists.
-
-- [The Fractal-Cybernetic Manifesto](./manifesto.en.md)
-  Defines the "Real DAO" philosophy: a transition from Subjective Policy (Politics) to Objective Mechanism (Cybernetics). Outlines the separation of `L1 Strategy` (Mathematical Sovereignty) and `L2 Tactics` (Fractal Federation).
-
-### 3. Core Specifications & Contracts
-
-Normative source-of-truth documents defining subsystem concepts, rationale, invariants, and public contracts. These docs are not post-hoc code notes; implementation and tests are expected to follow them.
-
-#### TMCTOL Standard
-
-The flagship economic standard combining minting curves with automatic liquidity generation on top of DEOS.
-
-- [TMCTOL Specification](./tmctol.specification.en.md)
-
-#### Runtime / Product Contracts
-
-- [DEOS Oracle Specification](../template/pallets/oracle/docs/specification.en.md)
-  Bounded reusable scalar-feed contract covering typed identity and provenance, immutable aggregation semantics, current-state freshness, revision rules, producer authority, lifecycle, and transactional O(1) change notification.
-
-- [DEOS Oracle Embedding Guide](../template/pallets/oracle/docs/embedding.md)
-  Package-owned host-runtime obligations for generic types, authority, bounded hooks, consumers, production weights, and independent integration evidence.
-
-- [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
-  Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, Actor Contract Step/Task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
-
-- [DEOS Actors External Runtime Embedding Guide](../template/pallets/actors/docs/embedding.md)
-  Package-owned host-runtime checklist for reusing `pallet-deos-actors` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
-
-- [DEOS Actors Control-Plane Contract](./actors-control-plane.contract.en.md)
-  Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded Actor Contracts.
-
-- [DEOS Staking Specification](../template/pallets/staking/docs/specification.en.md)
-  Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.
-
-- [DEOS Governance Specification](../template/pallets/governance/docs/specification.en.md)
-  DEOS's bounded dual-track alternative to OpenGov for the current TMCTOL standard: domains, cadence, primary/protection hierarchy, typed payload kinds, invoice voting, bounded observability, and runtime-upgrade authority.
-
-- [Read-Model Contract](./read-model.contract.en.md)
-  Project-wide data-surface rule. Defines the split between bounded authoritative on-chain projections and externally indexed/materialized views.
+## Framework
 
 - [Framework / Instance Contract](./framework-instance.contract.en.md)
-  Boundary contract separating reusable DEOS mechanisms and safety surfaces from downstream instance policy, labor culture, bucket topology, launch economics, and product strategy.
-
-### 4. Architecture & Shipped Implementation Maps
-
-Implementation-specific documents describing how the current runtime realizes the contracts above.
-
-- [DEOS Actors Package Architecture](../template/pallets/actors/docs/architecture.en.md)
-  Reusable crate implementation map covering actor state, execution, scheduler queues, wakeups, triggers, lifecycle, storage, extrinsics, adapter contracts, and package validation.
-
-- [DEOS Actors Integration](./actors.integration.en.md)
-  Concrete reference composition covering deterministic System accounts, TMCTOL actor topology, runtime adapters, ingress, fees, block bounds, reactive delivery, generated artifacts, control-plane realization, validation, and operations.
-
-- [DEOS Oracle Package Architecture](../template/pallets/oracle/docs/architecture.en.md)
-  Reusable crate implementation map covering host interfaces, bounded storage, lifecycle, transactional publication, current-state reads, benchmark design, and the independent fixture.
-
-- [DEOS Oracle Integration](./oracle.integration.en.md)
-  Concrete reference composition covering directional pool feeds, runtime authority and bounds, DEOS Router production/consumption, reactive Actor ingress, browser inspection, generated weight ownership, and cross-system rollback evidence.
-
 - [Core Architecture](./core.architecture.en.md)
-  _! SYSTEM BACKBONE !_
-  The token-driven design foundation. Covers system accounts structure, "Omnivorous" balance monitoring, Bitmask Asset Taxonomy, separation of Abstract Actors from Concrete Pallets, and the operational token lifecycle checkpoint runbook.
+- [Read-Model Contract](./read-model.contract.en.md)
+- [Manifesto](./manifesto.en.md)
 
-- [DEOS Router Specification](../template/pallets/router/docs/specification.en.md)
-  Defines bounded route families, intent protection, deterministic selection, atomic execution, outcomes, failure classes, Weight classes, and conformance.
+## Economic Standard
 
-- [DEOS Router Architecture](../template/pallets/router/docs/architecture.en.md)
-  Maps the shipped package implementation, EMA Oracle integration, fee routing, and Asset Conversion adapters.
-
-- [Token Minting Curve Architecture](../template/pallets/tmc/docs/architecture.en.md)
-  The unidirectional minting engine. Covers the current runtime realization of the linear bonding curve, integral-based minting, read surfaces, and conservation invariants.
-
+- [TMCTOL Specification](./tmctol.specification.en.md)
+- [TMC Architecture](../template/pallets/tmc/docs/architecture.en.md)
 - [Asset Registry Architecture](../template/pallets/asset-registry/docs/architecture.en.md)
-  The foreign asset gateway. Documents the Hybrid Registry pattern: deterministic hashing at registration, persistent bidirectional `Location <-> AssetId` mapping, and XCM location-key migration.
 
-- [Randomness Strategy](./randomness.strategy.en.md)
-  Secondary operational note for the current launch line. Documents the retirement of the local `pallet-vrf` line, the trusted team-operated collator posture plus previous-block-hash fallback used for the first mainnet, and the gate for any future relay-beacon replacement: only a new parachain-consumable per-block protocol beacon qualifies.
+The simulator is the executable authority for TMCTOL formulas, thresholds, and invariant scenarios.
 
-- [DEOS Staking Architecture](../template/pallets/staking/docs/architecture.en.md)
-  Code-anchored implementation map of `pallet-staking`: deterministic pool/reward account derivation, mandatory receipt lifecycle, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, explicit NativeVotePower custody, native nomination reward settlement, runtime bindings, and the current operational watchpoints.
+## DEOS Actors
 
-- [Governance Architecture](../template/pallets/governance/docs/architecture.en.md)
-  Code-anchored implementation map of `pallet-governance`: bounded winning-vote memory, resolution-once dedup, active proposal lifecycle, weighted vote policy wiring, auto-finalization buckets, recent finalized-outcome retention, and the current policy/watchpoint surface.
+- [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
+- [Package Architecture](../template/pallets/actors/docs/architecture.en.md)
+- [Embedding Guide](../template/pallets/actors/docs/embedding.md)
+- [DEOS Actors Integration](./actors.integration.en.md)
+- [Control-Plane Contract](./actors-control-plane.contract.en.md)
 
-### 5. Delivery
+## DEOS Oracle
 
-- [Roadmap / BACKLOG](../BACKLOG.md)
-  Canonical open backlog for infrastructure hardening, testing expansion, and upcoming framework evolution tasks.
+- [Specification](../template/pallets/oracle/docs/specification.en.md)
+- [Package Architecture](../template/pallets/oracle/docs/architecture.en.md)
+- [Embedding Guide](../template/pallets/oracle/docs/embedding.md)
+- [DEOS Oracle Integration](./oracle.integration.en.md)
 
-### 6. Local Tooling
+## DEOS Router
 
-- [Template Workspace README](../template/README.md)
-  Repository-local Rust runtime-kernel workspace entrypoint for `runtime/`, `pallets/`, `primitives/`, and benchmark/test commands.
+- [Specification](../template/pallets/router/docs/specification.en.md)
+- [Package Architecture](../template/pallets/router/docs/architecture.en.md)
+- [Embedding Guide](../template/pallets/router/docs/embedding.md)
 
-- [Simulator README](../simulator/README.md)
-  Repository-local executable math reference for tokenomic validation, formulas, thresholds, and invariants.
+## DEOS Staking
 
-- [Web Client README](../web-client/README.md)
-  Repository-local SvelteKit workspace for the browser-facing reference client.
+- [Specification](../template/pallets/staking/docs/specification.en.md)
+- [Package Architecture](../template/pallets/staking/docs/architecture.en.md)
+- [Embedding Guide](../template/pallets/staking/docs/embedding.md)
 
-- [Generated Wiki Index](../wiki/index.en.md)
-  Repo-local onboarding and navigation layer derived from `/docs`, also consumed by the browser-facing wiki surface.
+## DEOS Governance
 
-- [Scripts Layer Map](../scripts/README.md)
-  Canonical map of human-callable atoms, shared deterministic compositions, and local admin utilities.
+- [Specification](../template/pallets/governance/docs/specification.en.md)
+- [Package Architecture](../template/pallets/governance/docs/architecture.en.md)
+- [Embedding Guide](../template/pallets/governance/docs/embedding.md)
 
-- [Project Skill Graph](../.agents/skills/README.md)
-  Agent-facing Domain DAG for validation routing, delivery judgment, capability ownership, and shared-script boundaries.
+## Workspace and Operations
 
+- [Template Workspace](../template/README.md)
+- [Web Client](../web-client/README.md)
 - [Web Client Architecture](../web-client/docs/architecture.en.md)
-  Client implementation contract: product role, read-model honesty, widget-vs-layout vocabulary, UI Kit, Domain DAG, adapter boundaries, generated-wiki rendering, and validation.
+- [Simulator](../simulator/README.md)
+- [Project Scripts](../scripts/README.md)
+- [Open Work](../BACKLOG.md)
+- [Delivery History](../CHANGELOG.md)

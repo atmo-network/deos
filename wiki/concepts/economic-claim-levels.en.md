@@ -12,7 +12,6 @@ sources:
   - resource: ../../AGENTS.md
   - resource: ../../docs/tmctol.specification.en.md
   - resource: ../../simulator/README.md
-  - resource: ../../.agents/skills/alignment/economic-claims.json
 status: stable
 audience: newcomer
 tags:

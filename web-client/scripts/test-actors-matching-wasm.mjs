@@ -65,22 +65,17 @@ const step = {
   on_error: { type: 'AbortCycle', value: undefined },
 };
 const contractScale = encodeActorContractValue(metadataBytes, {
-  type: 'Active',
-  value: {
-    schedule: {
-      trigger: {
-        type: 'Immediate',
-        value: {
-          sources: [{ type: 'Manual', value: undefined }],
-        },
-      },
-      cooldown_blocks: 0,
+  trigger: {
+    type: 'Immediate',
+    value: {
+      sources: [{ type: 'Manual', value: undefined }],
     },
-    schedule_window: undefined,
-    steps: [step, step],
-    completion: { type: 'Persistent', value: undefined },
-    funding: { type: 'RuntimePolicy', value: undefined },
   },
+  cooldown_blocks: 0,
+  window: undefined,
+  steps: [step, step],
+  completion: { type: 'Persistent', value: undefined },
+  funding: { type: 'RuntimePolicy', value: undefined },
 });
 const artifact = createActorContractArtifact({
   metadataBytes,

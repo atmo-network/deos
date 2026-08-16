@@ -96,7 +96,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Development Status](development/status.en.md)
 - [Three-Layer Validation](development/three-layer-validation.en.md)
 - [Scripts Layer](usage/scripts-layer.en.md)
-- [Agent Coordination](usage/agent-coordination.en.md)
 - [Forking DEOS](usage/forking-deos.en.md)
 - [Repository Structure](implementation/repository-structure.en.md)
 - [Tech Stack](implementation/tech-stack.en.md)

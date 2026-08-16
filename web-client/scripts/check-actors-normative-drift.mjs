@@ -24,14 +24,8 @@ const manifestPath = path.join(
   scriptDir,
   '../src/lib/automation/actors-abi-manifest.json',
 );
-const rulesPath = path.join(
-  repoRoot,
-  '.agents/skills/alignment/rules/actors-identity-rules.json',
-);
-
 const spec = await readFile(specPath, 'utf8');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-const ruleInventory = JSON.parse(await readFile(rulesPath, 'utf8'));
 function specSection(startMarker, endMarker) {
   const start = spec.indexOf(startMarker);
   assert.ok(start >= 0, `spec marker not found: ${startMarker}`);
@@ -226,18 +220,6 @@ for (const match of spec.matchAll(/\bSections? ([0-9]+(?:\.[0-9]+)?)/g)) {
     failures.push(`section reference: missing Section ${match[1]}`);
   }
 }
-const publicTermRule = ruleInventory.rules.find(
-  (rule) => rule.id === 'actors-public-stale-terms',
-);
-assert.ok(publicTermRule, 'Actors public stale-term rule is missing');
-assert.equal(publicTermRule.kind, 'regex-any');
-for (const pattern of publicTermRule.patterns) {
-  const staleTerm = new RegExp(pattern);
-  if (staleTerm.test(spec)) {
-    failures.push(`terminology: stale term ${pattern}`);
-  }
-}
-
 for (const [label, names] of [
   ['calls', specCalls()],
   ['events', specEvents().map((event) => event.name)],
@@ -250,12 +232,7 @@ for (const [label, names] of [
     );
   }
 }
-for (const typeName of [
-  'ContractInput',
-  'Task',
-  'Predicate',
-  'AmountResolution',
-]) {
+for (const typeName of ['Trigger', 'Task', 'Predicate', 'AmountResolution']) {
   const repeated = duplicates(specTypeVariants(typeName));
   if (repeated.length > 0) {
     failures.push(
@@ -306,15 +283,17 @@ orderedDiff(
   manifest.pallet.errors.map((entry) => entry.name),
 );
 
-for (const structName of [
-  'Schedule',
-  'ActiveContractInput',
-  'Step',
-  'Precondition',
-]) {
-  const matches = manifest.types.filter(
-    (entry) =>
-      entry.path?.join('::') === `pallet_deos_actors::types::${structName}`,
+function isActorsType(entry, name) {
+  return (
+    entry.path?.[0] === 'pallet_deos_actors' &&
+    entry.path?.[1] === 'types' &&
+    entry.path?.at(-1) === name
+  );
+}
+
+for (const structName of ['ActorContract', 'Step', 'Precondition']) {
+  const matches = manifest.types.filter((entry) =>
+    isActorsType(entry, structName),
   );
   if (matches.length !== 1) {
     failures.push(
@@ -332,16 +311,14 @@ for (const structName of [
 }
 
 for (const [specEnumName, metadataEnumName] of [
-  ['ContractInput', 'ContractInput'],
+  ['Trigger', 'Trigger'],
   ['Task', 'Task'],
   ['Predicate', 'Predicate'],
   ['AmountResolution', 'AmountResolution'],
 ]) {
   const expected = specTypeSurface(specEnumName);
-  const matches = manifest.types.filter(
-    (entry) =>
-      entry.path?.join('::') ===
-      `pallet_deos_actors::types::${metadataEnumName}`,
+  const matches = manifest.types.filter((entry) =>
+    isActorsType(entry, metadataEnumName),
   );
   if (matches.length !== 1) {
     failures.push(

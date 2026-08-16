@@ -1,6 +1,6 @@
 /*
 Domain: Actors linear plan authoring
-Owns: Typed step drafts, immutable ordered-step operations, structural validation, exact ContractInput lowering, and canonical artifact production.
+Owns: Typed step drafts, immutable ordered-step operations, structural validation, exact ActorContract lowering, and canonical artifact production.
 Excludes: Runtime submission, governance authority, adapter execution, simulation, weight modeling, recipes, and widget state.
 Zone: Automation domain capability; composes the canonical contract-artifact codec without defining another runtime language.
 */
@@ -1402,13 +1402,10 @@ function lowerTrigger(trigger: ActorAuthoringTrigger) {
     case 'Cadenced':
       return runtimeVariant('Cadenced', {
         every_blocks: trigger.everyBlocks,
-        mode:
+        sources:
           trigger.mode.type === 'Always'
-            ? runtimeVariant('Always')
-            : runtimeVariant(
-                'WhenSignalled',
-                lowerTriggerSources(trigger.mode.sources),
-              ),
+            ? undefined
+            : lowerTriggerSources(trigger.mode.sources),
       });
   }
 }
@@ -1443,12 +1440,10 @@ export function lowerActorAuthoringContract(
         .join('; ')}`,
     );
   }
-  return runtimeVariant('Active', {
-    schedule: {
-      trigger: lowerTrigger(contract.trigger),
-      cooldown_blocks: contract.cooldownBlocks,
-    },
-    schedule_window:
+  return {
+    trigger: lowerTrigger(contract.trigger),
+    cooldown_blocks: contract.cooldownBlocks,
+    window:
       contract.scheduleWindow == null
         ? undefined
         : {
@@ -1476,7 +1471,7 @@ export function lowerActorAuthoringContract(
     completion: runtimeVariant(contract.completionPolicy),
     funding: lowerFundingPolicy(contract.fundingPolicy),
     auto_close_at_cycle_nonce: contract.autoCloseAtCycleNonce ?? undefined,
-  });
+  };
 }
 
 export function createActorArtifactFromAuthoring(input: {

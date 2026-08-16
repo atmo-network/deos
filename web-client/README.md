@@ -98,13 +98,7 @@ Surface-pressure warnings are triage signals, not folder-theater mandates.
 
 `WikiWidget` renders repo-local generated wiki markdown from `../wiki`.
 
-The wiki is trusted reviewed repository content, not arbitrary user input. Safety belongs to repository validation through:
-
-```sh
-npm run validate:wiki
-```
-
-That guard validates `/wiki` as a strict OKF v0.2 bundle, then rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before content is rendered in the browser.
+The wiki is trusted reviewed repository content, not arbitrary user input. The independent Wiki Sync Skill validates `/wiki` as a strict OKF v0.2 bundle and rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed frontmatter before generated content is retained. The client consumes that reviewed output without depending on Skill internals.
 
 The widget consumes:
 
@@ -151,33 +145,7 @@ Use the smallest meaningful validation first. For full client validation, run:
 npm run validate
 ```
 
-That command runs Prettier, deterministic Actors contract-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. For architecture-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
-
-```sh
-../scripts/validate-local.sh fast
-```
-
-From inside this workspace, the same boundary gate is available directly:
-
-```sh
-npm run validate:dag
-```
-
-`validate:dag` resolves the validator through `DOMAIN_DAG_VALIDATOR`, `SKILL_DIR`, or the repo-local `.agents/skills/domain-dag` copy. It preserves the default web-client root when forwarding extra validator args, and the Domain DAG config includes `scripts/` so these package launchers stay under the same source-boundary/header gate. Run `npm run validate:dag -- --help` for launcher options.
-
-For wiki-rendering/content changes, also run:
-
-```sh
-npm run validate:wiki
-```
-
-`validate:wiki` runs strict OKF and trusted-markdown validation before the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
-
-To run every configured client-adjacent gate:
-
-```sh
-npm run validate:all
-```
+That command runs Prettier, deterministic Actors contract-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact Actors call/origin composition, and matching-Wasm provenance-gate fixtures. Independent Domain DAG and Wiki Sync Skills may audit this workspace, but client and project validation do not depend on their internal scripts.
 
 ## Production Build
 

@@ -21,7 +21,7 @@ macro_rules! update_actor_contract_partial {
 
 use crate::{Actors, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_deos_actors::{
-  ActorType, AmountResolution, AssetOps, CompletionPolicy, ContractInput, ContractSteps, DexOps,
+  ActorContract, ActorType, AmountResolution, AssetOps, CompletionPolicy, ContractSteps, DexOps,
   Event, ExecutionContext, FundingSourcePolicy, OutcomeTotals, StepErrorPolicy, Task,
 };
 use polkadot_sdk::frame_support::{
@@ -64,20 +64,18 @@ fn activate_dormant_system(
   Actors::activate_actor(
     RuntimeOrigin::root(),
     actor_id,
-    ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-      schedule: pallet_deos_actors::Schedule {
-        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
-          pallet_deos_actors::SourceFilter::Any,
-          pallet_deos_actors::AssetFilter::Any,
-        ),
-        cooldown_blocks: primitives::ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
-      },
-      schedule_window: None,
+    ActorContract {
+      trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+        pallet_deos_actors::SourceFilter::Any,
+        pallet_deos_actors::AssetFilter::Any,
+      ),
+      cooldown_blocks: primitives::ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+      window: None,
       steps,
       completion: pallet_deos_actors::CompletionPolicy::Persistent,
       funding: FundingSourcePolicy::RuntimePolicy,
       auto_close_at_cycle_nonce: None,
-    }),
+    },
   )
 }
 
@@ -164,20 +162,18 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::root(),
       actor_ids::TREASURY_B_ACTORS_ID,
-      ContractInput::Active(pallet_deos_actors::ActiveContractInput {
-        schedule: pallet_deos_actors::Schedule {
-          trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
-            pallet_deos_actors::SourceFilter::Any,
-            pallet_deos_actors::AssetFilter::Any,
-          ),
-          cooldown_blocks: 5,
-        },
-        schedule_window: None,
+      ActorContract {
+        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+          pallet_deos_actors::SourceFilter::Any,
+          pallet_deos_actors::AssetFilter::Any,
+        ),
+        cooldown_blocks: 5,
+        window: None,
         steps,
         completion: pallet_deos_actors::CompletionPolicy::Persistent,
         funding: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
-      }),
+      },
     ));
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
@@ -194,7 +190,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
 #[test]
 fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_deos_actors::ActorContract::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
+    pallet_deos_actors::ActorContracts::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
       let contract = maybe.as_mut().expect("Burn Actor contract exists");
       contract.steps = alloc::vec![pallet_deos_actors::Step {
         precondition: None,
@@ -352,22 +348,25 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
 fn genesis_burn_actor_has_deterministic_sovereign_and_correct_state() {
   new_test_ext().execute_with(|| {
     let actor_id = actor_ids::BURN_ACTOR_ID;
-    let instance = Actors::active_actor_view(actor_id).expect("Burn Actor must exist at genesis");
+    let instance = Actors::active_actor_state(actor_id).expect("Burn Actor must exist at genesis");
     let expected_sovereign = Actors::sovereign_account_id_system(actor_id);
-    assert_eq!(instance.sovereign_account, expected_sovereign);
+    assert_eq!(instance.identity.sovereign_account, expected_sovereign);
     assert_eq!(
-      instance.actor_class,
+      instance.identity.actor_class,
       pallet_deos_actors::ActorClass::System {
         sovereign_id: actor_id,
       }
     );
-    assert_eq!(instance.mutability, pallet_deos_actors::Mutability::Mutable);
     assert_eq!(
-      instance.lifecycle,
+      instance.identity.mutability,
+      pallet_deos_actors::Mutability::Mutable
+    );
+    assert_eq!(
+      instance.hot.lifecycle,
       pallet_deos_actors::ActiveLifecycle::Active
     );
-    assert_eq!(instance.unsuccessful_attempt_streak, 0);
-    assert!(!instance.pending_signal);
+    assert_eq!(instance.hot.unsuccessful_attempt_streak, 0);
+    assert!(!instance.hot.pending_signal);
     assert_eq!(
       Actors::next_actor_id(),
       actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID + 1
@@ -396,9 +395,9 @@ fn genesis_value_driven_contracts_use_omnivorous_address_event_triggers() {
       actor_ids::FEE_SINK_ACTORS_ID,
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
     ] {
-      let instance = Actors::active_actor_view(actor_id).expect("genesis active actor exists");
+      let instance = Actors::active_actor_state(actor_id).expect("genesis active actor exists");
       assert!(
-        instance.schedule.trigger.address_event_source_enabled(),
+        instance.contract.trigger.address_event_source_enabled(),
         "value-driven actor {actor_id} must react to verified inbound value without polling"
       );
     }
@@ -490,9 +489,9 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     let reward_liability_before = crate::Staking::native_security_reward_liability();
     let reward_custody_before =
       Balances::free_balance(crate::Staking::native_security_reward_account());
-    let burn_before = Actors::active_actor_view(burn_actor_id).expect("Burn Actor exists");
-    let target_cycle_nonce = burn_before.cycle_nonce.saturating_add(1);
-    assert!(burn_before.schedule.trigger.address_event_source_enabled());
+    let burn_before = Actors::active_actor_state(burn_actor_id).expect("Burn Actor exists");
+    let target_cycle_nonce = burn_before.identity.cycle_nonce.saturating_add(1);
+    assert!(burn_before.contract.trigger.address_event_source_enabled());
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
 
     System::set_block_number(31);
@@ -525,20 +524,20 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
       "the swap transfers native input without changing currency issuance",
     );
 
-    let max_wait_blocks = burn_before.schedule.cooldown_blocks.saturating_add(2);
+    let max_wait_blocks = burn_before.contract.cooldown_blocks.saturating_add(2);
     for offset in 1..=max_wait_blocks {
       let block = 31u32.saturating_add(offset);
       System::set_block_number(block);
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
-      if Actors::active_actor_view(burn_actor_id)
-        .is_some_and(|actor| actor.cycle_nonce == target_cycle_nonce)
+      if Actors::active_actor_state(burn_actor_id)
+        .is_some_and(|state| state.identity.cycle_nonce == target_cycle_nonce)
       {
         break;
       }
     }
-    let burn_after = Actors::active_actor_view(burn_actor_id).expect("Burn Actor remains active");
-    assert_eq!(burn_after.cycle_nonce, target_cycle_nonce);
+    let burn_after = Actors::active_actor_state(burn_actor_id).expect("Burn Actor remains active");
+    assert_eq!(burn_after.identity.cycle_nonce, target_cycle_nonce);
     assert_eq!(
       Balances::free_balance(&burn_actor),
       crate::EXISTENTIAL_DEPOSIT,
@@ -1330,20 +1329,12 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       bucket_id,
-      pallet_deos_actors::Schedule {
-        trigger: pallet_deos_actors::Trigger::immediate_manual(),
-        cooldown_blocks: 0,
-      },
-      None,
+      (pallet_deos_actors::Trigger::immediate_manual(), 0, None),
     ));
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       treasury_id,
-      pallet_deos_actors::Schedule {
-        trigger: pallet_deos_actors::Trigger::cadenced_always(1),
-        cooldown_blocks: 0,
-      },
-      None,
+      (pallet_deos_actors::Trigger::cadenced_always(1), 0, None),
     ));
 
     assert_eq!(
@@ -1722,14 +1713,14 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       liquidity_id,
-      pallet_deos_actors::Schedule {
-        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+      (
+        pallet_deos_actors::Trigger::immediate_manual_and_address_event(
           pallet_deos_actors::SourceFilter::Any,
           pallet_deos_actors::AssetFilter::Any,
         ),
-        cooldown_blocks: 0,
-      },
-      None,
+        0,
+        None,
+      ),
     ));
     // 4. User mints BLDR via Router TMC
     let mint_amount = 10 * precision;
@@ -1836,11 +1827,7 @@ fn treasury_b_buyback_burns_bldr() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       treasury_b_id,
-      pallet_deos_actors::Schedule {
-        trigger: pallet_deos_actors::Trigger::cadenced_always(10),
-        cooldown_blocks: 5,
-      },
-      None,
+      (pallet_deos_actors::Trigger::cadenced_always(10), 5, None),
     ));
     let target_supply_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::total_issuance(target_id);

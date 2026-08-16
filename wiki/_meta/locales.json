@@ -171,10 +171,6 @@
       "en": "usage/forking-deos.en.md",
       "ru": "usage/forking-deos.ru.md"
     },
-    "agent-coordination": {
-      "en": "usage/agent-coordination.en.md",
-      "ru": "usage/agent-coordination.ru.md"
-    },
     "parachain-context": {
       "en": "concepts/parachain-context.en.md",
       "ru": "concepts/parachain-context.ru.md"

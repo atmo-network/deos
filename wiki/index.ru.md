@@ -97,7 +97,6 @@ DEOS — фреймворк среды исполнения для програ�
 - [Статус разработки](development/status.ru.md)
 - [Трёхуровневая проверка](development/three-layer-validation.ru.md)
 - [Слой скриптов](usage/scripts-layer.ru.md)
-- [Координация агентов](usage/agent-coordination.ru.md)
 - [Создание форка DEOS](usage/forking-deos.ru.md)
 - [Структура репозитория](implementation/repository-structure.ru.md)
 - [Технологический стек](implementation/tech-stack.ru.md)

@@ -118,7 +118,6 @@ where
       panic!("benchmark active proposal index must fit configured domain cap")
     }
   }
-  ActiveProposalCounts::<T>::insert(domain, count);
   ActiveProposalIdsByDomain::<T>::insert(domain, item_ids);
 }
 
@@ -144,7 +143,6 @@ fn seed_proposal_votes<T: Config>(
     item_id,
     benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
   );
-  ActiveProposalCounts::<T>::insert(domain, 1);
   ActiveProposalIdsByDomain::<T>::insert(
     domain,
     BoundedVec::try_from(alloc::vec![item_id])
@@ -215,7 +213,6 @@ where
     .iter()
     .map(|touch| touch.item_id)
     .collect::<alloc::vec::Vec<_>>();
-  ActiveProposalCounts::<T>::insert(domain, n);
   ActiveProposalIdsByDomain::<T>::insert(
     domain,
     BoundedVec::try_from(active_ids)
@@ -394,7 +391,10 @@ mod benches {
       item_id,
       benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
     );
-    ActiveProposalCounts::<T>::insert(domain, 1);
+    ActiveProposalIdsByDomain::<T>::insert(
+      domain,
+      BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
+    );
     let retention_epoch: T::Epoch = current_epoch_u32::<T>(current_epoch)
       .saturating_add(T::FinalizedProposalOutcomeRetentionEpochs::get())
       .into();
@@ -440,7 +440,10 @@ mod benches {
       item_id,
       benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
     );
-    ActiveProposalCounts::<T>::insert(domain, 1);
+    ActiveProposalIdsByDomain::<T>::insert(
+      domain,
+      BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
+    );
     let expiry_epoch = expiry_epoch::<T>(current_epoch);
     let occupancy = T::MaxExpiringAccountsPerEpoch::get().saturating_sub(n);
     let mut bucket = BoundedVec::default();
@@ -513,7 +516,10 @@ mod benches {
       item_id,
       benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
     );
-    ActiveProposalCounts::<T>::insert(domain, 1);
+    ActiveProposalIdsByDomain::<T>::insert(
+      domain,
+      BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
+    );
     #[extrinsic_call]
     reject_proposal(RawOrigin::Root, domain, item_id);
     assert!(!ActiveProposals::<T>::contains_key(domain, item_id));
@@ -565,7 +571,10 @@ mod benches {
       item_id,
       benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
     );
-    ActiveProposalCounts::<T>::insert(domain, 1);
+    ActiveProposalIdsByDomain::<T>::insert(
+      domain,
+      BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
+    );
     let maturity_epoch: T::Epoch = maturity_epoch_u32.into();
     let occupancy = T::MaxMaturingProposalsPerEpoch::get().saturating_sub(1);
     let mut bucket = BoundedVec::default();
