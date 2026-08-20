@@ -12,7 +12,6 @@
     ],
     "reported_candidates": [
       "Short pages below the configured body-line threshold",
-      "Low-confidence pages below the configured confidence threshold",
       "Graph leaves with no outbound edge"
     ]
   },
@@ -51,7 +50,7 @@
         "en": "usage/forking-deos.en.md",
         "ru": "usage/forking-deos.ru.md"
       },
-      "rationale": "Low-confidence graph clustering showed the fork checklist as an adjacent weak page inside the forking neighborhood. Its table now lives in Forking DEOS, while aliases route fork-profile queries to that owner page."
+      "rationale": "Graph clustering showed the fork checklist as an adjacent weak page inside the forking neighborhood. Its table now lives in Forking DEOS, while aliases route fork-profile queries to that owner page."
     },
     {
       "page_id": "threat-model",
@@ -63,7 +62,7 @@
         "en": "concepts/invariant-map.en.md",
         "ru": "concepts/invariant-map.ru.md"
       },
-      "rationale": "Low-confidence graph clustering showed Threat Model and Invariant Map as one assurance neighborhood. Threat rows now live in the strengthened Invariant and Threat Map, while risk/threat aliases route to that owner page."
+      "rationale": "Graph clustering showed Threat Model and Invariant Map as one assurance neighborhood. Threat rows now live in the strengthened Invariant and Threat Map, while risk/threat aliases route to that owner page."
     },
     {
       "page_id": "deos-vs-dao-treasury",
@@ -75,12 +74,10 @@
         "en": "getting-started/executive-summary.en.md",
         "ru": "getting-started/executive-summary.ru.md"
       },
-      "rationale": "Low-confidence graph clustering showed the DAO treasury comparison and Executive Summary as one partner-positioning neighborhood. The comparison now lives inside Executive Summary, while treasury-comparison aliases route to that owner page."
+      "rationale": "Graph clustering showed the DAO treasury comparison and Executive Summary as one partner-positioning neighborhood. The comparison now lives inside Executive Summary, while treasury-comparison aliases route to that owner page."
     }
   ],
   "delete_or_merge_candidates": [],
-  "low_confidence_candidates": [],
-  "low_confidence_graph_clusters": [],
   "compression_candidates": [
     {
       "cluster": "assurance map",

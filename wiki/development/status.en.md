@@ -23,8 +23,6 @@ related:
   - Three-Layer Validation
   - Reference Client
   - Generated Wiki
-last_compiled: 2026-08-14
-confidence: 0.9
 ---
 
 # Development Status

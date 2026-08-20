@@ -24,8 +24,6 @@ related:
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
   - Карта доменов
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # DEOS за 60 секунд

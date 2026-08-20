@@ -142,8 +142,8 @@ check_prerequisites() {
     require_commands cargo sed grep wc sort awk head cut dirname mktemp chmod mv rm sha256sum
 
     if ! command -v frame-omni-bencher &>/dev/null; then
-        log_warning "frame-omni-bencher not found. Install with:"
-        echo "  cargo install --locked frame-omni-bencher --tag polkadot-v1.22.3"
+        log_warning "frame-omni-bencher not found. Install the pinned SDK bundle with:"
+        echo "  $SCRIPT_DIR/01-download-binaries.sh"
         echo ""
         log_info "Falling back to 'cargo test --features runtime-benchmarks' mode"
         BENCHER_MODE="cargo"
@@ -222,6 +222,7 @@ normalize_weight_file() {
     sed -i 's/for WeightInfo<T>/for SubstrateWeight<T>/' "$file"
     sed -i 's/ pallet_xcm::WeightInfo/ polkadot_sdk::pallet_xcm::WeightInfo/' "$file"
     sed -i "s#${TEMPLATE_DIR}#template#g" "$file"
+    sed -i -E "s#template/runtime/src/weights/\\.${pallet_name}\\.weights\\.[[:alnum:]]+#template/runtime/src/weights/${pallet_name}.rs#g" "$file"
     if [[ "$pallet_name" == "pallet_oracle" ]]; then
         local measured_proof
         measured_proof="$(sed -n '/fn register_feed_new_producer()/,/^[[:space:]]*}/p' "$file" \

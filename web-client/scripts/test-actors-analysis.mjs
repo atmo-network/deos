@@ -222,12 +222,7 @@ function condition(name) {
 
 function activeContract(steps) {
   return {
-    trigger: {
-      type: 'Immediate',
-      value: {
-        sources: [{ type: 'Manual', value: undefined }],
-      },
-    },
+    trigger: { type: 'Manual', value: undefined },
     cooldown_blocks: 5,
     window: undefined,
     steps,
@@ -865,39 +860,25 @@ test('installed Actor Contracts produce complete bounded analysis', () => {
   }
 });
 
-test('trigger analysis separates readiness sources from admission and runtime proof', () => {
-  const addressEvent = {
-    type: 'OnAddressEvent',
-    value: {
-      source_filter: variant('Any'),
-      asset_filter: variant('Any'),
-    },
-  };
-  const observationChange = {
-    type: 'OnObservationChange',
-    value: { feed: observationFeed },
-  };
+test('trigger analysis projects one exact scalar trigger without runtime proof', () => {
   const contractWithTrigger = (trigger) => {
     const contract = activeContract([step()]);
     contract.trigger = trigger;
     return contract;
   };
-  const immediate = analyze(
+  const observation = analyze(
     artifactFor({
       contract: contractWithTrigger({
-        type: 'Immediate',
-        value: {
-          sources: [variant('Manual'), addressEvent, observationChange],
-        },
+        type: 'ObservationChange',
+        value: { feed: observationFeed },
       }),
     }),
   );
-  assert.equal(immediate.completionPolicy, 'Persistent');
-  assert.deepEqual(immediate.trigger, {
-    admission: 'Immediate',
-    everyBlocks: null,
-    sourceCount: 3,
-    sourceKinds: ['Manual', 'AddressEvent', 'ObservationChange'],
+  assert.equal(observation.completionPolicy, 'Persistent');
+  assert.deepEqual(observation.trigger, {
+    kind: 'ObservationChange',
+    everyTicks: null,
+    sourceKinds: ['ObservationChange'],
     observationFeeds: [
       {
         aggregation: {
@@ -917,20 +898,18 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     ],
   });
   assert(
-    immediate.findings.some(
+    observation.findings.some(
       (finding) =>
         finding.kind === 'ExternallySignalledAdmission' &&
-        finding.gate === 'Immediate',
+        finding.trigger === 'ObservationChange',
     ),
   );
   const triggerAmountContract = contractWithTrigger({
-    type: 'Immediate',
-    value: { sources: [observationChange] },
+    type: 'ObservationChange',
+    value: { feed: observationFeed },
   });
   triggerAmountContract.steps = [
-    step({
-      amount: { type: 'PercentageAtOpening', value: 500_000_000 },
-    }),
+    step({ amount: { type: 'PercentageAtOpening', value: 500_000_000 } }),
   ];
   const triggerAmountAnalysis = analyze(
     artifactFor({ contract: triggerAmountContract }),
@@ -949,55 +928,39 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     artifactFor({
       contract: contractWithTrigger({
         type: 'Cadenced',
-        value: {
-          every_blocks: 10,
-          sources: undefined,
-        },
+        value: { every_ticks: 10n },
       }),
     }),
   );
   assert.deepEqual(periodic.trigger, {
-    admission: 'CadencedAlways',
-    everyBlocks: 10,
-    sourceCount: 0,
+    kind: 'Cadenced',
+    everyTicks: 10,
     sourceKinds: [],
     observationFeeds: [],
   });
   assert(
     periodic.findings.some(
       (finding) =>
-        finding.kind === 'PeriodicAdmission' && finding.everyBlocks === 10,
+        finding.kind === 'PeriodicAdmission' && finding.everyTicks === 10,
     ),
   );
 
-  const signalled = analyze(
+  const address = analyze(
     artifactFor({
       contract: contractWithTrigger({
-        type: 'Cadenced',
+        type: 'AddressEvent',
         value: {
-          every_blocks: 20,
-          sources: [addressEvent],
+          source_filter: variant('Any'),
+          asset_filter: variant('Any'),
         },
       }),
     }),
   );
-  assert.deepEqual(signalled.trigger, {
-    admission: 'CadencedWhenSignalled',
-    everyBlocks: 20,
-    sourceCount: 1,
-    sourceKinds: ['AddressEvent'],
-    observationFeeds: [],
-  });
-  assert(
-    signalled.findings.some(
-      (finding) =>
-        finding.kind === 'ExternallySignalledAdmission' &&
-        finding.gate === 'Cadenced',
-    ),
-  );
-  assert(!('predicates' in signalled.trigger));
-  assert(!('steps' in signalled.trigger));
-  assert(!JSON.stringify(signalled.trigger).includes('runtime execution'));
+  assert.equal(address.trigger.kind, 'AddressEvent');
+  assert.deepEqual(address.trigger.sourceKinds, ['AddressEvent']);
+  assert(!('predicates' in address.trigger));
+  assert(!('steps' in address.trigger));
+  assert(!JSON.stringify(address.trigger).includes('runtime execution'));
 });
 
 test('unknown capabilities remain factual and no state-specific claim appears', () => {

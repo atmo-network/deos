@@ -84,7 +84,7 @@ export function projectObservationActorDeliveryInspection(input: {
     pendingSignal: boolean;
     queueTicket: bigint | null;
     wakeup: {
-      block: number;
+      key: { type: 'Block'; value: number } | { type: 'Tick'; value: bigint };
       pageId: bigint;
       slot: number;
     } | null;
@@ -113,11 +113,15 @@ export function projectObservationActorDeliveryInspection(input: {
     );
   }
   if (input.hot.wakeup !== null) {
-    requireBoundedInteger(
-      input.hot.wakeup.block,
-      'Wakeup block',
-      Number.MAX_SAFE_INTEGER,
-    );
+    if (input.hot.wakeup.key.type === 'Block') {
+      requireBoundedInteger(
+        input.hot.wakeup.key.value,
+        'Wakeup block',
+        Number.MAX_SAFE_INTEGER,
+      );
+    } else if (input.hot.wakeup.key.value < 0n) {
+      throw new Error('Wakeup tick must be unsigned');
+    }
     requireBoundedInteger(input.hot.wakeup.slot, 'Wakeup slot');
     if (input.hot.wakeup.pageId < 0n) {
       throw new Error('Wakeup page id must be unsigned');

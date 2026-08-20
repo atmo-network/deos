@@ -21,6 +21,6 @@
 
 ## Evidence
 
-- Bind generated `WeightInfo`; production runtimes must not use `()`.
+- Bind generated `WeightInfo`; production runtimes must not use `()` or the packaged `SubstrateWeight`. Both are hand-written estimates rather than benchmark output, and they underprice execution.
 - Validate default, no-std, runtime-benchmark, try-runtime, metadata, maximum-density, hook rollback, and independent-runtime builds.
 - Pin LastValue and EMA arithmetic, first/equal/change revision behavior, lifecycle transitions, zero policy, overflow, and SCALE/storage contracts before integration.

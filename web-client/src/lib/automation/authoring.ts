@@ -8,6 +8,7 @@ import { decodeAddress } from '@polkadot/util-crypto';
 
 import {
   ACTORS_MAX_CONTRACT_STEPS,
+  ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
   ACTORS_MAX_PRECONDITION_CLAUSES,
   ACTORS_MAX_PREDICATES_PER_CLAUSE,
   ACTORS_MAX_PREDICATES_PER_STEP,
@@ -191,10 +192,10 @@ export type ActorAuthoringFundingPolicy =
   | { type: 'AnyVerifiedIngress' }
   | { type: 'SignedAllowlist'; accounts: string[] };
 
-export type ActorAuthoringTriggerSource =
+export type ActorAuthoringTrigger =
   | { type: 'Manual' }
   | {
-      type: 'OnAddressEvent';
+      type: 'AddressEvent';
       sourceFilter:
         | { type: 'Any' }
         | { type: 'OwnerOnly' }
@@ -203,17 +204,8 @@ export type ActorAuthoringTriggerSource =
         | { type: 'Any' }
         | { type: 'Whitelist'; assets: ActorAuthoringAsset[] };
     }
-  | { type: 'OnObservationChange'; feed: ActorAuthoringObservationFeed };
-
-export type ActorAuthoringTrigger =
-  | { type: 'Immediate'; sources: ActorAuthoringTriggerSource[] }
-  | {
-      type: 'Cadenced';
-      everyBlocks: number;
-      mode:
-        | { type: 'Always' }
-        | { type: 'WhenSignalled'; sources: ActorAuthoringTriggerSource[] };
-    };
+  | { type: 'ObservationChange'; feed: ActorAuthoringObservationFeed }
+  | { type: 'Cadenced'; everyTicks: number };
 
 export type ActorAuthoringCompletionPolicy =
   | 'Persistent'
@@ -233,24 +225,26 @@ export type ActorAuthoringContract = {
 
 export type ActorAuthoringLimits = {
   maxContractSteps: number;
+  maxExecutionDelayBlocks: number;
+  maxCadenceTicks: number;
   maxRetryAttempts: number;
   maxPreconditionClauses: number;
   maxPredicatesPerClause: number;
   maxConditionsPerStep: number;
   maxSplitTransferLegs: number;
   maxWhitelistSize: number;
-  maxTriggerSources: number;
 };
 
 export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
   maxContractSteps: ACTORS_MAX_CONTRACT_STEPS,
+  maxExecutionDelayBlocks: ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
+  maxCadenceTicks: ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
   maxRetryAttempts: ACTORS_MAX_RETRY_ATTEMPTS,
   maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
   maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
   maxConditionsPerStep: ACTORS_MAX_PREDICATES_PER_STEP,
   maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
-  maxTriggerSources: 4,
 };
 
 export type ActorAuthoringIssue = {
@@ -385,7 +379,7 @@ export function createActorAuthoringContract(): ActorAuthoringContract {
     mutability: 'Mutable',
     completionPolicy: 'Persistent',
     autoCloseAtCycleNonce: null,
-    trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
+    trigger: { type: 'Manual' },
     cooldownBlocks: 0,
     scheduleWindow: null,
     fundingPolicy: { type: 'OwnerOnly' },
@@ -773,103 +767,60 @@ function validateUniqueAddresses(
   });
 }
 
-function validateTriggerSources(
-  sources: ActorAuthoringTriggerSource[],
-  path: string,
-  issues: ActorAuthoringIssue[],
-  limits: ActorAuthoringLimits,
-) {
-  if (sources.length === 0 || sources.length > limits.maxTriggerSources) {
-    issues.push({
-      path,
-      message: `Trigger policy requires 1..${limits.maxTriggerSources} sources`,
-    });
-  }
-  const seen = new Set<string>();
-  sources.forEach((source, sourceIndex) => {
-    const sourcePath = `${path}[${sourceIndex}]`;
-    if (source.type === 'OnAddressEvent') {
-      if (source.sourceFilter.type === 'Whitelist') {
-        validateUniqueAddresses(
-          source.sourceFilter.accounts,
-          `${sourcePath}.sourceFilter.accounts`,
-          issues,
-          limits.maxWhitelistSize,
-        );
-      }
-      if (source.assetFilter.type === 'Whitelist') {
-        if (
-          source.assetFilter.assets.length === 0 ||
-          source.assetFilter.assets.length > limits.maxWhitelistSize
-        ) {
-          issues.push({
-            path: `${sourcePath}.assetFilter.assets`,
-            message: `Asset whitelist requires 1..${limits.maxWhitelistSize} entries`,
-          });
-        }
-        const assets = new Set<string>();
-        source.assetFilter.assets.forEach((asset, assetIndex) => {
-          validateAsset(
-            asset,
-            `${sourcePath}.assetFilter.assets[${assetIndex}]`,
-            issues,
-          );
-          const key = bytesKey(assetCanonicalBytes(asset));
-          if (assets.has(key)) {
-            issues.push({
-              path: `${sourcePath}.assetFilter.assets[${assetIndex}]`,
-              message: 'Asset whitelist entries must be unique',
-            });
-          }
-          assets.add(key);
-        });
-      }
-    } else if (source.type === 'OnObservationChange') {
-      validateObservationFeed(source.feed, `${sourcePath}.feed`, issues);
-    }
-    try {
-      const key = bytesKey(triggerSourceCanonicalBytes(source));
-      if (seen.has(key)) {
-        issues.push({
-          path: sourcePath,
-          message: 'Trigger sources must be semantically unique',
-        });
-      }
-      seen.add(key);
-    } catch {
-      // Field-level validation owns malformed account diagnostics.
-    }
-  });
-}
-
 function validateTrigger(
   trigger: ActorAuthoringTrigger,
   issues: ActorAuthoringIssue[],
   limits: ActorAuthoringLimits,
 ) {
   switch (trigger.type) {
-    case 'Immediate':
-      validateTriggerSources(
-        trigger.sources,
-        'trigger.sources',
-        issues,
-        limits,
-      );
+    case 'Manual':
       return;
-    case 'Cadenced':
-      if (!isU32(trigger.everyBlocks) || trigger.everyBlocks === 0) {
-        issues.push({
-          path: 'trigger.everyBlocks',
-          message: 'Cadence must be a positive u32',
+    case 'AddressEvent':
+      if (trigger.sourceFilter.type === 'Whitelist') {
+        validateUniqueAddresses(
+          trigger.sourceFilter.accounts,
+          'trigger.sourceFilter.accounts',
+          issues,
+          limits.maxWhitelistSize,
+        );
+      }
+      if (trigger.assetFilter.type === 'Whitelist') {
+        if (
+          trigger.assetFilter.assets.length === 0 ||
+          trigger.assetFilter.assets.length > limits.maxWhitelistSize
+        ) {
+          issues.push({
+            path: 'trigger.assetFilter.assets',
+            message: `Asset whitelist requires 1..${limits.maxWhitelistSize} entries`,
+          });
+        }
+        const assets = new Set<string>();
+        trigger.assetFilter.assets.forEach((asset, index) => {
+          validateAsset(asset, `trigger.assetFilter.assets[${index}]`, issues);
+          const key = bytesKey(assetCanonicalBytes(asset));
+          if (assets.has(key)) {
+            issues.push({
+              path: `trigger.assetFilter.assets[${index}]`,
+              message: 'Asset whitelist entries must be unique',
+            });
+          }
+          assets.add(key);
         });
       }
-      if (trigger.mode.type === 'WhenSignalled') {
-        validateTriggerSources(
-          trigger.mode.sources,
-          'trigger.mode.sources',
-          issues,
-          limits,
-        );
+      return;
+    case 'ObservationChange':
+      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
+      return;
+    case 'Cadenced':
+      if (
+        !Number.isSafeInteger(trigger.everyTicks) ||
+        trigger.everyTicks <= 0 ||
+        trigger.everyTicks > limits.maxCadenceTicks
+      ) {
+        issues.push({
+          path: 'trigger.everyTicks',
+          message: `Cadence must be within 1..${limits.maxCadenceTicks} timestamp ticks`,
+        });
       }
   }
 }
@@ -906,10 +857,25 @@ export function validateActorAuthoringContract(
       message: `Active ${contract.actorType} Actor Contract requires 1..${maxSteps} steps`,
     });
   }
-  if (!isU32(contract.cooldownBlocks)) {
+  if (
+    !isU32(contract.cooldownBlocks) ||
+    contract.cooldownBlocks > limits.maxExecutionDelayBlocks
+  ) {
     issues.push({
       path: 'cooldownBlocks',
-      message: 'Cooldown must be a u32',
+      message: `Cooldown must be within 0..${limits.maxExecutionDelayBlocks} blocks`,
+    });
+  }
+  if (contract.trigger.type === 'Cadenced' && contract.cooldownBlocks !== 0) {
+    issues.push({
+      path: 'cooldownBlocks',
+      message: 'Cadenced triggers require zero block cooldown',
+    });
+  }
+  if (contract.trigger.type === 'Cadenced' && contract.scheduleWindow != null) {
+    issues.push({
+      path: 'scheduleWindow',
+      message: 'Cadenced triggers cannot use a block schedule window',
     });
   }
   if (
@@ -1248,10 +1214,6 @@ function u32Le(value: number) {
   ];
 }
 
-function boundedVecBytes(values: (Uint8Array | number[])[]) {
-  return [values.length << 2, ...values.flatMap((value) => Array.from(value))];
-}
-
 function assetCanonicalBytes(asset: ActorAuthoringAsset) {
   switch (asset.type) {
     case 'Native':
@@ -1263,87 +1225,12 @@ function assetCanonicalBytes(asset: ActorAuthoringAsset) {
   }
 }
 
-function observationFeedCanonicalBytes(feed: ActorAuthoringObservationFeed) {
-  return [
-    ...assetCanonicalBytes(feed.assetIn),
-    ...assetCanonicalBytes(feed.assetOut),
-    0,
-    ...(feed.aggregation.type === 'LastValue'
-      ? [0]
-      : [1, ...u32Le(feed.aggregation.halfLifeBlocks)]),
-    feed.scale,
-  ];
-}
-
-function sourceFilterCanonicalBytes(
-  filter: Extract<
-    ActorAuthoringTriggerSource,
-    { type: 'OnAddressEvent' }
-  >['sourceFilter'],
-) {
-  switch (filter.type) {
-    case 'Any':
-      return [0];
-    case 'OwnerOnly':
-      return [1];
-    case 'Whitelist':
-      return [
-        2,
-        ...boundedVecBytes(
-          [...filter.accounts]
-            .sort(compareAccountBytes)
-            .map((account) => decodeAddress(account.trim())),
-        ),
-      ];
-  }
-}
-
-function assetFilterCanonicalBytes(
-  filter: Extract<
-    ActorAuthoringTriggerSource,
-    { type: 'OnAddressEvent' }
-  >['assetFilter'],
-) {
-  switch (filter.type) {
-    case 'Any':
-      return [0];
-    case 'Whitelist':
-      return [
-        1,
-        ...boundedVecBytes(
-          [...filter.assets]
-            .sort((left, right) =>
-              compareBytes(
-                assetCanonicalBytes(left),
-                assetCanonicalBytes(right),
-              ),
-            )
-            .map(assetCanonicalBytes),
-        ),
-      ];
-  }
-}
-
-function triggerSourceCanonicalBytes(source: ActorAuthoringTriggerSource) {
-  switch (source.type) {
-    case 'Manual':
-      return [0];
-    case 'OnAddressEvent':
-      return [
-        1,
-        ...sourceFilterCanonicalBytes(source.sourceFilter),
-        ...assetFilterCanonicalBytes(source.assetFilter),
-      ];
-    case 'OnObservationChange':
-      return [2, ...observationFeedCanonicalBytes(source.feed)];
-  }
-}
-
-function lowerTriggerSource(source: ActorAuthoringTriggerSource) {
-  switch (source.type) {
+function lowerTrigger(trigger: ActorAuthoringTrigger) {
+  switch (trigger.type) {
     case 'Manual':
       return runtimeVariant('Manual');
-    case 'OnAddressEvent': {
+    case 'AddressEvent': {
+      const source = trigger;
       const sourceFilter = (() => {
         switch (source.sourceFilter.type) {
           case 'Any':
@@ -1370,42 +1257,18 @@ function lowerTriggerSource(source: ActorAuthoringTriggerSource) {
                 )
                 .map(lowerAsset),
             );
-      return runtimeVariant('OnAddressEvent', {
+      return runtimeVariant('AddressEvent', {
         source_filter: sourceFilter,
         asset_filter: assetFilter,
       });
     }
-    case 'OnObservationChange':
-      return runtimeVariant('OnObservationChange', {
-        feed: lowerObservationFeed(source.feed),
-      });
-  }
-}
-
-function lowerTriggerSources(sources: ActorAuthoringTriggerSource[]) {
-  return [...sources]
-    .sort((left, right) =>
-      compareBytes(
-        triggerSourceCanonicalBytes(left),
-        triggerSourceCanonicalBytes(right),
-      ),
-    )
-    .map(lowerTriggerSource);
-}
-
-function lowerTrigger(trigger: ActorAuthoringTrigger) {
-  switch (trigger.type) {
-    case 'Immediate':
-      return runtimeVariant('Immediate', {
-        sources: lowerTriggerSources(trigger.sources),
+    case 'ObservationChange':
+      return runtimeVariant('ObservationChange', {
+        feed: lowerObservationFeed(trigger.feed),
       });
     case 'Cadenced':
       return runtimeVariant('Cadenced', {
-        every_blocks: trigger.everyBlocks,
-        sources:
-          trigger.mode.type === 'Always'
-            ? undefined
-            : lowerTriggerSources(trigger.mode.sources),
+        every_ticks: BigInt(trigger.everyTicks),
       });
   }
 }

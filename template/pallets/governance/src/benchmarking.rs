@@ -377,14 +377,12 @@ mod benches {
   #[benchmark]
   fn cast_vote() {
     let voter: T::AccountId = whitelisted_caller();
-    let (domain, _) = T::BenchmarkHelper::prepare_primary_eligible_submitter(&voter)
-      .expect("benchmark helper must prepare a primary-eligible voter");
+    let domain = T::BenchmarkHelper::prepare_protection_voter(&voter)
+      .expect("benchmark helper must prepare a protection voter");
     let item_id = benchmark_item_id::<T>(1);
     let submitted_epoch: T::Epoch = 1u32.into();
-    let voting_epoch_u32 =
-      1u32.saturating_add(T::ProposalLeadInPeriod::get().saturated_into::<u32>());
-    frame_system::Pallet::<T>::set_block_number(voting_epoch_u32.into());
-    let current_epoch: T::Epoch = voting_epoch_u32.into();
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let current_epoch: T::Epoch = 1u32.into();
     ActiveProposals::<T>::insert(domain, item_id, ActiveProposal { submitted_epoch });
     ProposalMetadataByItem::<T>::insert(
       domain,
@@ -395,6 +393,27 @@ mod benches {
       domain,
       BoundedVec::try_from(alloc::vec![item_id]).expect("benchmark active proposal index fits"),
     );
+    let mut votes = ProposalVotes {
+      ayes: BoundedVec::default(),
+      nays: BoundedVec::default(),
+      amplifies: BoundedVec::default(),
+      approves: BoundedVec::default(),
+      reduces: BoundedVec::default(),
+      vetoes: BoundedVec::default(),
+      passes: BoundedVec::default(),
+    };
+    for index in 0..T::MaxWinningVoteAccountsPerCall::get().saturating_sub(1) {
+      votes
+        .vetoes
+        .try_push(ProposalBallot {
+          account: account("prior-veto", index, 0),
+          vote_epoch: current_epoch,
+          weight: 1,
+          raw_power: 1,
+        })
+        .expect("benchmark veto set must fit configured maximum");
+    }
+    ProposalVotesByItem::<T>::insert(domain, item_id, votes);
     let retention_epoch: T::Epoch = current_epoch_u32::<T>(current_epoch)
       .saturating_add(T::FinalizedProposalOutcomeRetentionEpochs::get())
       .into();
@@ -415,11 +434,31 @@ mod benches {
       RawOrigin::Signed(voter.clone()),
       domain,
       item_id,
-      ProposalVoteKind::Aye,
+      ProposalVoteKind::Veto,
     );
-    let votes =
-      ProposalVotesByItem::<T>::get(domain, item_id).expect("benchmark vote state must exist");
-    assert!(votes.ayes.iter().any(|ballot| ballot.account == voter));
+    assert!(!ActiveProposals::<T>::contains_key(domain, item_id));
+    assert!(FinalizedProposals::<T>::contains_key(domain, item_id));
+  }
+
+  #[benchmark]
+  fn unlock_vote_power() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (lock_id, amount) = T::BenchmarkHelper::prepare_vote_power_custody(&caller)
+      .expect("runtime must prepare transferable vote-power custody");
+    let current_epoch = T::EpochProvider::current_epoch();
+    VotePowerCustodyByAccount::<T>::insert(
+      &caller,
+      lock_id,
+      VotePowerCustodyPosition {
+        amount,
+        lock_until: current_epoch,
+      },
+    );
+    #[extrinsic_call]
+    unlock_vote_power(RawOrigin::Signed(caller.clone()), lock_id);
+    assert!(!VotePowerCustodyByAccount::<T>::contains_key(
+      caller, lock_id
+    ));
   }
 
   #[benchmark]

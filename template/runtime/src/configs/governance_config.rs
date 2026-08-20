@@ -106,6 +106,83 @@ fn governance_domain_policy(domain: AssetId) -> RuntimeGovernanceDomainPolicy {
   }
 }
 
+parameter_types! {
+  pub const GovernanceVotePowerCustodyPalletId: polkadot_sdk::frame_support::PalletId =
+    polkadot_sdk::frame_support::PalletId(*primitives::ecosystem::pallet_ids::GOVERNANCE_CUSTODY_PALLET_ID);
+}
+
+pub fn governance_vote_power_custody_account() -> AccountId {
+  use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
+  GovernanceVotePowerCustodyPalletId::get().into_account_truncating()
+}
+
+pub struct RuntimeVotePowerCustody;
+impl pallet_governance::VotePowerCustody<AccountId, AssetId, AssetId, Balance>
+  for RuntimeVotePowerCustody
+{
+  fn lock_id(domain: AssetId, track: pallet_governance::ProposalTrackFamily) -> Option<AssetId> {
+    let backing = match track {
+      pallet_governance::ProposalTrackFamily::Ordinary => {
+        governance_domain_policy(domain).primary_track
+      }
+      pallet_governance::ProposalTrackFamily::Veto => {
+        governance_domain_policy(domain).protection_track
+      }
+    };
+    match backing {
+      RuntimeGovernanceTrackBacking::DirectStake => crate::Staking::staked_asset_id(domain),
+      RuntimeGovernanceTrackBacking::VetoAsset => {
+        Some(primitives::ecosystem::protocol_tokens::VETO_ASSET_ID)
+      }
+      RuntimeGovernanceTrackBacking::NativeStake => None,
+    }
+  }
+
+  fn target_amount(
+    domain: AssetId,
+    track: pallet_governance::ProposalTrackFamily,
+    account: &AccountId,
+    current_locked: Balance,
+  ) -> Balance {
+    let Some(lock_id) = Self::lock_id(domain, track) else {
+      return current_locked;
+    };
+    current_locked.saturating_add(crate::Assets::balance(lock_id, account))
+  }
+
+  fn lock(
+    account: &AccountId,
+    lock_id: AssetId,
+    amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::{fungibles::Mutate, tokens::Preservation};
+    <crate::Assets as Mutate<AccountId>>::transfer(
+      lock_id,
+      account,
+      &governance_vote_power_custody_account(),
+      amount,
+      Preservation::Expendable,
+    )?;
+    Ok(())
+  }
+
+  fn unlock(
+    account: &AccountId,
+    lock_id: AssetId,
+    amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::{fungibles::Mutate, tokens::Preservation};
+    <crate::Assets as Mutate<AccountId>>::transfer(
+      lock_id,
+      &governance_vote_power_custody_account(),
+      account,
+      amount,
+      Preservation::Expendable,
+    )?;
+    Ok(())
+  }
+}
+
 fn governance_track_power_profile_for_backing(
   backing: RuntimeGovernanceTrackBacking,
 ) -> pallet_governance::ProposalVotePowerProfile {
@@ -159,23 +236,44 @@ impl pallet_governance::GovernanceDomainPolicyProvider<AssetId>
 }
 
 #[cfg_attr(feature = "runtime-benchmarks", allow(dead_code))]
+fn transferable_vote_power_balance(asset_id: AssetId, account: &AccountId) -> Balance {
+  crate::Assets::balance(asset_id, account).saturating_add(
+    crate::Governance::vote_power_custody(account, asset_id)
+      .map(|position| position.amount)
+      .unwrap_or_default(),
+  )
+}
+
+fn direct_stake_vote_power(domain: AssetId, account: &AccountId) -> Balance {
+  let Some(staked_asset_id) = crate::Staking::staked_asset_id(domain) else {
+    return 0;
+  };
+  let shares = transferable_vote_power_balance(staked_asset_id, account);
+  let Some(pool) = crate::Staking::pool(domain) else {
+    return 0;
+  };
+  if pool.total_shares == 0 {
+    return 0;
+  }
+  (sp_core::U256::from(shares).saturating_mul(sp_core::U256::from(pool.accounted_balance))
+    / sp_core::U256::from(pool.total_shares))
+  .try_into()
+  .unwrap_or(Balance::MAX)
+}
+
 fn track_base_weight(
   backing: RuntimeGovernanceTrackBacking,
   domain: AssetId,
   account: &AccountId,
 ) -> u128 {
   match backing {
-    RuntimeGovernanceTrackBacking::DirectStake => {
-      crate::Staking::stake_value(domain, account).unwrap_or_default()
-    }
+    RuntimeGovernanceTrackBacking::DirectStake => direct_stake_vote_power(domain, account),
     RuntimeGovernanceTrackBacking::VetoAsset => {
       let asset_id = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
       if !<crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(asset_id) {
         return 0;
       }
-      <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::balance(
-        asset_id, account,
-      )
+      transferable_vote_power_balance(asset_id, account)
     }
     RuntimeGovernanceTrackBacking::NativeStake => {
       DelegationWeightedCollatorSessionManager::conservative_native_lp_value(
@@ -396,7 +494,7 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, AssetId
 pub struct RuntimeGovernanceBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash>
+impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balance>
   for RuntimeGovernanceBenchmarkHelper
 {
   fn prepare_primary_eligible_submitter(
@@ -429,6 +527,48 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash>
       .map_err(|error| error.error)?;
     Ok((domain, payload_hash))
   }
+
+  fn prepare_protection_voter(
+    account: &AccountId,
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+    let domain = protocol_governance_domain();
+    let asset_id = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(asset_id) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        asset_id,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    <crate::Assets as Mutate<AccountId>>::mint_into(asset_id, account, 100)?;
+    Ok(domain)
+  }
+
+  fn prepare_vote_power_custody(
+    account: &AccountId,
+  ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+    let asset_id = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    if !<crate::Assets as Inspect<AccountId>>::asset_exists(asset_id) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        asset_id,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    let amount = 100;
+    <crate::Assets as Mutate<AccountId>>::mint_into(
+      asset_id,
+      &governance_vote_power_custody_account(),
+      amount,
+    )?;
+    Ok((asset_id, amount))
+  }
 }
 
 pub struct RuntimeProposalRuntimeUpgradeAuthorizationProvider;
@@ -454,6 +594,25 @@ impl pallet_governance::ProposalPayloadPreimageNoteCostProvider<Balance>
   }
 }
 
+const MAX_NORMALIZED_PROTECTION_POWER: u64 = u64::MAX / 7;
+
+fn normalize_protection_power(power: u128, total_issuance: u128) -> u64 {
+  if total_issuance == 0 {
+    return 0;
+  }
+  let bounded_power = power.min(total_issuance);
+  if total_issuance <= u128::from(MAX_NORMALIZED_PROTECTION_POWER) {
+    return bounded_power as u64;
+  }
+  (sp_core::U256::from(bounded_power) * sp_core::U256::from(MAX_NORMALIZED_PROTECTION_POWER)
+    / sp_core::U256::from(total_issuance))
+  .as_u64()
+}
+
+fn normalize_protection_total(total_issuance: u128) -> u64 {
+  total_issuance.min(u128::from(MAX_NORMALIZED_PROTECTION_POWER)) as u64
+}
+
 pub struct RuntimeVetoVotePowerProvider;
 impl pallet_governance::VetoVotePowerProvider<AccountId, AssetId, u32, BlockNumber>
   for RuntimeVetoVotePowerProvider
@@ -463,40 +622,19 @@ impl pallet_governance::VetoVotePowerProvider<AccountId, AssetId, u32, BlockNumb
     context: &pallet_governance::ProposalVoteContext<u32, BlockNumber>,
     account: &AccountId,
   ) -> u64 {
-    #[cfg(feature = "runtime-benchmarks")]
-    {
-      let _ = (domain, context, account);
-      return 1;
-    }
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      declining_power_weight(u128::from(Self::raw_vote_weight(domain, account)), context)
-        .min(u128::from(u64::MAX)) as u64
-    }
+    declining_power_weight(u128::from(Self::raw_vote_weight(domain, account)), context)
+      .min(u128::from(u64::MAX)) as u64
   }
 
   fn raw_vote_weight(domain: AssetId, account: &AccountId) -> u64 {
-    #[cfg(feature = "runtime-benchmarks")]
-    {
-      let _ = (domain, account);
-      return 1;
-    }
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      protection_track_base_weight(domain, account).min(u128::from(u64::MAX)) as u64
-    }
+    normalize_protection_power(
+      protection_track_base_weight(domain, account),
+      protection_track_total_issuance(domain),
+    )
   }
 
   fn total_issuance(domain: AssetId) -> u64 {
-    #[cfg(feature = "runtime-benchmarks")]
-    {
-      let _ = domain;
-      return 1;
-    }
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      protection_track_total_issuance(domain).min(u128::from(u64::MAX)) as u64
-    }
+    normalize_protection_total(protection_track_total_issuance(domain))
   }
 }
 
@@ -765,6 +903,8 @@ impl pallet_governance::Config for Runtime {
   type ProposalOpeningFee = ProposalOpeningFee;
   type ProposalFeeRecipient = crate::configs::actor_config::ActorFeeRecipient;
   type DomainId = AssetId;
+  type VotePowerLockId = AssetId;
+  type VotePowerCustody = RuntimeVotePowerCustody;
   type WinningVoteItemId = u32;
   type Epoch = BlockNumber;
   type EpochProvider = RuntimeGovernanceEpochProvider;
@@ -813,7 +953,10 @@ impl pallet_governance::Config for Runtime {
 
 #[cfg(test)]
 mod tests {
-  use super::declining_power_weight;
+  use super::{
+    MAX_NORMALIZED_PROTECTION_POWER, declining_power_weight, normalize_protection_power,
+    normalize_protection_total,
+  };
 
   fn context(
     submitted_epoch: u32,
@@ -827,6 +970,36 @@ mod tests {
       maturity_epoch,
       vote_epoch,
     }
+  }
+
+  #[test]
+  fn protection_power_normalization_preserves_boundary_ratios_without_u64_saturation() {
+    let cap = u128::from(MAX_NORMALIZED_PROTECTION_POWER);
+    let total = cap * 100;
+    let majority = total * 51 / 100;
+    let minority = total / 100;
+
+    assert_eq!(
+      normalize_protection_total(total),
+      MAX_NORMALIZED_PROTECTION_POWER
+    );
+    assert!(normalize_protection_power(majority, total) > MAX_NORMALIZED_PROTECTION_POWER / 2);
+    assert!(normalize_protection_power(minority, total) < MAX_NORMALIZED_PROTECTION_POWER / 2);
+    assert_eq!(
+      normalize_protection_power(total, total),
+      MAX_NORMALIZED_PROTECTION_POWER
+    );
+    assert_eq!(
+      MAX_NORMALIZED_PROTECTION_POWER.saturating_mul(7),
+      u64::MAX - (u64::MAX % 7),
+      "the normalization cap must reserve the full declining-power multiplier"
+    );
+  }
+
+  #[test]
+  fn protection_power_normalization_keeps_representable_units_exact() {
+    assert_eq!(normalize_protection_total(1_000), 1_000);
+    assert_eq!(normalize_protection_power(510, 1_000), 510);
   }
 
   #[test]

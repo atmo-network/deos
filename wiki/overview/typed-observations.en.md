@@ -23,8 +23,6 @@ related:
   - Actors System
   - Token-Driven Automation
   - Read-Model Split
-last_compiled: 2026-07-28
-confidence: 0.95
 ---
 
 # Typed Observations

@@ -12,8 +12,9 @@ use std::sync::Arc;
 fn register_foreign_asset_works() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    // Location mapping to ID 1000 via MockLocationToAssetId
+    // Location mapping to a namespaced ID via MockLocationToAssetId.
     let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+    let asset_id = TYPE_FOREIGN | 1000;
     let metadata = CurrencyMetadata {
       name: b"Sibling Token".to_vec(),
       symbol: b"SIBL".to_vec(),
@@ -34,17 +35,17 @@ fn register_foreign_asset_works() {
     // 2. Verify Storage Persistence
     assert_eq!(
       crate::Pallet::<Test>::location_to_asset(&location),
-      Some(1000)
+      Some(asset_id)
     );
     assert_eq!(
-      crate::Pallet::<Test>::asset_to_location(1000),
+      crate::Pallet::<Test>::asset_to_location(asset_id),
       Some(location.clone())
     );
 
     // 3. Verify Event
     frame_system::Pallet::<Test>::assert_last_event(RuntimeEvent::AssetRegistry(
       Event::ForeignAssetRegistered {
-        asset_id: 1000,
+        asset_id,
         location: location.clone(),
         symbol: metadata.symbol.clone(),
       },
@@ -52,7 +53,7 @@ fn register_foreign_asset_works() {
 
     // 4. Verify Assets Pallet State
     // Check Metadata
-    let stored_metadata = polkadot_sdk::pallet_assets::Metadata::<Test>::get(1000);
+    let stored_metadata = polkadot_sdk::pallet_assets::Metadata::<Test>::get(asset_id);
     assert_eq!(stored_metadata.name, metadata.name);
     assert_eq!(stored_metadata.symbol, metadata.symbol);
     assert_eq!(stored_metadata.decimals, metadata.decimals);
@@ -104,10 +105,11 @@ fn register_collision_fails() {
       decimals: 12,
     };
 
-    // Pre-occupy ID 1000 (Mock maps Parachain(1000) -> 1000)
+    // Pre-occupy the generated namespaced ID.
+    let asset_id = TYPE_FOREIGN | 1000;
     assert_ok!(pallet_assets::Pallet::<Test>::force_create(
       RuntimeOrigin::root(),
-      1000,
+      asset_id,
       1,    // owner
       true, // is_sufficient
       10    // min_balance
@@ -148,6 +150,96 @@ fn register_foreign_asset_fails_bad_origin() {
       ),
       polkadot_sdk::sp_runtime::DispatchError::BadOrigin
     );
+  });
+}
+
+#[test]
+fn generated_registration_rejects_non_foreign_namespace() {
+  new_test_ext().execute_with(|| {
+    let location = Location::here();
+    let metadata = CurrencyMetadata {
+      name: b"Invalid Namespace".to_vec(),
+      symbol: b"INV".to_vec(),
+      decimals: 12,
+    };
+
+    assert_noop!(
+      crate::Pallet::<Test>::register_foreign_asset(
+        RuntimeOrigin::root(),
+        location.clone(),
+        metadata,
+        1,
+        true,
+      ),
+      Error::<Test>::InvalidAssetIdMask
+    );
+    assert!(crate::Pallet::<Test>::location_to_asset(location).is_none());
+  });
+}
+
+#[test]
+fn registration_rejects_retained_reverse_identity_after_ledger_removal() {
+  new_test_ext().execute_with(|| {
+    let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+    let retained_location = Location::new(1, Junctions::X1(Arc::new([Parachain(999)])));
+    let asset_id = TYPE_FOREIGN | 1000;
+    crate::ForeignAssetLocationByAssetId::<Test>::insert(asset_id, retained_location.clone());
+    let metadata = CurrencyMetadata {
+      name: b"Collision".to_vec(),
+      symbol: b"COL".to_vec(),
+      decimals: 12,
+    };
+
+    assert_noop!(
+      crate::Pallet::<Test>::register_foreign_asset(
+        RuntimeOrigin::root(),
+        location.clone(),
+        metadata,
+        1,
+        true,
+      ),
+      Error::<Test>::AssetIdCollision
+    );
+    assert!(crate::Pallet::<Test>::location_to_asset(location).is_none());
+    assert_eq!(
+      crate::Pallet::<Test>::asset_to_location(asset_id),
+      Some(retained_location)
+    );
+  });
+}
+
+#[test]
+fn failed_link_hook_rolls_back_both_identity_directions() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let location = Location::new(1, Junctions::X1(Arc::new([Parachain(3000)])));
+    let asset_id = TYPE_FOREIGN | 77;
+    assert_ok!(pallet_assets::Pallet::<Test>::force_create(
+      RuntimeOrigin::root(),
+      asset_id,
+      1,
+      true,
+      1,
+    ));
+    let events_before = frame_system::Pallet::<Test>::event_count();
+    set_token_domain_hook_failure(true);
+
+    assert_eq!(
+      crate::Pallet::<Test>::link_existing_asset(
+        RuntimeOrigin::root(),
+        location.clone(),
+        asset_id,
+      ),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "TokenDomainHookRejected"
+      ))
+    );
+    set_token_domain_hook_failure(false);
+
+    assert!(crate::Pallet::<Test>::location_to_asset(location).is_none());
+    assert!(crate::Pallet::<Test>::asset_to_location(asset_id).is_none());
+    assert!(<pallet_assets::Pallet<Test> as Inspect<u64>>::asset_exists(asset_id));
+    assert_eq!(frame_system::Pallet::<Test>::event_count(), events_before);
   });
 }
 
@@ -260,7 +352,7 @@ fn register_foreign_asset_fails_oversized_metadata() {
     // Verify no mapping was created
     assert!(crate::Pallet::<Test>::location_to_asset(&location).is_none());
     // Verify no asset was created
-    assert!(!<pallet_assets::Pallet<Test> as Inspect<u64>>::asset_exists(1000));
+    assert!(!<pallet_assets::Pallet<Test> as Inspect<u64>>::asset_exists(TYPE_FOREIGN | 1000));
   });
 }
 

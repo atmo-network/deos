@@ -48,10 +48,7 @@ const contract = {
   actorType: 'System',
   mutability: 'Mutable',
   completionPolicy: 'CloseAfterProductiveCycle',
-  trigger: {
-    type: 'Immediate',
-    sources: [{ type: 'OnObservationChange', feed }],
-  },
+  trigger: { type: 'ObservationChange', feed },
   cooldownBlocks: 4,
   scheduleWindow: { start: 10, end: 1_000 },
   fundingPolicy: { type: 'RuntimePolicy' },

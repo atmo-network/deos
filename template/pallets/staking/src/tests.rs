@@ -2557,6 +2557,95 @@ fn foreign_asset_uses_dedicated_receipt_namespace() {
 }
 
 #[test]
+fn failed_receipt_mint_rolls_back_stake_collateral_and_pool_state() {
+  const STAKED_ASSET: AssetId = 0x5000_0000 | 2;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
+    assert_ok!(Assets::force_asset_status(
+      RuntimeOrigin::root(),
+      STAKED_ASSET,
+      1,
+      1,
+      1,
+      1,
+      1,
+      true,
+      true,
+    ));
+    let account_before = <Assets as Inspect<AccountId>>::balance(2, &1);
+    let pool_account = Staking::pool_account_for(2);
+    let pool_balance_before = <Assets as Inspect<AccountId>>::balance(2, &pool_account);
+    let pool_before = Staking::pool(2).expect("pool exists");
+    let events_before = System::event_count();
+
+    assert_eq!(
+      Staking::stake(RuntimeOrigin::signed(1), 2, 100),
+      Err(polkadot_sdk::pallet_assets::Error::<Test>::AssetNotLive.into())
+    );
+
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(2, &1),
+      account_before
+    );
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(2, &pool_account),
+      pool_balance_before
+    );
+    assert_eq!(Staking::pool(2), Some(pool_before));
+    assert_eq!(<Assets as Inspect<AccountId>>::balance(STAKED_ASSET, &1), 0);
+    assert_eq!(System::event_count(), events_before);
+  });
+}
+
+#[test]
+fn failed_backing_transfer_rolls_back_unstake_receipt_burn_and_pool_state() {
+  const STAKED_ASSET: AssetId = 0x5000_0000 | 2;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 100));
+    assert_ok!(Assets::force_asset_status(
+      RuntimeOrigin::root(),
+      2,
+      1,
+      1,
+      1,
+      1,
+      1,
+      true,
+      true,
+    ));
+    let receipt_before = <Assets as Inspect<AccountId>>::balance(STAKED_ASSET, &1);
+    let account_before = <Assets as Inspect<AccountId>>::balance(2, &1);
+    let pool_account = Staking::pool_account_for(2);
+    let pool_balance_before = <Assets as Inspect<AccountId>>::balance(2, &pool_account);
+    let pool_before = Staking::pool(2).expect("pool exists");
+    let events_before = System::event_count();
+
+    assert_eq!(
+      Staking::unstake(RuntimeOrigin::signed(1), 2, 50),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Token(
+        polkadot_sdk::sp_runtime::TokenError::Frozen
+      ))
+    );
+
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(STAKED_ASSET, &1),
+      receipt_before
+    );
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(2, &1),
+      account_before
+    );
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(2, &pool_account),
+      pool_balance_before
+    );
+    assert_eq!(Staking::pool(2), Some(pool_before));
+    assert_eq!(System::event_count(), events_before);
+  });
+}
+
+#[test]
 fn first_stake_mints_equal_shares() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {

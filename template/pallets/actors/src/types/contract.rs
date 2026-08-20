@@ -620,32 +620,37 @@ fn is_non_empty_strictly_scale_ordered<Value: Encode, Bound: Get<u32>>(
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
-pub enum TriggerSource<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId = AssetId>
-{
+pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId = AssetId> {
   Manual,
-  OnAddressEvent {
+  AddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
     asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
   },
-  OnObservationChange {
+  ObservationChange {
     feed: ObservationFeedId,
+  },
+  Cadenced {
+    every_ticks: u64,
   },
 }
 
 impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFeedId: Clone> Clone
-  for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+  for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn clone(&self) -> Self {
     match self {
       Self::Manual => Self::Manual,
-      Self::OnAddressEvent {
+      Self::AddressEvent {
         source_filter,
         asset_filter,
-      } => Self::OnAddressEvent {
+      } => Self::AddressEvent {
         source_filter: source_filter.clone(),
         asset_filter: asset_filter.clone(),
       },
-      Self::OnObservationChange { feed } => Self::OnObservationChange { feed: feed.clone() },
+      Self::ObservationChange { feed } => Self::ObservationChange { feed: feed.clone() },
+      Self::Cadenced { every_ticks } => Self::Cadenced {
+        every_ticks: *every_ticks,
+      },
     }
   }
 }
@@ -655,22 +660,26 @@ impl<
   AssetId: core::fmt::Debug,
   MaxWhitelistSize: Get<u32>,
   ObservationFeedId: core::fmt::Debug,
-> core::fmt::Debug for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+> core::fmt::Debug for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
       Self::Manual => f.write_str("Manual"),
-      Self::OnAddressEvent {
+      Self::AddressEvent {
         source_filter,
         asset_filter,
       } => f
-        .debug_struct("OnAddressEvent")
+        .debug_struct("AddressEvent")
         .field("source_filter", source_filter)
         .field("asset_filter", asset_filter)
         .finish(),
-      Self::OnObservationChange { feed } => f
-        .debug_struct("OnObservationChange")
+      Self::ObservationChange { feed } => f
+        .debug_struct("ObservationChange")
         .field("feed", feed)
+        .finish(),
+      Self::Cadenced { every_ticks } => f
+        .debug_struct("Cadenced")
+        .field("every_ticks", every_ticks)
         .finish(),
     }
   }
@@ -681,22 +690,25 @@ impl<
   AssetId: PartialEq,
   MaxWhitelistSize: Get<u32>,
   ObservationFeedId: PartialEq,
-> PartialEq for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+> PartialEq for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
       (Self::Manual, Self::Manual) => true,
       (
-        Self::OnAddressEvent {
+        Self::AddressEvent {
           source_filter: left_source,
           asset_filter: left_asset,
         },
-        Self::OnAddressEvent {
+        Self::AddressEvent {
           source_filter: right_source,
           asset_filter: right_asset,
         },
       ) => left_source == right_source && left_asset == right_asset,
-      (Self::OnObservationChange { feed: left }, Self::OnObservationChange { feed: right }) => {
+      (Self::ObservationChange { feed: left }, Self::ObservationChange { feed: right }) => {
+        left == right
+      }
+      (Self::Cadenced { every_ticks: left }, Self::Cadenced { every_ticks: right }) => {
         left == right
       }
       _ => false,
@@ -705,286 +717,66 @@ impl<
 }
 
 impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, ObservationFeedId: Eq> Eq
-  for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+  for Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
 }
 
-impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, ObservationFeedId: Encode>
-  TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
+impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
+  Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
-  pub fn has_canonical_filters(&self) -> bool {
+  pub fn manual() -> Self {
+    Self::Manual
+  }
+
+  pub fn address_event(
+    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
+    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
+  ) -> Self {
+    Self::AddressEvent {
+      source_filter,
+      asset_filter,
+    }
+  }
+
+  pub fn observation_change(feed: ObservationFeedId) -> Self {
+    Self::ObservationChange { feed }
+  }
+
+  pub fn cadenced(every_ticks: u64) -> Self {
+    Self::Cadenced { every_ticks }
+  }
+
+  pub fn has_canonical_filters(&self) -> bool
+  where
+    AccountId: Encode,
+    AssetId: Encode,
+  {
     match self {
-      Self::Manual => true,
-      Self::OnAddressEvent {
+      Self::AddressEvent {
         source_filter,
         asset_filter,
       } => source_filter.has_canonical_members() && asset_filter.has_canonical_members(),
-      Self::OnObservationChange { .. } => true,
+      _ => true,
     }
   }
-}
 
-pub type TriggerSources<
-  AccountId,
-  AssetId,
-  MaxWhitelistSize,
-  MaxTriggerSources,
-  ObservationFeedId = AssetId,
-> = BoundedVec<
-  TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>,
-  MaxTriggerSources,
->;
-
-#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
-pub enum Trigger<
-  AccountId,
-  AssetId,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId = AssetId,
-> {
-  Immediate {
-    sources:
-      TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
-  },
-  Cadenced {
-    every_blocks: u32,
-    sources: Option<
-      TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
-    >,
-  },
-}
-
-impl<
-  AccountId: Clone,
-  AssetId: Clone,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId: Clone,
-> Clone for Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
-{
-  fn clone(&self) -> Self {
+  pub fn cadence_ticks(&self) -> Option<u64> {
     match self {
-      Self::Immediate { sources } => Self::Immediate {
-        sources: sources.clone(),
-      },
-      Self::Cadenced {
-        every_blocks,
-        sources,
-      } => Self::Cadenced {
-        every_blocks: *every_blocks,
-        sources: sources.clone(),
-      },
+      Self::Cadenced { every_ticks } => Some(*every_ticks),
+      _ => None,
     }
-  }
-}
-
-impl<
-  AccountId: core::fmt::Debug,
-  AssetId: core::fmt::Debug,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId: core::fmt::Debug,
-> core::fmt::Debug
-  for Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
-{
-  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-    match self {
-      Self::Immediate { sources } => f
-        .debug_struct("Immediate")
-        .field("sources", sources)
-        .finish(),
-      Self::Cadenced {
-        every_blocks,
-        sources,
-      } => f
-        .debug_struct("Cadenced")
-        .field("every_blocks", every_blocks)
-        .field("sources", sources)
-        .finish(),
-    }
-  }
-}
-
-impl<
-  AccountId: PartialEq,
-  AssetId: PartialEq,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId: PartialEq,
-> PartialEq
-  for Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
-{
-  fn eq(&self, other: &Self) -> bool {
-    match (self, other) {
-      (Self::Immediate { sources: left }, Self::Immediate { sources: right }) => left == right,
-      (
-        Self::Cadenced {
-          every_blocks: left_blocks,
-          sources: left_sources,
-        },
-        Self::Cadenced {
-          every_blocks: right_blocks,
-          sources: right_sources,
-        },
-      ) => left_blocks == right_blocks && left_sources == right_sources,
-      _ => false,
-    }
-  }
-}
-
-impl<
-  AccountId: Eq,
-  AssetId: Eq,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId: Eq,
-> Eq for Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
-{
-}
-
-impl<
-  AccountId: Encode,
-  AssetId: Encode,
-  MaxWhitelistSize: Get<u32>,
-  MaxTriggerSources: Get<u32>,
-  ObservationFeedId: Encode,
-> Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
-{
-  pub fn immediate_manual() -> Self {
-    Self::Immediate {
-      sources: BoundedVec::try_from(alloc::vec![TriggerSource::Manual])
-        .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual")),
-    }
-  }
-
-  pub fn immediate_address_event(
-    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
-    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
-  ) -> Self {
-    Self::Immediate {
-      sources: BoundedVec::try_from(alloc::vec![TriggerSource::OnAddressEvent {
-        source_filter,
-        asset_filter,
-      }])
-      .unwrap_or_else(|_| panic!("MaxTriggerSources must admit AddressEvent")),
-    }
-  }
-
-  pub fn immediate_manual_and_address_event(
-    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
-    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
-  ) -> Self {
-    Self::Immediate {
-      sources: BoundedVec::try_from(alloc::vec![
-        TriggerSource::Manual,
-        TriggerSource::OnAddressEvent {
-          source_filter,
-          asset_filter,
-        },
-      ])
-      .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual and AddressEvent")),
-    }
-  }
-
-  pub fn cadenced_always(every_blocks: u32) -> Self {
-    Self::Cadenced {
-      every_blocks,
-      sources: None,
-    }
-  }
-
-  pub fn cadenced_when_signalled_manual(every_blocks: u32) -> Self {
-    Self::Cadenced {
-      every_blocks,
-      sources: Some(
-        BoundedVec::try_from(alloc::vec![TriggerSource::Manual])
-          .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual")),
-      ),
-    }
-  }
-
-  pub fn cadenced_when_signalled_address_event(
-    every_blocks: u32,
-    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
-    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
-  ) -> Self {
-    Self::Cadenced {
-      every_blocks,
-      sources: Some(
-        BoundedVec::try_from(alloc::vec![TriggerSource::OnAddressEvent {
-          source_filter,
-          asset_filter,
-        }])
-        .unwrap_or_else(|_| panic!("MaxTriggerSources must admit AddressEvent")),
-      ),
-    }
-  }
-
-  pub fn sources(
-    &self,
-  ) -> Option<
-    &TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
-  > {
-    match self {
-      Self::Immediate { sources } => Some(sources),
-      Self::Cadenced { sources, .. } => sources.as_ref(),
-    }
-  }
-
-  pub fn has_canonical_sources(&self) -> bool {
-    let Some(sources) = self.sources() else {
-      return true;
-    };
-    let mut filters_are_canonical = true;
-    for source in sources.as_slice() {
-      if !source.has_canonical_filters() {
-        filters_are_canonical = false;
-        break;
-      }
-    }
-    !sources.is_empty()
-      && filters_are_canonical
-      && sources.windows(2).all(|pair| {
-        let left = pair[0].encode();
-        let right = pair[1].encode();
-        left < right
-      })
-  }
-
-  pub fn cadence_blocks(&self) -> Option<u32> {
-    match self {
-      Self::Immediate { .. } => None,
-      Self::Cadenced { every_blocks, .. } => Some(*every_blocks),
-    }
-  }
-
-  fn source_enabled(
-    &self,
-    predicate: impl Fn(&TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>) -> bool,
-  ) -> bool {
-    let Some(sources) = self.sources() else {
-      return false;
-    };
-    for source in sources.as_slice() {
-      if predicate(source) {
-        return true;
-      }
-    }
-    false
   }
 
   pub fn manual_source_enabled(&self) -> bool {
-    self.source_enabled(|source| matches!(source, TriggerSource::Manual))
+    matches!(self, Self::Manual)
   }
 
   pub fn address_event_source_enabled(&self) -> bool {
-    self.source_enabled(|source| matches!(source, TriggerSource::OnAddressEvent { .. }))
+    matches!(self, Self::AddressEvent { .. })
   }
 
   pub fn observation_source_enabled(&self) -> bool {
-    self.source_enabled(|source| matches!(source, TriggerSource::OnObservationChange { .. }))
+    matches!(self, Self::ObservationChange { .. })
   }
 }
 

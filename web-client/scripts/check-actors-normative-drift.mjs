@@ -374,7 +374,6 @@ const expectedConstants = new Set([
   'MaxQueueLength',
   'MaxWakeupsPerBlock',
   'MaxObservationFanoutPagesPerBlock',
-  'MaxTriggerSources',
   'MaxOpeningSnapshotEntries',
   'MaxOpeningPredicateResults',
   'MaxPreconditionClauses',

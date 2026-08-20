@@ -40,7 +40,7 @@ The agent MUST NEVER silently preserve a wiki claim that conflicts with updated 
 
 Read the bundled [Open Knowledge Format reference](references/okf-reference.md) before changing Wiki schema, validation, provenance, lifecycle, trust, or reserved-file behavior. This directly readable Markdown atom embeds its lock metadata and the full adopted upstream source; project extensions remain subordinate to it.
 
-`/wiki` is an explicitly declared strict OKF v0.2 bundle. Root `index.md` declares `okf_version: "0.2"`; exact `index.md` is reserved and is not a localized concept or graph node. Every other Markdown concept uses canonical `type`, `description`, and structured `sources[].resource`. DEOS locale, audience, related-link, confidence, and compilation fields remain compatible extensions. Do not emit `page_type` or `summary` aliases, and never infer `generated`, `verified`, `stale_after`, attestation, or freshness evidence from compilation, confidence, Git history, or structural validation.
+`/wiki` is an explicitly declared strict OKF v0.2 bundle. Root `index.md` declares `okf_version: "0.2"`; exact `index.md` is reserved and is not a localized concept or graph node. Every other Markdown concept uses canonical `type`, `description`, and structured `sources[].resource`. DEOS locale, audience, related-link, and explicit lifecycle fields remain compatible extensions. Do not emit `page_type` or `summary` aliases, and never infer `generated`, `verified`, `stale_after`, attestation, or freshness evidence from dates, Git history, or structural validation.
 
 Strict OKF scope ends at `/wiki`; `/docs`, repository context, Skills, and unrelated Markdown are not members of this bundle merely because they use frontmatter.
 
@@ -150,7 +150,7 @@ Examples:
 - Sync only changed pages
 - Rebuild everything
 - Lint only
-- Consolidate confidence and supersession
+- Consolidate weak pages and supersession
 - Repair links and index
 - Regenerate one page from selected docs
 - Rebuild overview and glossary pages only
@@ -232,7 +232,7 @@ The wiki MUST NOT maintain separate mutation log files by default.
 
 Completed wiki delivery work belongs in the project-level delivery history, normally `CHANGELOG.md`, unless a repository explicitly introduces a different canonical history surface.
 
-The wiki may preserve freshness, confidence, provenance, and graph state through `_meta/*.json`, but those metadata artifacts are not a second changelog.
+The wiki may preserve explicit lifecycle, provenance, and graph state through `_meta/*.json`, but those metadata artifacts are not a second changelog.
 
 ### Locale Mirroring Contract
 
@@ -271,7 +271,7 @@ This MAY appear in frontmatter, a source section, sidecar metadata, or a combina
 If repository conventions allow, the agent SHOULD maintain:
 
 - `navigation.json` for localized navigation strings and localized wiki paths stored as language-keyed objects inside one manifest
-- `state.json` for confidence, freshness, staleness, supersession, and other page-level state, with localized fields grouped under language keys where needed
+- `state.json` for explicit status, provenance, supersession, and other page-level state, with localized fields grouped under language keys where needed
 - `graph.json` for typed relations between pages, with localized node labels and localized page paths grouped under language keys where needed
 - `aliases.json` for canonical naming and alias resolution, with alias maps grouped by language key
 - `locales.json` for supported locales, default locale, and localized page or metadata entrypoints
@@ -411,8 +411,6 @@ tags:
 related:
   - Another Page
   - Related Concept
-last_compiled: 2026-04-15
-confidence: 0.91
 ---
 ```
 
@@ -437,8 +435,6 @@ status: stable
 audience: newcomer
 related:
   - Другая страница
-last_compiled: 2026-04-15
-confidence: 0.78
 ---
 ```
 
@@ -492,20 +488,9 @@ For every nontrivial synthesized claim, the agent SHOULD preserve a traceable pa
 
 The agent MUST be able to answer, at least approximately, which source doc or docs justify a wiki statement.
 
-### Confidence
+### Evidence Signals
 
-If the repository or workflow supports confidence metadata, the agent SHOULD maintain it.
-
-Confidence SHOULD reflect evidence strength, freshness, specificity, and contradiction pressure.
-
-Confidence MUST NOT be presented as ground truth. It is an internal epistemic signal. Low confidence should be interpreted both page-locally and graph-locally: connected low-confidence pages indicate weak knowledge regions that should be improved, merged into stronger owners, or removed.
-
-Suggested range:
-
-- `0.90-1.00` strongly grounded and recently confirmed
-- `0.75-0.89` grounded but somewhat incomplete or partially distributed across docs
-- `0.50-0.74` plausible but weakly or indirectly supported
-- `<0.50` weak, stale, contradictory, or underdetermined
+Use verifiable signals only: structured source provenance, explicit lifecycle status, supersession links, locale parity, graph reachability, and concrete contradictions. Do not emit page-level compilation dates or subjective confidence scores; neither proves freshness or semantic correctness.
 
 ### Supersession
 
@@ -528,7 +513,7 @@ The agent SHOULD:
 1. Identify the contradiction
 2. Prefer the stronger or newer authoritative source when justified
 3. Annotate the conflict when the evidence remains unresolved
-4. Downgrade confidence where appropriate
+4. Mark the affected claim or page explicitly when uncertainty remains
 
 ### Staleness
 
@@ -638,7 +623,7 @@ Repository-local guard:
 ./.agents/skills/wiki-sync/scripts/audit-wiki-consolidation.sh
 ```
 
-This guard fails on missing page role metadata, provenance, related-link blocks, locale mirrors, and navigation/graph reachability. It reports short pages, low-confidence pages, and graph leaves as consolidation candidates instead of blocking useful writing by heuristic.
+This guard fails on missing page role metadata, provenance, related-link blocks, locale mirrors, and navigation/graph reachability. It reports short pages and graph leaves as consolidation candidates instead of blocking useful writing by heuristic.
 
 ### Phase 5: Consolidate
 
@@ -647,7 +632,6 @@ When requested or useful, the agent MAY run consolidation:
 - Merge duplicates
 - Strengthen summaries
 - Compress repetitive pages
-- Update confidence
 - Update supersession links
 - Improve index structure
 - Repair graph coherence
@@ -806,7 +790,7 @@ Run incremental detect -> interpret -> compile -> lint for affected areas.
 
 ### "refresh wiki"
 
-Run sync plus confidence, freshness, summary, and related-link updates.
+Run sync plus provenance, explicit lifecycle, summary, and related-link updates.
 
 ### "rebuild wiki"
 
@@ -818,7 +802,7 @@ Do not rewrite content unless necessary for minimal repair; report or repair gra
 
 ### "consolidate wiki"
 
-Merge duplicates, compress pages, improve graph coherence, update confidence and supersession, strengthen overview pages, and reduce onboarding friction.
+Merge duplicates, compress pages, improve graph coherence, update supersession, strengthen overview pages, and reduce onboarding friction.
 
 ### "repair wiki"
 
@@ -890,7 +874,7 @@ If metadata storage exists, the agent SHOULD store something equivalent to:
 - Doc -> affected wiki pages
 - Wiki page -> supporting docs
 - Alias -> canonical page
-- Page -> confidence/freshness state
+- Page -> explicit lifecycle and provenance state
 - Page -> taxonomy role
 - Page -> related pages
 - Page -> newcomer relevance or audience level
@@ -912,7 +896,7 @@ The agent SHOULD:
 - Update what can be updated safely
 - Mark uncertain areas
 - Note unresolved contradictions or missing evidence
-- Avoid fabricated confidence
+- Avoid fabricated freshness or evidence strength
 - Preserve frontend-stable artifacts where possible
 - Avoid destructive churn when evidence is insufficient
 
@@ -947,7 +931,6 @@ Unless repository conventions explicitly say otherwise, the agent MUST default t
 - Incremental sync first
 - Provenance preserved
 - Contradictions surfaced
-- Confidence conservative
 - Summaries concise
 - Glossary encouraged
 - Index compact
@@ -1022,7 +1005,6 @@ This skill MAY evolve in maturity.
 
 ### v2
 
-- Add confidence
 - Add supersession
 - Add contradiction handling
 - Add staleness handling

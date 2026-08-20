@@ -31,7 +31,7 @@ Mint amounts must be justified by the curve integral, not by ad hoc quoting:
 
 - Current price comes from the configured linear ceiling
 - Effective supply is read from live issuance minus initial issuance
-- Mint output is solved from the integral with overflow-safe intermediate arithmetic
+- Mint output is solved from the integral with checked `U256` intermediates and fails closed when a result is unrepresentable
 - Downstream distribution happens after mint amount is fixed
 
 ## Runtime-as-Config rule

@@ -205,6 +205,9 @@ pub mod pallet_ids {
 
   /// Staking pallet ID
   pub const STAKING_PALLET_ID: &[u8; 8] = b"staking0";
+
+  /// Governance transferable vote-power custody account
+  pub const GOVERNANCE_CUSTODY_PALLET_ID: &[u8; 8] = b"govvote0";
 }
 
 /// Ecosystem parameters defining mathematical constants and thresholds.
@@ -306,6 +309,15 @@ pub mod params {
   /// resource exhaustion on repeated cycle failures.
   pub const SYSTEM_ACTORS_COOLDOWN_BLOCKS: u32 = 10;
 
+  /// DEOS reference scheduler tick precision in milliseconds.
+  pub const ACTOR_CADENCE_TICK_MILLIS: u64 = 500;
+
+  /// Fee Sink allocation cadence in 500-millisecond internal time ticks (60 seconds).
+  pub const FEE_SINK_CADENCE_TICKS: u64 = 120;
+
+  /// Fraction of the current spendable Fee Sink native buffer processed per cycle.
+  pub const FEE_SINK_BUFFER_PCT: Perbill = Perbill::from_percent(10);
+
   /// Maximum tolerated slippage for generic System Actors swap operations (5%).
   /// Maximum swap slippage tolerance for generic System Actors execution plans.
   /// Used directly as `SwapIn.slippage_tolerance` unless a runtime-specific
@@ -359,6 +371,7 @@ mod tests {
     assert_eq!(pallet_ids::ASSET_CONVERSION_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::ASSET_REGISTRY_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::STAKING_PALLET_ID.len(), 8);
+    assert_eq!(pallet_ids::GOVERNANCE_CUSTODY_PALLET_ID.len(), 8);
   }
 
   #[test]

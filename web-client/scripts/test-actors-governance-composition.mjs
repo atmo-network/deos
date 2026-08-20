@@ -25,10 +25,7 @@ const runtime = {
 };
 const owner = '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT';
 const defaultContractScale = encodeActorContractValue(metadataBytes, {
-  trigger: {
-    type: 'Immediate',
-    value: { sources: [{ type: 'Manual', value: undefined }] },
-  },
+  trigger: { type: 'Manual', value: undefined },
   cooldown_blocks: 0,
   window: undefined,
   steps: [
@@ -104,12 +101,7 @@ test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots boun
 
 test('System Actors composition exposes exact Root call but denies current governance admission', () => {
   const contractScale = encodeActorContractValue(metadataBytes, {
-    trigger: {
-      type: 'Immediate',
-      value: {
-        sources: [{ type: 'Manual', value: undefined }],
-      },
-    },
+    trigger: { type: 'Manual', value: undefined },
     cooldown_blocks: 5,
     window: undefined,
     steps: [

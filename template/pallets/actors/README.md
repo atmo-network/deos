@@ -14,7 +14,7 @@ The current kernel/runtime slice provides:
 - User and System Actor creation with deterministic sovereign accounts
 - Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF with explicit Opening/Current timed Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
 - One scheduler over a canonical paged FIFO with monotonic `NextQueueTicket`, common block cutoff, exact physical occupancy, one actor-local live ticket, strict global ticket order across actor types, and shared time-ordered wakeup storage
-- Timer, manual, `OnAddressEvent`, and typed `OnObservationChange` sources; observation subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
+- Exactly one `Manual`, `AddressEvent`, `ObservationChange`, or timestamp-tick `Cadenced` trigger per Actor; one-feed subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay

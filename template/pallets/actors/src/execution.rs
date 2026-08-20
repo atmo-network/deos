@@ -390,6 +390,7 @@ impl<T: Config> Pallet<T> {
         result
       }};
     }
+
     let (
       cycle_nonce,
       start_cursor,
@@ -491,6 +492,34 @@ impl<T: Config> Pallet<T> {
       let step = &contract_steps[step_idx];
       let step_num = step_idx as u32;
       let step_fee = &fee_envelope.steps[step_idx - start_cursor as usize];
+      // Fee settlement can fail at six points in this step walk, and every one resolves the step
+      // identically: count the failure, record and emit it as Permanent, then terminate or advance
+      // per `StepErrorPolicy`. It stays a macro because that resolution ends in `break` or
+      // `continue` against this loop, which a helper function cannot express, and it lives inside
+      // the loop so `step` and `step_num` resolve without threading them through parameters.
+      macro_rules! fail_step_with_fee_error {
+        ($error:expr) => {{
+          let step_error = $error;
+          failed_steps = checked_semantic_increment(failed_steps)
+            .expect("semantic counter bound is precluded by admission");
+          let failure = TaskFailure::permanent(step_error);
+          let outcome = StepOutcome::Failed(failure.clone());
+          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
+          Self::deposit_event(Event::StepFailed {
+            actor_id,
+            cycle_nonce,
+            step_index: step_num,
+            retry_class: failure.retry,
+            error: step_error,
+          });
+          contract_steps_failed =
+            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
+          if contract_steps_failed {
+            break;
+          }
+          continue;
+        }};
+      }
       match Self::evaluate_step_precondition(
         step.precondition.as_ref(),
         &actor,
@@ -507,24 +536,7 @@ impl<T: Config> Pallet<T> {
               FeeChargeKind::EvaluationOnly,
             );
             if let Err(error) = collect_step_fee!(charged_fee) {
-              failed_steps = checked_semantic_increment(failed_steps)
-                .expect("semantic counter bound is precluded by admission");
-              let failure = TaskFailure::permanent(error);
-              let outcome = StepOutcome::Failed(failure.clone());
-              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-              Self::deposit_event(Event::StepFailed {
-                actor_id,
-                cycle_nonce,
-                step_index: step_num,
-                retry_class: failure.retry,
-                error,
-              });
-              contract_steps_failed =
-                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-              if contract_steps_failed {
-                break;
-              }
-              continue;
+              fail_step_with_fee_error!(error);
             }
           }
           precondition_skips = checked_semantic_increment(precondition_skips)
@@ -553,24 +565,7 @@ impl<T: Config> Pallet<T> {
           } else {
             error
           };
-          failed_steps = checked_semantic_increment(failed_steps)
-            .expect("semantic counter bound is precluded by admission");
-          let failure = TaskFailure::permanent(charged_error);
-          let outcome = StepOutcome::Failed(failure.clone());
-          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-          Self::deposit_event(Event::StepFailed {
-            actor_id,
-            cycle_nonce,
-            step_index: step_num,
-            retry_class: failure.retry,
-            error: charged_error,
-          });
-          contract_steps_failed =
-            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-          if contract_steps_failed {
-            break;
-          }
-          continue;
+          fail_step_with_fee_error!(charged_error);
         }
       }
       let prepared_task = match Self::prepare_task(
@@ -590,24 +585,7 @@ impl<T: Config> Pallet<T> {
               FeeChargeKind::EvaluationOnly,
             );
             if let Err(error) = collect_step_fee!(charged_fee) {
-              failed_steps = checked_semantic_increment(failed_steps)
-                .expect("semantic counter bound is precluded by admission");
-              let failure = TaskFailure::permanent(error);
-              let outcome = StepOutcome::Failed(failure.clone());
-              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-              Self::deposit_event(Event::StepFailed {
-                actor_id,
-                cycle_nonce,
-                step_index: step_num,
-                retry_class: failure.retry,
-                error,
-              });
-              contract_steps_failed =
-                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-              if contract_steps_failed {
-                break;
-              }
-              continue;
+              fail_step_with_fee_error!(error);
             }
           }
           skipped_resolution = checked_semantic_increment(skipped_resolution)
@@ -633,24 +611,7 @@ impl<T: Config> Pallet<T> {
               FeeChargeKind::EvaluationOnly,
             );
             if let Err(error) = collect_step_fee!(charged_fee) {
-              failed_steps = checked_semantic_increment(failed_steps)
-                .expect("semantic counter bound is precluded by admission");
-              let failure = TaskFailure::permanent(error);
-              let outcome = StepOutcome::Failed(failure.clone());
-              Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-              Self::deposit_event(Event::StepFailed {
-                actor_id,
-                cycle_nonce,
-                step_index: step_num,
-                retry_class: failure.retry,
-                error,
-              });
-              contract_steps_failed =
-                resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-              if contract_steps_failed {
-                break;
-              }
-              continue;
+              fail_step_with_fee_error!(error);
             }
           }
           let outcome = StepOutcome::FundingUnavailable;
@@ -690,24 +651,7 @@ impl<T: Config> Pallet<T> {
           } else {
             error
           };
-          failed_steps = checked_semantic_increment(failed_steps)
-            .expect("semantic counter bound is precluded by admission");
-          let failure = TaskFailure::permanent(charged_error);
-          let outcome = StepOutcome::Failed(failure.clone());
-          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-          Self::deposit_event(Event::StepFailed {
-            actor_id,
-            cycle_nonce,
-            step_index: step_num,
-            retry_class: failure.retry,
-            error: charged_error,
-          });
-          contract_steps_failed =
-            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-          if contract_steps_failed {
-            break;
-          }
-          continue;
+          fail_step_with_fee_error!(charged_error);
         }
       };
       if is_user {
@@ -717,24 +661,7 @@ impl<T: Config> Pallet<T> {
           FeeChargeKind::Attempted,
         );
         if let Err(error) = collect_step_fee!(charged_fee) {
-          failed_steps = checked_semantic_increment(failed_steps)
-            .expect("semantic counter bound is precluded by admission");
-          let failure = TaskFailure::permanent(error);
-          let outcome = StepOutcome::Failed(failure.clone());
-          Self::record_step_outcome(&mut trace, step_num, outcome.clone());
-          Self::deposit_event(Event::StepFailed {
-            actor_id,
-            cycle_nonce,
-            step_index: step_num,
-            retry_class: failure.retry,
-            error,
-          });
-          contract_steps_failed =
-            resolve_step_control(&outcome, step.on_error) == StepControl::Terminate;
-          if contract_steps_failed {
-            break;
-          }
-          continue;
+          fail_step_with_fee_error!(error);
         }
       }
       if let Err(failure) = Self::execute_prepared_task(
@@ -1031,7 +958,8 @@ impl<T: Config> Pallet<T> {
       ActorExecutionPhase::Paused => return Err(SimulationError::Paused),
       ActorExecutionPhase::Ready => {}
       ActorExecutionPhase::WaitingRetry(_)
-      | ActorExecutionPhase::WaitingTemporal(_)
+      | ActorExecutionPhase::WaitingBlock(_)
+      | ActorExecutionPhase::WaitingCadenceTick(_)
       | ActorExecutionPhase::WaitingSignal => return Err(SimulationError::NotReady),
       ActorExecutionPhase::GlobalCircuitBreaker => unreachable!("handled above"),
     }

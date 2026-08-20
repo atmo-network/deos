@@ -29,8 +29,6 @@ related:
   - TMCTOL Standard
   - Staking
   - Read-Model Split
-last_compiled: 2026-07-24
-confidence: 0.85
 ---
 
 # End-to-End Flows

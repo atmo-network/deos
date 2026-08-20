@@ -29,8 +29,6 @@ related:
   - Reference Client
   - First Steps
   - Core Terms
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Generated Wiki
@@ -58,7 +56,7 @@ The wiki may synthesize multiple source concepts into one page when that creates
 Together, the reference client, agents, and validation scripts use the compiled graph under `wiki/_meta/`; no single consumer needs to load every manifest:
 
 - `navigation.json` orders sections and frontend summaries;
-- `state.json` records page status, audience, confidence, paths, and provenance;
+- `state.json` records explicit page status, audience, paths, and provenance;
 - `graph.json` stores nodes and typed reading relations;
 - `aliases.json` routes search terms to canonical page ids;
 - `locales.json` maps each page id to localized Markdown paths.
@@ -71,23 +69,15 @@ page id: token-surfaces
   ru -> concepts/token-surfaces.ru.md
 ```
 
-Graph edges such as `uses`, `extends`, `guides`, and `recommends` describe conceptual or reading relationships, not runtime dependencies. Provenance points back to authoritative project sources, while confidence indicates the maturity of the generated projection rather than protocol truth.
+Graph edges such as `uses`, `extends`, `guides`, and `recommends` describe conceptual or reading relationships, not runtime dependencies. Structured provenance points back to authoritative project sources.
 
 These manifests support browsing, search, and graph traversal. The prose still needs to stand on its own.
 
-## Confidence Bands
+## Evidence Signals
 
-Wiki confidence measures evidence maturity for one page, not probability, prose quality, project quality, or expected market behavior. Reviewers score the weakest material claim against source authority, claim coverage, freshness, and contradiction pressure.
+The wiki uses verifiable signals rather than page-level freshness dates or subjective confidence scores. Each page declares structured source provenance, explicit lifecycle status, locale identity, and related concepts. Shared manifests preserve source lists, graph reachability, aliases, and locale parity.
 
-The wiki uses conservative `0.05` bands:
-
-- `0.95` — direct, current, nearly complete owner-source coverage;
-- `0.90` — strongly grounded synthesis with minor distributed-evidence risk;
-- `0.85` — grounded but partial, highly synthetic, or under freshness pressure;
-- `0.80` — materially incomplete, stale, indirect, or contradiction-prone;
-- `0.75` and below — weak support or known material errors requiring remediation.
-
-Page length, source count, and graph degree do not raise confidence. Shared `state.json` confidence uses the lower locale score, and the consolidation audit reports source revisions newer than `last_compiled`.
+These signals prove structure and traceability, not semantic correctness. Contradictions, missing evidence, stale claims, and supersession must be stated explicitly and repaired against the owning sources.
 
 ## Trust Boundary and Evolution
 

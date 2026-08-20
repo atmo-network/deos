@@ -45,6 +45,50 @@ pub enum ProposalTrackFamily {
 }
 
 #[derive(
+  Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct VotePowerCustodyPosition<Balance, Epoch> {
+  pub amount: Balance,
+  pub lock_until: Epoch,
+}
+
+pub trait VotePowerCustody<AccountId, DomainId, LockId, Balance> {
+  fn lock_id(_domain: DomainId, _track: ProposalTrackFamily) -> Option<LockId> {
+    None
+  }
+
+  fn target_amount(
+    _domain: DomainId,
+    _track: ProposalTrackFamily,
+    _account: &AccountId,
+    current_locked: Balance,
+  ) -> Balance {
+    current_locked
+  }
+
+  fn lock(
+    _account: &AccountId,
+    _lock_id: LockId,
+    _amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Ok(())
+  }
+
+  fn unlock(
+    _account: &AccountId,
+    _lock_id: LockId,
+    _amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Ok(())
+  }
+}
+
+impl<AccountId, DomainId, LockId, Balance> VotePowerCustody<AccountId, DomainId, LockId, Balance>
+  for ()
+{
+}
+
+#[derive(
   Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
 pub enum ProposalVotePowerProfile {
@@ -207,17 +251,43 @@ pub trait ProposalSubmissionEligibilityProvider<AccountId, DomainId> {
 impl<AccountId, DomainId> ProposalSubmissionEligibilityProvider<AccountId, DomainId> for () {}
 
 #[cfg(feature = "runtime-benchmarks")]
-pub trait BenchmarkHelper<AccountId, DomainId, Hash> {
+pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
   ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError>;
+
+  fn prepare_protection_voter(
+    account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError>;
+
+  fn prepare_vote_power_custody(
+    account: &AccountId,
+  ) -> Result<(LockId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
-impl<AccountId, DomainId, Hash> BenchmarkHelper<AccountId, DomainId, Hash> for () {
+impl<AccountId, DomainId, Hash, LockId, Balance>
+  BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> for ()
+{
   fn prepare_primary_eligible_submitter(
     _account: &AccountId,
   ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
+  fn prepare_protection_voter(
+    _account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
+  fn prepare_vote_power_custody(
+    _account: &AccountId,
+  ) -> Result<(LockId, Balance), polkadot_sdk::sp_runtime::DispatchError> {
     Err(polkadot_sdk::sp_runtime::DispatchError::Other(
       "GovernanceBenchmarkHelperNotConfigured",
     ))
@@ -405,6 +475,7 @@ pub trait WeightInfo {
   fn submit_proposal() -> Weight;
   fn submit_signed_proposal() -> Weight;
   fn cast_vote() -> Weight;
+  fn unlock_vote_power() -> Weight;
   fn resolve_proposal(accounts: u32) -> Weight;
   fn resolve_proposal_from_votes(accounts: u32) -> Weight;
   fn force_resolve_proposal_from_votes(accounts: u32) -> Weight;
@@ -433,6 +504,10 @@ impl WeightInfo for () {
   }
 
   fn cast_vote() -> Weight {
+    Weight::zero()
+  }
+
+  fn unlock_vote_power() -> Weight {
     Weight::zero()
   }
 
@@ -489,7 +564,7 @@ pub mod pallet {
   use crate::{
     EpochProvider as _, GovernanceDomainPolicyProvider as _,
     ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
-    ProposalRuntimeUpgradeAuthorizationProvider as _, WeightInfo as _,
+    ProposalRuntimeUpgradeAuthorizationProvider as _, VotePowerCustody as _, WeightInfo as _,
   };
   use codec::{Decode, Encode};
   use frame::prelude::*;
@@ -513,6 +588,13 @@ pub mod pallet {
     type ProposalOpeningFee: Get<BalanceOf<Self>>;
     type ProposalFeeRecipient: Get<Self::AccountId>;
     type DomainId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
+    type VotePowerLockId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
+    type VotePowerCustody: crate::VotePowerCustody<
+        Self::AccountId,
+        Self::DomainId,
+        Self::VotePowerLockId,
+        BalanceOf<Self>,
+      >;
     type WinningVoteItemId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
     type Epoch: Parameter
       + MaxEncodedLen
@@ -605,7 +687,13 @@ pub mod pallet {
         Self::Hash,
       >;
     #[cfg(feature = "runtime-benchmarks")]
-    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::DomainId, Self::Hash>;
+    type BenchmarkHelper: crate::BenchmarkHelper<
+        Self::AccountId,
+        Self::DomainId,
+        Self::Hash,
+        Self::VotePowerLockId,
+        BalanceOf<Self>,
+      >;
     type WeightInfo: crate::WeightInfo;
   }
 
@@ -1219,6 +1307,18 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, T::AccountId, GovernanceLock<T::Epoch>, OptionQuery>;
 
   #[pallet::storage]
+  #[pallet::getter(fn vote_power_custody)]
+  pub type VotePowerCustodyByAccount<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    Blake2_128Concat,
+    T::VotePowerLockId,
+    crate::VotePowerCustodyPosition<BalanceOf<T>, T::Epoch>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
   #[pallet::getter(fn active_proposal_ids)]
   pub type ActiveProposalIdsByDomain<T: Config> = StorageMap<
     _,
@@ -1377,6 +1477,18 @@ pub mod pallet {
       previous_lock_until: Option<T::Epoch>,
       new_lock_until: T::Epoch,
     },
+    VotePowerCustodyUpdated {
+      account: T::AccountId,
+      lock_id: T::VotePowerLockId,
+      previous_amount: BalanceOf<T>,
+      new_amount: BalanceOf<T>,
+      lock_until: T::Epoch,
+    },
+    VotePowerCustodyReleased {
+      account: T::AccountId,
+      lock_id: T::VotePowerLockId,
+      amount: BalanceOf<T>,
+    },
     ProposalUrgentAuthorized {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
@@ -1521,6 +1633,9 @@ pub mod pallet {
     InsufficientProposalOpeningFeeBalance,
     ProposalVoteSetFull,
     ProposalProtectionTrackClosed,
+    VotePowerCustodyTargetDecreased,
+    VotePowerCustodyNotFound,
+    VotePowerCustodyLockActive,
     ActiveProposalCapReached,
     ActiveProposalAuthorCapReached,
     ActiveProposalAuthorMissing,
@@ -1751,6 +1866,27 @@ pub mod pallet {
     ) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
       Self::resolve_active_proposal_from_votes_with_policy(domain, item_id, false)
+    }
+
+    #[pallet::call_index(10)]
+    #[pallet::weight(T::WeightInfo::unlock_vote_power())]
+    #[transactional]
+    pub fn unlock_vote_power(origin: OriginFor<T>, lock_id: T::VotePowerLockId) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let position = VotePowerCustodyByAccount::<T>::get(&account, lock_id)
+        .ok_or(Error::<T>::VotePowerCustodyNotFound)?;
+      ensure!(
+        T::EpochProvider::current_epoch() >= position.lock_until,
+        Error::<T>::VotePowerCustodyLockActive
+      );
+      T::VotePowerCustody::unlock(&account, lock_id, position.amount)?;
+      VotePowerCustodyByAccount::<T>::remove(&account, lock_id);
+      Self::deposit_event(Event::VotePowerCustodyReleased {
+        account,
+        lock_id,
+        amount: position.amount,
+      });
+      Ok(())
     }
   }
 

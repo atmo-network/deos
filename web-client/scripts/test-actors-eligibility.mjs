@@ -75,14 +75,14 @@ test('projectActorEligibility projects canonical active classification', () => {
       type: 'Active',
       value: {
         terminal_reason: undefined,
-        execution_phase: { type: 'WaitingTemporal', value: 42 },
+        execution_phase: { type: 'WaitingCadenceTick', value: 42n },
       },
     },
   });
   assert.deepEqual(projectActorEligibility(decoded), {
     type: 'Active',
     terminalReason: null,
-    executionPhase: { type: 'WaitingTemporal', block: 42 },
+    executionPhase: { type: 'WaitingCadenceTick', tick: 42 },
   });
 });
 

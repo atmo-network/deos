@@ -188,9 +188,9 @@ Later locks, unlocks, redelegation, governance memory, pool valuation, or candid
 
 `fund_native_security_reward(amount)` is the typed certified pallet call. It derives the current `SecurityEpoch`, requires the configured funding origin, transfers native currency only from `SecurityRewardFundingSource`, and updates pot credit plus liability in one transaction. The runtime Fee Sink adapter also preflights and certifies only the exact Fee Sink-to-reward-account native leg. Direct reward-account balance has no accounting effect.
 
-The accepted `frame-omni-bencher 0.22.0` production-runtime run used 100 steps, 50 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `91,186,330 + 51,406,814p + 4,054,386r` RefTime plus database Weight and `11,061 + 2,854p + 2,597r` ProofSize.
+The accepted `frame-omni-bencher 0.22.0` production-runtime run used 50 steps, 20 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `164,401,427 + 44,891,248p` RefTime plus database Weight and `11,052 + 2,854p + 2,597r` ProofSize.
 
-At `p = 100` and measured-success `r = 13`, planning charges 5,284,574,748 RefTime and 330,222 proof bytes before database Weight. The runtime conservatively charges one additional retained-epoch unit so a full-window rejection is covered. Session retention at the hard `r = 14` bound charges 263,468,359 RefTime, 290,294 ProofSize, 119 reads, and 105 writes. Trusted contraction charges 27,099,000 RefTime, 14,309 ProofSize, four reads, and four writes. All are Mandatory session work.
+At `p = 100` and measured-success `r = 13`, planning charges 4,653,526,227 RefTime and 330,213 proof bytes before database Weight. The runtime conservatively charges one additional retained-epoch read/proof unit so full-window rejection is covered. Session retention at hard `r = 14` charges 241,435,775 RefTime, 290,294 ProofSize, 119 reads, and 105 writes. Trusted contraction charges 23,537,000 RefTime, 14,309 ProofSize, four reads, and four writes. All are Mandatory session work.
 
 `MaxNativeSecurityParticipants = 100` follows the operator/candidate topology and measured range. `MaxNominationsPerAccount = 16` remains a position bound, while one account contributes at most one participant snapshot row.
 
@@ -228,7 +228,7 @@ Implementation details:
 - `sync_pool_state(asset_id)` runs before crediting shares
 - `total_shares == 0 && accounted_balance > 0` rejects as `PoolHasUnownedBalance`
 - Every successful stake mints the resolved `stXXX` receipt
-- Successful stake touches reward snapshot state for the next epoch
+- Pool sync, base transfer, checked accounting, receipt mint, pool write, and event share one transaction; receipt failure cannot retain transferred backing
 
 For native `$NTVE`, staking is liquid: it creates transferable `stNTVE`, not collator security backing. `stake_value(asset_id, account)` derives one value from current receipt ownership; no passive/delegated exposure model exists.
 
@@ -241,7 +241,7 @@ available_shares = live stXXX balance
 amount_out = shares * accounted_balance / total_shares
 ```
 
-Native unstake is therefore an exit from liquid `stNTVE` value, not an exit from collator nomination. Collator nomination exits use the LP unlock lifecycle.
+Receipt burn, base payout, checked pool reduction, state write, and event share one transaction. A frozen or otherwise rejected backing transfer restores burned receipts and pool state. Native unstake is therefore an atomic exit from liquid `stNTVE` value, not an exit from collator nomination; collator nomination exits use the LP unlock lifecycle.
 
 ### 4. Native LP collator nomination
 
@@ -457,6 +457,6 @@ This repository is still the forkable framework line. Storage versions are curre
 ## Current Limitations and Remaining Work
 
 - Certified funding, retained snapshots/pots, exact liabilities, liquid/batch/compound settlement, claim markers, horizon admission, and atomic bounded expiry are implemented; deterministic package evidence runs four cleanup-free horizons and one LP-backed-to-Trusted transition with Open, Planned, partially claimed, compound-eligible, excess-custody, and pending-unlock state
-- The accepted 100-step, 50-repeat retention benchmark charges 263,468,359 RefTime, 290,294 ProofSize, 119 reads, and 105 writes at the 14-epoch/100-participant runtime bound; the exact modularized candidate production Wasm SHA-256 is `43d2120a32dd3a9f085da71da016f4251775fb231ac5506fedc55aeb8929b368`
+- The accepted 50-step, 20-repeat retention benchmark charges 241,435,775 RefTime, 290,294 ProofSize, 119 reads, and 105 writes at the 14-epoch/100-participant runtime bound
 - Browser transport and staking-widget presentation expose mode-gated liquid claim and atomic compound with explicit epoch/operator/minimum-output inputs; composed runtime evidence proves claim consumption through canonical LP mint and operator lock, while live-network execution remains open
 - Runtime snapshot weights use accepted production measurement; production forks should rerun benchmarks on their target hardware and runtime profile before launch

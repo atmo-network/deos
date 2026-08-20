@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.19`
+- **Release line**: `0.7.20`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions
@@ -38,13 +38,15 @@ Both profiles use the pallet's canonical FIFO and wakeup stores. The fixture def
 An embedding runtime must provide only the bounded host surface that Actors cannot own itself:
 
 - `AssetOps`: Transfer, burn, mint, balance, minimum-balance, and exact `preflight_transfer` consequences over local `AccountId`, `AssetId`, and `Balance` types. Preflight covers both source withdrawal and recipient depositability, preserves explicit retry classification, and must agree with the following transfer under unchanged state. Generic Actors does not promise that a provider-backed or reserved-only zero-free native recipient can accept sub-minimum ingress.
-- `ObservationProvider`: Current typed scalar state classified as Unavailable, Uninitialized, Fresh, or Stale over the embedding's `ObservationFeedId`; the same type identifies `OnObservationChange { feed }` sources. The source-derived subscription index, transactional latest-revision dirty ingress, and independently metered deferred fanout ship with the package. Fanout sets the existing pending latch and invokes the existing scheduler only; the boundary has no concrete Oracle, producer, history, or off-chain dependency.
+- `ObservationProvider`: Current typed scalar state classified as Unavailable, Uninitialized, Fresh, or Stale over the embedding's `ObservationFeedId`; the same type identifies the scalar `ObservationChange { feed }` trigger. The one-feed subscription index, transactional latest-revision dirty ingress, and independently metered deferred fanout ship with the package. Fanout sets the existing pending latch and invokes the existing scheduler only; the boundary has no concrete Oracle, producer, history, or off-chain dependency.
 - `ObservationChangeIngress`: Typed certified-publisher boundary accepting one externally owned monotonic feed revision. The host publisher calls this trait rather than the pallet's inherent implementation directly.
 - `DexOps`: Caller-aware exact-in quotes and capacity-bounded exact-out swaps with deterministic fees, slippage, rounding, and failure behavior. Swap methods receive only `ExecutionContext { actor, actor_type }`; the package derives immutable `ActorType` from stored actor state so an embedding never reconstructs authority from account catalogs or sovereign-address heuristics.
 - `LiquidityOps`: Addition, removal, and pair-scoped donation; donation permits reserve strengthening without LP receipt minting when supported by runtime policy.
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
+- `Time` and `CadenceTickMillis`: Deterministic consensus milliseconds and the host's nonzero tick quantum. The pallet floors readiness, ceils activation anchors, and never derives cadence from local block count.
 - `WeightInfo`: The single runtime-derived numeric authority covers worst-case Task classes, calls, Predicates, fees, ingress, scheduler work, orchestration, Continuation, finalization, and cleanup in both Weight dimensions. Transfer, Mint, and split fanout include possible synchronous address-event ingress; Burn remains independently priced without transfer-ingress proof; adapter-free `StopCycle` prices its explicit stop event.
+- `Weight generation`: The `SubstrateWeight` and `()` implementations shipped in `src/weights.rs` are hand-written estimates, not benchmark output, and both underprice execution. The DEOS reference runtime measures `create_user_actor` at roughly thirteen times the packaged RefTime with seven times its ProofSize. Run `frame-benchmarking` against your own runtime and bind the generated file.
 - `contract`: Exhaustive read-only classification of each Task, Predicate, amount resolution, and error policy. Its task weight owner delegates to `WeightInfo`; it does not replace runtime measurement, capability configuration, or canonical task parameters.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
@@ -82,6 +84,8 @@ Business policy belongs in runtime adapters or genesis actor configuration, not 
 ## 4. Actor Permission Model
 
 User actors are signed-owner controlled, fee-bearing, slot-bounded, and cannot mint. System actors are governance-created, slotless, fee-exempt, and may be Mutable or Immutable. No runtime extrinsic may mutate, pause, trigger, or close a System Immutable actor, but that control guard must not block mandatory internal terminal transitions such as consecutive-failure closure. A later attachment to its vacant custody locator creates a fresh identity rather than reopening the former actor.
+
+`ensure_control_origin` accepts either the signed `owner` or `SystemOrigin` for a System actor, so the `owner` account passed at creation holds the same pause, resume, trigger, contract-update, and close authority as governance over that actor. A host that supplies a signable `owner` therefore delegates governance-equivalent control to that account. Pass an account with no known private key when System control must stay governance-only; the reference runtime uses the `ActorsPalletId` account for exactly this reason.
 
 A downstream runtime decides whether to ship any genesis System actors. Genesis System Actor topology is runtime-owned configuration, not a pallet requirement.
 

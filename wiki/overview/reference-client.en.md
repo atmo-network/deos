@@ -26,8 +26,6 @@ related:
   - Read-Model Split
   - Newcomer FAQ
   - Core Terms
-last_compiled: 2026-07-24
-confidence: 0.9
 ---
 
 # Reference Client

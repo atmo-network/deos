@@ -69,7 +69,7 @@ The package stores each actor identity once and each active actor across three a
 - `ActorContract`: trigger/cooldown schedule, optional execution window, ordered `ContractSteps`, and `Persistent | CloseAfterProductiveCycle` completion policy
 - `ActorFunding`: canonical funding-source policy, bounded tracked assets, and bounded `funding_accumulated[asset]` checked deltas
 
-`ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives eligibility from `schedule_anchor`, window start, and exact cadence. The typed lifecycle forbids contradictory pause state.
+`ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or schedule replacement derives block eligibility from `schedule_anchor` and window start, while `Cadenced` records a separate timestamp-ceiled `cadence_anchor_tick`. The typed lifecycle forbids contradictory pause state.
 
 Package internals combine `ActorIdentities + ActorHot + ActorContract` through one crate-private loaded context. External consumers use `active_actor_state`, which returns canonical identity, hot, Contract, funding, and optional Continuation partitions without flattening or synchronized mirrors.
 
@@ -121,11 +121,11 @@ Task set in implementation:
 | Predicate | `BalanceAbove`, `BalanceBelow`, `BalanceEquals`, `BalanceNotEquals`, `BlockNumberAbove`, `BlockNumberBelow`, `ObservationAbove`, `ObservationBelow`, `ObservationEquals`, `ObservationNotEquals` | Active contract calls; `every_predicate_is_pure_and_bounded`, predicate evaluator and observation tests |
 | Task | `Transfer`, `SplitTransfer`, `SwapIn`, `SwapOut`, `AddLiquidity`, `RemoveLiquidity`, `Burn`, `Mint`, `Stake`, `DonateLiquidity`, `Unstake`, `StopCycle` | Active contract calls; `every_task_has_one_exhaustive_semantic_contract`, task tests, and independent runtime profiles |
 | Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`, `AllAvailable`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests and independent exact-output evidence |
-| Trigger | `Immediate`, `Cadenced`; cadenced `sources: None` or `Some`; `Manual`, `OnAddressEvent`, `OnObservationChange`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Actor Contract constructors plus raw typed calls; manual, certified-ingress, observation-fanout, cadence, and embedding tests |
+| Trigger | Exactly one of `Manual`, `AddressEvent`, `ObservationChange`, or `Cadenced`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Actor Contract constructors plus raw typed calls; manual, certified-ingress, observation-fanout, timestamp-cadence, and embedding tests |
 | Funding | `OwnerOnly`, `SignedAllowlist`, `RuntimePolicy`, `AnyVerifiedIngress`; provenance `Signed`, `InternalProtocol`, `Xcm` | Active contract and certified producer constructors; funding-policy package tests and DEOS producer inventory |
 | Completion and step policy | `Persistent`, `CloseAfterProductiveCycle`; `AbortCycle`, `ContinueNextStep`, `RetryLater` | Active contract constructors; productive-close and exhaustive transition-matrix tests |
 | Attempt and step views | `AttemptDisposition::{Completed, Failed, Suspended, Closed}`; `StepOutcome::{Executed, Stopped, Skipped, FundingUnavailable, Failed}` | Shared production evaluator; production/simulation parity tests |
-| Eligibility view | `NotRegistered`, `Dormant`, `Ready`, `Paused`, `GlobalCircuitBreaker`, `CloseDue`, `WaitingSignal`, `WaitingRetry`, `WaitingTemporal` | `actor_eligibility`; `eligibility_projection_*` tests |
+| Eligibility view | `NotRegistered`, `Dormant`; Active phases `Ready`, `Paused`, `GlobalCircuitBreaker`, `WaitingSignal`, `WaitingRetry`, `WaitingBlock`, `WaitingCadenceTick` plus terminal reason | `actor_eligibility`; `eligibility_projection_*` tests |
 | Simulation | `FreshCurrentPlan`, `CurrentContinuation`; every `SimulationError` in specification Section 7.2 | `simulate_current_contract`; package simulation and independent runtime tests |
 | Adapter result | `RetryClass::{Permanent, Temporary}`; scalar observation `Unavailable`, `Uninitialized`, `Fresh`, `Stale` | Host adapters and fail-closed unit implementations; runtime Oracle mapping, retry matrix, and embedding tests |
 | Event | Every variant in specification Section 8 and runtime metadata | Production `deposit_event` sites; event-order, task, lifecycle, ingress, scheduler, and generated ABI tests |
@@ -258,7 +258,7 @@ Lifecycle lease-by-cycles is authored by `ActorContract.auto_close_at_cycle_nonc
 
 The generic pallet collects creation and per-step User fees through one runtime-supplied `FeeCollector`; terminal cleanup charges no Actors fee. Both User creation calls collect `ActorCreationFee` for Active and Dormant admission before identity, slot, counter, or next-id mutation; failed collection leaves every actor store and owner balance unchanged. System creation remains exempt.
 
-Fee collection is exact-once: one charge performs one read-only ingress preflight, one fee-native ledger movement, and one post-movement notification inside one outer transaction. The ledger-only movement primitive performs no generic transfer/transaction-extension ingress and no native-staking bridge; notifying the same movement twice is impossible, zero/no-op collection emits no ingress, and failure rolls back movement and all Actors state.
+Actors invokes the runtime-supplied collector exactly once per selected charge and assigns no trigger semantics to that movement. A host may pair fee custody with certified ingress or keep collection ledger-only; either choice remains inside the enclosing transaction. Zero collection is a no-op, and any collector failure rolls back movement and all Actors state.
 
 - Predicate and Task preparation run read-only before collection determines the Step outcome.
 - Every attempted User Step invokes `FeeCollector` at most once: false Precondition or resolution/funding non-execution charges evaluation-only, while an executable Step charges evaluation plus generated execution fee together.
@@ -312,7 +312,7 @@ Cancellation emits `CycleCancelled` before one cumulative terminal `CycleSummary
 
 `actor_eligibility` is the read-only `ActorEligibilityApi` projection. It mirrors `apply_admission` and reuses the exact cadence, retry, window, failure-limit, breaker, and latch owners, so clients do not reproduce scheduler arithmetic.
 
-The projection is one algebra: `NotRegistered`, `Dormant`, or `Active(ActorClassification)`. Active eligibility preserves terminal reason and the exact `ActorExecutionPhase`, including carried `WaitingRetry(block)` and `WaitingTemporal(block)` payloads; no parallel phase or next-block field exists.
+The projection is one algebra: `NotRegistered`, `Dormant`, or `Active(ActorClassification)`. Active eligibility preserves terminal reason and the exact `ActorExecutionPhase`, including `WaitingRetry(block)`, `WaitingBlock(block)`, and `WaitingCadenceTick(tick)` payloads; no parallel phase or next-block field exists.
 
 The projection persists no state, emits no event, and promises no service. Queue position and available Weight still decide actual admission. Arithmetic overflow and malformed Continuation state return typed projection errors rather than an inferred phase.
 
@@ -324,9 +324,9 @@ Code anchor: `src/scheduler.rs::actor_eligibility`; package tests prefixed `elig
 
 Scheduler execution is queue-first and deterministic:
 
-It uses two scheduler layers: a monotonic paged FIFO for work that can execute now and an exact paged temporal layer for later eligibility. Distinct wakeup blocks use a paged minimum heap; same-block actors occupy linked fixed-capacity pages.
+It uses two scheduler layers: a monotonic paged FIFO for work that can execute now and one typed paged temporal layer for later eligibility. Block deadlines and timestamp-tick deadlines have separate paged minimum heaps under one coordinator; actors sharing one typed deadline occupy linked fixed-capacity pages.
 
-1. **Wakeup drain**: the cursor exposes the earliest due block without scanning sparse gaps; one admitted unit consumes one slot, preserves a partial bucket at the same minimum, and either appends live readiness to the active FIFO or lazily discards a stale pointer
+1. **Wakeup drain**: the coordinator fairly alternates block and tick domains when both are due; each cursor exposes its earliest deadline without scanning sparse gaps, and one admitted unit consumes one slot, preserves a partial bucket at the same minimum, and either appends live readiness to the active FIFO or lazily discards a stale pointer
 2. **Ingress admission**: each matched producer call applies funding independently and sets the unified boolean signal latch; actor-local queue/wakeup membership remains bounded and may join the active run queue in the same `on_idle` pass
 3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots global `NextQueueTicket`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
 4. **Canonical head**: tri-state discovery returns `Empty`, `Head`, or `Blocked` only for the one global FIFO. It stops on an incomplete probe rather than treating the head as absent.
@@ -345,7 +345,7 @@ Scheduler accounting stays local unless it controls consensus progress. `scanned
 
 The temporal wakeup layer owns future eligibility and admits it only through the active run queue. Every active actor may own at most one exact pointer; replacement and closure invalidate that slot without scanning actors or blocks. `MaxActiveActors` bounds global live wakeups, while `WakeupPageSize` controls I/O granularity rather than same-block capacity. This makes spillover buckets, placement-drop events, and actor-key retry scans unnecessary.
 
-One placement owner (`schedule_next_work_local`) maps immediate readiness, next-block work, cadence/cooldown/window targets, fixed retry backoff, capacity recovery, and terminal expiry to either the FIFO or an exact wakeup. `defer_wakeup` and `wakeup_substrate_schedule` are its only temporal mutators. Queue saturation falls back to an exact next-block wakeup; fallback failure leaves no false success claim (spec 8.1.4).
+One placement owner (`schedule_next_work_local`) maps signalled readiness, timestamp cadence, block cooldown/window/retry targets, capacity recovery, and terminal expiry to either the FIFO or one typed wakeup. `defer_wakeup` and `defer_tick_wakeup` share the same transactional substrate. Queue saturation falls back to an exact next-block wakeup; fallback failure leaves no false success claim (spec 8.1.4).
 
 Queue consumption, attempt effects/events, and all reachable post-attempt placement share one transaction. Ticket/page/wakeup exhaustion or topology failure rolls back the attempt and preserves the prior queue head. Wakeup removal and queue materialization likewise commit atomically or retain the exact wakeup.
 
@@ -353,13 +353,13 @@ Package coverage proves the strict post-worker cutoff: two manual triggers in on
 
 The package uses the paged wakeup substrate and sparse cursor:
 
-- `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
-- `WakeupCursorPages` plus `WakeupCursorLen` provide the production paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
-- Heap insertion, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices. Maximum-depth generated evidence belongs to `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact`.
-- `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
+- `WakeupPages<(WakeupKey, page_id)>` and per-key `WakeupBuckets` own the paged topology, where `WakeupKey` is `Block(number)` or `Tick(number)`.
+- `WakeupCursorPages<(clock, page_id)>` plus `WakeupCursorLen<clock>` provide separate production paged binary min-heaps for block and tick keys; each bucket owns its exact reverse `cursor_index`.
+- Heap insertion, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, preserve contiguous per-clock cursor pages, and avoid scanning empty intermediate keys; try-state reconciles each clock's page shape, uniqueness, ordering, and reverse indices. Maximum-depth generated evidence belongs to `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact`.
+- `ActorHot` owns `WakeupPointer { block: WakeupKey, page_id, slot }` and `cadence_anchor_tick`; the retained field name `block` is SCALE representation, while its typed value owns the clock domain.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
-- Transactional replacement invalidates the prior exact slot, removes an emptied block from the cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
-- The cursor-driven overdue worker runs before the block-start queue cutoff, peeks sparse blocks, stops before future minima, and processes one slot per admitted unit. It meters cursor lookup, page scan, queue append, and possible full-depth cursor removal before mutation; partial progress keeps the same minimum for later resumption.
+- Transactional replacement invalidates the prior exact slot, removes an emptied key from its clock cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
+- The cursor-driven overdue worker runs after timestamp inherent application and before the queue cutoff. It floors consensus milliseconds into the current tick, fairly chooses a due clock, and processes one slot per admitted unit. It meters each cursor lookup, page scan, queue append, and possible full-depth cursor removal before mutation; partial progress keeps the same minimum for later resumption.
 - The worker stops at the component-wise minimum of its dedicated `WakeupWeightLimit` and the actual `on_idle` remainder after fixed base and saturated queue cleanup. A complete cursor/drain unit must fit before mutation, returned hook Weight cannot exceed the caller budget, actor service receives the remainder, and there is no guarantee lending.
 - The production drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
@@ -385,14 +385,15 @@ Recovery is governance-operated (circuit breaker or parameter adjustment); no em
 ### Cadence
 
 - Cadence readiness is deterministic only; Actors exposes no probability field, entropy provider, secure/insecure branch, hash fallback, probability event, or probability error.
-- Cadence uses `schedule_anchor` as its exact origin and derives no actor-specific phase.
-- Active installation and replacement prevalidate exact next-block, cooldown, maximum cadence, and window-terminal targets before mutation. Runtime rearm derives cadence gates, retry backoff, and queue-capacity fallback with checked final-type arithmetic; an unrepresentable target fails closed as scheduler-index exhaustion instead of saturating into the current block or another semantic target. Saturation remains only in specification-owned observational elapsed-age calculations.
-- `Cadenced::WhenSignalled` latches work immediately but applies cadence before scheduler admission. It retains one cadence wakeup while clean; a missed gate advances arithmetically to the next exact cadence gate, so a later signal cannot execute immediately against a stale first-eligibility anchor. `Cadenced::Always` re-arms from admitted-run cadence without a source.
+- Cadence uses `cadence_anchor_tick = ceil(timestamp_millis / CadenceTickMillis)` as its exact origin and derives no actor-specific phase. Genesis records an uninitialized anchor and one tick-zero bootstrap wakeup because no consensus timestamp exists during construction.
+- The first ordinary wakeup service after timestamp inherent application replaces that marker with the ceiled anchor and one full-period deadline without latching readiness or entering FIFO. Active installation and replacement anchor directly because consensus time is then available.
+- Admission prevalidates nonzero bounded `every_ticks`, zero cooldown, no window, and checked anchor/deadline arithmetic. Runtime rearm selects the first aligned tick strictly after the observed tick, so missed periods coalesce without catch-up bursts.
+- A due initialized tick clears the typed temporal pointer, sets the existing pending latch, and appends one FIFO opportunity. Only FIFO service executes the Actor; after an attempt terminates, cadence rearms from the immutable anchor.
 - Any future probabilistic execution requires a separate append-only admission policy and a concrete financially secure runtime entropy contract rather than an optional field on deterministic cadence.
 
 ### Trigger Sources
 
-Manual and AddressEvent ingress share `ActorHot.pending_signal` as one canonical readiness latch. The declared ObservationChange source targets that same latch once Actors-owned deferred fanout binds; no parallel actor signal key, source tag, generation, bitmask, or event-block metadata enters consensus state.
+`Manual`, `AddressEvent`, and `ObservationChange` each use `ActorHot.pending_signal` as the canonical readiness latch for the Actor that selected that one trigger. `Cadenced` uses the same latch only when its due tick materializes. No source set, parallel signal key, source tag, generation, bitmask, or event-block metadata enters consensus state.
 
 Filter surface:
 
@@ -402,7 +403,7 @@ Filter surface:
 Each producer event evaluates every configured source atom without short-circuit. Several atoms matching one event fold into one readiness decision; funding/provenance mutation runs once outside that fold. Distinct producer events still apply funding independently, while pending readiness shares one latch and one bounded actor-queue membership without coalescing value effects.
 When a signalled cycle starts, the latch is consumed atomically.
 
-`OnObservationChange` ships as an append-only SCALE source atom at index `2`. Its payload contains one typed feed identity only; thresholds remain Predicate-owned. `note_observation_changed` enters Actors dirty-feed state without a subscriber walk, amount payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
+`ObservationChange` is the scalar SCALE trigger at index `2`. Its payload contains one typed feed identity only; thresholds remain Predicate-owned. `note_observation_changed` enters Actors dirty-feed state without a subscriber walk, amount payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
 
 Opening-snapshot surface validation runs at genesis, creation, activation, and plan replacement. It requires every staking-share mapping to exist but remains independent from trigger kind, signal payload, and event amount.
 
@@ -438,7 +439,7 @@ Host-decided `RuntimePolicy` receives both optional fields unchanged. Every acce
 
 ### Manual
 
-`manual_trigger` sets the shared `ActorHot.pending_signal` latch only when the canonical source set includes Manual. Missing Manual fails with `ManualSourceDisabled`, paused calls fail with `ActorPaused`, and System Immutable calls fail with `ImmutableActor`. Immediate policies request the active FIFO; Cadenced policies retain one future wakeup and do not permit Manual to bypass cadence. The latch clears when a signalled cycle starts and survives deferrals.
+`manual_trigger` sets `ActorHot.pending_signal` only when the Actor's scalar trigger is `Manual`. Every other trigger fails with `ManualSourceDisabled`; paused calls fail with `ActorPaused`, and System Immutable calls fail with `ImmutableActor`. Manual readiness requests the FIFO under block cooldown/window gates. The latch clears when a signalled cycle starts and survives deferrals.
 
 ---
 
@@ -448,15 +449,15 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 - `NextActorId`: monotonic actor ID allocator
 - `ActorIdentities`: one durable identity map for Active and Dormant actors, retaining owner, class/custody locator, mutability, sovereign account, `cycle_nonce`, and non-optional `last_control_mutation_block`
-- `ActorHot`: active/paused lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, and direct `terminal_at`
-- `ActorContract`: active schedule/window plus bounded ordered `ContractSteps`; the generated storage descriptor maximum is 10,524 bytes
+- `ActorHot`: active/paused lifecycle, counters, pending readiness, block and cadence anchors, live queue ticket, exact typed wakeup pointer, and direct `terminal_at`
+- `ActorContract`: one scalar trigger, optional block window, and bounded ordered `ContractSteps`; the generated storage descriptor maximum is 8,735 bytes
 - `ActorFunding`: active-only canonical funding-source policy, bounded tracked-asset set, and `funding_accumulated[asset] = amount`; authorized ingress adds checked deltas, fresh cycle opening atomically takes the map as its frozen snapshot, and later ingress remains accumulated for the next cycle
 - `ActorIdentityCount`: transactionally maintained O(1) `ActorIdentities` cardinality bounded by `MaxActorIdentities`
 - `ActiveActorCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorContract`, and `ActorFunding`
 - `NextQueueTicket`: shared monotonic global age allocator and common block-start cutoff source
 - `QueueHead` / `QueueTail` / `QueueOccupancy` / `QueuePages`: one global physical FIFO with a shared O(1) topology preflight, transactional append and exact-live-head consume, exact unconsumed physical-entry capacity, actor-local live-ticket dedup/invalidation, transactional tombstone drain, full-page reclamation, and checked empty partial-tail alignment. Entries store global `ticket` plus `actor_id`; ticket publication/clearing commits with its physical mutation.
 - `QueueOccupancy` includes tombstones, so physical tail gaps never weaken capacity; package coverage proves occupancy counts invalidated entries until the tombstone drain releases exactly their share, and the wakeup cursor's `MaxActiveActors` capacity overflow fails closed transactionally, preserving the actor's exact existing pointer and bucket.
-- `WakeupPages` / `WakeupBuckets` / `WakeupCursorPages` / `WakeupCursorLen`: exact paged temporal topology and sparse minimum cursor; `ActorHot.wakeup_pointer` is the sole ordinary temporal-membership authority, while `terminal_at + actor_id` owns terminal membership/removal. Try-state rejects pointer/slot disagreement, terminal drift, and pointers beyond the terminal block, but accepts bounded stale physical wakeup tombstones until normal drain converges.
+- `WakeupPages` / `WakeupBuckets` / `WakeupCursorPages` / `WakeupCursorLen`: typed paged temporal topology with separate sparse block/tick cursors; `NextWakeupClock` fairly selects the first domain when both are due. `ActorHot.wakeup_pointer` is the sole temporal-membership authority. Try-state rejects key/clock/pointer/slot disagreement and invalid terminal membership, while accepting bounded stale physical tombstones until normal drain converges.
 - Wakeup replacement is one closed storage transaction across existing pointer validation, page-slot removal, checked page/bucket live-count release, reciprocal neighbor unlinking, cursor removal, new cursor/page insertion, checked live-count acquisition, and the actor pointer rewrite. Missing pages or slots, non-reciprocal links, cursor disagreement, count underflow/overflow, or insertion exhaustion rolls back the exact existing schedule and returns topology corruption; intentional actor-local invalidation on terminal cleanup remains the only lazy stale-entry path.
 - Cross-path falsifiers compare complete storage roots and event vectors around manual-trigger capacity fallback, schedule replacement, fresh post-attempt rearm, and Continuation retry rejection. Terminal-only wakeup plus live-ticket coexistence runs try-state, while the fixed-seed corruption corpus injects queue occupancy/page and wakeup cursor/slot/live-count contradictions and requires exact rollback on every rejected transition.
 - `ActiveActorLimit`: explicit nonzero governance-configurable active cap bounded by `min(MaxActiveActors, MaxQueueLength)` and never below `ActiveActorCount`; zero has no fallback meaning and fails try-state
@@ -500,16 +501,16 @@ Creation and mutability rules are explicit:
 - Fresh System creation allocates matching actor and custody-locator ids. `create_system_actor_at_sovereign_id` requires an allocated vacant locator, creates a fresh actor id with nonce zero, and accepts complete Active or Dormant input without inheriting lineage state.
 - Mutable actors may replace the authored contract through `update_contract`; Immutable actors fix it for actor lifetime.
 - User actors cannot admit a `Mint` Task in Contract Steps.
-- Immutable System actors reject Manual sources at admission; no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, or close one. Reattachment after terminal close creates a distinct identity and does not mutate the former actor.
+- Immutable System actors reject the `Manual` trigger at admission; no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, or close one. Reattachment after terminal close creates a distinct identity and does not mutate the former actor.
 
 Mandatory runtime-owned terminal transitions remain distinct from the control guard. Immutable System actors may use an execution window or another internal terminal condition; an actor with none may remain Active indefinitely under the current dispatch contract. Failure threshold and window expiry use pure cleanup. Only a runtime upgrade can replace this immutability contract.
 
 Scheduler hygiene follows the specification's bounded liveness matrix:
 
-- One `next_eligible_at` calculation combines admitted-run cooldown, exact deterministic cadence, and window start.
-- Execution-created late enqueues join next-block queue state only when eligibility reaches that block; later eligibility receives one wakeup.
-- Immediate sources omit cadence but retain cooldown and window gates; sources under `Cadenced::WhenSignalled` retain cadence as well.
-- Paused Cadenced actors consume no continuation after a due wakeup; resume re-primes from effective eligibility. Pending signalled actors re-prime under their configured Immediate or Cadenced gate.
+- `next_eligible_at` combines block cooldown and window start for signalled Actors; timestamp cadence has its separate aligned-tick owner.
+- Execution-created late enqueues join next-block queue state only when block eligibility reaches that point; later eligibility receives one typed wakeup.
+- `Manual`, `AddressEvent`, and `ObservationChange` retain block cooldown/window gates. `Cadenced` admits neither and owns one timestamp deadline while Idle.
+- A suspended Cadenced Actor owns only its ordinary block retry. After the cycle terminates, it rearms one aligned timestamp deadline strictly after the observed tick.
 - Closed or missing stale queue and wakeup entries are ignored deterministically.
 
 Pallet regressions cover paused-pop-resume, cooldown, and pre-window ordering. Runtime integration proves actor-to-actor ingress remains queued across the `on_idle` boundary.

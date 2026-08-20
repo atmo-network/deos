@@ -34,7 +34,7 @@ export type {
   ActorTaskName,
 } from './semantic-manifest.ts';
 
-export const ACTORS_STATIC_ANALYZER_VERSION = '9' as const;
+export const ACTORS_STATIC_ANALYZER_VERSION = '10' as const;
 
 export type ActorRequiredAdapter =
   | 'AssetOps'
@@ -230,9 +230,8 @@ export type ActorStaticSuffixEnvelope = {
 };
 
 export type ActorStaticTriggerAnalysis = {
-  admission: 'Immediate' | 'CadencedAlways' | 'CadencedWhenSignalled';
-  everyBlocks: number | null;
-  sourceCount: number;
+  kind: 'Manual' | 'AddressEvent' | 'ObservationChange' | 'Cadenced';
+  everyTicks: number | null;
   sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
   observationFeeds: ActorContractProjection[];
 };
@@ -240,10 +239,10 @@ export type ActorStaticTriggerAnalysis = {
 export type ActorStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
-      gate: 'Immediate' | 'Cadenced';
+      trigger: 'Manual' | 'AddressEvent' | 'ObservationChange';
       sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
     }
-  | { kind: 'PeriodicAdmission'; everyBlocks: number }
+  | { kind: 'PeriodicAdmission'; everyTicks: number }
   | {
       kind: 'TriggerAmountCompatibilityViolation';
       steps: number[];
@@ -1140,70 +1139,48 @@ function parseTrigger(
     member(value, 'trigger', 'ActorContract'),
     'ActorContract.trigger',
   );
-  const parseSources = (projected: ActorContractProjection, label: string) => {
-    const sourceKinds: ActorStaticTriggerAnalysis['sourceKinds'] = [];
-    const observationFeeds: ActorContractProjection[] = [];
-    array(projected, label).forEach((source, index) => {
-      const parsed = variant(source, `${label}[${index}]`);
-      if (parsed.type === 'Manual') {
-        sourceKinds.push('Manual');
-        return;
+  switch (trigger.type) {
+    case 'Manual':
+      return {
+        kind: 'Manual',
+        everyTicks: null,
+        sourceKinds: ['Manual'],
+        observationFeeds: [],
+      };
+    case 'AddressEvent':
+      return {
+        kind: 'AddressEvent',
+        everyTicks: null,
+        sourceKinds: ['AddressEvent'],
+        observationFeeds: [],
+      };
+    case 'ObservationChange':
+      return {
+        kind: 'ObservationChange',
+        everyTicks: null,
+        sourceKinds: ['ObservationChange'],
+        observationFeeds: [
+          member(trigger.value, 'feed', 'Trigger.ObservationChange'),
+        ],
+      };
+    case 'Cadenced': {
+      const everyTicks = safeInteger(
+        member(trigger.value, 'every_ticks', 'Trigger.Cadenced'),
+        'Trigger.Cadenced.every_ticks',
+      );
+      if (everyTicks < 1) {
+        throw new Error('Trigger.Cadenced.every_ticks must be positive');
       }
-      if (parsed.type === 'OnAddressEvent') {
-        sourceKinds.push('AddressEvent');
-        return;
-      }
-      if (parsed.type === 'OnObservationChange') {
-        sourceKinds.push('ObservationChange');
-        observationFeeds.push(
-          member(parsed.value, 'feed', `TriggerSource.OnObservationChange`),
-        );
-        return;
-      }
-      throw new Error(`Unsupported TriggerSource variant: ${parsed.type}`);
-    });
-    return { sourceKinds, observationFeeds };
-  };
-  if (trigger.type === 'Immediate') {
-    const sources = parseSources(
-      member(trigger.value, 'sources', 'Trigger.Immediate'),
-      'Trigger.Immediate.sources',
-    );
-    return {
-      admission: 'Immediate',
-      everyBlocks: null,
-      sourceCount: sources.sourceKinds.length,
-      ...sources,
-    };
+      return {
+        kind: 'Cadenced',
+        everyTicks,
+        sourceKinds: [],
+        observationFeeds: [],
+      };
+    }
+    default:
+      throw new Error(`Unsupported Trigger variant: ${trigger.type}`);
   }
-  if (trigger.type !== 'Cadenced') {
-    throw new Error(`Unsupported Trigger variant: ${trigger.type}`);
-  }
-  const everyBlocks = member(trigger.value, 'every_blocks', 'Trigger.Cadenced');
-  const everyBlocksNumber = safeInteger(
-    everyBlocks,
-    'Trigger.Cadenced.every_blocks',
-  );
-  if (everyBlocksNumber < 1) {
-    throw new Error('Trigger.Cadenced.every_blocks must be positive');
-  }
-  const sourceProjection = member(trigger.value, 'sources', 'Trigger.Cadenced');
-  if (isNoneProjection(sourceProjection)) {
-    return {
-      admission: 'CadencedAlways',
-      everyBlocks: everyBlocksNumber,
-      sourceCount: 0,
-      sourceKinds: [],
-      observationFeeds: [],
-    };
-  }
-  const sources = parseSources(sourceProjection, 'Trigger.Cadenced.sources');
-  return {
-    admission: 'CadencedWhenSignalled',
-    everyBlocks: everyBlocksNumber,
-    sourceCount: sources.sourceKinds.length,
-    ...sources,
-  };
 }
 
 function findings(
@@ -1226,10 +1203,7 @@ function findings(
     .map((step) => step.index);
   if (
     triggerAmountSteps.length > 0 &&
-    (trigger == null ||
-      trigger.admission === 'CadencedAlways' ||
-      trigger.sourceKinds.length === 0 ||
-      trigger.sourceKinds.some((kind) => kind !== 'AddressEvent'))
+    (trigger == null || trigger.kind !== 'AddressEvent')
   ) {
     results.push({
       kind: 'TriggerAmountCompatibilityViolation',
@@ -1238,15 +1212,15 @@ function findings(
       reason: 'AddressEventOnlyRequired',
     });
   }
-  if (trigger?.admission === 'CadencedAlways') {
+  if (trigger?.kind === 'Cadenced') {
     results.push({
       kind: 'PeriodicAdmission',
-      everyBlocks: trigger.everyBlocks as number,
+      everyTicks: trigger.everyTicks as number,
     });
   } else if (trigger != null) {
     results.push({
       kind: 'ExternallySignalledAdmission',
-      gate: trigger.admission === 'Immediate' ? 'Immediate' : 'Cadenced',
+      trigger: trigger.kind,
       sourceKinds: trigger.sourceKinds,
     });
   }

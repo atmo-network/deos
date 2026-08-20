@@ -268,7 +268,10 @@ pub mod pallet {
   use crate::adapters::{RetryClass, SovereignAccountPolicy, StakingOps as _};
   use frame::prelude::*;
   use polkadot_sdk::{
-    frame_support::{PalletId, traits::EnsureOrigin},
+    frame_support::{
+      PalletId,
+      traits::{EnsureOrigin, Time},
+    },
     sp_runtime::traits::{CheckedAdd, One, SaturatedConversion, Saturating, Zero},
     sp_weights::{WeightMeter, WeightToFee as _},
   };
@@ -299,7 +302,10 @@ pub mod pallet {
     type DexOps: DexOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type StakingOps: crate::adapters::StakingOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type LiquidityOps: LiquidityOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type Time: Time<Moment = u64>;
 
+    #[pallet::constant]
+    type CadenceTickMillis: Get<u64>;
     #[pallet::constant]
     type MinWindowLength: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
@@ -355,8 +361,6 @@ pub mod pallet {
     type MaxSweepBatch: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
-    #[pallet::constant]
-    type MaxTriggerSources: Get<u32>;
     #[pallet::constant]
     type MaxSplitTransferLegs: Get<u32>;
     /// Target block duration in whole seconds.
@@ -415,25 +419,16 @@ pub mod pallet {
 
   pub type AssetFilterOf<T> = AssetFilter<<T as Config>::AssetId, <T as Config>::MaxWhitelistSize>;
 
-  pub type ActorObservationFeedsOf<T> =
-    BoundedVec<<T as Config>::ObservationFeedId, <T as Config>::MaxTriggerSources>;
+  pub type ActorObservationFeedsOf<T> = BoundedVec<<T as Config>::ObservationFeedId, ConstU32<1>>;
   pub type SimulationResultOf<T> = SimulationResult<<T as Config>::MaxContractSteps>;
   pub type ObservationSubscriberPageOf<T> =
     ObservationSubscriberPage<<T as Config>::ObservationPageSize>;
   pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::ObservationPageSize>;
 
-  pub type TriggerSourceOf<T> = TriggerSource<
-    <T as frame_system::Config>::AccountId,
-    <T as Config>::AssetId,
-    <T as Config>::MaxWhitelistSize,
-    <T as Config>::ObservationFeedId,
-  >;
-
   pub type TriggerOf<T> = Trigger<
     <T as frame_system::Config>::AccountId,
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
-    <T as Config>::MaxTriggerSources,
     <T as Config>::ObservationFeedId,
   >;
 
@@ -517,7 +512,8 @@ pub mod pallet {
   pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
   pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
-  pub type WakeupCursorPageOf<T> = BoundedVec<BlockNumberFor<T>, <T as Config>::WakeupPageSize>;
+  pub type WakeupCursorPageOf<T> =
+    BoundedVec<WakeupKey<BlockNumberFor<T>>, <T as Config>::WakeupPageSize>;
 
   pub(crate) type ActiveActorViewOf<T> = ActiveActorView<
     <T as frame_system::Config>::AccountId,
@@ -599,6 +595,7 @@ pub mod pallet {
         queue_ticket: hot.queue_ticket,
         last_control_mutation_block: identity.last_control_mutation_block,
         schedule_anchor: hot.schedule_anchor,
+        cadence_anchor_tick: hot.cadence_anchor_tick,
         last_cycle_block: hot.last_cycle_block,
       }
     }
@@ -623,6 +620,22 @@ pub mod pallet {
 
     pub fn pending_signal(actor_id: ActorId) -> bool {
       ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.pending_signal)
+    }
+
+    pub fn wakeup_pages(key: (BlockNumberFor<T>, WakeupPageId)) -> Option<WakeupPageOf<T>> {
+      WakeupPages::<T>::get((WakeupKey::Block(key.0), key.1))
+    }
+
+    pub fn wakeup_buckets(block: BlockNumberFor<T>) -> Option<WakeupBucketState> {
+      WakeupBuckets::<T>::get(WakeupKey::Block(block))
+    }
+
+    pub fn wakeup_cursor_pages(page_id: WakeupPageId) -> Option<WakeupCursorPageOf<T>> {
+      WakeupCursorPages::<T>::get((WakeupClock::Block, page_id))
+    }
+
+    pub fn wakeup_cursor_len() -> WakeupCursorIndex {
+      WakeupCursorLen::<T>::get(WakeupClock::Block)
     }
 
     pub(crate) fn active_actor_exists(actor_id: ActorId) -> bool {
@@ -701,33 +714,39 @@ pub mod pallet {
   pub type QueuePages<T: Config> =
     StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
 
-  /// Fixed-size pages for the next temporal wakeup substrate.
+  /// Fixed-size pages for block and timestamp-tick wakeups.
   #[pallet::storage]
-  #[pallet::getter(fn wakeup_pages)]
   pub type WakeupPages<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    (BlockNumberFor<T>, WakeupPageId),
+    (WakeupKey<BlockNumberFor<T>>, WakeupPageId),
     WakeupPageOf<T>,
     OptionQuery,
   >;
 
-  /// Small per-block ownership and allocation metadata for temporal pages.
+  /// Small per-deadline ownership and allocation metadata for temporal pages.
   #[pallet::storage]
-  #[pallet::getter(fn wakeup_buckets)]
   pub type WakeupBuckets<T: Config> =
-    StorageMap<_, Blake2_128Concat, BlockNumberFor<T>, WakeupBucketState, OptionQuery>;
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, WakeupBucketState, OptionQuery>;
 
-  /// Paged binary min-heap of distinct wakeup blocks for sparse due discovery.
+  /// Paged binary min-heaps of distinct block and timestamp-tick deadlines.
   #[pallet::storage]
-  #[pallet::getter(fn wakeup_cursor_pages)]
-  pub type WakeupCursorPages<T: Config> =
-    StorageMap<_, Blake2_128Concat, WakeupPageId, WakeupCursorPageOf<T>, OptionQuery>;
+  pub type WakeupCursorPages<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    (WakeupClock, WakeupPageId),
+    WakeupCursorPageOf<T>,
+    OptionQuery,
+  >;
 
-  /// Logical length of the paged sparse-wakeup cursor heap.
+  /// Logical length of each sparse-wakeup cursor heap.
   #[pallet::storage]
-  #[pallet::getter(fn wakeup_cursor_len)]
-  pub type WakeupCursorLen<T> = StorageValue<_, WakeupCursorIndex, ValueQuery>;
+  pub type WakeupCursorLen<T> =
+    StorageMap<_, Blake2_128Concat, WakeupClock, WakeupCursorIndex, ValueQuery>;
+
+  /// Clock selected first when both temporal domains have due work.
+  #[pallet::storage]
+  pub type NextWakeupClock<T> = StorageValue<_, WakeupClock, ValueQuery>;
 
   pub type OwnerSlotBitmap = [u8; 32];
 
@@ -946,6 +965,9 @@ pub mod pallet {
         let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&contract.steps)
           .expect("genesis contract steps must have valid funding-tracked assets");
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(contract.window, Zero::zero());
+        // Genesis has no consensus timestamp. Cadenced actors use `None` as a bounded bootstrap
+        // marker and re-anchor from the first timestamp observed by ordinary wakeup service.
+        let cadence_anchor_tick = None;
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
@@ -967,6 +989,7 @@ pub mod pallet {
             .window
             .map(|window| Pallet::<T>::window_terminal_at(&window)),
           schedule_anchor,
+          cadence_anchor_tick,
           last_cycle_block: None,
         };
         let active_count = Pallet::<T>::active_instance_count();
@@ -1126,6 +1149,15 @@ pub mod pallet {
           .expect("validated plan bound fits u32"),
         "MaxOpeningSnapshotEntries must equal twice MaxContractSteps"
       );
+      // Genesis asserts this too, but genesis runs once. Only this gate re-checks the bound after
+      // a runtime upgrade, and `capture_opening_predicates` traps on `on_idle` if it ever breaks.
+      assert_eq!(
+        T::MaxOpeningPredicateResults::get(),
+        T::MaxContractSteps::get()
+          .checked_mul(T::MaxPredicatesPerStep::get())
+          .expect("opening predicate-result bound must fit u32"),
+        "MaxOpeningPredicateResults must equal MaxContractSteps * MaxPredicatesPerStep"
+      );
       assert!(
         T::MinUserBalance::get() >= T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()),
         "MinUserBalance must cover the fee-native asset minimum"
@@ -1193,11 +1225,11 @@ pub mod pallet {
         && queue_cleanup_weight.all_lte(after_base)
       {
         let cutoff = NextQueueTicket::<T>::get();
-        match Self::paged_drain_tombstones(cutoff, 1) {
-          Ok(queue) if queue.entries_scanned > 0 => queue_cleanup_weight,
-          Ok(_) => Weight::zero(),
-          Err(_) => queue_cleanup_weight,
-        }
+        // The probe reads queue topology and the head page before it can know whether anything is
+        // drainable, so a scan that finds nothing still consumed that work. Charge the attempt
+        // unconditionally rather than letting the empty outcome bill zero every block.
+        let _ = Self::paged_drain_tombstones(cutoff, 1);
+        queue_cleanup_weight
       } else {
         Weight::zero()
       };
@@ -1730,9 +1762,8 @@ pub mod pallet {
       let cancellation_reason = (schedule_changed || steps_changed || funding_changed)
         .then_some(CancellationReason::ContractReplaced);
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
-      if schedule_changed {
-        Self::preflight_observation_subscription_replace(actor_id, &contract.trigger)?;
-      }
+      let cadence_anchor_tick =
+        Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
       Self::with_control_transaction(|| {
         let continuation_cancelled = if let Some(reason) = cancellation_reason {
           Self::cancel_continuation_internal(actor_id, reason, None)?
@@ -1749,6 +1780,7 @@ pub mod pallet {
             .expect("active actor hot-state existence was prevalidated");
           if schedule_changed {
             hot.schedule_anchor = schedule_anchor;
+            hot.cadence_anchor_tick = cadence_anchor_tick;
             hot.terminal_at = contract
               .window
               .map(|window| Self::window_terminal_at(&window));
@@ -2602,6 +2634,14 @@ pub mod pallet {
           }
         }
         let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
+        let cadence_anchor_tick = match Self::cadence_anchor_tick(&contract.trigger) {
+          Ok(anchor) => anchor,
+          Err(error) => {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              Self::placement_error(error),
+            ));
+          }
+        };
         let actor_class = match actor_type {
           ActorType::User => ActorClass::User {
             owner_slot: owner_slot.expect("User allocation always returns a slot"),
@@ -2629,6 +2669,7 @@ pub mod pallet {
             .window
             .map(|window| Self::window_terminal_at(&window)),
           schedule_anchor,
+          cadence_anchor_tick,
           last_cycle_block: None,
         };
         SovereignIndex::<T>::insert(sovereign_account.clone(), actor_id);
@@ -2754,6 +2795,8 @@ pub mod pallet {
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
       // rather than block zero (spec 4.3.3).
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
+      let cadence_anchor_tick =
+        Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
       let hot = ActorHotState {
         lifecycle: ActiveLifecycle::Active,
         cycle_state: CycleState::Idle,
@@ -2765,6 +2808,7 @@ pub mod pallet {
           .window
           .map(|window| Self::window_terminal_at(&window)),
         schedule_anchor,
+        cadence_anchor_tick,
         last_cycle_block: None,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -2852,16 +2896,19 @@ pub mod pallet {
 
     fn validate_trigger(trigger: &TriggerOf<T>, cooldown_blocks: u32) -> DispatchResult {
       ensure!(
-        trigger.has_canonical_sources(),
+        trigger.has_canonical_filters(),
         Error::<T>::InvalidTriggerConfiguration
       );
-      // Both cadence and cooldown are bounded by MaxExecutionDelayBlocks (spec 7.3.1).
       let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
-      if let Trigger::Cadenced { every_blocks, .. } = trigger {
-        ensure!(*every_blocks > 0, Error::<T>::InvalidTriggerConfiguration);
+      if let Trigger::Cadenced { every_ticks } = trigger {
+        ensure!(*every_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
         ensure!(
-          *every_blocks <= max_delay,
+          *every_ticks <= u64::from(max_delay),
           Error::<T>::ExecutionDelayTooLong
+        );
+        ensure!(
+          cooldown_blocks == 0,
+          Error::<T>::InvalidTriggerConfiguration
         );
       }
       ensure!(
@@ -2901,18 +2948,11 @@ pub mod pallet {
         schedule_anchor.checked_add(&cooldown).is_some(),
         Error::<T>::SchedulerIndexExhausted
       );
-      let first_temporal_eligible = if let Trigger::Cadenced { every_blocks, .. } = contract.trigger
-      {
-        let cadence: BlockNumberFor<T> = every_blocks.into();
-        ensure!(
-          schedule_anchor.checked_add(&cadence).is_some(),
-          Error::<T>::SchedulerIndexExhausted
-        );
-        Self::cadence_at_or_after(schedule_anchor, every_blocks, schedule_anchor)
-          .map_err(|_| Error::<T>::SchedulerIndexExhausted)?
-      } else {
-        schedule_anchor
-      };
+      if matches!(contract.trigger, Trigger::Cadenced { .. }) {
+        ensure!(contract.window.is_none(), Error::<T>::InvalidScheduleWindow);
+        return Ok(());
+      }
+      let first_temporal_eligible = schedule_anchor;
       if let Some(window) = contract.window {
         ensure!(
           first_temporal_eligible <= window.end,
@@ -3438,8 +3478,6 @@ pub mod pallet {
         );
       }
 
-      Self::preflight_remove_observation_subscriptions(actor_id)?;
-
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let result = (|| -> DispatchResult {
           Self::cancel_continuation_internal(actor_id, CancellationReason::Closing(reason), None)?;
@@ -3449,8 +3487,18 @@ pub mod pallet {
           Self::remove_active_actor(actor_id)?;
           ActorIdentities::<T>::remove(actor_id);
           ActorFunding::<T>::remove(actor_id);
-          ActiveActorCount::<T>::mutate(|count| *count -= 1);
-          ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+          ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
+            *count = count
+              .checked_sub(1)
+              .ok_or(Error::<T>::ActiveActorCountInvariant)?;
+            Ok(())
+          })?;
+          ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+            *count = count
+              .checked_sub(1)
+              .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+            Ok(())
+          })?;
           match instance.actor_class {
             ActorClass::User { owner_slot } => Self::remove_owner_slot_binding(
               &instance.owner,
@@ -3500,7 +3548,12 @@ pub mod pallet {
 
       Self::with_control_transaction(|| {
         ActorIdentities::<T>::remove(actor_id);
-        ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+        ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        })?;
         match identity.actor_class {
           ActorClass::User { owner_slot } => Self::remove_owner_slot_binding(
             &identity.owner,
@@ -3954,7 +4007,7 @@ pub mod pallet {
       if T::WakeupPageSize::get() == 0 {
         return Err(TryRuntimeError::Other("WakeupPageSize must be non-zero"));
       }
-      let mut wakeup_live_by_block = alloc::collections::BTreeMap::new();
+      let mut wakeup_live_by_key = alloc::collections::BTreeMap::new();
       let mut live_wakeup_memberships = 0u32;
       for (block, page_id) in WakeupPages::<T>::iter_keys() {
         let page = WakeupPages::<T>::get((block, page_id))
@@ -4011,8 +4064,8 @@ pub mod pallet {
             "WakeupBucket tail page has a successor",
           ));
         }
-        let block_live = wakeup_live_by_block.entry(block).or_insert(0u32);
-        *block_live = block_live.saturating_add(live_entries);
+        let key_live = wakeup_live_by_key.entry(block).or_insert(0u32);
+        *key_live = key_live.saturating_add(live_entries);
         // `wakeup_pointer` is the sole ordinary temporal-membership authority (spec 5.1): a
         // physical page slot is a live member only when the actor's pointer addresses exactly
         // this slot. A slot whose actor owns a different pointer is corruption; a slot whose
@@ -4047,11 +4100,10 @@ pub mod pallet {
           "live wakeup memberships exceed active actor count",
         ));
       }
-      let cursor_len = WakeupCursorLen::<T>::get();
       for block in WakeupBuckets::<T>::iter_keys() {
         let bucket = WakeupBuckets::<T>::get(block)
           .ok_or(TryRuntimeError::Other("wakeup bucket key has no value"))?;
-        if wakeup_live_by_block.get(&block).copied() != Some(bucket.live_entries) {
+        if wakeup_live_by_key.get(&block).copied() != Some(bucket.live_entries) {
           return Err(TryRuntimeError::Other(
             "WakeupBucket live-entry count disagrees with pages",
           ));
@@ -4063,64 +4115,70 @@ pub mod pallet {
             "WakeupBucket head or tail page is missing",
           ));
         }
+        let cursor_len = WakeupCursorLen::<T>::get(block.clock());
         if let Some(index) = bucket.cursor_index
-          && (index >= cursor_len || Self::wakeup_cursor_get(index) != Some(block))
+          && (index >= cursor_len || Self::wakeup_cursor_get(block.clock(), index) != Some(block))
         {
           return Err(TryRuntimeError::Other(
             "WakeupBucket cursor reverse index does not resolve",
           ));
         }
       }
-      if cursor_len > T::MaxActiveActors::get() {
-        return Err(TryRuntimeError::Other(
-          "WakeupCursorLen exceeds configured active actor capacity",
-        ));
-      }
       let cursor_page_size = T::WakeupPageSize::get();
-      let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
-      let actual_cursor_pages = WakeupCursorPages::<T>::iter_keys().count() as u32;
-      if actual_cursor_pages != expected_cursor_pages {
-        return Err(TryRuntimeError::Other(
-          "WakeupCursorPages count disagrees with cursor length",
-        ));
-      }
-      for page_id in 0..expected_cursor_pages {
-        let Some(page) = WakeupCursorPages::<T>::get(u64::from(page_id)) else {
+      for clock in [WakeupClock::Block, WakeupClock::Tick] {
+        let cursor_len = WakeupCursorLen::<T>::get(clock);
+        if cursor_len > T::MaxActiveActors::get() {
           return Err(TryRuntimeError::Other(
-            "WakeupCursorPages has a gap in logical page order",
-          ));
-        };
-        let consumed = page_id.saturating_mul(cursor_page_size);
-        let expected_len = cursor_len.saturating_sub(consumed).min(cursor_page_size) as usize;
-        if page.len() != expected_len {
-          return Err(TryRuntimeError::Other(
-            "WakeupCursorPage length disagrees with logical position",
+            "WakeupCursorLen exceeds configured active actor capacity",
           ));
         }
-      }
-      let mut cursor_blocks = alloc::collections::BTreeSet::new();
-      for index in 0..cursor_len {
-        let Some(block) = Self::wakeup_cursor_get(index) else {
+        let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
+        let actual_cursor_pages = WakeupCursorPages::<T>::iter_keys()
+          .filter(|(stored_clock, _)| *stored_clock == clock)
+          .count() as u32;
+        if actual_cursor_pages != expected_cursor_pages {
           return Err(TryRuntimeError::Other(
-            "WakeupCursor index does not resolve to a page entry",
-          ));
-        };
-        if !cursor_blocks.insert(block) {
-          return Err(TryRuntimeError::Other(
-            "WakeupCursor contains a duplicate block",
+            "WakeupCursorPages count disagrees with cursor length",
           ));
         }
-        if WakeupBuckets::<T>::get(block).and_then(|bucket| bucket.cursor_index) != Some(index) {
-          return Err(TryRuntimeError::Other(
-            "WakeupCursor block has no matching bucket reverse index",
-          ));
-        }
-        if index > 0 {
-          let parent = index.saturating_sub(1) / 2;
-          if Self::wakeup_cursor_get(parent).is_none_or(|parent_block| parent_block > block) {
+        for page_id in 0..expected_cursor_pages {
+          let Some(page) = WakeupCursorPages::<T>::get((clock, u64::from(page_id))) else {
             return Err(TryRuntimeError::Other(
-              "WakeupCursor violates min-heap ordering",
+              "WakeupCursorPages has a gap in logical page order",
             ));
+          };
+          let consumed = page_id.saturating_mul(cursor_page_size);
+          let expected_len = cursor_len.saturating_sub(consumed).min(cursor_page_size) as usize;
+          if page.len() != expected_len {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursorPage length disagrees with logical position",
+            ));
+          }
+        }
+        let mut cursor_keys = alloc::collections::BTreeSet::new();
+        for index in 0..cursor_len {
+          let Some(key) = Self::wakeup_cursor_get(clock, index) else {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursor index does not resolve to a page entry",
+            ));
+          };
+          if key.clock() != clock || !cursor_keys.insert(key) {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursor contains a duplicate or wrong-clock key",
+            ));
+          }
+          if WakeupBuckets::<T>::get(key).and_then(|bucket| bucket.cursor_index) != Some(index) {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursor key has no matching bucket reverse index",
+            ));
+          }
+          if index > 0 {
+            let parent = index.saturating_sub(1) / 2;
+            if Self::wakeup_cursor_get(clock, parent).is_none_or(|parent_key| parent_key > key) {
+              return Err(TryRuntimeError::Other(
+                "WakeupCursor violates min-heap ordering",
+              ));
+            }
           }
         }
       }
@@ -4145,9 +4203,8 @@ pub mod pallet {
         // The earlier due requirement determines the next temporal service point (spec 5.1):
         // every placement path clamps the wakeup target to the terminal block, so an ordinary
         // or terminal wakeup must never be scheduled beyond `terminal_at`.
-        if hot
-          .terminal_at
-          .is_some_and(|terminal_at| pointer.block > terminal_at)
+        if let Some(terminal_at) = hot.terminal_at
+          && !matches!(pointer.block, WakeupKey::Block(block) if block <= terminal_at)
         {
           return Err(TryRuntimeError::Other(
             "ActorHot wakeup pointer exceeds its terminal membership",

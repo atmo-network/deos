@@ -213,23 +213,6 @@ export function isCanonicalChain(
   return provenance.contractClass === 'canonical-chain';
 }
 
-export function isMaterialized(
-  value: ReadModelValue<unknown> | ReadModelProvenance,
-): boolean {
-  const provenance = 'provenance' in value ? value.provenance : value;
-  return provenance.contractClass === 'materialized';
-}
-
-export function isSessionDerivedCanonical(
-  value: ReadModelValue<unknown> | ReadModelProvenance,
-): boolean {
-  const provenance = 'provenance' in value ? value.provenance : value;
-  return (
-    provenance.contractClass === 'canonical-chain' &&
-    provenance.realization === 'session-derived'
-  );
-}
-
 export function getReadModelLabel(provenance: ReadModelProvenance): string {
   if (provenance.contractClass === 'materialized') {
     if (provenance.scope === 'archive') {

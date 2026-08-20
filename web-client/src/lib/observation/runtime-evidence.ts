@@ -49,7 +49,6 @@ export type ObservationRuntimeEvidenceIdentity = Omit<
       proofSize: bigint;
     };
     maxActiveActors: number;
-    maxTriggerSources: number;
     queuePageSize: number;
   };
 };
@@ -127,8 +126,7 @@ export function compareObservationRuntimeEvidenceIdentity(
   ) {
     reasons.push('fanout Weight limit mismatch');
   }
-  const maxActiveDirtyFeeds =
-    observed.fanout.maxActiveActors * observed.fanout.maxTriggerSources;
+  const maxActiveDirtyFeeds = observed.fanout.maxActiveActors;
   if (maxActiveDirtyFeeds !== EXPECTED.fanout.maxActiveDirtyFeeds) {
     reasons.push('active dirty-feed bound mismatch');
   }
@@ -203,7 +201,6 @@ function decodeFanoutConstants(bytes: Uint8Array) {
       proofSize: (weight as { proof_size: bigint }).proof_size,
     },
     maxActiveActors: numberConstant('MaxActiveActors'),
-    maxTriggerSources: numberConstant('MaxTriggerSources'),
     queuePageSize: numberConstant('QueuePageSize'),
   };
 }

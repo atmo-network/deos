@@ -112,10 +112,7 @@ function priceBucket({ direction, threshold }) {
     failure:
       'Non-fresh observation skips; Temporary swap failure retries at one cursor; retry exhaustion closes.',
     contract: activeContract({
-      trigger: {
-        type: 'Immediate',
-        sources: [{ type: 'OnObservationChange', feed }],
-      },
+      trigger: { type: 'ObservationChange', feed },
       predicates: [
         {
           type: buying ? 'ObservationBelow' : 'ObservationAbove',
@@ -165,7 +162,7 @@ const partialScenarios = [
     failure:
       'The core must not run automatically until a typed treasury-ratio producer and feed meaning exist.',
     contract: activeContract({
-      trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
+      trigger: { type: 'Manual' },
       predicates: [],
       task: {
         type: 'SplitTransfer',
@@ -198,7 +195,7 @@ const partialScenarios = [
     failure:
       'The core must not run automatically until a typed depth producer and feed meaning exist.',
     contract: activeContract({
-      trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
+      trigger: { type: 'Manual' },
       predicates: [],
       task: {
         type: 'AddLiquidity',
@@ -228,11 +225,7 @@ const nonPriceScalar = {
   failure:
     'Before the authored block the condition skips; transfer failure follows AbortCycle without retry state.',
   contract: activeContract({
-    trigger: {
-      type: 'Cadenced',
-      everyBlocks: 10,
-      mode: { type: 'Always' },
-    },
+    trigger: { type: 'Cadenced', everyTicks: 10 },
     predicates: [{ type: 'BlockNumberAbove', threshold: 100 }],
     task: {
       type: 'Transfer',
@@ -290,8 +283,8 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
       scenario.name,
     );
     assert.equal(
-      inspection.projection.trigger.value.sources[0].type,
-      'OnObservationChange',
+      inspection.projection.trigger.type,
+      'ObservationChange',
       scenario.name,
     );
   }
@@ -343,7 +336,8 @@ test('non-price scalar strategy uses runtime block truth rather than a mislabele
     runtime: { ...runtime, modelIdentity: 'reactive-scenario-corpus' },
     weightModel,
   });
-  assert.equal(analysis.trigger.admission, 'CadencedAlways');
+  assert.equal(analysis.trigger.kind, 'Cadenced');
+  assert.equal(analysis.trigger.everyTicks, 10);
   assert.equal(analysis.steps[0].predicates[0].type, 'BlockNumberAbove');
   assert.equal(analysis.steps[0].predicates[0].observation, 'block-number');
   assert.equal(analysis.steps[0].task, 'Transfer');

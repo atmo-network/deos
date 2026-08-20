@@ -1,5 +1,4 @@
 use crate::pallet::*;
-use crate::types::TriggerSource;
 use polkadot_sdk::frame_support::{BoundedVec, ensure, traits::Get};
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult};
 
@@ -13,14 +12,10 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn derive_observation_feeds(
     trigger: &TriggerOf<T>,
   ) -> Result<ActorObservationFeedsOf<T>, DispatchError> {
-    let mut feeds = alloc::vec::Vec::new();
-    if let Some(sources) = trigger.sources() {
-      for source in sources {
-        if let TriggerSource::OnObservationChange { feed } = source {
-          feeds.push(*feed);
-        }
-      }
-    }
+    let feeds = match trigger {
+      Trigger::ObservationChange { feed } => alloc::vec![*feed],
+      _ => alloc::vec![],
+    };
     BoundedVec::try_from(feeds)
       .map_err(|_| Error::<T>::ObservationSubscriptionCapacityExceeded.into())
   }
@@ -282,7 +277,10 @@ impl<T: Config> Pallet<T> {
       );
       list.tail = page.previous.unwrap_or(page_id);
     }
-    list.count -= 1;
+    list.count = list
+      .count
+      .checked_sub(1)
+      .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
     if list.count == 0 {
       ensure!(
         page.previous.is_none() && page.next.is_none(),
@@ -331,11 +329,8 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })?;
     ObservationSubscriptionCount::<T>::try_mutate(|count| -> DispatchResult {
-      let maximum = T::MaxActiveActors::get()
-        .checked_mul(T::MaxTriggerSources::get())
-        .ok_or(Error::<T>::ObservationSubscriptionCapacityExceeded)?;
       ensure!(
-        *count < maximum,
+        *count < T::MaxActiveActors::get(),
         Error::<T>::ObservationSubscriptionCapacityExceeded
       );
       *count = count

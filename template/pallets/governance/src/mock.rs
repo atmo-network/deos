@@ -185,7 +185,7 @@ impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, DomainI
 pub struct MockGovernanceBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256>
+impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256, DomainId, u128>
   for MockGovernanceBenchmarkHelper
 {
   fn prepare_primary_eligible_submitter(
@@ -200,6 +200,20 @@ impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256>
         account, 100,
       );
     Ok((42, H256::default()))
+  }
+
+  fn prepare_protection_voter(
+    account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    set_veto_vote_weight(*account, 100);
+    set_veto_total_issuance(100);
+    Ok(42)
+  }
+
+  fn prepare_vote_power_custody(
+    _account: &AccountId,
+  ) -> Result<(DomainId, u128), polkadot_sdk::sp_runtime::DispatchError> {
+    Ok((42, 1))
   }
 }
 
@@ -355,6 +369,8 @@ impl pallet_governance::Config for Test {
   type ProposalOpeningFee = ProposalOpeningFee;
   type ProposalFeeRecipient = ProposalFeeRecipient;
   type DomainId = DomainId;
+  type VotePowerLockId = DomainId;
+  type VotePowerCustody = ();
   type WinningVoteItemId = u32;
   type Epoch = Epoch;
   type EpochProvider = MockEpochProvider;

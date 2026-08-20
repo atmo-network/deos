@@ -31,8 +31,6 @@ related:
   - DEOS Framework Overview
   - $BLDR Builder Economy
   - Core Terms
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Reading Paths

@@ -27,8 +27,6 @@ related:
   - TMCTOL Standard
   - Read-Model Split
   - Core Terms
-last_compiled: 2026-08-14
-confidence: 0.9
 ---
 
 # Token-Driven Automation

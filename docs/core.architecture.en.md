@@ -54,7 +54,7 @@ Package specifications own intended semantics; package architecture maps own shi
 
 | Owner | Composition family | Cross-system invariant |
 | --- | --- | --- |
-| [Governance](../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, maturity, and strategic reserve are checked before economics or mutation |
+| [Governance](../template/pallets/governance/docs/specification.en.md) | Proposal/preimage admission, transferable vote-source custody, voting, resolution, enactment, cleanup, and participation memory | Domain lanes, author caps, preimage integrity, source non-reuse, maturity, and strategic reserve are checked before economics or mutation |
 | [DEOS Staking](../template/pallets/staking/docs/specification.en.md) | Pool/receipt, LP nomination, governance custody, session security, certified reward, claim, compound, and atomic expiry | One mode and `SessionIndex` owner bind bounded custody, frozen rights, conservative backing, exact liability, and automatic transactional settlement |
 | [DEOS Actors](../template/pallets/actors/docs/specification.en.md) | Actor Contract lifecycle, trigger, scheduler, simulation, sweep, and repair | Canonical typed contracts execute bounded FIFO attempts with explicit preconditions, paid failure, atomic task effects, and one Continuation owner |
 | [DEOS Router](../template/pallets/router/docs/specification.en.md) | Pool registration, quote preparation, and atomic exact-input/output swap | Prepared identity, maximum recipient output, concrete failure cause, retry disposition, Oracle publication, and fee ingress commit together |
@@ -89,7 +89,7 @@ Native token ($NTVE) uses `AssetKind::Native` enum variant, not a bitmask ID.
 | Token | AssetKind | ID | Role |
 | --- | --- | --- | --- |
 | `$NTVE` | `Native` | — | Sovereign currency, L1 TMC emission |
-| `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Governance token (deferred) |
+| `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Protocol protection-governance token |
 | `$BLDR` | `Local(0x1000_0002)` | `0x1000_0002` | Builder incentive token, L2 TMC emission |
 
 #### 3.3.2 Zero-Cost Abstractions
@@ -207,8 +207,9 @@ The DEOS reference runtime extends its "Omnivorous" philosophy to the Polkadot e
 
 The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay Chain and Sibling Parachains after governance registration in the Asset Registry.
 
-- `Ingress Protocol`: The system accepts `ReserveAssetDeposited` and `Teleport` instructions.
-- `Asset Mapping (Hybrid)`: bidirectional `Location <-> AssetId` stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
+- `Ingress Protocol`: The system accepts registered reserve assets through `ReserveAssetDeposited`; teleporting is disabled by both the executor and the pallet dispatch filter.
+- `Asset Identity`: The local balances currency `$NTVE` is concrete XCM `Here`. Relay `Parent` and sibling-origin assets are foreign reserves and enter their governance-registered `0xF...` `pallet-assets` ledgers; a relay reserve deposit cannot mint `$NTVE`.
+- `Asset Mapping (Hybrid)`: Bidirectional `Location <-> AssetId` is stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
 - `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. The reference runtime caps this register at one asset while `FixedWeightBounds` is active, so one generated saturated foreign-asset Actors deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation.
 - `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; `SafeCallFilter = Nothing` makes `Transact` fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
 

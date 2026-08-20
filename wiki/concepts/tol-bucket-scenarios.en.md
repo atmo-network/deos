@@ -27,8 +27,6 @@ related:
   - Architecture Diagrams
   - Actors System
   - Token-Driven Automation
-last_compiled: 2026-07-22
-confidence: 0.85
 ---
 
 # TOL Bucket Scenarios

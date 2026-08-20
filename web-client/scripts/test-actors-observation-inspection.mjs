@@ -102,11 +102,19 @@ test('selected actor projection exposes one exact queue or wakeup admission path
       actorClass: 'User',
       pendingSignal: true,
       queueTicket: null,
-      wakeup: { block: 120, pageId: 3n, slot: 4 },
+      wakeup: {
+        key: { type: 'Block', value: 120 },
+        pageId: 3n,
+        slot: 4,
+      },
     },
   });
   assert.equal(wakeup.queueAdmissionStatus, 'WakeupScheduled');
-  assert.deepEqual(wakeup.wakeup, { block: 120, pageId: 3n, slot: 4 });
+  assert.deepEqual(wakeup.wakeup, {
+    key: { type: 'Block', value: 120 },
+    pageId: 3n,
+    slot: 4,
+  });
 
   const blocked = projectObservationActorDeliveryInspection({
     actorId: 9n,
@@ -144,7 +152,11 @@ test('selected actor projection exposes one exact queue or wakeup admission path
           actorClass: 'System',
           pendingSignal: true,
           queueTicket: 1n,
-          wakeup: { block: 120, pageId: 3n, slot: 4 },
+          wakeup: {
+            key: { type: 'Tick', value: 120n },
+            pageId: 3n,
+            slot: 4,
+          },
         },
       }),
     /cannot own queue and wakeup/,
@@ -299,7 +311,6 @@ test('finalized runtime evidence verifies exact generated identity and classifie
         proofSize: BigInt(expected.fanout.fanoutWeightLimit.proofSize),
       },
       maxActiveActors: 10_000,
-      maxTriggerSources: 4,
       queuePageSize: 64,
     },
   };

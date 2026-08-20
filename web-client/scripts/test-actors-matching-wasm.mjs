@@ -65,12 +65,7 @@ const step = {
   on_error: { type: 'AbortCycle', value: undefined },
 };
 const contractScale = encodeActorContractValue(metadataBytes, {
-  trigger: {
-    type: 'Immediate',
-    value: {
-      sources: [{ type: 'Manual', value: undefined }],
-    },
-  },
+  trigger: { type: 'Manual', value: undefined },
   cooldown_blocks: 0,
   window: undefined,
   steps: [step, step],

@@ -5,9 +5,10 @@ use polkadot_sdk::frame_support::{
 };
 use polkadot_sdk::frame_system::{EnsureRoot, EnsureSigned};
 use polkadot_sdk::sp_runtime::{
-  BuildStorage,
+  BuildStorage, DispatchError, DispatchResult,
   traits::{BlakeTwo256, IdentityLookup},
 };
+use std::cell::RefCell;
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 type Balance = u128;
@@ -110,13 +111,31 @@ impl polkadot_sdk::sp_runtime::traits::Convert<polkadot_sdk::staging_xcm::latest
     match (location.parents, location.interior) {
       (1, Junctions::X1(junctions)) => {
         if let Parachain(id) = junctions[0] {
-          id
+          primitives::assets::TYPE_FOREIGN | (id & primitives::assets::MASK_INDEX)
         } else {
           0
         }
       }
       _ => 0,
     }
+  }
+}
+
+thread_local! {
+  static FAIL_TOKEN_DOMAIN_HOOK: RefCell<bool> = const { RefCell::new(false) };
+}
+
+pub fn set_token_domain_hook_failure(fail: bool) {
+  FAIL_TOKEN_DOMAIN_HOOK.with(|state| *state.borrow_mut() = fail);
+}
+
+pub struct MockTokenDomainHook;
+impl crate::TokenDomainHook for MockTokenDomainHook {
+  fn on_token_registered(_token_asset: primitives::AssetKind) -> DispatchResult {
+    if FAIL_TOKEN_DOMAIN_HOOK.with(|state| *state.borrow()) {
+      return Err(DispatchError::Other("TokenDomainHookRejected"));
+    }
+    Ok(())
   }
 }
 
@@ -132,7 +151,7 @@ impl pallet_asset_registry::Config for Test {
   type RegistryOrigin = EnsureRoot<AccountId>; // Only root can register in tests
   type AssetIdGenerator = MockLocationToAssetId;
   type AssetOwner = MockAssetOwner;
-  type TokenDomainHook = ();
+  type TokenDomainHook = MockTokenDomainHook;
   type WeightInfo = ();
 }
 
@@ -148,6 +167,8 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   }
   .assimilate_storage(&mut t)
   .unwrap();
+
+  FAIL_TOKEN_DOMAIN_HOOK.with(|state| *state.borrow_mut() = false);
 
   t.into()
 }

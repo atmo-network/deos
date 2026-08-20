@@ -7,9 +7,7 @@ use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult};
 
 impl<T: Config> Pallet<T> {
   fn maximum_dirty_observation_feeds() -> Result<u32, DispatchError> {
-    T::MaxActiveActors::get()
-      .checked_mul(T::MaxTriggerSources::get())
-      .ok_or(Error::<T>::DirtyObservationCapacityExceeded.into())
+    Ok(T::MaxActiveActors::get())
   }
 
   fn dirty_observation_links_are_valid(

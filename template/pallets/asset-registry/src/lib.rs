@@ -172,10 +172,17 @@ pub mod pallet {
       );
       // 2. Generate Deterministic AssetId
       let asset_id = T::AssetIdGenerator::convert(location.clone());
-      // 3. Check for ID collision
-      if pallet_assets::Pallet::<T>::asset_exists(asset_id) {
-        return Err(Error::<T>::AssetIdCollision.into());
-      }
+      // 3. Validate namespace and reject either ledger or retained-registry collisions.
+      let id_u32: u32 = asset_id.into();
+      ensure!(
+        (id_u32 & MASK_TYPE) == TYPE_FOREIGN,
+        Error::<T>::InvalidAssetIdMask
+      );
+      ensure!(
+        !pallet_assets::Pallet::<T>::asset_exists(asset_id)
+          && !ForeignAssetLocationByAssetId::<T>::contains_key(asset_id),
+        Error::<T>::AssetIdCollision
+      );
       // 4. Persist Mapping
       Self::insert_mapping(&location, asset_id);
       // 5. Prepare Asset Owner
@@ -242,10 +249,12 @@ pub mod pallet {
         !ForeignAssetMapping::<T>::contains_key(&location),
         Error::<T>::AssetAlreadyRegistered
       );
-      // 3. Check for ID collision
-      if pallet_assets::Pallet::<T>::asset_exists(asset_id) {
-        return Err(Error::<T>::AssetIdCollision.into());
-      }
+      // 3. Reject either ledger or retained-registry collisions.
+      ensure!(
+        !pallet_assets::Pallet::<T>::asset_exists(asset_id)
+          && !ForeignAssetLocationByAssetId::<T>::contains_key(asset_id),
+        Error::<T>::AssetIdCollision
+      );
       // 4. Persist Mapping
       Self::insert_mapping(&location, asset_id);
       // 5. Prepare Asset Owner
@@ -285,6 +294,7 @@ pub mod pallet {
     /// The AssetId must exist and have the correct FOREIGN mask.
     #[pallet::call_index(2)]
     #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::link_existing_asset())]
+    #[transactional]
     pub fn link_existing_asset(
       origin: OriginFor<T>,
       location: Location,

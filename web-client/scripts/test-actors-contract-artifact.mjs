@@ -31,10 +31,7 @@ function canonicalArtifact() {
     actorType: 'User',
     mutability: 'Mutable',
     contractScale: encodeActorContractValue(metadataBytes, {
-      trigger: {
-        type: 'Immediate',
-        value: { sources: [{ type: 'Manual', value: undefined }] },
-      },
+      trigger: { type: 'Manual', value: undefined },
       cooldown_blocks: 0,
       window: undefined,
       steps: [
@@ -53,12 +50,7 @@ function canonicalArtifact() {
 
 test('ActorContract encodes and projects every nested value losslessly', () => {
   const contractScale = encodeActorContractValue(metadataBytes, {
-    trigger: {
-      type: 'Immediate',
-      value: {
-        sources: [{ type: 'Manual', value: undefined }],
-      },
-    },
+    trigger: { type: 'Manual', value: undefined },
     cooldown_blocks: 5,
     window: undefined,
     steps: [
@@ -134,12 +126,7 @@ test('DNF timing and clause topology change canonical identity and remain diff-v
       actorType: 'User',
       mutability: 'Mutable',
       contractScale: encodeActorContractValue(metadataBytes, {
-        trigger: {
-          type: 'Immediate',
-          value: {
-            sources: [{ type: 'Manual', value: undefined }],
-          },
-        },
+        trigger: { type: 'Manual', value: undefined },
         cooldown_blocks: 0,
         window: undefined,
         steps: [
@@ -219,43 +206,32 @@ test('trigger admission diff stays inside the trigger tree and never invents con
     if (!inspection.valid) throw new Error('fixture must inspect');
     return inspection;
   };
-  const manual = [{ type: 'Manual', value: undefined }];
-  const immediate = inspectTrigger({
-    type: 'Immediate',
-    value: { sources: manual },
-  });
+  const manual = inspectTrigger({ type: 'Manual', value: undefined });
   const observation = inspectTrigger({
-    type: 'Immediate',
+    type: 'ObservationChange',
     value: {
-      sources: [
-        {
-          type: 'OnObservationChange',
-          value: {
-            feed: {
-              asset_in: { type: 'Native', value: undefined },
-              asset_out: { type: 'Local', value: 7 },
-              method: { type: 'PreExecutionSpot', value: undefined },
-              aggregation: {
-                type: 'Ema',
-                value: { half_life_blocks: 100 },
-              },
-              scale: 12,
-            },
-          },
+      feed: {
+        asset_in: { type: 'Native', value: undefined },
+        asset_out: { type: 'Local', value: 7 },
+        method: { type: 'PreExecutionSpot', value: undefined },
+        aggregation: {
+          type: 'Ema',
+          value: { half_life_blocks: 100 },
         },
-      ],
+        scale: 12,
+      },
     },
   });
-  const observationSource = observation.projection.trigger.value.sources[0];
-  assert.equal(observationSource.type, 'OnObservationChange');
-  assert.deepEqual(Object.keys(observationSource.value), ['feed']);
-  assert.equal(observationSource.value.feed.aggregation.type, 'Ema');
+  const observationTrigger = observation.projection.trigger;
+  assert.equal(observationTrigger.type, 'ObservationChange');
+  assert.deepEqual(Object.keys(observationTrigger.value), ['feed']);
+  assert.equal(observationTrigger.value.feed.aggregation.type, 'Ema');
   assert.equal(
-    observationSource.value.feed.aggregation.value.half_life_blocks.$integer,
+    observationTrigger.value.feed.aggregation.value.half_life_blocks.$integer,
     '100',
   );
-  assert.equal(observationSource.value.feed.scale.$integer, '12');
-  const observationDiff = diffActorContractArtifacts(immediate, observation);
+  assert.equal(observationTrigger.value.feed.scale.$integer, '12');
+  const observationDiff = diffActorContractArtifacts(manual, observation);
   assert.equal(observationDiff.compatible, true);
   if (observationDiff.compatible) {
     assert(
@@ -266,12 +242,9 @@ test('trigger admission diff stays inside the trigger tree and never invents con
   }
   const cadenced = inspectTrigger({
     type: 'Cadenced',
-    value: {
-      every_blocks: 10,
-      sources: manual,
-    },
+    value: { every_ticks: 10n },
   });
-  const diff = diffActorContractArtifacts(immediate, cadenced);
+  const diff = diffActorContractArtifacts(manual, cadenced);
   assert.equal(diff.compatible, true);
   if (diff.compatible) {
     assert(diff.changes.length > 0);
@@ -285,7 +258,7 @@ test('trigger admission diff stays inside the trigger tree and never invents con
         (change) =>
           change.kind === 'replace' &&
           change.path === '/trigger/type' &&
-          change.before === 'Immediate' &&
+          change.before === 'Manual' &&
           change.after === 'Cadenced',
       ),
     );

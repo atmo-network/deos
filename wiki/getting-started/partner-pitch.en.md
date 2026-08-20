@@ -23,8 +23,6 @@ tags:
 related:
   - DEOS in 60 Seconds
   - Forking DEOS
-last_compiled: 2026-07-20
-confidence: 0.8
 ---
 
 # Partner Pitch

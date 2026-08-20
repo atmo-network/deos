@@ -33,8 +33,6 @@ related:
   - TMCTOL Standard
   - Actors System
   - TOL Bucket Scenarios
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # `$BLDR` Builder Economy

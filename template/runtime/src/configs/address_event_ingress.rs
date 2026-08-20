@@ -203,15 +203,6 @@ pub const ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
     rollback_owner: "ActorAwareAssetTransactor deposit revert",
     weight_owner: "One-asset deposit generated weight",
   },
-  AddressEventProducer {
-    id: "TmctolFeeCollector",
-    credited_surface: "Fee Sink sovereign",
-    source_provenance: "Payer / InternalProtocol",
-    preflight_owner: "Ledger-only preflight inside transfer_native_ledger_only",
-    notify_owner: "TmctolFeeCollector::collect_fee single notify",
-    rollback_owner: "Fee Sink transfer + ingress transaction revert",
-    weight_owner: "Fee collection generated weights",
-  },
 ];
 
 impl pallet_deos_actors::AddressEventIngress<AccountId, AssetKind, Balance>

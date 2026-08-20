@@ -886,6 +886,7 @@ pub mod pallet {
 
     #[pallet::call_index(2)]
     #[pallet::weight(T::WeightInfo::stake())]
+    #[transactional]
     pub fn stake(origin: OriginFor<T>, asset_id: T::AssetId, amount: T::Balance) -> DispatchResult {
       let account = ensure_signed(origin)?;
       let minted_shares = Self::do_stake(asset_id, &account, amount)?;
@@ -900,6 +901,7 @@ pub mod pallet {
 
     #[pallet::call_index(3)]
     #[pallet::weight(T::WeightInfo::unstake())]
+    #[transactional]
     pub fn unstake(
       origin: OriginFor<T>,
       asset_id: T::AssetId,

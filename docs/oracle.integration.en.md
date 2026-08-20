@@ -34,9 +34,9 @@ The DEOS runtime mounts DEOS Oracle at pallet index `52`. It bounds global feeds
 
 Canonical pool indexing admits one EMA feed at scale `12` for each ordered direction. Both use the DEOS Router pallet account as producer, pre-execution-reserve provenance, zero rejection, and Active lifecycle. Repeated indexing succeeds only when the complete immutable configuration matches.
 
-Two feeds per pool bound Router admission to `500` complete directional pairs. Capacity prevalidation rejects before mutation when both identities do not fit. A conflicting reverse identity rolls back the first feed, pool index, and LP reverse index in the same top-level transaction.
+Two feeds per pool bound Router admission to `500` complete directional pairs. Before pool creation or liquidity mutation dispatches, `PoolIndexExtension` prevalidates the predicted or existing LP token, bounded reverse-index capacity and collisions, both feed identities, and producer capacity. This ordering is required because a transaction-extension post-dispatch error does not roll back successful call state.
 
-The pool-index call charges two worst-case DEOS Oracle registration envelopes plus its own bounded LP-index database work. No pool admission path performs an unbounded feed scan.
+The pool-index call charges two worst-case DEOS Oracle registration envelopes plus 13 reads and one write for bounded preflight and LP-index work. No pool admission path performs an unbounded feed scan.
 
 ## Router Production and Consumption
 

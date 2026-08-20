@@ -271,7 +271,8 @@ pub enum ActorExecutionPhase<BlockNumber> {
   GlobalCircuitBreaker,
   Paused,
   WaitingRetry(BlockNumber),
-  WaitingTemporal(BlockNumber),
+  WaitingBlock(BlockNumber),
+  WaitingCadenceTick(u64),
   WaitingSignal,
   Ready,
 }
@@ -394,6 +395,7 @@ pub struct ActorHotState<BlockNumber> {
   pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub terminal_at: Option<BlockNumber>,
   pub schedule_anchor: BlockNumber,
+  pub cadence_anchor_tick: Option<u64>,
   pub last_cycle_block: Option<BlockNumber>,
 }
 
@@ -430,5 +432,6 @@ pub(crate) struct ActiveActorView<AccountId, BlockNumber, Trigger, Steps> {
   pub queue_ticket: Option<u64>,
   pub last_control_mutation_block: BlockNumber,
   pub schedule_anchor: BlockNumber,
+  pub cadence_anchor_tick: Option<u64>,
   pub last_cycle_block: Option<BlockNumber>,
 }

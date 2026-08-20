@@ -31,8 +31,23 @@ pub const fn deos_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) ->
   )
 }
 
-#[transactional]
-pub(crate) fn ensure_deos_router_pool_feeds(
+fn expected_deos_router_feed(
+  feed: OracleFeedId,
+) -> FeedConfig<AccountId, OracleMeaning, OracleProvenance> {
+  FeedConfig {
+    producer: RouterPalletId::get().into_account_truncating(),
+    meaning: feed.meaning(),
+    provenance: OracleProvenance::DeosRouterPreExecutionReserves,
+    scale: DEOS_ROUTER_ORACLE_SCALE,
+    aggregation: Aggregation::Ema {
+      half_life_blocks: DeosRouterEmaHalfLife::get(),
+    },
+    zero_policy: ZeroPolicy::Reject,
+    lifecycle: FeedLifecycle::Active,
+  }
+}
+
+pub(crate) fn preflight_deos_router_pool_feeds(
   asset_a: AssetKind,
   asset_b: AssetKind,
 ) -> DispatchResult {
@@ -44,31 +59,44 @@ pub(crate) fn ensure_deos_router_pool_feeds(
   let reverse = forward.reverse();
   let producer: AccountId = RouterPalletId::get().into_account_truncating();
   let current = pallet_oracle::ProducerFeeds::<Runtime>::get(&producer).len() as u32;
-  let missing = u32::from(!pallet_oracle::Feeds::<Runtime>::contains_key(forward)).saturating_add(
-    u32::from(!pallet_oracle::Feeds::<Runtime>::contains_key(reverse)),
-  );
+  let forward_existing = pallet_oracle::Feeds::<Runtime>::get(forward);
+  let reverse_existing = pallet_oracle::Feeds::<Runtime>::get(reverse);
+  let missing =
+    u32::from(forward_existing.is_none()).saturating_add(u32::from(reverse_existing.is_none()));
   ensure!(
     current.saturating_add(missing) <= DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS.saturating_mul(2),
     DispatchError::Other("DEOS Router pool feed capacity reached")
   );
+  if let Some(existing) = forward_existing {
+    ensure!(
+      existing == expected_deos_router_feed(forward),
+      DispatchError::Other("Oracle feed identity collision")
+    );
+  }
+  if let Some(existing) = reverse_existing {
+    ensure!(
+      existing == expected_deos_router_feed(reverse),
+      DispatchError::Other("Oracle feed identity collision")
+    );
+  }
+  Ok(())
+}
+
+#[transactional]
+pub(crate) fn ensure_deos_router_pool_feeds(
+  asset_a: AssetKind,
+  asset_b: AssetKind,
+) -> DispatchResult {
+  preflight_deos_router_pool_feeds(asset_a, asset_b)?;
+  let forward = deos_router_pool_feed(asset_a, asset_b);
   ensure_deos_router_feed(forward)?;
-  ensure_deos_router_feed(reverse)
+  ensure_deos_router_feed(forward.reverse())
 }
 
 fn ensure_deos_router_feed(feed: OracleFeedId) -> DispatchResult {
-  let producer: AccountId = RouterPalletId::get().into_account_truncating();
-  let aggregation = Aggregation::Ema {
-    half_life_blocks: DeosRouterEmaHalfLife::get(),
-  };
-  let expected = FeedConfig {
-    producer: producer.clone(),
-    meaning: feed.meaning(),
-    provenance: OracleProvenance::DeosRouterPreExecutionReserves,
-    scale: DEOS_ROUTER_ORACLE_SCALE,
-    aggregation,
-    zero_policy: ZeroPolicy::Reject,
-    lifecycle: FeedLifecycle::Active,
-  };
+  let expected = expected_deos_router_feed(feed);
+  let producer = expected.producer.clone();
+  let aggregation = expected.aggregation;
   if let Some(existing) = pallet_oracle::Feeds::<Runtime>::get(feed) {
     ensure!(
       existing == expected,

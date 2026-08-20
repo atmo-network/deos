@@ -229,7 +229,7 @@ export class BlockchainObservationReader {
                 hot.wakeup_pointer == null
                   ? null
                   : {
-                      block: hot.wakeup_pointer.block,
+                      key: hot.wakeup_pointer.block,
                       pageId: hot.wakeup_pointer.page_id,
                       slot: hot.wakeup_pointer.slot,
                     },

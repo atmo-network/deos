@@ -25,8 +25,6 @@ related:
   - Стандарт TMCTOL
   - Формулы TMCTOL
   - Экономическая физика прежде политики
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # `Token Minting Curve`

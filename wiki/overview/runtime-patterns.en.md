@@ -24,8 +24,6 @@ related:
   - Asset Identity
   - Randomness Strategy
   - Core Terms
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Runtime Patterns

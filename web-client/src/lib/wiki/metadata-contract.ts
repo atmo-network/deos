@@ -39,7 +39,6 @@ export type WikiStatePage = {
   title: LocalizedValue;
   status: string;
   audience: string;
-  confidence: number;
   sources: Record<string, string[]>;
 };
 

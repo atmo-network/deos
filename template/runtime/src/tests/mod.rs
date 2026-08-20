@@ -17,6 +17,8 @@ pub mod fee_integration_tests;
 #[cfg(test)]
 pub mod governance_integration_tests;
 #[cfg(test)]
+pub mod integrity_tests;
+#[cfg(test)]
 pub mod load_testing;
 #[cfg(test)]
 pub mod oracle_integration_tests;

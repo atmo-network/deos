@@ -110,12 +110,7 @@ function step({
 
 function activeContract(steps) {
   return {
-    trigger: {
-      type: 'Immediate',
-      value: {
-        sources: [{ type: 'Manual', value: undefined }],
-      },
-    },
+    trigger: { type: 'Manual', value: undefined },
     cooldown_blocks: 5,
     window: undefined,
     steps,

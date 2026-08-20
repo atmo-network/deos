@@ -8,7 +8,8 @@
 use super::common::{
   ALICE, ASSET_A, ASSET_B, add_liquidity, burn_actor_account, create_pool, get_pool_lp_asset,
   liquidity_actor_account, new_test_ext, publish_bidirectional_deos_router_observation,
-  publish_deos_router_observation, seeded_test_ext, update_actor_contract_partial,
+  publish_deos_router_observation, seeded_test_ext, set_consensus_timestamp,
+  update_actor_contract_partial,
 };
 macro_rules! update_actor_contract_partial {
   ($origin:expr, $actor:expr, $value:expr $(,)?) => {
@@ -65,7 +66,7 @@ fn activate_dormant_system(
     RuntimeOrigin::root(),
     actor_id,
     ActorContract {
-      trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+      trigger: pallet_deos_actors::Trigger::address_event(
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       ),
@@ -163,7 +164,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
       RuntimeOrigin::root(),
       actor_ids::TREASURY_B_ACTORS_ID,
       ActorContract {
-        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+        trigger: pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
           pallet_deos_actors::AssetFilter::Any,
         ),
@@ -388,19 +389,21 @@ fn genesis_burn_actor_sovereign_is_stable_across_rebuilds() {
 }
 
 #[test]
-fn genesis_value_driven_contracts_use_omnivorous_address_event_triggers() {
+fn genesis_contracts_use_their_declared_single_readiness_mode() {
   new_test_ext().execute_with(|| {
-    for actor_id in [
-      actor_ids::BURN_ACTOR_ID,
-      actor_ids::FEE_SINK_ACTORS_ID,
-      actor_ids::BLDR_SPLITTER_ACTORS_ID,
-    ] {
+    for actor_id in [actor_ids::BURN_ACTOR_ID, actor_ids::BLDR_SPLITTER_ACTORS_ID] {
       let instance = Actors::active_actor_state(actor_id).expect("genesis active actor exists");
       assert!(
         instance.contract.trigger.address_event_source_enabled(),
-        "value-driven actor {actor_id} must react to verified inbound value without polling"
+        "value-driven actor {actor_id} reacts to verified inbound value"
       );
     }
+    let fee_sink = Actors::active_actor_state(actor_ids::FEE_SINK_ACTORS_ID)
+      .expect("Fee Sink genesis actor exists");
+    assert_eq!(
+      fee_sink.contract.trigger,
+      pallet_deos_actors::Trigger::cadenced(primitives::ecosystem::params::FEE_SINK_CADENCE_TICKS,)
+    );
   });
 }
 
@@ -1239,14 +1242,18 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
       zap_contract_steps,
     ));
-    // Explicitly trigger execution since we deposited funds before updating execution plans
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::root(),
-      actor_ids::BURN_ACTOR_ID
+    // Re-publish readiness because the balances arrived before the final plans were installed.
+    assert_ok!(Actors::notify_address_event(
+      actor_ids::BURN_ACTOR_ID,
+      foreign,
+      1,
+      &ALICE,
     ));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::root(),
-      actor_ids::LIQUIDITY_ACTOR_ACTORS_ID
+    assert_ok!(Actors::notify_address_event(
+      actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+      foreign,
+      1,
+      &ALICE,
     ));
     let issuance_before = Balances::total_issuance();
     let foreign_before_bm = crate::Assets::balance(super::common::ASSET_A, &bm);
@@ -1329,12 +1336,12 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       bucket_id,
-      (pallet_deos_actors::Trigger::immediate_manual(), 0, None),
+      (pallet_deos_actors::Trigger::manual(), 0, None),
     ));
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       treasury_id,
-      (pallet_deos_actors::Trigger::cadenced_always(1), 0, None),
+      (pallet_deos_actors::Trigger::cadenced(1), 0, None),
     ));
 
     assert_eq!(
@@ -1349,6 +1356,9 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       polkadot_sdk::frame_support::traits::Get<Weight>>::get();
     for block in 2..=8 {
       System::set_block_number(block);
+      set_consensus_timestamp(u64::from(block).saturating_mul(
+        primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
+      ));
       Actors::on_initialize(block);
       Actors::on_idle(block, budget);
     }
@@ -1642,9 +1652,11 @@ fn bldr_splitter_distributes_to_liquidity_and_treasury() {
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
       (steps, CompletionPolicy::Persistent,)
     ));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::root(),
+    assert_ok!(Actors::notify_address_event(
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
+      bldr_asset,
+      fund_amount,
+      &ALICE,
     ));
     System::reset_events();
     for block in 11..=30 {
@@ -1714,7 +1726,7 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
       RuntimeOrigin::root(),
       liquidity_id,
       (
-        pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+        pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
           pallet_deos_actors::AssetFilter::Any,
         ),
@@ -1827,7 +1839,7 @@ fn treasury_b_buyback_burns_bldr() {
     assert_ok!(update_actor_contract_partial!(
       RuntimeOrigin::root(),
       treasury_b_id,
-      (pallet_deos_actors::Trigger::cadenced_always(10), 5, None),
+      (pallet_deos_actors::Trigger::cadenced(10), 0, None),
     ));
     let target_supply_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::total_issuance(target_id);
@@ -1835,6 +1847,9 @@ fn treasury_b_buyback_burns_bldr() {
     System::reset_events();
     for block in 11..=100 {
       System::set_block_number(block);
+      set_consensus_timestamp(u64::from(block).saturating_mul(
+        primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
+      ));
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
     }
@@ -2145,7 +2160,12 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
         );
       } else {
         assert_ok!(activate_dormant_system(bucket_id, steps));
-        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), bucket_id));
+        assert_ok!(Actors::notify_address_event(
+          bucket_id,
+          AssetKind::Local(lp_asset_id),
+          1,
+          &ALICE,
+        ));
       }
       before_lp.push((bucket_id, crate::Assets::balance(lp_asset_id, &bucket)));
     }

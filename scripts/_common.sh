@@ -2,17 +2,35 @@
 # Shared utilities for DEOS scripts
 # Source this file: source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+# Namerefs (`local -n`) and `mapfile` below require bash 4.3+. Fail with a clear prerequisite error
+# rather than the cryptic syntax error an older bash would emit; macOS still ships bash 3.2.
+if [[ -z "${BASH_VERSINFO:-}" ]] || (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
+    echo "[ERROR] DEOS scripts require bash 4.3 or newer, found ${BASH_VERSION:-unknown}" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
 PROJECT_ROOT="${DEOS_PROJECT_ROOT:-$(dirname "$SCRIPT_DIR")}"
 TEMPLATE_DIR="$PROJECT_ROOT/template"
 BIN_DIR="${DEOS_BINARY_DIR:-$PROJECT_ROOT/bin}"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Colour only when stdout is a terminal and NO_COLOR is unset, so redirected step logs and CI output
+# stay free of escape sequences. The compact-output mode replays those logs on failure.
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    NC='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    NC=''
+fi
 
 DEOS_VERBOSE="${DEOS_VERBOSE:-0}"
 DEOS_FAILURE_TAIL_LINES="${DEOS_FAILURE_TAIL_LINES:-80}"
@@ -148,16 +166,16 @@ run_shell_step() {
     start_time=$(date +%s)
     if [[ "$DEOS_VERBOSE" == "1" ]]; then
         if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -lc "$command" || status=$?
+            timeout "${timeout_minutes}m" bash -c "$command" || status=$?
         else
-            bash -lc "$command" || status=$?
+            bash -c "$command" || status=$?
         fi
     else
         log_path="$(step_log_path "$label")"
         if [[ -n "$timeout_minutes" ]]; then
-            timeout "${timeout_minutes}m" bash -lc "$command" >"$log_path" 2>&1 || status=$?
+            timeout "${timeout_minutes}m" bash -c "$command" >"$log_path" 2>&1 || status=$?
         else
-            bash -lc "$command" >"$log_path" 2>&1 || status=$?
+            bash -c "$command" >"$log_path" 2>&1 || status=$?
         fi
     fi
     status="${status:-0}"
@@ -248,7 +266,7 @@ start_background_command() {
     log_info "Log file: $log_path"
     (
         cd "$workdir"
-        bash -lc "$command"
+        bash -c "$command"
     ) >"$log_path" 2>&1 &
     pid_ref="$!"
     log_success "$label started with PID $pid_ref"
@@ -321,6 +339,19 @@ wait_for_http() {
     return 1
 }
 
+# Signals a process and every descendant, deepest first. `start_background_command` runs its work
+# inside a subshell, so the recorded PID is only the ancestor: signalling it alone leaves the actual
+# node or dev-server grandchild orphaned and holding its port.
+kill_process_tree() {
+    local pid="$1"
+    local signal="${2:-TERM}"
+    local child
+    while IFS= read -r child; do
+        [[ -n "$child" ]] && kill_process_tree "$child" "$signal"
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
+    kill -"$signal" "$pid" >/dev/null 2>&1 || true
+}
+
 stop_background_process() {
     local pid="${1:-}"
     local keep_running="${2:-0}"
@@ -341,7 +372,7 @@ stop_background_process() {
 
     if kill -0 "$pid" >/dev/null 2>&1; then
         log_info "Stopping $label (PID: $pid)"
-        kill "$pid" >/dev/null 2>&1 || true
+        kill_process_tree "$pid" TERM
         for _ in {1..10}; do
             if ! kill -0 "$pid" >/dev/null 2>&1; then
                 break
@@ -350,7 +381,7 @@ stop_background_process() {
         done
         if kill -0 "$pid" >/dev/null 2>&1; then
             log_warning "$label did not stop gracefully, sending SIGKILL"
-            kill -9 "$pid" >/dev/null 2>&1 || true
+            kill_process_tree "$pid" KILL
         fi
         log_success "$label stopped"
     fi

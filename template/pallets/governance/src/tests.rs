@@ -3218,6 +3218,26 @@ fn immediate_veto_cancels_proposal_without_reward_credit() {
 }
 
 #[test]
+fn failed_immediate_veto_finalization_rolls_back_ballot_lock_and_participation() {
+  new_test_ext().execute_with(|| {
+    set_veto_vote_weight(10, 51);
+    set_veto_total_issuance(100);
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    crate::ActiveProposalIdsByDomain::<Test>::remove(7);
+
+    assert_noop!(
+      Governance::cast_vote(RuntimeOrigin::signed(10), 7, 100, ProposalVoteKind::Veto,),
+      Error::<Test>::ActiveProposalCountUnderflow
+    );
+
+    assert!(ActiveProposals::<Test>::contains_key(7, 100));
+    assert!(Governance::proposal_votes(7, 100).is_none());
+    assert_eq!(Governance::governance_lock(10), None);
+    assert_eq!(Governance::govxp_counters(7, 10).total_participations, 0);
+  });
+}
+
+#[test]
 fn sub_percent_veto_does_not_activate_final_veto_gate() {
   new_test_ext().execute_with(|| {
     set_vote_weight(10, 5);

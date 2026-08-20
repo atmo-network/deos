@@ -30,8 +30,6 @@ related:
   - Routing and Minting Loop
   - Governance
   - Core Terms
-last_compiled: 2026-08-14
-confidence: 0.95
 ---
 
 # Actors System

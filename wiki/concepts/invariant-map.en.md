@@ -30,8 +30,6 @@ related:
   - Three-Layer Validation
   - TMCTOL Standard
   - Governance Domains
-last_compiled: 2026-07-21
-confidence: 0.85
 ---
 
 # Invariant and Threat Map

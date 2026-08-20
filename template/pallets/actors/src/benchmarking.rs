@@ -198,6 +198,66 @@ mod benches {
     target_slot
   }
 
+  // Observation scaffolding for lifecycle benchmarks.
+  //
+  // Each Actor owns at most one observation subscription. The helpers below keep the measured
+  // actor on the heavier subscribe/unsubscribe branches, including recycled slots and dirty-list
+  // middle-node removal.
+
+  /// Allocates `count` distinct observation feeds. Benchmarks carve their measured sets out of one
+  /// pool because the helper is deterministic and repeated calls would return overlapping feeds.
+  fn observation_feed_pool<T: Config>(count: u32) -> alloc::vec::Vec<T::ObservationFeedId> {
+    let feeds = T::BenchmarkHelper::setup_observation_feeds(count)
+      .expect("observation benchmark feeds must be available");
+    assert_eq!(
+      feeds.len() as u32,
+      count,
+      "observation benchmark helper must supply every requested feed"
+    );
+    feeds
+  }
+
+  /// Builds the one admitted observation trigger.
+  fn observation_trigger<T: Config>(feed: T::ObservationFeedId) -> TriggerOf<T> {
+    Trigger::observation_change(feed)
+  }
+
+  /// Subscribes a permanent guard actor to `feed`. Guards bracket the measured feeds in the dirty
+  /// list so each unsubscribed feed is a middle node and pays both neighbour writes on unlink.
+  fn install_observation_guard<T: Config>(feed: T::ObservationFeedId, seed: u32) {
+    let owner: T::AccountId = account("observation-dirty-guard", seed, 0);
+    let _ = bench_create_system_observation::<T>(owner, feed);
+  }
+
+  /// Creates and closes a subscribed actor on `feed` so the next slot allocation takes the
+  /// free-list branch (page read, pop, page delete-or-write, length write) rather than the bare
+  /// counter increment. Any runtime that has ever closed a subscribed actor is in this state.
+  fn seed_recycled_observation_slot<T: Config>(feed: T::ObservationFeedId) {
+    let owner: T::AccountId = account("observation-slot-donor", 0, 0);
+    let actor_id = bench_create_system_observation::<T>(owner, feed);
+    Pallet::<T>::close_actor(RawOrigin::Root.into(), actor_id)
+      .expect("observation slot donor close must succeed");
+    assert!(
+      ObservationFreeSlotLen::<T>::get() > 0,
+      "donor close must recycle one observation subscription slot"
+    );
+  }
+
+  /// Marks `feeds` dirty in list order. Ingress appends to the tail, so passing a slice ordered as
+  /// `[guard_low, measured.., guard_high]` leaves every measured feed a middle node. Must run after
+  /// the measured actor exists, because ingress skips feeds with no subscriber.
+  fn mark_observation_chain_dirty<T: Config>(feeds: &[T::ObservationFeedId]) {
+    for feed in feeds {
+      Pallet::<T>::note_observation_changed(*feed, 1)
+        .expect("observation change ingress must succeed for a subscribed feed");
+    }
+    assert_eq!(
+      DirtyObservationListState::<T>::get().count,
+      feeds.len() as u32,
+      "every prepared observation feed must be dirty"
+    );
+  }
+
   fn seed_actor_for_cycle<T: Config>(actor_id: ActorId) {
     let Some(instance) = Pallet::<T>::active_actor_view(actor_id) else {
       return;
@@ -213,6 +273,13 @@ mod benches {
   }
 
   fn bench_create_user<T: Config>(caller: T::AccountId) -> ActorId {
+    bench_create_user_with_trigger::<T>(caller, Trigger::manual())
+  }
+
+  fn bench_create_user_with_trigger<T: Config>(
+    caller: T::AccountId,
+    trigger: TriggerOf<T>,
+  ) -> ActorId {
     ensure_creation_balance::<T>(&caller);
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
@@ -220,7 +287,7 @@ mod benches {
     let contract_steps = make_contract_steps::<T>(recipient);
     prefund_active_user_creation::<T>(&caller, &contract_steps);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger,
       cooldown_blocks: 10,
     };
     Pallet::<T>::create_user_actor(
@@ -244,8 +311,11 @@ mod benches {
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
+    // Pool layout: [slot donor, measured].
+    let feeds = observation_feed_pool::<T>(2);
+    seed_recycled_observation_slot::<T>(feeds[0]);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: observation_trigger::<T>(feeds[1]),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -258,6 +328,11 @@ mod benches {
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after create_user_actor");
     assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
+    assert_eq!(
+      ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.len() as u32),
+      Some(1),
+      "measured create must install its one observation subscription"
+    );
   }
 
   #[benchmark]
@@ -271,7 +346,7 @@ mod benches {
     let contract_steps = make_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, requested_slot, &contract_steps);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -295,7 +370,7 @@ mod benches {
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 100,
     };
     #[extrinsic_call]
@@ -324,7 +399,7 @@ mod benches {
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient.clone());
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 100,
     };
     Pallet::<T>::create_system_actor(
@@ -374,9 +449,12 @@ mod benches {
     .expect("dormant System identity creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient: T::AccountId = account("activate-recipient", 0, 0);
+    // Pool layout: [slot donor, measured].
+    let feeds = observation_feed_pool::<T>(2);
+    seed_recycled_observation_slot::<T>(feeds[0]);
     let contract = system_contract::<T>(
       Schedule {
-        trigger: Trigger::immediate_manual(),
+        trigger: observation_trigger::<T>(feeds[1]),
         cooldown_blocks: 100,
       },
       make_contract_steps::<T>(recipient),
@@ -389,6 +467,11 @@ mod benches {
     );
     assert!(Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
+    assert_eq!(
+      ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.len() as u32),
+      Some(1),
+      "measured activation must install its one observation subscription"
+    );
   }
 
   #[benchmark]
@@ -402,7 +485,7 @@ mod benches {
       Mutability::Mutable,
       system_contract::<T>(
         Schedule {
-          trigger: Trigger::immediate_manual(),
+          trigger: Trigger::manual(),
           cooldown_blocks: 100,
         },
         contract_steps,
@@ -460,8 +543,13 @@ mod benches {
     ensure_creation_balance::<T>(&owner);
     let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
     let recipient: T::AccountId = account("close-recipient", 0, 0);
+    // Pool layout: [guard_low, measured, guard_high].
+    let feeds = observation_feed_pool::<T>(3);
+    let measured = feeds[1];
+    install_observation_guard::<T>(feeds[0], 0);
+    install_observation_guard::<T>(feeds[feeds.len() - 1], 1);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: observation_trigger::<T>(measured),
       cooldown_blocks: 1,
     };
     let contract_steps = make_contract_steps::<T>(recipient);
@@ -475,9 +563,16 @@ mod benches {
     .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    mark_observation_chain_dirty::<T>(&feeds);
     #[extrinsic_call]
     close_actor(RawOrigin::Signed(owner), actor_id);
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
+    assert_eq!(
+      DirtyObservationListState::<T>::get().count,
+      2,
+      "only the two guard feeds remain dirty after the measured close"
+    );
   }
 
   // Diagnostic counterpart for the System branch; production close pricing uses the heavier User path.
@@ -486,7 +581,7 @@ mod benches {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("system-close-recipient", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 1,
     };
     Pallet::<T>::create_system_actor(
@@ -508,7 +603,19 @@ mod benches {
   #[benchmark]
   fn update_contract() {
     let caller: T::AccountId = whitelisted_caller();
-    let actor_id = bench_create_user::<T>(caller.clone());
+    // Worst case replaces one dirty middle-node subscription with a disjoint feed.
+    // Pool layout: [slot donor, guard_low, replaced, installed, guard_high].
+    let feeds = observation_feed_pool::<T>(5);
+    let guard_high = feeds[4];
+    seed_recycled_observation_slot::<T>(feeds[0]);
+    install_observation_guard::<T>(feeds[1], 0);
+    install_observation_guard::<T>(guard_high, 1);
+    let replaced = feeds[2];
+    let installed = feeds[3];
+    let actor_id =
+      bench_create_user_with_trigger::<T>(caller.clone(), observation_trigger::<T>(replaced));
+    let dirty_chain = alloc::vec![feeds[1], replaced, guard_high];
+    mark_observation_chain_dirty::<T>(&dirty_chain);
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       maybe_hot
@@ -541,7 +648,7 @@ mod benches {
       RawOrigin::Signed(caller),
       actor_id,
       ActorContract {
-        trigger: Trigger::immediate_manual(),
+        trigger: observation_trigger::<T>(installed),
         cooldown_blocks: 20,
         window: None,
         steps: replacement.clone(),
@@ -549,6 +656,11 @@ mod benches {
         completion: CompletionPolicy::Persistent,
         auto_close_at_cycle_nonce: None,
       },
+    );
+    assert_eq!(
+      ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.to_vec()),
+      Some(alloc::vec![installed]),
+      "measured update must replace the one observation source"
     );
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after update_contract");
@@ -591,7 +703,7 @@ mod benches {
     let caller: T::AccountId = whitelisted_caller();
     let mut actor_ids: BoundedVec<ActorId, T::MaxSweepBatch> = BoundedVec::default();
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 10,
     };
     let bounded_n = n.min(T::MaxSweepBatch::get());
@@ -629,7 +741,7 @@ mod benches {
     let payer: T::AccountId = whitelisted_caller();
     let owner: T::AccountId = account("fee-sink-owner", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::cadenced_always(1),
+      trigger: Trigger::cadenced(1),
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_actor(
@@ -656,7 +768,7 @@ mod benches {
   #[benchmark]
   fn task_transfer() {
     let caller: T::AccountId = account("transfer-caller", 0, 0);
-    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0, Some(caller.clone()));
     let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::AssetOps::mint(&caller, native, amount.saturating_mul(2u32.into()))
@@ -690,7 +802,7 @@ mod benches {
 
   #[benchmark]
   fn task_mint() {
-    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0, None);
     let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::BenchmarkHelper::enable_asset_ops_ingress();
@@ -800,7 +912,10 @@ mod benches {
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     let mut targets: alloc::vec::Vec<(ActorId, T::AccountId)> = alloc::vec::Vec::new();
     for seed in 0..bounded_legs {
-      targets.push(prepare_saturated_address_actor::<T>(seed));
+      targets.push(prepare_saturated_address_actor::<T>(
+        seed,
+        Some(caller.clone()),
+      ));
     }
     let total = amount
       .saturating_mul(bounded_legs.into())
@@ -825,7 +940,7 @@ mod benches {
     T::BenchmarkHelper::setup_xcm_asset_deposit()
       .expect("XCM deposit benchmark asset must be registered");
     let source: T::AccountId = account("xcm-source", 0, 0);
-    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0, Some(source.clone()));
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     #[block]
     {
@@ -911,8 +1026,10 @@ mod benches {
       .expect("benchmark helper must prepare exact-input swap state");
     #[block]
     {
+      // System is the heavier branch: it additionally runs the typed reference-deviation guard,
+      // which reads the Oracle observation and the pool reserves before executing.
       T::DexOps::swap_exact_in(
-        ExecutionContext::new(&caller, ActorType::User),
+        ExecutionContext::new(&caller, ActorType::System),
         asset_in,
         asset_out,
         amount_in,
@@ -930,8 +1047,9 @@ mod benches {
         .expect("benchmark helper must prepare exact-output swap state");
     #[block]
     {
+      // System is the heavier branch: see `task_dex_exact_in`.
       T::DexOps::swap_exact_out(
-        ExecutionContext::new(&caller, ActorType::User),
+        ExecutionContext::new(&caller, ActorType::System),
         asset_in,
         asset_out,
         amount_out,
@@ -951,7 +1069,7 @@ mod benches {
       T::BenchmarkHelper::setup_remove_liquidity(&caller)
         .expect("benchmark helper must prepare indexed remove-liquidity state");
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 10,
     };
     let contract_steps =
@@ -1011,7 +1129,7 @@ mod benches {
   ) -> ActorId {
     let owner: T::AccountId = account("cycle_owner", seed, 0);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_actor(
@@ -1029,10 +1147,7 @@ mod benches {
     feed: T::ObservationFeedId,
   ) -> ActorId {
     let schedule = Schedule {
-      trigger: Trigger::Immediate {
-        sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
-          .expect("one observation source must fit"),
-      },
+      trigger: Trigger::observation_change(feed),
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_actor(
@@ -1048,7 +1163,7 @@ mod benches {
   fn bench_create_system_manual<T: Config>(seed: u32) -> ActorId {
     let owner: T::AccountId = account("wakeup_owner", seed, 0);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 0,
     };
     let contract_steps = make_inert_contract_steps::<T>();
@@ -1130,10 +1245,10 @@ mod benches {
       let index = page_start.saturating_add(slot);
       let block: BlockNumberFor<T> = 1_000_000u32.saturating_add(index).into();
       page
-        .try_push(block)
+        .try_push(WakeupKey::Block(block))
         .expect("benchmark cursor page must fit configured bound");
       WakeupBuckets::<T>::insert(
-        block,
+        WakeupKey::Block(block),
         WakeupBucketState {
           head_page: 0,
           tail_page: 0,
@@ -1143,7 +1258,18 @@ mod benches {
         },
       );
     }
-    WakeupCursorPages::<T>::insert(page_id, page);
+    WakeupCursorPages::<T>::insert((WakeupClock::Block, page_id), page);
+  }
+
+  fn clear_host_genesis_wakeup_placements<T: Config>() {
+    let actor_ids = ActorHot::<T>::iter()
+      .filter_map(|(actor_id, hot)| hot.wakeup_pointer.map(|_| actor_id))
+      .collect::<alloc::vec::Vec<_>>();
+    for actor_id in actor_ids {
+      Pallet::<T>::wakeup_substrate_invalidate(actor_id)
+        .expect("host genesis wakeup placement must be removable");
+    }
+    assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Block), 0);
   }
 
   fn add_wakeup_cursor_page(page_ids: &mut alloc::vec::Vec<WakeupPageId>, index: u32, size: u32) {
@@ -1187,7 +1313,7 @@ mod benches {
       };
       install_wakeup_cursor_page::<T>(page_id, len);
     }
-    WakeupCursorLen::<T>::put(cursor_len);
+    WakeupCursorLen::<T>::insert(WakeupClock::Block, cursor_len);
     1_000_000u32.saturating_add(start_index).into()
   }
 
@@ -1214,37 +1340,32 @@ mod benches {
     NextQueueTicket::<T>::put(u64::from(capacity));
   }
 
-  fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (ActorId, T::AccountId) {
+  fn prepare_saturated_address_actor<T: Config>(
+    seed: u32,
+    matched_source: Option<T::AccountId>,
+  ) -> (ActorId, T::AccountId) {
     let owner: T::AccountId = account("ingress_owner", seed, 0);
-    let native = T::FeeNativeAssetId::get();
-    let native_only =
-      BoundedVec::try_from(vec![native]).expect("one asset must fit the trigger filter bound");
-    let mut candidates = vec![
-      TriggerSource::Manual,
-      TriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::Any,
-        asset_filter: AssetFilter::Any,
-      },
-      TriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::OwnerOnly,
-        asset_filter: AssetFilter::Any,
-      },
-      TriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::Any,
-        asset_filter: AssetFilter::Whitelist(native_only),
-      },
-    ];
-    candidates.sort_by_key(Encode::encode);
-    let max_sources = T::MaxTriggerSources::get() as usize;
-    assert!(
-      (1..=candidates.len()).contains(&max_sources),
-      "benchmark source corpus must saturate MaxTriggerSources"
-    );
-    candidates.truncate(max_sources);
-    let sources = BoundedVec::try_from(candidates)
-      .expect("saturated trigger sources must fit the runtime bound");
+    let source_filter = if let Some(matched_source) = matched_source {
+      let mut allowed_sources = (0..T::MaxWhitelistSize::get().saturating_sub(2))
+        .map(|index| account("ingress-source", index, 0))
+        .collect::<alloc::vec::Vec<T::AccountId>>();
+      allowed_sources.push(owner.clone());
+      allowed_sources.push(matched_source);
+      allowed_sources.sort_by_key(Encode::encode);
+      allowed_sources.dedup();
+      assert_eq!(
+        allowed_sources.len() as u32,
+        T::MaxWhitelistSize::get(),
+        "benchmark source whitelist must saturate MaxWhitelistSize"
+      );
+      SourceFilter::Whitelist(
+        BoundedVec::try_from(allowed_sources).expect("source whitelist must fit runtime bound"),
+      )
+    } else {
+      SourceFilter::Any
+    };
     let schedule = Schedule {
-      trigger: Trigger::Immediate { sources },
+      trigger: Trigger::address_event(source_filter, AssetFilter::Any),
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_actor(
@@ -1272,45 +1393,6 @@ mod benches {
     });
     install_saturated_tombstone_queue::<T>();
     (actor_id, recipient)
-  }
-
-  // Non-dispatch diagnostic benchmark proving cooldown-ineligible timers own no queue probe.
-  #[benchmark]
-  fn scheduler_cooldown_ineligible_idle() {
-    let owner: T::AccountId = whitelisted_caller();
-    let schedule = Schedule {
-      trigger: Trigger::cadenced_always(1),
-      cooldown_blocks: 10,
-    };
-    Pallet::<T>::create_system_actor(
-      RawOrigin::Root.into(),
-      owner.clone(),
-      Mutability::Mutable,
-      system_contract::<T>(schedule, make_inert_contract_steps::<T>()),
-    )
-    .expect("System timer creation must succeed");
-    let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    let first_block: BlockNumberFor<T> = 1u32.into();
-    frame_system::Pallet::<T>::set_block_number(first_block);
-    let _ = Pallet::<T>::on_idle(first_block, Weight::MAX);
-    let expected_wakeup: BlockNumberFor<T> = 11u32.into();
-    assert_eq!(
-      ActorHot::<T>::get(actor_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block)),
-      Some(expected_wakeup)
-    );
-    let now: BlockNumberFor<T> = 2u32.into();
-    frame_system::Pallet::<T>::set_block_number(now);
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    let instance = Pallet::<T>::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.cycle_nonce, 1);
-    assert_eq!(
-      ActorHot::<T>::get(actor_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block)),
-      Some(expected_wakeup)
-    );
-    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.queue_ticket.is_none()));
   }
 
   #[benchmark]
@@ -1342,7 +1424,7 @@ mod benches {
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(0);
     QueueOccupancy::<T>::put(0);
-    WakeupCursorLen::<T>::put(0);
+    WakeupCursorLen::<T>::insert(WakeupClock::Block, 0);
     IdleStarvationState::<T>::kill();
     #[block]
     {
@@ -1534,9 +1616,11 @@ mod benches {
       .expect("replacement wakeup pointer must exist");
     assert_eq!(
       (pointer.block, pointer.page_id, pointer.slot),
-      (replacement_block, 0, 0)
+      (WakeupKey::Block(replacement_block), 0, 0)
     );
-    assert!(!WakeupBuckets::<T>::contains_key(old_block));
+    assert!(!WakeupBuckets::<T>::contains_key(WakeupKey::Block(
+      old_block
+    )));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1563,13 +1647,17 @@ mod benches {
     {
       assert!(Pallet::<T>::wakeup_substrate_invalidate(actor_id).is_some());
     }
-    assert!(!WakeupPages::<T>::contains_key((wakeup_block, 1)));
+    assert!(!WakeupPages::<T>::contains_key((
+      WakeupKey::Block(wakeup_block),
+      1,
+    )));
     assert_eq!(
-      WakeupPages::<T>::get((wakeup_block, 0)).and_then(|page| page.next_page),
+      WakeupPages::<T>::get((WakeupKey::Block(wakeup_block), 0)).and_then(|page| page.next_page),
       Some(2)
     );
     assert_eq!(
-      WakeupPages::<T>::get((wakeup_block, 2)).and_then(|page| page.previous_page),
+      WakeupPages::<T>::get((WakeupKey::Block(wakeup_block), 2))
+        .and_then(|page| page.previous_page),
       Some(0)
     );
   }
@@ -1595,7 +1683,7 @@ mod benches {
       assert_eq!(stats.pages_deleted, 0);
     }
     assert_eq!(
-      WakeupPages::<T>::get((wakeup_block, 0)).map(|page| page.scan_slot),
+      WakeupPages::<T>::get((WakeupKey::Block(wakeup_block), 0)).map(|page| page.scan_slot),
       Some(scan_limit)
     );
   }
@@ -1618,8 +1706,13 @@ mod benches {
       assert_eq!(stats.entries_scanned, page_size);
       assert_eq!(stats.pages_deleted, 1);
     }
-    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
-    assert!(!WakeupPages::<T>::contains_key((wakeup_block, 0)));
+    assert!(!WakeupBuckets::<T>::contains_key(WakeupKey::Block(
+      wakeup_block
+    )));
+    assert!(!WakeupPages::<T>::contains_key((
+      WakeupKey::Block(wakeup_block),
+      0,
+    )));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1646,7 +1739,9 @@ mod benches {
       assert_eq!(stats.pages_touched, 2);
       assert_eq!(stats.pages_deleted, 2);
     }
-    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+    assert!(!WakeupBuckets::<T>::contains_key(WakeupKey::Block(
+      wakeup_block
+    )));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1674,7 +1769,9 @@ mod benches {
       assert_eq!(stats.stale_entries, page_size);
       assert_eq!(stats.pages_deleted, 1);
     }
-    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+    assert!(!WakeupBuckets::<T>::contains_key(WakeupKey::Block(
+      wakeup_block
+    )));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1707,10 +1804,10 @@ mod benches {
         install_wakeup_cursor_page::<T>(page_id, len);
       }
     }
-    WakeupCursorLen::<T>::put(insert_index);
+    WakeupCursorLen::<T>::insert(WakeupClock::Block, insert_index);
     let inserted_block: BlockNumberFor<T> = 1u32.into();
     WakeupBuckets::<T>::insert(
-      inserted_block,
+      WakeupKey::Block(inserted_block),
       WakeupBucketState {
         head_page: 0,
         tail_page: 0,
@@ -1723,7 +1820,7 @@ mod benches {
     {
       assert!(Pallet::<T>::wakeup_cursor_insert(inserted_block));
     }
-    assert_eq!(WakeupCursorLen::<T>::get(), max_active);
+    assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Block), max_active);
     assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(inserted_block));
   }
 
@@ -1735,10 +1832,14 @@ mod benches {
     {
       assert_eq!(Pallet::<T>::wakeup_cursor_pop_min(), Some(expected_min));
     }
-    assert_eq!(WakeupCursorLen::<T>::get(), cursor_len.saturating_sub(1));
+    assert_eq!(
+      WakeupCursorLen::<T>::get(WakeupClock::Block),
+      cursor_len.saturating_sub(1)
+    );
     assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
     assert_eq!(
-      WakeupBuckets::<T>::get(expected_min).and_then(|bucket| bucket.cursor_index),
+      WakeupBuckets::<T>::get(WakeupKey::Block(expected_min))
+        .and_then(|bucket| bucket.cursor_index),
       None
     );
   }
@@ -1751,35 +1852,61 @@ mod benches {
     {
       assert!(Pallet::<T>::wakeup_cursor_remove(removed_block));
     }
-    assert_eq!(WakeupCursorLen::<T>::get(), cursor_len.saturating_sub(1));
+    assert_eq!(
+      WakeupCursorLen::<T>::get(WakeupClock::Block),
+      cursor_len.saturating_sub(1)
+    );
     assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_000u32.into()));
     assert_eq!(
-      WakeupBuckets::<T>::get(removed_block).and_then(|bucket| bucket.cursor_index),
+      WakeupBuckets::<T>::get(WakeupKey::Block(removed_block))
+        .and_then(|bucket| bucket.cursor_index),
       None
     );
   }
 
   #[benchmark(pov_mode = Measured)]
   fn scheduler_wakeup_cursor_worker_partial() {
-    let wakeup_block: BlockNumberFor<T> = 10u32.into();
+    clear_host_genesis_wakeup_placements::<T>();
     let first = bench_create_system_manual::<T>(34_100_000);
     let second = bench_create_system_manual::<T>(34_100_001);
-    assert!(Pallet::<T>::wakeup_substrate_schedule(first, wakeup_block));
-    assert!(Pallet::<T>::wakeup_substrate_schedule(second, wakeup_block));
+    for actor_id in [first, second] {
+      ActorContracts::<T>::mutate(actor_id, |maybe_contract| {
+        maybe_contract
+          .as_mut()
+          .expect("benchmark actor contract exists")
+          .trigger = Trigger::Cadenced { every_ticks: 1 };
+      });
+      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+        maybe_hot
+          .as_mut()
+          .expect("benchmark actor hot state exists")
+          .cadence_anchor_tick = None;
+      });
+      Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 0)
+        .expect("benchmark bootstrap wakeup fits");
+    }
     let limit = T::WeightInfo::scheduler_wakeup_cursor_worker_future()
+      .saturating_mul(2)
       .saturating_add(Pallet::<T>::wakeup_cursor_drain_unit_weight_upper(false));
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(limit);
     #[block]
     {
-      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(wakeup_block, &mut meter);
+      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(10u32.into(), &mut meter);
       assert_eq!(stats.entries_scanned, 1);
       assert_eq!(stats.ready_entries, 1);
     }
     assert_eq!(
-      WakeupBuckets::<T>::get(wakeup_block).map(|bucket| bucket.live_entries),
+      WakeupBuckets::<T>::get(WakeupKey::Tick(0)).map(|bucket| bucket.live_entries),
       Some(1)
     );
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(wakeup_block));
+    let rearmed_tick = ActorHot::<T>::get(first)
+      .and_then(|hot| hot.cadence_anchor_tick)
+      .and_then(|anchor| anchor.checked_add(1))
+      .expect("benchmark cadence re-anchors");
+    assert_eq!(
+      WakeupBuckets::<T>::get(WakeupKey::Tick(rearmed_tick)).map(|bucket| bucket.live_entries),
+      Some(1)
+    );
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1792,7 +1919,7 @@ mod benches {
       .try_push(Some(WakeupEntry { actor_id }))
       .expect("one wakeup entry fits");
     WakeupPages::<T>::insert(
-      (wakeup_block, 0),
+      (WakeupKey::Block(wakeup_block), 0),
       WakeupPage {
         entries,
         live_entries: 1,
@@ -1801,7 +1928,7 @@ mod benches {
         next_page: None,
       },
     );
-    WakeupBuckets::<T>::mutate(wakeup_block, |maybe_bucket| {
+    WakeupBuckets::<T>::mutate(WakeupKey::Block(wakeup_block), |maybe_bucket| {
       let bucket = maybe_bucket.as_mut().expect("cursor bucket exists");
       bucket.head_page = 0;
       bucket.tail_page = 0;
@@ -1810,7 +1937,7 @@ mod benches {
     });
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       maybe_hot.as_mut().expect("actor hot state").wakeup_pointer = Some(WakeupPointer {
-        block: wakeup_block,
+        block: WakeupKey::Block(wakeup_block),
         page_id: 0,
         slot: 0,
       });
@@ -1822,13 +1949,17 @@ mod benches {
       assert_eq!(stats.entries_scanned, 1);
       assert_eq!(stats.ready_entries, 1);
     }
-    assert_eq!(WakeupCursorLen::<T>::get(), cursor_len.saturating_sub(1));
+    assert_eq!(
+      WakeupCursorLen::<T>::get(WakeupClock::Block),
+      cursor_len.saturating_sub(1)
+    );
     assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
-    assert!(WakeupBuckets::<T>::get(wakeup_block).is_none());
+    assert!(WakeupBuckets::<T>::get(WakeupKey::Block(wakeup_block)).is_none());
   }
 
   #[benchmark(pov_mode = Measured)]
   fn scheduler_wakeup_cursor_worker_future() {
+    clear_host_genesis_wakeup_placements::<T>();
     let wakeup_block: BlockNumberFor<T> = 1_000_000u32.into();
     let actor_id = bench_create_system_manual::<T>(34_300_000);
     assert!(Pallet::<T>::wakeup_substrate_schedule(
@@ -2109,13 +2240,14 @@ mod benches {
         ActorIdentities::<T>::get(actor_id).is_some_and(|identity| identity.cycle_nonce == 1)
       })
       .count() as u32;
-    // User fee collection may materialize one Fee Sink service obligation. At the
-    // configured attempt ceiling that obligation consumes one pass slot while the
-    // post-cutoff ticket remains ordered behind the measured cohort.
-    let expected = bounded.min(T::MaxExecutionsPerBlock::get().saturating_sub(1));
-    assert_eq!(
-      executed, expected,
-      "mixed canonical-FIFO benchmark must complete its bounded cohort"
+    // Whether User fee collection materializes a Fee Sink service obligation is host
+    // configuration, not a pallet guarantee. When the host does configure one, that obligation
+    // consumes a single pass slot ahead of the measured cohort while the post-cutoff ticket stays
+    // ordered behind it; a host without a Fee Sink runs the whole cohort.
+    let ceiling = bounded.min(T::MaxExecutionsPerBlock::get());
+    assert!(
+      executed == ceiling || executed == ceiling.saturating_sub(1),
+      "mixed canonical-FIFO cohort must reach the pass ceiling, minus at most one slot taken by a host Fee Sink service obligation"
     );
     let consumed = (0..bounded)
       .filter(|offset| {
@@ -2123,7 +2255,10 @@ mod benches {
         ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.queue_ticket.is_none())
       })
       .count() as u32;
-    assert_eq!(consumed, expected);
+    assert_eq!(
+      consumed, executed,
+      "every executed cohort actor must release its queue ticket"
+    );
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -2357,7 +2492,7 @@ mod benches {
   #[benchmark]
   fn transaction_extension_ingress_notify() {
     let source: T::AccountId = account("ingress_source", 0, 0);
-    let (actor_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let (actor_id, recipient) = prepare_saturated_address_actor::<T>(0, Some(source.clone()));
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
@@ -2424,7 +2559,7 @@ mod benches {
     let initial_balance = T::MinUserBalance::get().saturating_mul(1_000_000u32.into());
     let native = T::FeeNativeAssetId::get();
     let schedule = Schedule {
-      trigger: Trigger::cadenced_always(1),
+      trigger: Trigger::cadenced(1),
       cooldown_blocks: 0,
     };
     let mut sovereigns: alloc::vec::Vec<T::AccountId> = alloc::vec::Vec::with_capacity(n as usize);
@@ -2445,6 +2580,10 @@ mod benches {
       sovereigns.push(sov);
       actor_ids.push(actor_id);
     }
+    // Creation stamps `last_control_mutation_block`, and the one-mutation-per-actor clock is per
+    // block, so the rewrite below must land strictly after the block the creation loop ran on.
+    let creation_block = frame_system::Pallet::<T>::block_number();
+    frame_system::Pallet::<T>::set_block_number(creation_block + One::one());
     for (i, actor_id) in actor_ids.iter().enumerate() {
       let next_sov = sovereigns[(i + 1) % sovereigns.len()].clone();
       let transfer_contract_steps: ContractSteps<T> = BoundedVec::try_from(alloc::vec![Step {

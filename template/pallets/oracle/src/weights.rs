@@ -1,3 +1,13 @@
+//! # Unmeasured reference values
+//!
+//! The `WeightInfo` implementations in this file are hand-written estimates, not benchmark
+//! output. They exist so the pallet compiles and tests run standalone.
+//!
+//! A host runtime MUST generate its own weights with `frame-benchmarking` and bind those instead.
+//! Binding `SubstrateWeight` or `()` from this file in production underprices execution: the DEOS
+//! reference runtime measures several of these calls at more than ten times the value below, with
+//! ProofSize and database access that these estimates omit entirely.
+
 use polkadot_sdk::frame_support::weights::Weight;
 
 pub trait WeightInfo {

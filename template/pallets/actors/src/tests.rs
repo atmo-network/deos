@@ -10,8 +10,8 @@ use crate::{
   QueueTail, RetryClass, ScheduleWindow, SimulationError, SimulationMode, SimulationStepRecord,
   SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy,
   StepOf, StepOutcome, StepSkippedReason, SuspensionReason, SystemSovereignState, Task,
-  TaskFailure, TaskOf, TimedPredicate, Trigger, TriggerSource, WakeupBucketState, WakeupBuckets,
-  WakeupEntry, WakeupPage, WakeupPages, WakeupPointer, adapters::AssetOps,
+  TaskFailure, TaskOf, TimedPredicate, Trigger, WakeupBucketState, WakeupBuckets, WakeupClock,
+  WakeupEntry, WakeupKey, WakeupPage, WakeupPages, WakeupPointer, adapters::AssetOps,
   compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
@@ -94,12 +94,6 @@ struct Schedule {
 type RuntimeSchedule = Schedule;
 type RuntimeSourceFilter = SourceFilterOf<Test>;
 type RuntimeAssetFilter = AssetFilterOf<Test>;
-type RuntimeTriggerSource = TriggerSource<
-  AccountId,
-  TestAsset,
-  <Test as crate::Config>::MaxWhitelistSize,
-  <Test as crate::Config>::ObservationFeedId,
->;
 type RuntimeTrigger = crate::TriggerOf<Test>;
 type RuntimeTask = TaskOf<Test>;
 type RuntimeStep = StepOf<Test>;
@@ -109,7 +103,10 @@ type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFo
 type TestWeightInfo = crate::weights::TestWeightInfo;
 
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::actor_hot(actor_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block))
+  Actors::actor_hot(actor_id).and_then(|hot| match hot.wakeup_pointer?.block {
+    WakeupKey::Block(block) => Some(block),
+    WakeupKey::Tick(tick) => Some(tick),
+  })
 }
 
 fn seed_saturated_tombstone_queue() {
@@ -187,78 +184,33 @@ fn assert_variant_names<T: TypeInfo>(expected: &[&str]) {
 }
 
 #[test]
-fn trigger_grammar_is_bounded_and_non_nested() {
-  let manual = RuntimeTriggerSource::Manual;
-  let address = RuntimeTriggerSource::OnAddressEvent {
-    source_filter: SourceFilter::OwnerOnly,
-    asset_filter: AssetFilter::Any,
-  };
-  let observation = RuntimeTriggerSource::OnObservationChange { feed: 7 };
+fn trigger_grammar_is_single_source_and_non_nested() {
+  let manual = RuntimeTrigger::manual();
+  let address = RuntimeTrigger::address_event(SourceFilter::OwnerOnly, AssetFilter::Any);
+  let observation = RuntimeTrigger::observation_change(7);
+  let cadence = RuntimeTrigger::cadenced(10);
+
   assert_eq!(observation.encode(), vec![2, 7, 0, 0, 0]);
-  let sources = BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(vec![
-    manual.clone(),
-    address,
-    observation.clone(),
-  ])
-  .expect("two trigger sources fit the runtime bound");
-  let policy = RuntimeTrigger::Cadenced {
-    every_blocks: 10,
-    sources: Some(sources),
-  };
-  assert!(policy.has_canonical_sources());
-  assert!(policy.manual_source_enabled());
-  assert!(policy.address_event_source_enabled());
-  assert!(policy.observation_source_enabled());
-  assert_eq!(policy.cadence_blocks(), Some(10));
-  let encoded = policy.encode();
-  assert!(encoded.len() <= RuntimeTrigger::max_encoded_len());
-  assert_eq!(RuntimeTrigger::decode(&mut &encoded[..]), Ok(policy));
+  assert!(manual.manual_source_enabled());
+  assert!(address.address_event_source_enabled());
+  assert!(observation.observation_source_enabled());
+  assert_eq!(cadence.cadence_ticks(), Some(10));
+  assert!(!cadence.manual_source_enabled());
+  assert!(!cadence.address_event_source_enabled());
+  assert!(!cadence.observation_source_enabled());
 
-  let empty = RuntimeTrigger::Immediate {
-    sources: BoundedVec::default(),
-  };
-  assert!(!empty.has_canonical_sources());
-  let duplicate = RuntimeTrigger::Immediate {
-    sources: BoundedVec::try_from(vec![manual.clone(), manual.clone()]).expect("within bound"),
-  };
-  assert!(!duplicate.has_canonical_sources());
-  let duplicate_observation = RuntimeTrigger::Immediate {
-    sources: BoundedVec::try_from(vec![observation.clone(), observation]).expect("within bound"),
-  };
-  assert!(!duplicate_observation.has_canonical_sources());
-  let reverse = RuntimeTrigger::Immediate {
-    sources: BoundedVec::try_from(vec![
-      RuntimeTriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::OwnerOnly,
-        asset_filter: AssetFilter::Any,
-      },
-      manual.clone(),
-    ])
-    .expect("within bound"),
-  };
-  assert!(!reverse.has_canonical_sources());
-  let non_canonical_filter = RuntimeTrigger::Immediate {
-    sources: BoundedVec::try_from(vec![RuntimeTriggerSource::OnAddressEvent {
-      source_filter: SourceFilter::Whitelist(
-        BoundedVec::try_from(vec![2, 1]).expect("within whitelist bound"),
-      ),
-      asset_filter: AssetFilter::Any,
-    }])
-    .expect("within source bound"),
-  };
-  assert!(!non_canonical_filter.has_canonical_sources());
-  let always = RuntimeTrigger::Cadenced {
-    every_blocks: 5,
-    sources: None,
-  };
-  assert!(always.has_canonical_sources());
-  assert!(!always.manual_source_enabled());
-  assert!(!always.address_event_source_enabled());
-  assert!(!always.observation_source_enabled());
+  for trigger in [manual, address, observation, cadence] {
+    assert!(trigger.has_canonical_filters());
+    let encoded = trigger.encode();
+    assert!(encoded.len() <= RuntimeTrigger::max_encoded_len());
+    assert_eq!(RuntimeTrigger::decode(&mut &encoded[..]), Ok(trigger));
+  }
 
-  let too_many =
-    vec![manual; <<Test as crate::Config>::MaxTriggerSources as Get<u32>>::get() as usize + 1];
-  assert!(BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(too_many).is_err());
+  let non_canonical_filter = RuntimeTrigger::address_event(
+    SourceFilter::Whitelist(BoundedVec::try_from(vec![2, 1]).expect("within whitelist bound")),
+    AssetFilter::Any,
+  );
+  assert!(!non_canonical_filter.has_canonical_filters());
 }
 
 #[test]
@@ -311,18 +263,17 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
-      observation_schedule(vec![1, 2]),
+      observation_schedule(vec![1]),
       None,
       inert_contract_steps(),
     );
     let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
     assert_eq!(
       Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![1, 2]))
+      Some(BoundedVec::truncate_from(vec![1]))
     );
-    assert_eq!(Actors::observation_subscription_count(), 2);
+    assert_eq!(Actors::observation_subscription_count(), 1);
     assert_eq!(Actors::observation_subscriber_count(1), 1);
-    assert_eq!(Actors::observation_subscriber_count(2), 1);
     assert_eq!(Actors::observation_ingress_revision(1), None);
     assert_eq!(Actors::observation_ingress_revision(2), None);
     assert!(Actors::dirty_observation_feeds(1).is_none());
@@ -337,15 +288,14 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      observation_schedule(vec![2, 3]),
+      observation_schedule(vec![3]),
       None,
     ));
     assert_eq!(
       Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![2, 3]))
+      Some(BoundedVec::truncate_from(vec![3]))
     );
     assert_eq!(Actors::observation_subscriber_count(1), 0);
-    assert_eq!(Actors::observation_subscriber_count(2), 1);
     assert_eq!(Actors::observation_subscriber_count(3), 1);
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(update_contract_partial!(
@@ -356,7 +306,7 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     ));
     assert_eq!(
       Actors::actor_observation_feeds(actor_id),
-      Some(BoundedVec::truncate_from(vec![2, 3]))
+      Some(BoundedVec::truncate_from(vec![3]))
     );
     frame_system::Pallet::<Test>::set_block_number(3);
     assert_ok!(Actors::deactivate_actor(
@@ -456,34 +406,6 @@ fn observation_occupied_page_list_follows_live_pages_after_fragmentation() {
     assert!(Actors::pending_signal(remaining_actor));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn duplicate_observation_subscriptions_fail_before_actor_mutation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = Schedule {
-      trigger: RuntimeTrigger::Immediate {
-        sources: BoundedVec::try_from(vec![
-          RuntimeTriggerSource::OnObservationChange { feed: 1 },
-          RuntimeTriggerSource::OnObservationChange { feed: 1 },
-        ])
-        .expect("duplicate sources fit physical bound"),
-      },
-      cooldown_blocks: 0,
-    };
-    assert_noop!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(ALICE),
-        Mutability::Mutable,
-        user_active_contract(schedule, None, inert_contract_steps()),
-      ),
-      Error::<Test>::InvalidTriggerConfiguration
-    );
-    assert_eq!(Actors::active_actor_count(), 0);
-    assert_eq!(Actors::observation_subscription_count(), 0);
-    assert_eq!(crate::NextObservationSubscriptionSlot::<Test>::get(), 0);
   });
 }
 
@@ -890,9 +812,7 @@ fn dirty_feed_capacity_failure_rolls_back_list_insertion() {
       None,
       inert_contract_steps(),
     );
-    let active_actor_maximum: u32 = <Test as crate::Config>::MaxActiveActors::get();
-    let trigger_source_maximum: u32 = <Test as crate::Config>::MaxTriggerSources::get();
-    let maximum = active_actor_maximum * trigger_source_maximum;
+    let maximum: u32 = <Test as crate::Config>::MaxActiveActors::get();
     crate::DirtyObservationListState::<Test>::put(crate::types::DirtyObservationList {
       count: maximum,
       ..Default::default()
@@ -1373,30 +1293,24 @@ fn maximum_observation_subscription_density_is_paged_and_bounded() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_count = Actors::effective_active_actor_limit();
-    let feeds = vec![1, 2, 3, 4];
+    let feed = 1;
     for _ in 0..actor_count {
       create_system_with(
         ALICE,
-        observation_schedule(feeds.clone()),
+        observation_schedule(vec![feed]),
         None,
         inert_contract_steps(),
       );
     }
     assert_eq!(Actors::active_actor_count(), actor_count);
-    let source_count: u32 = <Test as crate::Config>::MaxTriggerSources::get();
-    assert_eq!(
-      Actors::observation_subscription_count(),
-      actor_count * source_count
-    );
+    assert_eq!(Actors::observation_subscription_count(), actor_count);
     let page_size: u32 = <Test as crate::Config>::ObservationPageSize::get();
     let page_count = actor_count.div_ceil(page_size);
-    for feed in feeds {
-      assert_eq!(Actors::observation_subscriber_count(feed), actor_count);
-      assert_eq!(
-        crate::ObservationSubscriberPages::<Test>::iter_prefix(feed).count() as u32,
-        page_count
-      );
-    }
+    assert_eq!(Actors::observation_subscriber_count(feed), actor_count);
+    assert_eq!(
+      crate::ObservationSubscriberPages::<Test>::iter_prefix(feed).count() as u32,
+      page_count
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1603,20 +1517,15 @@ fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<crate::PredicateError>(&["InvalidObservation"]);
   assert_variant_names::<RuntimeSourceFilter>(&["Any", "OwnerOnly", "Whitelist"]);
   assert_variant_names::<RuntimeAssetFilter>(&["Any", "Whitelist"]);
-  assert_variant_names::<RuntimeTriggerSource>(&[
+  assert_variant_names::<RuntimeTrigger>(&[
     "Manual",
-    "OnAddressEvent",
-    "OnObservationChange",
+    "AddressEvent",
+    "ObservationChange",
+    "Cadenced",
   ]);
-  assert_variant_names::<RuntimeTrigger>(&["Immediate", "Cadenced"]);
-  assert_variant_names::<
-    Trigger<
-      AccountId,
-      TestAsset,
-      <Test as crate::Config>::MaxWhitelistSize,
-      <Test as crate::Config>::MaxTriggerSources,
-    >,
-  >(&["Immediate", "Cadenced"]);
+  assert_variant_names::<Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>>(
+    &["Manual", "AddressEvent", "ObservationChange", "Cadenced"],
+  );
   assert_variant_names::<ActorType>(&["User", "System"]);
   assert_variant_names::<ActorClass>(&["User", "System"]);
   assert_variant_names::<Mutability>(&["Mutable", "Immutable"]);
@@ -1696,11 +1605,11 @@ fn public_reachability_inventory_is_closed_and_canonical() {
 #[test]
 fn paged_wakeup_primitives_encode_exact_pointer_and_bounded_page_ownership() {
   let pointer = WakeupPointer {
-    block: 42u64,
+    block: WakeupKey::Block(42u64),
     page_id: 7,
     slot: 3,
   };
-  assert_eq!(pointer.block, 42);
+  assert_eq!(pointer.block, WakeupKey::Block(42));
   assert_eq!(pointer.page_id, 7);
   assert_eq!(pointer.slot, 3);
 
@@ -1751,7 +1660,10 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
       .expect("hot state")
       .wakeup_pointer
       .expect("first wakeup pointer");
-    assert_eq!((first.block, first.page_id, first.slot), (10, 0, 0));
+    assert_eq!(
+      (first.block, first.page_id, first.slot),
+      (WakeupKey::Block(10), 0, 0)
+    );
     assert_eq!(
       Actors::wakeup_buckets(10)
         .expect("first bucket")
@@ -1768,7 +1680,7 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
       .expect("replacement wakeup pointer");
     assert_eq!(
       (replacement.block, replacement.page_id, replacement.slot),
-      (20, 0, 0)
+      (WakeupKey::Block(20), 0, 0)
     );
     assert!(Actors::wakeup_buckets(10).is_none());
     assert!(Actors::wakeup_pages((10, 0)).is_none());
@@ -1800,7 +1712,7 @@ fn wakeup_replacement_rolls_back_when_existing_cursor_is_corrupt() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+    WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").cursor_index = Some(1);
     });
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -1820,7 +1732,7 @@ fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupPages::<Test>::remove((10, 0));
+    WakeupPages::<Test>::remove((WakeupKey::Block(10), 0));
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
       Actors::try_wakeup_substrate_schedule_inner(actor_id, 20),
@@ -1857,7 +1769,7 @@ fn wakeup_replacement_rolls_back_on_live_count_underflow() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+    WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").live_entries = 0;
     });
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -1886,10 +1798,14 @@ fn wakeup_cursor_capacity_overflow_fails_closed_and_preserves_existing_path() {
       .expect("hot state")
       .wakeup_pointer
       .expect("existing path");
-    assert_eq!((pointer.block, pointer.page_id, pointer.slot), (10, 0, 0));
+    assert_eq!(
+      (pointer.block, pointer.page_id, pointer.slot),
+      (WakeupKey::Block(10), 0, 0)
+    );
 
     // Saturate the wakeup cursor heap at its capacity bound; the worker's index insert fails.
-    crate::WakeupCursorLen::<Test>::put(
+    crate::WakeupCursorLen::<Test>::insert(
+      WakeupClock::Block,
       <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
     );
     assert!(
@@ -1949,7 +1865,7 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
       );
       assert!(Actors::wakeup_substrate_schedule(extra, block));
     }
-    crate::WakeupBuckets::<Test>::mutate(block, |bucket| {
+    crate::WakeupBuckets::<Test>::mutate(WakeupKey::Block(block), |bucket| {
       let bucket = bucket.as_mut().expect("bucket exists");
       bucket.next_page_id = u64::MAX;
     });
@@ -1994,7 +1910,7 @@ fn wakeup_bucket_corruption_fails_closed_as_corrupted_topology() {
     // topology instead of retrying as queue-full.
     let target = block + 1;
     crate::WakeupBuckets::<Test>::insert(
-      target,
+      WakeupKey::Block(target),
       crate::WakeupBucketState {
         head_page: 0,
         tail_page: 0,
@@ -2047,7 +1963,7 @@ fn saturated_enqueue_falls_back_to_exact_next_block_wakeup_not_silent_loss() {
     );
     assert_eq!(
       hot.wakeup_pointer.expect("readiness wakeup").block,
-      2,
+      WakeupKey::Block(2),
       "exact next-block wakeup preserves readiness"
     );
     assert_eq!(Actors::wakeup_buckets(2).expect("bucket").live_entries, 1);
@@ -2068,7 +1984,7 @@ fn saturated_enqueue_fails_closed_when_wakeup_fallback_also_fails() {
     // corrupt the target wakeup bucket so that fallback placement also fails.
     seed_saturated_tombstone_queue();
     crate::WakeupBuckets::<Test>::insert(
-      2,
+      WakeupKey::Block(2),
       crate::WakeupBucketState {
         head_page: 0,
         tail_page: 0,
@@ -2104,7 +2020,7 @@ fn manual_trigger_fails_closed_when_wakeup_fallback_cannot_preserve_readiness() 
     // wakeup, then corrupt that target bucket so the fallback also fails.
     seed_saturated_tombstone_queue();
     crate::WakeupBuckets::<Test>::insert(
-      2,
+      WakeupKey::Block(2),
       crate::WakeupBucketState {
         head_page: 0,
         tail_page: 0,
@@ -2162,7 +2078,7 @@ fn paged_wakeup_substrate_invalidation_rolls_back_on_cursor_mismatch() {
       .expect("hot state")
       .wakeup_pointer
       .expect("wakeup pointer");
-    crate::pallet::WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+    crate::pallet::WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
       maybe_bucket.as_mut().expect("wakeup bucket").cursor_index = None;
     });
 
@@ -2709,6 +2625,7 @@ fn actor_storage_schema_is_explicit() {
       "WakeupBuckets",
       "WakeupCursorPages",
       "WakeupCursorLen",
+      "NextWakeupClock",
       "OwnerSlotBitmaps",
       "SovereignIndex",
       "ActiveActorLimit",
@@ -2772,7 +2689,8 @@ fn actor_storage_schema_is_explicit() {
       ("WakeupPages", true, true),
       ("WakeupBuckets", true, true),
       ("WakeupCursorPages", true, true),
-      ("WakeupCursorLen", false, false),
+      ("WakeupCursorLen", false, true),
+      ("NextWakeupClock", false, false),
       ("OwnerSlotBitmaps", false, true),
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
@@ -2837,34 +2755,37 @@ fn actor_storage_schema_is_explicit() {
   assert_plain_storage_type::<u64>(&entries[12]);
   assert_plain_storage_type::<u32>(&entries[13]);
   assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[14]);
-  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[15]);
-  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[16]);
-  assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[17]);
-  assert_plain_storage_type::<u32>(&entries[18]);
-  assert_map_storage_types::<AccountId, [u8; 32]>(&entries[19]);
-  assert_map_storage_types::<AccountId, u64>(&entries[20]);
-  assert_plain_storage_type::<u32>(&entries[21]);
-  assert_map_storage_types::<u64, crate::ActorObservationFeedsOf<Test>>(&entries[22]);
-  assert_map_storage_types::<u64, u32>(&entries[23]);
-  assert_map_storage_types::<u32, u64>(&entries[24]);
-  assert_plain_storage_type::<u32>(&entries[25]);
+  assert_map_storage_types::<(WakeupKey<MockBlockNumber>, u64), crate::WakeupPageOf<Test>>(
+    &entries[15],
+  );
+  assert_map_storage_types::<WakeupKey<MockBlockNumber>, WakeupBucketState>(&entries[16]);
+  assert_map_storage_types::<(WakeupClock, u64), crate::WakeupCursorPageOf<Test>>(&entries[17]);
+  assert_map_storage_types::<WakeupClock, u32>(&entries[18]);
+  assert_plain_storage_type::<WakeupClock>(&entries[19]);
+  assert_map_storage_types::<AccountId, [u8; 32]>(&entries[20]);
+  assert_map_storage_types::<AccountId, u64>(&entries[21]);
+  assert_plain_storage_type::<u32>(&entries[22]);
+  assert_map_storage_types::<u64, crate::ActorObservationFeedsOf<Test>>(&entries[23]);
+  assert_map_storage_types::<u64, u32>(&entries[24]);
+  assert_map_storage_types::<u32, u64>(&entries[25]);
   assert_plain_storage_type::<u32>(&entries[26]);
-  assert_map_storage_types::<u32, crate::ObservationFreeSlotPageOf<Test>>(&entries[27]);
-  assert_map_storage_types::<(u32, u32), crate::ObservationSubscriberPageOf<Test>>(&entries[28]);
-  assert_map_storage_types::<u32, ObservationSubscriberPageList>(&entries[29]);
-  assert_map_storage_types::<u32, u32>(&entries[30]);
-  assert_plain_storage_type::<u32>(&entries[31]);
-  assert_map_storage_types::<u32, u64>(&entries[32]);
+  assert_plain_storage_type::<u32>(&entries[27]);
+  assert_map_storage_types::<u32, crate::ObservationFreeSlotPageOf<Test>>(&entries[28]);
+  assert_map_storage_types::<(u32, u32), crate::ObservationSubscriberPageOf<Test>>(&entries[29]);
+  assert_map_storage_types::<u32, ObservationSubscriberPageList>(&entries[30]);
+  assert_map_storage_types::<u32, u32>(&entries[31]);
+  assert_plain_storage_type::<u32>(&entries[32]);
+  assert_map_storage_types::<u32, u64>(&entries[33]);
   assert_map_storage_types::<
     u32,
     crate::types::DirtyObservationState<
       u32,
       polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>,
     >,
-  >(&entries[33]);
-  assert_plain_storage_type::<crate::types::DirtyObservationList<u32>>(&entries[34]);
-  assert_plain_storage_type::<bool>(&entries[35]);
-  assert_plain_storage_type::<IdleStarvationPhase>(&entries[36]);
+  >(&entries[34]);
+  assert_plain_storage_type::<crate::types::DirtyObservationList<u32>>(&entries[35]);
+  assert_plain_storage_type::<bool>(&entries[36]);
+  assert_plain_storage_type::<IdleStarvationPhase>(&entries[37]);
 }
 
 #[test]
@@ -3098,7 +3019,7 @@ fn ordinary_transfer_to_actor(
 
 fn manual_schedule() -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::immediate_manual(),
+    trigger: Trigger::manual(),
     cooldown_blocks: 0,
   }
 }
@@ -3108,7 +3029,7 @@ fn on_address_event_schedule(
   asset_filter: RuntimeAssetFilter,
 ) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::immediate_address_event(source_filter, asset_filter),
+    trigger: Trigger::address_event(source_filter, asset_filter),
     cooldown_blocks: 0,
   }
 }
@@ -3122,22 +3043,18 @@ fn signal_percentage_trigger(actor_id: ActorId, asset: TestAsset) {
 }
 
 fn observation_schedule(feeds: Vec<u32>) -> RuntimeSchedule {
-  let mut sources = feeds
-    .into_iter()
-    .map(|feed| RuntimeTriggerSource::OnObservationChange { feed })
-    .collect::<Vec<_>>();
-  sources.sort_by_key(Encode::encode);
+  let [feed]: [u32; 1] = feeds
+    .try_into()
+    .expect("one observation trigger feed is required");
   Schedule {
-    trigger: RuntimeTrigger::Immediate {
-      sources: BoundedVec::try_from(sources).expect("observation sources fit"),
-    },
+    trigger: RuntimeTrigger::observation_change(feed),
     cooldown_blocks: 0,
   }
 }
 
-fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
+fn timer_schedule(every_ticks: u32) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::cadenced_always(every_blocks),
+    trigger: Trigger::cadenced(u64::from(every_ticks)),
     cooldown_blocks: 0,
   }
 }
@@ -3950,7 +3867,7 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 10,
     };
     let actor_id = create_system_with(
@@ -4477,7 +4394,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
     );
     let initial = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(initial.actor_class.actor_type(), ActorType::User);
-    assert!(matches!(initial.trigger, Trigger::Immediate { .. }));
+    assert!(matches!(initial.trigger, Trigger::Manual));
     assert_eq!(initial.lifecycle, ActiveLifecycle::Active);
     assert!(!initial.pending_signal);
     assert_eq!(initial.cycle_nonce, 0);
@@ -4503,8 +4420,8 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       ActiveLifecycle::Paused
     );
     let timer_schedule = Schedule {
-      trigger: Trigger::cadenced_always(3),
-      cooldown_blocks: 2,
+      trigger: Trigger::cadenced(3),
+      cooldown_blocks: 0,
     };
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
@@ -4516,13 +4433,10 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       None,
     ));
     let after_update = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(after_update.cooldown_blocks, 2);
+    assert_eq!(after_update.cooldown_blocks, 0);
     assert!(matches!(
       after_update.trigger,
-      Trigger::Cadenced {
-        every_blocks: 3,
-        sources: None
-      }
+      Trigger::Cadenced { every_ticks: 3 }
     ));
   });
 }
@@ -5510,7 +5424,8 @@ fn control_placement_failures_roll_back_state_and_events() {
       transfer_contract_steps(BOB, 1),
     );
     assert!(Actors::wakeup_substrate_invalidate(actor_id).is_some());
-    crate::WakeupCursorLen::<Test>::put(
+    crate::WakeupCursorLen::<Test>::insert(
+      WakeupClock::Block,
       <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
     );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -5604,7 +5519,8 @@ fn creation_wakeup_failures_roll_back_exactly() {
       if saturate_queue {
         seed_saturated_tombstone_queue();
       }
-      crate::WakeupCursorLen::<Test>::put(
+      crate::WakeupCursorLen::<Test>::insert(
+        WakeupClock::Tick,
         <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
       );
       let schedule = timer_schedule(if saturate_queue { 1 } else { 10 });
@@ -5739,30 +5655,6 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
 }
 
 #[test]
-fn create_rejects_duplicate_trigger_sources() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let sources = BoundedVec::try_from(vec![
-      RuntimeTriggerSource::Manual,
-      RuntimeTriggerSource::Manual,
-    ])
-    .expect("duplicate source fixture fits the type bound");
-    let schedule = Schedule {
-      trigger: RuntimeTrigger::Immediate { sources },
-      cooldown_blocks: 0,
-    };
-    assert_noop!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(ALICE),
-        Mutability::Mutable,
-        user_active_contract(schedule, None, transfer_contract_steps(BOB, 1)),
-      ),
-      Error::<Test>::InvalidTriggerConfiguration
-    );
-  });
-}
-
-#[test]
 fn create_rejects_empty_whitelist_filter() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -5827,10 +5719,7 @@ fn create_rejects_zero_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::Cadenced {
-        every_blocks: 0,
-        sources: None,
-      },
+      trigger: Trigger::Cadenced { every_ticks: 0 },
       cooldown_blocks: 0,
     };
     assert_noop!(
@@ -6551,13 +6440,7 @@ fn checkpoint_a_s4_paused_head_uses_hot_only_admission() {
 
 #[test]
 fn manual_trigger_rejects_address_and_observation_only_policies() {
-  let observation_schedule = Schedule {
-    trigger: RuntimeTrigger::Immediate {
-      sources: BoundedVec::try_from(vec![RuntimeTriggerSource::OnObservationChange { feed: 7 }])
-        .expect("one observation source fits"),
-    },
-    cooldown_blocks: 0,
-  };
+  let observation_schedule = observation_schedule(vec![7]);
   for schedule in [
     on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
     observation_schedule,
@@ -6587,7 +6470,7 @@ fn manual_trigger_waits_through_cooldown_without_second_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 5,
     };
     let actor_id = create_user_with(
@@ -6671,7 +6554,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::immediate_address_event(SourceFilter::Any, AssetFilter::Any),
+      trigger: Trigger::address_event(SourceFilter::Any, AssetFilter::Any),
       cooldown_blocks: 5,
     };
     let actor_id = create_user_with(
@@ -8597,8 +8480,8 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
     ));
     let rescheduled_block = scheduled_wakeup_block(actor_id).expect("replacement wakeup");
     assert_ne!(rescheduled_block, initial_block);
-    assert!(Actors::wakeup_buckets(initial_block).is_none());
-    assert_eq!(Actors::wakeup_cursor_len(), 1);
+    assert!(WakeupBuckets::<Test>::get(WakeupKey::Tick(initial_block)).is_none());
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
   });
 }
 
@@ -8608,7 +8491,7 @@ fn cadence_update_rolls_back_exactly_when_existing_wakeup_cursor_is_corrupt() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let initial_block = scheduled_wakeup_block(actor_id).expect("initial wakeup");
-    WakeupBuckets::<Test>::mutate(initial_block, |maybe_bucket| {
+    WakeupBuckets::<Test>::mutate(WakeupKey::Tick(initial_block), |maybe_bucket| {
       maybe_bucket.as_mut().expect("bucket").cursor_index = None;
     });
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -8768,7 +8651,7 @@ fn temporal_membership_try_state_rejects_page_slot_pointing_at_different_actor()
     assert!(Actors::wakeup_substrate_schedule(other, 10));
     // A physical slot whose entry addresses an actor that owns a different pointer is
     // corruption: `wakeup_pointer` is the sole ordinary temporal-membership authority.
-    WakeupPages::<Test>::mutate((10, 0), |maybe| {
+    WakeupPages::<Test>::mutate((WakeupKey::Block(10), 0), |maybe| {
       let page = maybe.as_mut().expect("wakeup page");
       page.entries[0] = Some(crate::WakeupEntry { actor_id: other });
     });
@@ -8789,79 +8672,18 @@ fn temporal_membership_try_state_accepts_lazy_wakeup_tombstones() {
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
     // Lazy terminal cleanup leaves a stale physical wakeup entry behind; the entry carries no
     // membership authority and must not fail try_state (spec 5.1 stale-entry semantics).
-    assert!(Actors::wakeup_buckets(scheduled_block).is_some());
-    assert!(Actors::wakeup_cursor_len() > 0);
+    assert!(WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
+      scheduled_block
+    )));
+    assert!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick) > 0);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-    // The bounded drain converges the tombstone at its due block.
+    // The bounded drain converges the tombstone at its due tick.
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     run_idle(Weight::MAX);
-    assert!(Actors::wakeup_buckets(scheduled_block).is_none());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn temporal_membership_try_state_accepts_earlier_due_ordinary_pointer() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // Cadence inside a bounded window: the wakeup substrate carries the earlier of the ordinary
-    // cadence target and the window terminal block.
-    let actor_id = create_system_with(
-      ALICE,
-      timer_schedule(20),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    let hot = Actors::actor_hot(actor_id).expect("hot");
-    let pointer = hot.wakeup_pointer.expect("cadence wakeup");
-    assert_eq!(hot.terminal_at, Some(102));
-    assert!(
-      pointer.block <= 102,
-      "earlier due requirement determines the service point"
-    );
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn temporal_membership_try_state_accepts_live_ticket_with_forward_pointer() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let ticket = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("manual trigger queues the actor");
-    // Replacing the schedule installs a forward cadence wakeup while the manual ticket stays
-    // live; the earlier-due contract and terminal membership remain reconcilable.
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      timer_schedule(20),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-    ));
-    let hot = Actors::actor_hot(actor_id).expect("hot");
-    assert_eq!(hot.queue_ticket, Some(ticket));
-    assert_eq!(hot.terminal_at, Some(102));
-    // With a zero cadence phase the rearm requeues (already live) without a wakeup; otherwise
-    // the forward cadence wakeup must never be scheduled beyond the terminal block.
-    if let Some(pointer) = hot.wakeup_pointer {
-      assert!(
-        pointer.block <= 102,
-        "the wakeup substrate never schedules beyond the terminal block"
-      );
-    }
+    assert!(!WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
+      scheduled_block
+    )));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -8879,7 +8701,7 @@ fn terminal_membership_rolls_back_atomically_with_failed_schedule_replacement() 
     );
     // Corrupt the existing wakeup cursor so the replacement placement must roll back; the
     // terminal membership update and the whole control transaction revert together.
-    WakeupBuckets::<Test>::mutate(102, |maybe| {
+    WakeupBuckets::<Test>::mutate(WakeupKey::Block(102), |maybe| {
       maybe.as_mut().expect("bucket").cursor_index = None;
     });
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -8946,8 +8768,10 @@ fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(scheduled_wakeup_block(actor_id).is_none());
-    assert!(Actors::wakeup_buckets(scheduled_block).is_some());
-    assert_eq!(Actors::wakeup_cursor_len(), 1);
+    assert!(WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
+      scheduled_block
+    )));
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
@@ -8977,18 +8801,18 @@ fn repeated_timer_close_churn_converges_lazy_wakeup_tombstones() {
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
       assert!(scheduled_wakeup_block(actor_id).is_none());
     }
-    assert!(Actors::wakeup_cursor_len() > 0);
+    assert!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick) > 0);
     frame_system::Pallet::<Test>::reset_events();
     for offset in 0..10 {
       frame_system::Pallet::<Test>::set_block_number(
         latest_wakeup.saturating_add(1_000).saturating_add(offset),
       );
       run_idle(Weight::MAX);
-      if Actors::wakeup_cursor_len() == 0 {
+      if crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick) == 0 {
         break;
       }
     }
-    assert_eq!(Actors::wakeup_cursor_len(), 0);
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
     assert_eq!(Actors::queue_head(), Actors::queue_tail());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -10540,7 +10364,7 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 2,
     };
     let actor_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
@@ -10977,7 +10801,7 @@ fn continuation_weight_deferral_does_not_admit_attempt() {
 }
 
 #[test]
-fn fresh_attempt_rolls_back_before_effect_when_requeue_ticket_is_exhausted() {
+fn fresh_attempt_rolls_back_before_effect_when_tick_rearm_is_exhausted() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -10992,7 +10816,10 @@ fn fresh_attempt_rolls_back_before_effect_when_requeue_ticket_is_exhausted() {
     let actor_before = Actors::active_actor_view(actor_id).expect("queued fresh actor");
     let bob_before = native_balance(&BOB);
     let events_before = System::events();
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    crate::WakeupCursorLen::<Test>::insert(
+      WakeupClock::Tick,
+      <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
+    );
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     let _ = Actors::execute_cycle(Weight::MAX);
@@ -11027,7 +10854,16 @@ fn post_attempt_rearm_rolls_back_on_fifo_topology_corruption() {
     frame_system::Pallet::<Test>::set_block_number(2);
     let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
     Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
-    set_corrupt_queue_after_transfer(true);
+    crate::WakeupBuckets::<Test>::insert(
+      WakeupKey::Tick(3),
+      WakeupBucketState {
+        head_page: 0,
+        tail_page: 0,
+        next_page_id: 1,
+        live_entries: 0,
+        cursor_index: None,
+      },
+    );
     let actor_before = Actors::active_actor_view(actor_id).expect("queued actor");
     let bob_before = native_balance(&BOB);
     let events_before = System::events();
@@ -11095,7 +10931,7 @@ fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
     frame_system::Pallet::<Test>::set_block_number(due);
     let next_retry = due.saturating_add(2);
     crate::WakeupBuckets::<Test>::insert(
-      next_retry,
+      WakeupKey::Block(next_retry),
       crate::WakeupBucketState {
         head_page: 0,
         tail_page: 0,
@@ -11135,220 +10971,35 @@ fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
 }
 
 #[test]
-fn cadenced_address_signal_survives_pause_and_executes_once_at_gate() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: Trigger::cadenced_when_signalled_address_event(
-          4,
-          SourceFilter::Any,
-          AssetFilter::Any,
-        ),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      10,
-      &ALICE
-    ));
-    assert!(Actors::pending_signal(actor_id));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      0
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      20,
-      &ALICE
-    ));
-    assert!(Actors::pending_signal(actor_id));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
-
-    frame_system::Pallet::<Test>::set_block_number(4);
-    assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
-    frame_system::Pallet::<Test>::set_block_number(5);
-    run_idle(Weight::MAX);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.cycle_nonce, 1);
-    assert!(!instance.pending_signal);
-
-    frame_system::Pallet::<Test>::set_block_number(6);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      1
-    );
-  });
-}
-
-#[test]
-fn signal_after_missed_cadence_waits_for_next_gate() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: Trigger::cadenced_when_signalled_manual(4),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
-
-    frame_system::Pallet::<Test>::set_block_number(5);
-    run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(6);
-    run_idle(Weight::MAX);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(9));
-
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      0
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(9));
-
-    frame_system::Pallet::<Test>::set_block_number(9);
-    run_idle(Weight::MAX);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.cycle_nonce, 1);
-    assert!(!instance.pending_signal);
-  });
-}
-
-#[test]
 fn continuation_retry_omits_external_timer_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::cadenced_when_signalled_manual(100),
-      cooldown_blocks: 2,
+      trigger: Trigger::cadenced(100),
+      cooldown_blocks: 0,
     };
     let actor_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
 
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let cadence_due = scheduled_wakeup_block(actor_id).expect("cadenced signal wakeup");
+    let cadence_due = scheduled_wakeup_block(actor_id).expect("cadenced wakeup");
     frame_system::Pallet::<Test>::set_block_number(cadence_due);
     run_idle(Weight::MAX);
 
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(cadence_due + 2));
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(
+      Actors::actor_hot(actor_id)
+        .expect("suspended cadence actor")
+        .queue_ticket
+        .is_some()
+    );
     assert_eq!(
       Actors::continuation_state(actor_id)
         .expect("suspended")
         .unsuccessful_attempts_at_cursor,
       1
     );
-  });
-}
-
-#[test]
-fn cadenced_signals_during_continuation_coalesce_into_one_later_cycle() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    setup_temporary_retry_pool();
-    let schedule = Schedule {
-      trigger: Trigger::cadenced_when_signalled_address_event(
-        4,
-        SourceFilter::Any,
-        AssetFilter::Any,
-      ),
-      cooldown_blocks: 2,
-    };
-    let actor_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
-    fund_native(actor_id, 100);
-    set_temporary_dex_failure(true);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      1,
-      &ALICE
-    ));
-
-    frame_system::Pallet::<Test>::set_block_number(5);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("suspended")
-        .cycle_nonce,
-      1
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(7));
-    assert!(
-      Actors::actor_hot(actor_id)
-        .expect("suspended actor")
-        .queue_ticket
-        .is_none()
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(6);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      2,
-      &ALICE
-    ));
-    let signal_ticket = Actors::actor_hot(actor_id)
-      .expect("signalled suspended actor")
-      .queue_ticket;
-    assert!(signal_ticket.is_some());
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      3,
-      &ALICE
-    ));
-    let hot = Actors::actor_hot(actor_id).expect("repeatedly signalled suspended actor");
-    assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, signal_ticket);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(7));
-
-    set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(7);
-    run_idle(Weight::MAX);
-    let after_retry = Actors::active_actor_view(actor_id).expect("retry completes");
-    assert_eq!(after_retry.cycle_nonce, 1);
-    assert_eq!(after_retry.cycle_state, CycleState::Idle);
-    assert!(after_retry.pending_signal);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(9));
-
-    frame_system::Pallet::<Test>::set_block_number(9);
-    run_idle(Weight::MAX);
-    let after_later_cycle = Actors::active_actor_view(actor_id).expect("later cycle completes");
-    assert_eq!(after_later_cycle.cycle_nonce, 2);
-    assert!(!after_later_cycle.pending_signal);
   });
 }
 
@@ -11478,7 +11129,7 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 200,
     };
     let actor_id = create_system_with(
@@ -12054,7 +11705,7 @@ fn cancelled_continuation_leaves_only_convergent_queue_and_wakeup_tombstones() {
     let actor_id = create_system_with(
       ALICE,
       Schedule {
-        trigger: Trigger::immediate_manual(),
+        trigger: Trigger::manual(),
         cooldown_blocks: 10,
       },
       None,
@@ -12433,7 +12084,7 @@ fn contract_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
       RuntimeOrigin::root(),
       schedule_id,
       Schedule {
-        trigger: Trigger::immediate_manual(),
+        trigger: Trigger::manual(),
         cooldown_blocks: 1,
       },
       None
@@ -12485,7 +12136,7 @@ fn window_expiry_cancels_while_failure_cutoff_finalizes_before_close() {
     let window_id = create_system_with(
       ALICE,
       Schedule {
-        trigger: Trigger::immediate_manual(),
+        trigger: Trigger::manual(),
         cooldown_blocks: 200,
       },
       Some(ScheduleWindow { start: 1, end: 101 }),
@@ -14930,22 +14581,10 @@ fn untracked_credit_can_trigger_without_allocating_funding_state() {
 }
 
 #[test]
-fn one_ingress_matching_multiple_sources_mutates_funding_once() {
+fn one_ingress_matching_the_single_source_mutates_funding_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let sources = BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(vec![
-      RuntimeTriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::Any,
-        asset_filter: AssetFilter::Any,
-      },
-      RuntimeTriggerSource::OnAddressEvent {
-        source_filter: SourceFilter::OwnerOnly,
-        asset_filter: AssetFilter::Any,
-      },
-    ])
-    .expect("two sources fit");
-    let trigger = Trigger::Immediate { sources };
-    assert!(trigger.has_canonical_sources());
+    let trigger = Trigger::address_event(SourceFilter::Any, AssetFilter::Any);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -16487,7 +16126,7 @@ fn inclusive_window_span_exact_minimum_is_admissible() {
 fn schedule_cooldown_is_bounded_by_max_execution_delay() {
   new_test_ext().execute_with(|| {
     let too_long = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: u32::try_from(
         <Test as crate::Config>::MaxExecutionDelayBlocks::get().saturating_add(1),
       )
@@ -16510,7 +16149,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
     let max = u64::MAX;
     frame_system::Pallet::<Test>::set_block_number(max - 5_000);
     let exact_cooldown = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 5_000,
     };
     let actor_id = create_system_with(ALICE, exact_cooldown, None, inert_contract_steps());
@@ -16523,7 +16162,7 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
     let max = u64::MAX;
     frame_system::Pallet::<Test>::set_block_number(max - 4_999);
     let overflowing_cooldown = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 5_000,
     };
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -16551,17 +16190,12 @@ fn future_schedule_targets_accept_exact_boundary_and_reject_overflow_without_mut
   new_test_ext().execute_with(|| {
     let max = u64::MAX;
     frame_system::Pallet::<Test>::set_block_number(max - 3);
-    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    assert_noop!(
-      Actors::create_system_actor(
-        RuntimeOrigin::root(),
-        ALICE,
-        Mutability::Mutable,
-        system_active_contract(timer_schedule(4), None, inert_contract_steps()),
-      ),
-      Error::<Test>::SchedulerIndexExhausted
-    );
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      system_active_contract(timer_schedule(4), None, inert_contract_steps()),
+    ));
   });
 }
 
@@ -19508,7 +19142,31 @@ fn timer_always_executes_on_interval() {
 }
 
 #[test]
-fn timer_every_block_uses_exact_next_block_before_cutoff_then_late_tickets() {
+fn uninitialized_genesis_cadence_reanchors_without_first_service_execution() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
+    crate::ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("active cadence actor")
+        .cadence_anchor_tick = None;
+    });
+
+    frame_system::Pallet::<Test>::set_block_number(100);
+    Actors::on_idle(100, Weight::MAX);
+
+    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
+    assert_eq!(instance.cycle_nonce, 0);
+    assert!(!instance.pending_signal);
+    assert_eq!(instance.cadence_anchor_tick, Some(100));
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(101));
+  });
+}
+
+#[test]
+fn cadence_every_tick_rearms_one_future_tick_without_late_fifo_tickets() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
@@ -19521,20 +19179,16 @@ fn timer_every_block_uses_exact_next_block_before_cutoff_then_late_tickets() {
       0
     );
     frame_system::Pallet::<Test>::set_block_number(2);
-    let cutoff = Actors::next_queue_ticket();
     Actors::on_idle(2, Weight::MAX);
     let after_first = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(after_first.cycle_nonce, 1);
-    assert!(
-      after_first
-        .queue_ticket
-        .is_some_and(|ticket| ticket >= cutoff)
-    );
+    assert!(after_first.queue_ticket.is_none());
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
     for block in 3..=6 {
       frame_system::Pallet::<Test>::set_block_number(block);
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::MAX);
-      assert_eq!(Actors::wakeup_cursor_len(), 0);
+      assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
     }
     let cycle_nonce = Actors::active_actor_view(actor_id)
       .expect("Actors exists")
@@ -19547,90 +19201,12 @@ fn timer_every_block_uses_exact_next_block_before_cutoff_then_late_tickets() {
 }
 
 #[test]
-fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = Schedule {
-      trigger: Trigger::cadenced_always(1),
-      cooldown_blocks: 10,
-    };
-    let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      0
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      1
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(12));
-    for block in 3..=11 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      run_idle(Weight::MAX);
-      assert_eq!(
-        Actors::active_actor_view(actor_id)
-          .expect("Actors exists")
-          .cycle_nonce,
-        1
-      );
-      assert_eq!(scheduled_wakeup_block(actor_id), Some(12));
-    }
-    frame_system::Pallet::<Test>::set_block_number(12);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      2
-    );
-  });
-}
-
-#[test]
-fn timer_eligibility_uses_maximum_of_cadence_cooldown_and_window() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = Schedule {
-      trigger: Trigger::cadenced_always(4),
-      cooldown_blocks: 10,
-    };
-    let actor_id = create_system_with(
-      ALICE,
-      schedule,
-      Some(ScheduleWindow {
-        start: 15,
-        end: 115,
-      }),
-      inert_contract_steps(),
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(15));
-    frame_system::Pallet::<Test>::set_block_number(15);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      1
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(27));
-  });
-}
-
-#[test]
 fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::cadenced_always(1),
-      cooldown_blocks: 5,
+      trigger: Trigger::cadenced(1),
+      cooldown_blocks: 0,
     };
     let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
     run_idle(Weight::MAX);
@@ -20727,7 +20303,7 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
       ALICE,
       Mutability::Immutable,
       system_active_contract(
-        timer_schedule(1),
+        on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
         Some(ScheduleWindow { start: 1, end: 101 }),
         inert_contract_steps(),
       ),
@@ -20931,9 +20507,9 @@ mod proptest_actor {
   type RuntimeSchedule = Schedule;
   type RuntimeStep = StepOf<Test>;
 
-  fn timer_schedule_pt(every_blocks: u32) -> RuntimeSchedule {
+  fn timer_schedule_pt(every_ticks: u32) -> RuntimeSchedule {
     Schedule {
-      trigger: Trigger::cadenced_always(every_blocks),
+      trigger: Trigger::cadenced(u64::from(every_ticks)),
       cooldown_blocks: 0,
     }
   }
@@ -20947,7 +20523,7 @@ mod proptest_actor {
     .expect("contract_steps must fit")
   }
 
-  fn create_timer_actor(owner: AccountId, every_blocks: u32) -> u64 {
+  fn create_timer_actor(owner: AccountId, every_ticks: u32) -> u64 {
     let id = Actors::next_actor_id();
     let plan = inert_contract_steps();
     prefund_active_user_creation(owner, &plan);
@@ -20955,7 +20531,7 @@ mod proptest_actor {
       RuntimeOrigin::signed(owner),
       Mutability::Mutable,
       {
-        let schedule = timer_schedule_pt(every_blocks);
+        let schedule = timer_schedule_pt(every_ticks);
         Some(crate::ActorContract {
           trigger: schedule.trigger,
           cooldown_blocks: schedule.cooldown_blocks,
@@ -21198,7 +20774,6 @@ mod proptest_actor {
       AccountId,
       TestAsset,
       <Test as crate::Config>::MaxWhitelistSize,
-      <Test as crate::Config>::MaxTriggerSources,
       <Test as crate::Config>::ObservationFeedId,
     >,
   ) -> Option<crate::ActorContractOf<Test>> {
@@ -21430,7 +21005,7 @@ mod proptest_actor {
         let rejected = match corruption {
           0 => {
             assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-            WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+            WakeupBuckets::<Test>::mutate(crate::WakeupKey::Block(10), |maybe_bucket| {
               maybe_bucket.as_mut().expect("bucket").cursor_index = None;
             });
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -21451,7 +21026,7 @@ mod proptest_actor {
           }
           2 => {
             assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-            WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+            WakeupBuckets::<Test>::mutate(crate::WakeupKey::Block(10), |maybe_bucket| {
               maybe_bucket.as_mut().expect("bucket").live_entries = 0;
             });
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -21551,7 +21126,7 @@ mod proptest_actor {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
-                system_contract(Trigger::immediate_manual()).expect("direct Actor Contract"),
+                system_contract(Trigger::manual()).expect("direct Actor Contract"),
               );
             }
             ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
@@ -21597,7 +21172,7 @@ mod proptest_actor {
             }
             ModelOp::Signal if !closed && ActorHot::<Test>::contains_key(system_id) => {
               let schedule = Schedule {
-                trigger: Trigger::immediate_address_event(
+                trigger: Trigger::address_event(
                   SourceFilter::Any,
                   AssetFilter::Any,
                 ),
@@ -22317,6 +21892,13 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
       );
       if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
         frame_system::Pallet::<Test>::set_block_number(11);
+        ActorHot::<Test>::mutate(actor_id, |maybe| {
+          maybe
+            .as_mut()
+            .expect("parity actor hot state exists")
+            .pending_signal = true;
+        });
+        Actors::enqueue(actor_id).expect("parity actor enqueues");
       } else if case.stimulus == StepParityStimulus::PredicateError {
         ActorHot::<Test>::mutate(actor_id, |maybe| {
           maybe
@@ -22931,7 +22513,7 @@ fn eligibility_projection_waits_for_cooldown_and_reports_next_block() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::immediate_manual(),
+      trigger: Trigger::manual(),
       cooldown_blocks: 5,
     };
     let actor_id = create_user_with(
@@ -22961,7 +22543,7 @@ fn eligibility_projection_waits_for_cooldown_and_reports_next_block() {
     ));
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingTemporal(6)
+      ActorExecutionPhase::WaitingBlock(6)
     );
   });
 }
@@ -22981,7 +22563,7 @@ fn eligibility_projection_waits_for_schedule_window_until_gate() {
     );
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingTemporal(50)
+      ActorExecutionPhase::WaitingBlock(50)
     );
 
     frame_system::Pallet::<Test>::set_block_number(50);
@@ -23005,13 +22587,13 @@ fn eligibility_projection_reports_exact_cadence_gate_without_actor_phase() {
 
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::Ready
+      ActorExecutionPhase::WaitingCadenceTick(21)
     );
 
     frame_system::Pallet::<Test>::set_block_number(11);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingTemporal(21)
+      ActorExecutionPhase::WaitingCadenceTick(21)
     );
   });
 }

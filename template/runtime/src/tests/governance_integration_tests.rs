@@ -14,6 +14,7 @@ use pallet_governance::ProposalPayloadExecutor;
 use polkadot_sdk::frame_support::traits::{
   Hooks,
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+  tokens::Preservation,
 };
 use polkadot_sdk::frame_support::{assert_noop, assert_ok};
 use polkadot_sdk::frame_system;
@@ -1208,6 +1209,143 @@ fn unanimous_veto_pass_executes_runtime_upgrade_immediately() {
           total_protection_supply: 100,
         })
     }));
+  });
+}
+
+#[test]
+fn transferable_veto_power_is_custodied_reused_and_increased_without_revote_amplification() {
+  new_test_ext().execute_with(|| {
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 40,
+    ));
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &BOB, 60,
+    ));
+    for item_id in 120..=122 {
+      submit_root_action_proposal(item_id, crate::Hash::repeat_byte(item_id as u8));
+    }
+
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      120,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    let custody = crate::configs::governance_config::governance_vote_power_custody_account();
+    assert_eq!(Assets::balance(veto_asset, &ALICE), 0);
+    assert_eq!(Assets::balance(veto_asset, &custody), 40);
+    assert_eq!(
+      Governance::account_governance_power_view(PROTOCOL_GOVERNANCE_DOMAIN, 120, ALICE)
+        .expect("first proposal remains active")
+        .frozen_protection_ballot
+        .expect("first veto ballot is frozen")
+        .raw_power,
+      40
+    );
+
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      121,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    assert_eq!(Assets::balance(veto_asset, &custody), 40);
+    assert_eq!(
+      Governance::account_governance_power_view(PROTOCOL_GOVERNANCE_DOMAIN, 121, ALICE)
+        .expect("second proposal remains active")
+        .frozen_protection_ballot
+        .expect("second veto ballot is frozen")
+        .raw_power,
+      40
+    );
+
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 20,
+    ));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      122,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    let position = Governance::vote_power_custody(ALICE, veto_asset)
+      .expect("transferable vote power remains in one aggregate source position");
+    assert_eq!(position.amount, 60);
+    assert_eq!(Assets::balance(veto_asset, &ALICE), 0);
+    assert_eq!(Assets::balance(veto_asset, &custody), 60);
+    assert_noop!(
+      Governance::unlock_vote_power(RuntimeOrigin::signed(ALICE), veto_asset),
+      pallet_governance::Error::<Runtime>::VotePowerCustodyLockActive
+    );
+
+    System::set_block_number(position.lock_until);
+    assert_ok!(Governance::unlock_vote_power(
+      RuntimeOrigin::signed(ALICE),
+      veto_asset,
+    ));
+    assert!(Governance::vote_power_custody(ALICE, veto_asset).is_none());
+    assert_eq!(Assets::balance(veto_asset, &ALICE), 60);
+    assert_eq!(Assets::balance(veto_asset, &custody), 0);
+  });
+}
+
+#[test]
+fn transferable_staking_receipt_power_is_custodied_reused_and_increased() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &ALICE, 100));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(ALICE), 0, 60));
+    let receipt = Staking::staked_asset_id(0).expect("staking receipt is registered");
+    submit_root_action_proposal(123, crate::Hash::repeat_byte(23));
+    submit_root_action_proposal(124, crate::Hash::repeat_byte(24));
+    advance_to_primary_open();
+
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      123,
+      pallet_governance::ProposalVoteKind::Aye,
+    ));
+    let custody = crate::configs::governance_config::governance_vote_power_custody_account();
+    assert_eq!(Assets::balance(receipt, &ALICE), 0);
+    assert_eq!(Assets::balance(receipt, &custody), 60);
+    assert!(
+      <Assets as FungiblesMutate<_>>::transfer(receipt, &ALICE, &BOB, 1, Preservation::Expendable,)
+        .is_err(),
+      "a frozen receipt cannot move and vote again through another account"
+    );
+
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(ALICE), 0, 20));
+    assert_eq!(Assets::balance(receipt, &ALICE), 20);
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      124,
+      pallet_governance::ProposalVoteKind::Aye,
+    ));
+    let position = Governance::vote_power_custody(ALICE, receipt)
+      .expect("receipt power remains in one aggregate source position");
+    assert_eq!(position.amount, 80);
+    assert_eq!(Assets::balance(receipt, &ALICE), 0);
+    assert_eq!(Assets::balance(receipt, &custody), 80);
+    assert_eq!(
+      Governance::account_governance_power_view(PROTOCOL_GOVERNANCE_DOMAIN, 124, ALICE)
+        .expect("second proposal remains active")
+        .frozen_ordinary_ballot
+        .expect("second primary ballot is frozen")
+        .raw_power,
+      7 * 80
+    );
+
+    System::set_block_number(position.lock_until);
+    assert_ok!(Governance::unlock_vote_power(
+      RuntimeOrigin::signed(ALICE),
+      receipt,
+    ));
+    assert_eq!(Assets::balance(receipt, &ALICE), 80);
+    assert_eq!(Assets::balance(receipt, &custody), 0);
   });
 }
 

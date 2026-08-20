@@ -26,8 +26,6 @@ related:
   - DEOS in 60 Seconds
   - Forking DEOS
   - Three-Layer Validation
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Start Here

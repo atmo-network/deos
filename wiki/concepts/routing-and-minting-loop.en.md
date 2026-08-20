@@ -27,8 +27,6 @@ related:
   - Token-Driven Automation
   - Staking
   - Core Terms
-last_compiled: 2026-08-10
-confidence: 0.9
 ---
 
 # Routing and Minting Loop

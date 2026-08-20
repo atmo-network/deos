@@ -28,8 +28,6 @@ related:
   - Стандарт TMCTOL
   - Токен-управляемая автоматизация
   - Идентичность активов
-last_compiled: 2026-08-10
-confidence: 0.9
 ---
 
 # DEOS Router
