@@ -16,7 +16,9 @@ This directory contains deterministic command surfaces, not agent strategy:
 
 Public root orchestration uses Bash for process lifecycle, environment and toolchain control, filesystem operations, signal-safe cleanup, and composition of existing commands. JavaScript ES modules are support leaves for deterministic structural transformation or validation when JSON, metadata, graph traversal, exact integer handling, or testable data semantics would be unsafe or obscure in shell. They remain behind an owning Bash or package entrypoint and must not grow into a parallel orchestration layer.
 
-The split follows workload semantics rather than directory or product language: Bash controls actions, while JavaScript understands structured data. Do not replace a clear shell composition with Node merely to unify extensions, and do not encode structural programs as `sed`/`awk`/`jq` pipelines merely to keep a `.sh` suffix. A root JavaScript support leaf must have a concrete structural owner that cannot be represented safely by the runtime, package, or an existing native tool; `04-generate-chain-spec.sh`, for example, consumes the complete runtime-owned preset directly instead of maintaining a second JavaScript genesis projection. Do not add Python automation.
+The split follows workload semantics rather than directory or product language: Bash controls actions, while JavaScript understands structured data. Do not replace a clear shell composition with Node merely to unify extensions, and do not encode structural programs as `sed`/`awk`/`jq` pipelines merely to keep a `.sh` suffix. A root JavaScript support leaf must have a concrete structural owner that cannot be represented safely by the runtime, package, or an existing native tool; `04-generate-chain-spec.sh`, for example, consumes the complete runtime-owned preset directly instead of maintaining a second JavaScript genesis projection.
+
+Do not add Python automation. One bootstrap exception exists: `setup-environment.sh` reads `rust-toolchain.toml` through `python3` with `tomllib`, because Node has no built-in TOML parser and the Rust toolchain must be installable before any Node runtime is pinned. That exception covers TOML parsing only, and the script checks for `tomllib` as a named prerequisite. Every JSON read in that script uses Node, matching `_common.sh`.
 
 ## Executable Ownership Inventory
 
@@ -37,7 +39,7 @@ GitHub workflows invoke root shared implementations only. Skills never call sibl
 Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers form the logical local-network evidence ladder—binary prerequisites, Cargo tools, runtime, ChainSpec, network, liveness, basic mutation, temporal consensus, then composed economics—without making an atom depend implicitly on earlier scripts.
 
 - [01-download-binaries.sh](./01-download-binaries.sh)
-  Download the pinned Polkadot SDK `stable2606-1` relay node, Omni Node, and preparation/execution workers for the supported host, verify repository-recorded SHA-256 digests before publishing the complete bundle under ignored `/bin`, and reject unsupported platforms rather than selecting an approximate asset.
+  Download the pinned Polkadot SDK `stable2606-1` relay node, Omni Node, preparation/execution workers, and `frame-omni-bencher` for the supported host, verify repository-recorded SHA-256 digests before publishing the complete bundle under ignored `/bin`, and reject unsupported platforms rather than selecting an approximate asset.
 
 - [02-install-tools.sh](./02-install-tools.sh)
   Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).

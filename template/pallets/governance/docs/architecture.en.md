@@ -243,6 +243,7 @@ Active proposer identity is also chain-native today through the bounded `Proposa
 - `ProposalMetadataByItem[(domain, item_id)]`: `CadenceMode`, payload kind, and payload hash scaffold
 - `ProposalVotesByItem[(domain, item_id)]`: bounded primary/protection ballot sets with frozen weight/raw power
 - `GovernanceLocks[account]`: aggregate `lock_until` extended to the maximum touched enactment horizon
+- `VotePowerCustodyByAccount[(account, lock_id)]`: one aggregate transferable source position containing its locked amount and maximum ballot horizon
 - `ProposalUrgentAuthorizedAt[(domain, item_id)]`: written once when expeditable `Pass` crosses raw threshold
 - `ProposalPendingEnactmentAt[(domain, item_id)]`: approval scheduling state when enactment delay is positive
 - `PendingEnactmentBuckets[epoch]`: epoch-keyed bounded servicing for pending enactment attempts
@@ -340,6 +341,7 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 - Rejects protection-track ballots once the configured protection window has closed for that proposal
 - Rejects over-cap voter sets
 - If a newly updated raw `Veto` tally becomes **strictly greater** than the runtime threshold against the domain's total eligible protection supply, the extrinsic finalizes the proposal immediately as `VetoCancelled`
+- Ballot insertion, governance-lock extension, GovXP participation, urgent authorization, and immediate terminal resolution share one transaction; terminal failure restores exact pre-vote state
 - The later maturity-time protection gate only becomes active once raw `Veto` turnout reaches the runtime dust floor against that same protection supply
 - Emits `ProposalVoteCast`
 
@@ -484,6 +486,7 @@ The related state distinction is also important:
 | `7` | `resolve_proposal_from_votes` | maturity resolution |
 | `8` | `requeue_proposal_for_auto_finalization` | deferred-item recovery |
 | `9` | `force_resolve_proposal_from_votes` | policy-aware early finalization |
+| `10` | `unlock_vote_power` | signed release of one matured transferable source position |
 
 ## Events and Errors
 
@@ -587,7 +590,9 @@ $BLDR tactical governance => Staking::pool(native_asset_id).accounted_balance
 
 using a strict `>` comparison against the runtime threshold, while the end-of-window protection gate first requires raw `Veto` turnout to reach the runtime `1%` dust floor and then compares decline-weighted `Veto` vs decline-weighted `Pass` tallies.
 
-In `runtime-benchmarks` builds, the ordinary provider deliberately falls back to equal weight `1`, while the protection-power provider now falls back to `1 / 1` vote-weight-plus-total-issuance so benchmarking can exercise the immediate-cancellation worst case deterministically.
+The runtime stores protection ballots as `u64` while canonical balances are `u128`. Values above the exact `u64` envelope use one `U256` proportional normalization for account power and total supply, capped at `u64::MAX / 7` so every ordinary Declining Power result remains representable. Independent account/supply saturation is forbidden because it can turn a minority holder into an apparent 100% holder.
+
+In `runtime-benchmarks` builds, the ordinary provider retains equal weight `1`. The protection provider executes its production balance, issuance, normalization, and Declining Power path against a benchmark-prepared `$VETO` asset; `cast_vote` fills the veto set and executes immediate cancellation so generated weight covers the terminal branch and all winner-participation writes.
 
 This demonstrates the project's `Runtime-as-Config` discipline. The pallet does not hardcode one-account-one-vote or an ordinary-ballot staking formula. It keeps ordinary and protection vote-power surfaces runtime-wired rather than baking asset lookup or temporal policy into pallet logic.
 
@@ -625,7 +630,9 @@ Admin control stays intentionally narrow. `reject_proposal(...)`, policy-aware `
 
 Bounded finalized-outcome retention is sufficient for the kernel pallet. Durable archival history belongs to events, indexers, or a future dedicated history surface rather than unbounded in-kernel storage growth.
 
-Richer vote-power formulas, broader emergency policy, or permanent on-chain history remain future opt-in choices, not unresolved debt in the current launch baseline.
+Transferable ballot source non-reuse is enforced through `VotePowerCustodyByAccount` and the runtime `VotePowerCustody` adapter. The reference runtime transfers all free `$VETO` or same-domain staking receipt balance into one framework-owned custody account after a ballot is accepted. Later ballots read free plus already-custodied balance, reuse that amount across concurrent proposals, and increase the position only from newly free units. The signed `unlock_vote_power` call releases the source after its maximum horizon.
+
+Runtime regressions independently prove transfer rejection, concurrent reuse, later-position growth, and matured release for both `$VETO` and same-domain staking receipts.
 
 ## Query and Computation Semantics
 
@@ -636,7 +643,9 @@ Instead:
 
 - `ProposalVotesByItem[(domain, item_id)]` now stores bounded ballot sets for primary-track `Aye`, `Nay`, `Amplify`, `Approve`, `Reduce` plus protection-track `Veto`, `Pass`, with each ballot carrying the account, vote-time epoch, frozen computed weight, and frozen raw protection power
 - `cast_vote(...)` computes ordinary ballot weight through `ProposalVoteWeightProvider` and protection-track ballot weight/raw power through `VetoVotePowerProvider` exactly once at vote time; `proposal_vote_tally(...)` and resolution then sum the stored ballot weights rather than re-reading live balances
-- `cast_vote(...)` extends `GovernanceLocks[account].lock_until` to the maximum of its current value and the proposal's effective primary close plus enactment delay; runtime staking integration now uses that horizon to refuse collator-LP, standalone-governance-LP, `$NTVE`, and `stNTVE` unlock requests while the locked position is still custody-backing frozen `NativeVotePower`
+- `cast_vote(...)` extends `GovernanceLocks[account].lock_until` to the maximum of its current value and the proposal's effective primary close plus enactment delay; runtime staking integration uses that horizon to refuse collator-LP, standalone-governance-LP, `$NTVE`, and `stNTVE` unlock requests while the locked position is still custody-backing frozen `NativeVotePower`
+- After ballot admission, `cast_vote(...)` transactionally moves newly exposed transferable `$VETO` or staking receipts into aggregate source custody and extends that source horizon; a transfer failure rolls back the ballot and participation effects
+- `unlock_vote_power(lock_id)` transactionally returns the full aggregate source position after its horizon and removes the position; early and unknown releases fail explicitly
 - `cast_vote(...)` now already enforces the generic rule that ordinary ballots cannot enter before `primary_open`, while protection-track ballots remain admissible during any configured lead-in
 - `proposal_resolution_state(...)` first checks whether frozen raw protection-majority triggers the immediate threshold. After maturity, raw `Veto` turnout must clear the `1%` dust floor before the stored-weight `Veto` versus `Pass` gate applies; only then does the evaluator derive primary state from the family-aware tally.
 - Binary families use weighted `Aye / Nay`. Invoice families use `weighted_positive` versus `weighted_nay` with deterministic lowest-scalar tie-breaking across `Amplify / Approve / Reduce`. The launch-line runtime still reports only `Binary`, so invoice resolution remains kernel-ready rather than live reference-line policy.
@@ -773,7 +782,7 @@ The implementation is covered by:
 
 The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` steps, and `20` repeats.
 
-`submit_signed_proposal` measures primary-eligibility reads, opening-fee transfer, and strategic proposal creation with the domain active-cap index filled to `MaxActiveProposalsPerDomain - 1`. The admin general-submission benchmark fills to one below the general lane cap. Its runtime weight is `Weight::from_parts(696_259_000, 4_197_809)` plus `139` database reads and `8` writes.
+`submit_signed_proposal` measures primary eligibility, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `638,290,000 / 4,197,809` plus 138 reads and seven writes. `cast_vote` measures the saturated immediate-veto terminal branch with 256 winning participants, production `$VETO` power reads, and custody writes; it charges `1,124,323,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `68,166,000 / 6,208` plus five reads and five writes.
 
 The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
 

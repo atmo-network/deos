@@ -24,8 +24,6 @@ related:
   - Invariant Map
   - Invariant and Threat Map
   - Three-Layer Validation
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Economic Claim Levels

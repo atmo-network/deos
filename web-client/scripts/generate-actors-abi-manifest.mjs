@@ -204,6 +204,7 @@ const generated = await format(JSON.stringify(manifest), { parser: 'json' });
 const generatedBounds = await format(
   `/* Generated from Actors runtime metadata ${manifest.metadata.sha256}; do not edit. */\n` +
     `export const ACTORS_MAX_CONTRACT_STEPS = ${decodeUnsignedConstant(manifest, 'MaxContractSteps', 4)};\n` +
+    `export const ACTORS_MAX_EXECUTION_DELAY_BLOCKS = ${decodeUnsignedConstant(manifest, 'MaxExecutionDelayBlocks', 4)};\n` +
     `export const ACTORS_MAX_RETRY_ATTEMPTS = ${decodeUnsignedConstant(manifest, 'MaxRetryAttempts', 4)};\n` +
     `export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = ${decodeUnsignedConstant(manifest, 'MaxOpeningSnapshotEntries', 4)};\n` +
     `export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = ${decodeUnsignedConstant(manifest, 'MaxOpeningPredicateResults', 4)};\n` +

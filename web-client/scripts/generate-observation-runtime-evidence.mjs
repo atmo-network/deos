@@ -303,9 +303,7 @@ async function generatedSource(runtimeCodeHashFallback = null) {
       fanoutBaseWeight,
       serviceUnitWeight,
       maxServiceUnitsPerBlock,
-      maxActiveDirtyFeeds:
-        rustInteger(actorConfig, 'ActorMaxActiveActors') *
-        rustInteger(actorConfig, 'ActorMaxTriggerSources'),
+      maxActiveDirtyFeeds: rustInteger(actorConfig, 'ActorMaxActiveActors'),
       maxSubscriberPagesPerFeed: Math.ceil(
         rustInteger(actorConfig, 'ActorMaxActiveActors') /
           rustInteger(actorConfig, 'ActorQueuePageSize'),

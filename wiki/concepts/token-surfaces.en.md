@@ -27,8 +27,6 @@ related:
   - $BLDR Builder Economy
   - Token Minting Curve
   - Read-Model Split
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Token Surfaces

@@ -5,7 +5,7 @@
 
 use crate::{
   AccountId, AssetConversion, Assets, Balance, Balances, EXISTENTIAL_DEPOSIT, Oracle, Runtime,
-  RuntimeOrigin, Staking, System, configs::AssetKind,
+  RuntimeOrigin, SLOT_DURATION, Staking, System, Timestamp, configs::AssetKind,
 };
 use alloc::vec;
 use polkadot_sdk::frame_support::{
@@ -21,6 +21,13 @@ use polkadot_sdk::{
   sp_runtime::{DispatchError, ModuleError},
 };
 use primitives::assets::TYPE_FOREIGN;
+
+pub fn set_consensus_timestamp(timestamp_millis: u64) {
+  polkadot_sdk::pallet_aura::CurrentSlot::<Runtime>::put(
+    polkadot_sdk::sp_consensus_slots::Slot::from(timestamp_millis / SLOT_DURATION),
+  );
+  Timestamp::set_timestamp(timestamp_millis);
+}
 
 pub fn update_actor_contract_partial(
   origin: RuntimeOrigin,

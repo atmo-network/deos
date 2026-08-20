@@ -23,8 +23,6 @@ related:
   - DEOS Framework Overview
   - TMCTOL Standard
   - Domain Map
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # DEOS in 60 Seconds

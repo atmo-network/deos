@@ -9,7 +9,7 @@ use polkadot_sdk::{
   frame_support::{
     PalletId, construct_runtime,
     traits::{
-      ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get,
+      ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get, Time,
       fungible::Inspect as NativeInspect, tokens::Provenance,
     },
     weights::Weight,
@@ -555,6 +555,16 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetId, Balance, u32>
   }
 }
 
+pub struct RuntimeTime;
+
+impl Time for RuntimeTime {
+  type Moment = u64;
+
+  fn now() -> Self::Moment {
+    System::block_number().saturating_mul(500)
+  }
+}
+
 impl pallet_deos_actors::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;
@@ -567,6 +577,8 @@ impl pallet_deos_actors::Config for Runtime {
   type DexOps = RuntimeDexOps;
   type StakingOps = ();
   type LiquidityOps = ();
+  type Time = RuntimeTime;
+  type CadenceTickMillis = ConstU64<500>;
   type MinWindowLength = ConstU64<2>;
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -591,7 +603,6 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxWakeupsPerBlock = ConstU32<16>;
   type MaxSweepBatch = ConstU32<4>;
   type MaxWhitelistSize = ConstU32<4>;
-  type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<4>;
   type TargetBlockTime = ConstU64<315_576>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
@@ -901,7 +912,7 @@ mod tests {
         pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
       ]);
       let contract = active_contract(
-        pallet_deos_actors::Trigger::immediate_manual(),
+        pallet_deos_actors::Trigger::manual(),
         0,
         alloc::vec![pallet_deos_actors::Step {
           precondition,
@@ -963,7 +974,7 @@ mod tests {
       assert_ok!(Actors::activate_actor(
         RuntimeOrigin::signed(ALICE),
         actor_id,
-        transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 5),
+        transfer_contract(pallet_deos_actors::Trigger::manual(), 5),
       ));
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
         &ALICE,
@@ -991,7 +1002,7 @@ mod tests {
   fn independent_runtime_executes_a_native_transfer_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let contract = transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 50);
+      let contract = transfer_contract(pallet_deos_actors::Trigger::manual(), 50);
       prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
@@ -1048,7 +1059,7 @@ mod tests {
         pallet_deos_actors::Predicate::BlockNumberAbove { threshold: 0 },
       ];
       let contract = active_contract(
-        pallet_deos_actors::Trigger::immediate_manual(),
+        pallet_deos_actors::Trigger::manual(),
         0,
         alloc::vec![
           pallet_deos_actors::Step {
@@ -1103,7 +1114,7 @@ mod tests {
   fn executive_balance_transfer_submits_direct_ingress_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_deos_actors::Trigger::immediate_address_event(
+      let trigger = pallet_deos_actors::Trigger::address_event(
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
@@ -1139,7 +1150,7 @@ mod tests {
   fn failed_executive_transfer_submits_neither_value_nor_signal() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_deos_actors::Trigger::immediate_address_event(
+      let trigger = pallet_deos_actors::Trigger::address_event(
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
@@ -1214,7 +1225,7 @@ mod tests {
       );
       assert!(admission.all_lte(ActorOnIdleReserve::get()));
       let admitted_contract = pallet_deos_actors::ActorContract {
-        trigger: pallet_deos_actors::Trigger::immediate_manual(),
+        trigger: pallet_deos_actors::Trigger::manual(),
         cooldown_blocks: 0,
         window: None,
         steps: admitted.clone(),
@@ -1241,7 +1252,7 @@ mod tests {
   fn direct_runtime_ingress_is_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_deos_actors::Trigger::immediate_address_event(
+      let trigger = pallet_deos_actors::Trigger::address_event(
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
@@ -1286,7 +1297,7 @@ mod tests {
           ALICE,
           pallet_deos_actors::Mutability::Mutable,
           Some(transfer_contract(
-            pallet_deos_actors::Trigger::cadenced_always(20),
+            pallet_deos_actors::Trigger::cadenced(20),
             1,
           )),
         ));
@@ -1337,10 +1348,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
-        Some(transfer_contract(
-          pallet_deos_actors::Trigger::immediate_manual(),
-          5,
-        )),
+        Some(transfer_contract(pallet_deos_actors::Trigger::manual(), 5,)),
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       let sovereign = Actors::active_actor_state(actor_id)
@@ -1377,7 +1385,7 @@ mod tests {
           RuntimeOrigin::signed(ALICE),
           pallet_deos_actors::Mutability::Mutable,
           Some(contract_with_task(
-            pallet_deos_actors::Trigger::immediate_manual(),
+            pallet_deos_actors::Trigger::manual(),
             mint_task(),
           )),
         ),
@@ -1394,11 +1402,11 @@ mod tests {
         Actors::activate_actor(
           RuntimeOrigin::signed(ALICE),
           dormant_id,
-          contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), mint_task()),
+          contract_with_task(pallet_deos_actors::Trigger::manual(), mint_task()),
         ),
         pallet_deos_actors::Error::<Runtime>::MintNotAllowedForUserActor
       );
-      let plan = transfer_contract(pallet_deos_actors::Trigger::immediate_manual(), 1);
+      let plan = transfer_contract(pallet_deos_actors::Trigger::manual(), 1);
       prefund_active_contract(ALICE, &plan);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
@@ -1421,7 +1429,7 @@ mod tests {
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
         Some(contract_with_task(
-          pallet_deos_actors::Trigger::immediate_manual(),
+          pallet_deos_actors::Trigger::manual(),
           mint_task(),
         )),
       ));
@@ -1452,7 +1460,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let plan = active_contract(
-        pallet_deos_actors::Trigger::immediate_manual(),
+        pallet_deos_actors::Trigger::manual(),
         2,
         alloc::vec![
           step(
@@ -1531,7 +1539,7 @@ mod tests {
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
         Some(active_contract(
-          pallet_deos_actors::Trigger::immediate_manual(),
+          pallet_deos_actors::Trigger::manual(),
           1,
           alloc::vec![temporary_swap_step()],
         )),
@@ -1574,7 +1582,7 @@ mod tests {
   fn suspended_direct_ingress_latches_once_and_survives_cancellation() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_deos_actors::Trigger::immediate_address_event(
+      let trigger = pallet_deos_actors::Trigger::address_event(
         pallet_deos_actors::SourceFilter::Any,
         pallet_deos_actors::AssetFilter::Any,
       );
@@ -1657,7 +1665,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let contract = active_contract(
-        pallet_deos_actors::Trigger::immediate_manual(),
+        pallet_deos_actors::Trigger::manual(),
         1,
         alloc::vec![temporary_swap_step()],
       );
@@ -1705,7 +1713,7 @@ mod tests {
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
         Some(active_contract(
-          pallet_deos_actors::Trigger::immediate_manual(),
+          pallet_deos_actors::Trigger::manual(),
           0,
           alloc::vec![step(
             pallet_deos_actors::Task::Stake {
@@ -1740,7 +1748,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let unsupported_retry = active_contract(
-        pallet_deos_actors::Trigger::immediate_manual(),
+        pallet_deos_actors::Trigger::manual(),
         1,
         alloc::vec![step(
           pallet_deos_actors::Task::Stake {
@@ -1809,7 +1817,7 @@ mod tests {
         ALICE,
         pallet_deos_actors::Mutability::Mutable,
         Some(active_contract(
-          pallet_deos_actors::Trigger::immediate_manual(),
+          pallet_deos_actors::Trigger::manual(),
           1,
           alloc::vec![temporary_swap_step()],
         )),
@@ -1857,7 +1865,7 @@ mod tests {
       ])
       .expect("two-step plan fits");
       let contract = pallet_deos_actors::ActorContract {
-        trigger: pallet_deos_actors::Trigger::immediate_manual(),
+        trigger: pallet_deos_actors::Trigger::manual(),
         cooldown_blocks: 0,
         window: None,
         steps: plan,
@@ -1907,7 +1915,7 @@ mod tests {
         input_limit: pallet_deos_actors::InputLimit::Absolute(100),
         slippage_tolerance: Perbill::zero(),
       };
-      let contract = contract_with_task(pallet_deos_actors::Trigger::immediate_manual(), task);
+      let contract = contract_with_task(pallet_deos_actors::Trigger::manual(), task);
       prefund_active_contract(ALICE, &contract);
       assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),

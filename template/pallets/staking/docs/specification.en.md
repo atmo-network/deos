@@ -141,7 +141,7 @@ For a non-empty pool:
 minted_shares = amount_in * total_shares / accounted_balance
 ```
 
-The deposited `$NTVE` becomes pool backing and the staker receives `stNTVE`.
+The deposited `$NTVE` becomes pool backing and the staker receives `stNTVE`. Backing transfer, share arithmetic, receipt mint, pool mutation, and event MUST commit atomically; a failed receipt mint or later invariant check leaves every balance and pool fact unchanged.
 
 ### 4.2 Unstake
 
@@ -150,6 +150,8 @@ Native unstaking burns `stNTVE` shares and redeems `$NTVE` backing.
 ```text
 amount_out = shares_out * accounted_balance / total_shares
 ```
+
+Receipt burn, backing payout, pool mutation, and event MUST commit atomically; a failed backing transfer restores the receipt and every pool fact.
 
 ### 4.3 Transfer
 

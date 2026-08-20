@@ -55,12 +55,12 @@ graph TD
 
 - `get_curve(asset_kind)` retrieves the stored `CurveConfig`
 - Contains: `initial_price`, `slope_parameter`, `initial_issuance`, `native_asset_id`, `foreign_asset_id`
-- Mint execution now fails closed: the pallet pre-validates the configured collateral match and requires every non-native asset in the pair to exist before any collateral transfer begins
+- Creation and mint execution fail closed when Local/Foreign variants alias the same underlying `pallet-assets` ID; mint preflight also validates the exact configured collateral and requires every non-native asset to exist before any transfer
 
 `2. Effective Supply Calculation`
 
-- `effective_supply = total_issuance - initial_issuance`
-- Uses live `Currency::total_issuance()` — burns instantly compress the curve
+- `effective_supply = total_issuance.saturating_sub(initial_issuance)`
+- Uses live issuance: burns instantly compress the curve, and issuance below the creation baseline validly clamps effective supply to zero
 
 `3. Spot Price Calculation`
 
@@ -125,12 +125,12 @@ This ensures users pay the exact mathematical cost for their token allocation.
 
 ### Overflow Protection
 
-All intermediate calculations use `U256` (256-bit unsigned integers):
+Spot-price and mint-integral intermediates use checked `U256` arithmetic:
 
-- `slope × effective_supply` → U256
-- `(K×P)² + 2×m×K²×Cost` → U256
-- `sqrt(...)` → U256
-- Final division back to `Balance` (u128)
+- `slope × effective_supply` is widened before division, so a representable price cannot be understated by native-width saturation
+- `(K×P)² + 2×m×K²×Cost` fails closed if any product or sum exceeds `U256`
+- `sqrt(...)` and subtraction remain checked against the widened discriminant
+- A final value above `Balance` (`u128`) fails with `ArithmeticOverflow`; configured precision is integrity-checked as nonzero
 
 ## Core Components
 
@@ -297,8 +297,8 @@ While TMC provides the ceiling, TOL provides floor support:
 | `NoCurveExists` | Minting attempted without curve | Governance must call `create_curve` |
 | `InsufficientBalance` | User payment < calculated cost | Increase payment amount |
 | `ZeroAmount` | Mint requested with zero cost | Provide non-zero payment |
-| `ArithmeticOverflow` | U256 calculation exceeded bounds | Should be impossible with proper parameters |
-| `InvalidParameters` | Slope or price = 0 at curve creation | Use non-zero parameters |
+| `ArithmeticOverflow` | A widened price, discriminant intermediate, or mint result is unrepresentable | Use a smaller payment or an economically bounded curve configuration |
+| `InvalidParameters` | Both price and slope are zero, assets share one physical ledger identity, or runtime precision is zero | Supply a valid curve with distinct assets and nonzero host precision |
 | `ExceedsMaxSupply` | Mint would exceed Balance::MAX | Theoretical limit, unlikely in practice |
 
 ## Implementation Status

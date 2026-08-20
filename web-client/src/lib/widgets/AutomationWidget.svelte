@@ -93,20 +93,17 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   );
   const draftTriggerSummary = $derived(triggerSummary(draft.trigger));
 
-  function triggerSourceSummary(source: { type: string }) {
-    return source.type === 'OnAddressEvent' ? 'Address event' : source.type;
-  }
-
   function triggerSummary(trigger: ActorAuthoringTrigger) {
-    if (trigger.type === 'Immediate') {
-      return `Immediate · ${trigger.sources.map(triggerSourceSummary).join(' + ')}`;
+    switch (trigger.type) {
+      case 'Manual':
+        return 'Manual';
+      case 'AddressEvent':
+        return 'Address event';
+      case 'ObservationChange':
+        return 'Observation change';
+      case 'Cadenced':
+        return `Cadenced · ${trigger.everyTicks} ticks`;
     }
-    if (trigger.mode.type === 'Always') {
-      return `Cadenced/${trigger.everyBlocks} · Always`;
-    }
-    return `Cadenced/${trigger.everyBlocks} · ${trigger.mode.sources
-      .map(triggerSourceSummary)
-      .join(' + ')}`;
   }
 
   function eligibilityLabel(actor: AutomationActorSnapshot): string {
@@ -125,8 +122,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     switch (eligibility.executionPhase.type) {
       case 'Ready':
         return 'Ready now';
-      case 'WaitingTemporal':
+      case 'WaitingBlock':
         return `Gated · block ${eligibility.executionPhase.block}`;
+      case 'WaitingCadenceTick':
+        return `Cadence · tick ${eligibility.executionPhase.tick}`;
       case 'WaitingRetry':
         return `Retry · block ${eligibility.executionPhase.block}`;
       case 'WaitingSignal':

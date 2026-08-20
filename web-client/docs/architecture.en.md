@@ -104,7 +104,7 @@ Stability, probability, causal strength, contention harm, and economic impact re
 
 Unscored reactive findings separate structural paths from evidence-bound timing and policy comparisons. Static analysis derives cooldown from schedule bytes and derives absent hysteresis/persistence from the current stateless linear Predicate language. Chatter rows identify the plan. Other timing/policy rows require generated runtime, metadata, weights, fanout limits, and field provenance; mismatch suppresses them without hiding graph truth.
 
-Trigger projection keeps admission independent from source identity. Manual and AddressEvent remain source kinds; every `OnObservationChange` entry additionally preserves its exact metadata-decoded feed projection without inventing a threshold, Predicate, callback, or execution result.
+Trigger projection preserves the scalar metadata union directly: `Manual`, `AddressEvent`, `ObservationChange`, or `Cadenced`. ObservationChange retains its exact metadata-decoded feed projection without inventing a threshold, Predicate, callback, or execution result; cadence retains its timestamp-tick period.
 
 Authoring treats `SourceFilter::Any` as an explicit fee-griefing exposure rather than a convenience default: any certified sender matching the asset filter may latch readiness, and the resulting User attempt consumes the actor's Weight-derived fee budget. The client does not infer trusted senders or runtime reimbursement; authors narrow exposure with `OwnerOnly` or a bounded whitelist.
 
@@ -136,7 +136,7 @@ The step editor presents output-authored `SwapOut` first and requires explicit `
 
 The step editor presents `AbortCycle` as “Abort on task failure” without changing encoded identity. A compact disclosure separates false-precondition advance, resolution skip, funding unavailability, Temporary task failure, and Permanent task failure; the `StopCycle` warning names false-precondition skip separately from predicate-evaluation and User fee-collection failure.
 
-`AutomationWidget` keeps actor monitoring, observation inspection, and composition in separate views. `AutomationTriggerEditor` exposes Immediate/Cadenced admission, Always/WhenSignalled mode, and up to four Manual or filtered AddressEvent sources.
+`AutomationWidget` keeps actor monitoring, observation inspection, and composition in separate views. `AutomationTriggerEditor` exposes exactly one Manual, filtered AddressEvent, typed ObservationChange, or timestamp-tick Cadenced trigger. Strategies needing independent sources use separate Actors.
 
 Composition renders stable numbered rows with an absent unconditional guard or one bounded `Precondition` DNF, explicit `Opening`/`Current` predicate timing, and task-parameter, amount, and error-policy controls for every current primitive. Removing the final predicate makes `precondition` absent; `StopCycle` renders terminal completion without adding an edge. The widget creates artifacts but has no submission action.
 
@@ -256,7 +256,7 @@ The widget consumes generated metadata:
 - `_meta/navigation.json` for section/page navigation;
 - `_meta/aliases.json` for alias-aware lookup;
 - `_meta/graph.json` for related-page navigation;
-- `_meta/state.json` for status/confidence/provenance;
+- `_meta/state.json` for explicit status and provenance;
 - `_meta/locales.json` for locale/page discovery.
 
 The wiki reader should keep page content primary and show related context/provenance as supporting information.

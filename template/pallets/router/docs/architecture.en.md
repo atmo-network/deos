@@ -219,10 +219,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
       } else {
         (res_b, res_a)
       };
-      if !reserve_in.is_zero() {
-        let spot_price = reserve_out
-          .saturating_mul(T::Precision::get())
-          .saturating_div(reserve_in);
+      if let Some(spot_price) = Self::scaled_price(reserve_out, reserve_in) {
         T::PriceOracle::update_ema_price(from, to, spot_price)?;
       }
     }
@@ -245,7 +242,7 @@ The standalone Oracle provides bounded pair admission, typed status/provenance, 
 | Time | Oracle observation `updated_at`, same directional feed identity |
 | Cardinality | Canonical pool admission permits at most 500 complete bidirectional pairs under the 1,001-feed producer bound |
 | Initialization | First nonzero observation replaces zero EMA directly |
-| Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot ratio uses saturating `Balance` multiplication and division |
+| Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot and quoted ratios use `U256` intermediates and saturate only an unrepresentable final price |
 | Ordering | Direct route validates against the previous EMA, collects fee, snapshots pre-execution reserves into EMA, then executes; transaction rollback covers failure |
 | Direction | Every prepared XYK leg updates its ordered `asset_in -> asset_out` key in execution order; reverse state remains independent |
 | Router consumers | Per-leg XYK deviation and informational price impact; direct TMC mint has no XYK reference or publication |
@@ -262,7 +259,7 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
 | `LpPairByTokenId<T>` | `StorageValue<BoundedBTreeMap<..., MaxLpPairs>>` | Bounded reverse index from LP token ID to canonical pool pair |
 
-LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. Package `try_state` uses the same canonical-pair predicate and verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Runtime integration owns host-pool existence and exact registry agreement.
+LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `preflight_register_lp_pair` exposes the same read-only admission contract so a host can reject before an independently dispatched pool mutation. Package `try_state` verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Runtime integration owns host-pool existence and exact registry agreement.
 
 ## Extrinsics
 
@@ -426,15 +423,15 @@ Production `50 × 20` generation measures every semantic route class independent
 
 | Class | RefTime / ProofSize | Reads / Writes |
 | --- | --- | --- |
-| Exact-input direct XYK | `340,691,000 / 9,667` | `25 / 12` |
-| Exact-input direct mint | `360,526,000 / 21,862` | `32 / 14` |
-| Exact-input Native-anchored XYK | `502,866,000 / 19,253` | `36 / 17` |
-| Exact-output direct XYK | `195,978,000 / 6,208` | `10 / 5` |
-| Exact-output Native-anchored XYK | `365,276,000 / 16,644` | `21 / 10` |
+| Exact-input direct XYK | `302,068,000 / 13,998` | `25 / 12` |
+| Exact-input direct mint | `313,452,000 / 27,006` | `32 / 14` |
+| Exact-input Native-anchored XYK | `440,496,000 / 19,253` | `36 / 17` |
+| Exact-output direct XYK | `164,340,000 / 6,208` | `10 / 5` |
+| Exact-output Native-anchored XYK | `304,233,000 / 16,644` | `21 / 10` |
 
-The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,385,000 / 1,489`, one read, and one write.
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `8,591,000 / 1,489`, one read, and one write.
 
-The accepted full Actors production generation uses the same maximum for exact-input and exact-output DEX tasks. It measures exact-input at `550,009,000 / 19,253` with 37 reads and 17 writes and exact-output at `551,126,000 / 19,253` with 36 reads and 17 writes.
+The accepted full Actors production generation uses the maximum reachable Router topology plus the System reference guard. It measures exact-input at `510,687,000 / 19,253` with 38 reads and 17 writes and exact-output at `504,401,000 / 19,253` with 37 reads and 17 writes.
 
 ## Conclusion
 

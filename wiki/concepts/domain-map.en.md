@@ -27,8 +27,6 @@ related:
   - Governance
   - $BLDR Builder Economy
   - Reference Client
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Domain Map

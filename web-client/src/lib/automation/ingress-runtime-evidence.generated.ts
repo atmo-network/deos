@@ -15,7 +15,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     transactionVersion: 1,
   },
   inventorySha256:
-    'b298b0b3cf5ef02d2a5fed8cfa16cc2ee6a7e54ec1f82e75ef3bdbdf79bd0673',
+    'dbbedcbf1c0f6f035348ac80b4624c3a10dc43a5df90d0c2a7d3dac1468340fa',
   certifiedProducers: [
     {
       id: 'AddressEventIngressExtension::signed_transfer',
@@ -88,16 +88,6 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
       notifyOwner: 'ActorAwareAssetTransactor::on_inbound_without_source',
       rollbackOwner: 'ActorAwareAssetTransactor deposit revert',
       weightOwner: 'One-asset deposit generated weight',
-    },
-    {
-      id: 'TmctolFeeCollector',
-      creditedSurface: 'Fee Sink sovereign',
-      sourceProvenance: 'Payer / InternalProtocol',
-      preflightOwner:
-        'Ledger-only preflight inside transfer_native_ledger_only',
-      notifyOwner: 'TmctolFeeCollector::collect_fee single notify',
-      rollbackOwner: 'Fee Sink transfer + ingress transaction revert',
-      weightOwner: 'Fee collection generated weights',
     },
   ],
   boundary: {

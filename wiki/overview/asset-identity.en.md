@@ -22,8 +22,6 @@ related:
   - Staking
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-07-20
-confidence: 0.95
 ---
 
 # Asset Identity

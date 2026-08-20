@@ -32,8 +32,6 @@ related:
   - Physics-First vs Politics-First
   - Generated Wiki
   - Core Terms
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Newcomer FAQ

@@ -91,7 +91,7 @@ export type ObservationActorDeliveryInspection = {
   queueLane: 'System' | 'User' | null;
   queueTicket: bigint | null;
   wakeup: {
-    block: number;
+    key: { type: 'Block'; value: number } | { type: 'Tick'; value: bigint };
     pageId: bigint;
     slot: number;
   } | null;

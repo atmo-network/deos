@@ -166,8 +166,8 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await writeFile(
       sandboxSpecPath,
       specSource.replace(
-        '  Immediate { sources: Sources },\n  Cadenced { every_blocks: u32, sources: Option<Sources> },',
-        '  Cadenced { every_blocks: u32, sources: Option<Sources> },\n  Immediate { sources: Sources },',
+        '  Manual,\n  AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },',
+        '  AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },\n  Manual,',
       ),
     );
     const structFieldDrift = await run(

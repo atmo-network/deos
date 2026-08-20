@@ -27,8 +27,6 @@ related:
   - Routing and Minting Loop
   - Actors System
   - Read-Model Split
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Architecture Diagrams

@@ -152,49 +152,20 @@ function automationFundingSourcePolicy(funding: unknown): string | null {
   return typeof policy?.type === 'string' ? policy.type : null;
 }
 
-function triggerSourceLabel(source: unknown): string {
-  const variant = triggerRecord(source);
-  switch (variant?.type) {
-    case 'Manual':
-      return 'Manual';
-    case 'OnAddressEvent':
-      return 'Address event';
-    default:
-      return typeof variant?.type === 'string'
-        ? variant.type
-        : 'Unknown source';
-  }
-}
-
-function triggerSourcesLabel(value: unknown): string {
-  const sources = Array.isArray(value) ? value : [];
-  return sources.length === 0
-    ? 'No sources'
-    : sources.map(triggerSourceLabel).join(' + ');
-}
-
 function automationTriggerLabel(trigger?: {
   type: string;
   value?: unknown;
 }): string {
-  if (!trigger) {
-    return 'Unavailable';
-  }
-  const value = triggerRecord(trigger.value);
-  switch (trigger.type) {
-    case 'Immediate':
-      return `Immediate · ${triggerSourcesLabel(value?.sources)}`;
-    case 'Cadenced': {
-      const everyBlocks = value?.every_blocks;
-      const cadence = typeof everyBlocks === 'number' ? everyBlocks : 'unknown';
-      const mode = triggerRecord(value?.mode);
-      return mode?.type === 'WhenSignalled'
-        ? `Cadenced/${cadence} · ${triggerSourcesLabel(mode.value)}`
-        : `Cadenced/${cadence} · Always`;
-    }
-    default:
-      return trigger.type;
-  }
+  if (!trigger) return 'Unavailable';
+  if (trigger.type === 'AddressEvent') return 'Address event';
+  if (trigger.type === 'ObservationChange') return 'Observation change';
+  if (trigger.type !== 'Cadenced') return trigger.type;
+  const everyTicks = triggerRecord(trigger.value)?.every_ticks;
+  const cadence =
+    typeof everyTicks === 'number' || typeof everyTicks === 'bigint'
+      ? everyTicks.toString()
+      : 'unknown';
+  return `Cadenced · ${cadence} ticks`;
 }
 
 export class BlockchainAdapter implements Adapter {

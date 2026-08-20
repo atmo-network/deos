@@ -23,7 +23,7 @@ pub mod weights;
 pub use weights::WeightInfo;
 
 use frame::prelude::*;
-use polkadot_sdk::{frame_support::traits::ConstU32, sp_runtime::Perbill};
+use polkadot_sdk::{frame_support::traits::ConstU32, sp_core::U256, sp_runtime::Perbill};
 use scale_info::prelude::vec::Vec;
 
 /// Maximum asset count for the accepted direct and Native-anchored route families.
@@ -651,20 +651,37 @@ pub mod pallet {
       }
     }
 
-    pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
+    pub fn preflight_register_lp_pair(
+      lp_token_id: u32,
+      pair: (AssetKind, AssetKind),
+    ) -> DispatchResult {
       let canonical_pair = Self::canonical_lp_pair(pair).ok_or(Error::<T>::InvalidPoolPair)?;
-      LpPairByTokenId::<T>::try_mutate(|pairs| {
-        if let Some(existing) = pairs.get(&lp_token_id) {
-          ensure!(
-            *existing == canonical_pair,
-            Error::<T>::LpTokenPairCollision
-          );
-          return Ok(());
-        }
+      let pairs = LpPairByTokenId::<T>::get();
+      if let Some(existing) = pairs.get(&lp_token_id) {
         ensure!(
-          !pairs.values().any(|existing| *existing == canonical_pair),
+          *existing == canonical_pair,
           Error::<T>::LpTokenPairCollision
         );
+        return Ok(());
+      }
+      ensure!(
+        !pairs.values().any(|existing| *existing == canonical_pair),
+        Error::<T>::LpTokenPairCollision
+      );
+      ensure!(
+        (pairs.len() as u32) < T::MaxLpPairs::get(),
+        Error::<T>::LpPairCapacityExceeded
+      );
+      Ok(())
+    }
+
+    pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
+      Self::preflight_register_lp_pair(lp_token_id, pair)?;
+      let canonical_pair = Self::canonical_lp_pair(pair).ok_or(Error::<T>::InvalidPoolPair)?;
+      LpPairByTokenId::<T>::try_mutate(|pairs| {
+        if pairs.contains_key(&lp_token_id) {
+          return Ok(());
+        }
         pairs
           .try_insert(lp_token_id, canonical_pair)
           .map_err(|_| Error::<T>::LpPairCapacityExceeded)?;
@@ -913,14 +930,25 @@ pub mod pallet {
           ..
         } = leg
         {
-          ensure!(!quoted_amount_in.is_zero(), Error::<T>::InvalidOracleData);
-          let current_price = quoted_amount_out
-            .saturating_mul(T::Precision::get())
-            .saturating_div(*quoted_amount_in);
+          let current_price = Self::scaled_price(*quoted_amount_out, *quoted_amount_in)
+            .ok_or(Error::<T>::InvalidOracleData)?;
           T::PriceOracle::validate_price_deviation(*asset_in, *asset_out, current_price)?;
         }
       }
       Ok(())
+    }
+
+    /// Computes `numerator * Precision / denominator` without corrupting ordinary ratios when the
+    /// intermediate exceeds `Balance`. A representable quotient stays exact; only a quotient wider
+    /// than the public price type saturates at that type's explicit ceiling.
+    pub(crate) fn scaled_price(numerator: Balance, denominator: Balance) -> Option<Balance> {
+      if denominator.is_zero() {
+        return None;
+      }
+      let price = U256::from(numerator)
+        .checked_mul(U256::from(T::Precision::get()))?
+        .checked_div(U256::from(denominator))?;
+      Some(price.try_into().unwrap_or(Balance::MAX))
     }
 
     /// Update the local EMA from pre-execution pool reserves
@@ -930,16 +958,12 @@ pub mod pallet {
     ) -> Result<(), ExecutionError<T>> {
       if let Some(pool_id) = T::AssetConversion::single_pool_id(from, to) {
         if let Some((res_a, res_b)) = T::AssetConversion::single_pool_reserves(pool_id) {
-          // CORRECT: Identify which reserve matches the 'from' asset
           let (reserve_in, reserve_out) = if pool_id.0 == from {
             (res_a, res_b)
           } else {
-            (res_b, res_a) // Flip reserves if pool is sorted differently
+            (res_b, res_a)
           };
-          if !reserve_in.is_zero() {
-            let spot_price = reserve_out
-              .saturating_mul(T::Precision::get())
-              .saturating_div(reserve_in);
+          if let Some(spot_price) = Self::scaled_price(reserve_out, reserve_in) {
             T::PriceOracle::update_ema_price(from, to, spot_price)?;
           }
         }

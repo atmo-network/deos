@@ -40,8 +40,6 @@ related:
   - Reading Paths
   - Development Status
   - Newcomer FAQ
-last_compiled: 2026-08-14
-confidence: 0.9
 ---
 
 # Core Terms

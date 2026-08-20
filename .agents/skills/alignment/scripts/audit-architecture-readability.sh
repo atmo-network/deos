@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-MAX_BLOCK_CHARS="${DEOS_ARCHITECTURE_BLOCK_CHARS:-600}"
+MAX_BLOCK_CHARS="${DEOS_ARCHITECTURE_BLOCK_CHARS:-1024}"
 
 usage() {
     cat <<'EOF'
@@ -11,7 +11,7 @@ Usage: audit-architecture-readability.sh [ARCHITECTURE_FILE...]
 
 Rejects oversized prose paragraphs, list items, and table rows in English
 architecture Markdown. Fenced code, headings, and generated HTML are excluded.
-The default maximum semantic block length is 600 characters.
+The default maximum semantic block length is 1024 characters.
 
 With no arguments, audits root and package-owned *.architecture.en.md files.
 

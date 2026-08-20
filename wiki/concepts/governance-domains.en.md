@@ -27,8 +27,6 @@ related:
   - Read-Model Split
   - Physics-First vs Politics-First
   - Core Terms
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Governance Domains

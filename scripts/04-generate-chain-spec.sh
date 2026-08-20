@@ -95,10 +95,21 @@ check_prerequisites() {
     log_success "Chain spec prerequisites checked"
 }
 
+GENERATION_DIR=""
+
+# The explicit exit paths below already remove the staging directory, but an interrupt between
+# `mktemp -d` and those would leak it. The trap covers that window.
+cleanup_generation_dir() {
+    [[ -n "$GENERATION_DIR" && -d "$GENERATION_DIR" ]] && rm -rf "$GENERATION_DIR"
+    return 0
+}
+
 generate_chain_spec() {
     phase_banner "Step 2: Generate chain spec"
     local generation_dir generated_path
     generation_dir="$(mktemp -d "${TMPDIR:-/tmp}/deos-chain-spec.XXXXXX")"
+    GENERATION_DIR="$generation_dir"
+    trap cleanup_generation_dir EXIT INT TERM
     generated_path="$generation_dir/chain_spec.json"
 
     log_info "Generating chain specification"

@@ -24,8 +24,6 @@ related:
   - TMCTOL Standard
   - TMCTOL Formulas
   - Physics-First vs Politics-First
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Token Minting Curve

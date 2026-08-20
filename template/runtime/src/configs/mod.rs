@@ -66,7 +66,9 @@ pub use deos_router_config::{
 pub use tmc_config::TmcPalletId;
 
 #[allow(unused_imports)]
-pub use xcm_config::{ActorAwareAssetTransactor, RelayLocation, XcmOriginToTransactDispatchOrigin};
+pub use xcm_config::{
+  ActorAwareAssetTransactor, NativeLocation, RelayLocation, XcmOriginToTransactDispatchOrigin,
+};
 
 parameter_types! {
   pub const Version: RuntimeVersion = VERSION;
@@ -259,7 +261,7 @@ impl cumulus_pallet_aura_ext::Config for Runtime {}
 
 parameter_types! {
   /// The asset ID for the asset that we use to pay for message delivery fees.
-  pub FeeAssetId: AssetId = AssetId(xcm_config::RelayLocation::get());
+  pub FeeAssetId: AssetId = AssetId(xcm_config::NativeLocation::get());
   /// The base fee for the message delivery fees.
   pub const ToSiblingBaseDeliveryFee: u128 = MILLI_UNIT.saturating_mul(30);
   pub const ToParentBaseDeliveryFee: u128 = MILLI_UNIT.saturating_mul(30);

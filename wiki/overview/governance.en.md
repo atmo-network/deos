@@ -23,8 +23,6 @@ related:
   - Physics-First vs Politics-First
   - Staking
   - Core Terms
-last_compiled: 2026-07-28
-confidence: 0.9
 ---
 
 # Governance

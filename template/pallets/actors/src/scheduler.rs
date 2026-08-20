@@ -835,7 +835,7 @@ impl<T: Config> Pallet<T> {
     let Some(cursor_index) = bucket.cursor_index else {
       return Err(EnqueueOutcome::CorruptedTopology);
     };
-    if Self::wakeup_cursor_get(cursor_index) != Some(pointer.block) {
+    if Self::wakeup_cursor_get(pointer.block.clock(), cursor_index) != Some(pointer.block) {
       return Err(EnqueueOutcome::CorruptedTopology);
     }
     let Some(next_bucket_live) = bucket.live_entries.checked_sub(1) else {
@@ -927,19 +927,30 @@ impl<T: Config> Pallet<T> {
     result.ok()
   }
 
-  fn wakeup_substrate_schedule_inner(actor_id: ActorId, wakeup_block: BlockNumberFor<T>) -> bool {
+  fn wakeup_substrate_schedule_inner(
+    actor_id: ActorId,
+    wakeup_key: WakeupKey<BlockNumberFor<T>>,
+  ) -> bool {
     matches!(
-      Self::try_wakeup_substrate_schedule_inner(actor_id, wakeup_block),
+      Self::try_wakeup_substrate_schedule_key_inner(actor_id, wakeup_key),
       Ok(()) | Err(EnqueueOutcome::AlreadyLive)
     )
   }
 
+  #[cfg(test)]
   pub(crate) fn try_wakeup_substrate_schedule_inner(
     actor_id: ActorId,
     wakeup_block: BlockNumberFor<T>,
   ) -> Result<(), EnqueueOutcome> {
+    Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Block(wakeup_block))
+  }
+
+  fn try_wakeup_substrate_schedule_key_inner(
+    actor_id: ActorId,
+    wakeup_key: WakeupKey<BlockNumberFor<T>>,
+  ) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
-      match Self::try_wakeup_substrate_schedule_transition(actor_id, wakeup_block) {
+      match Self::try_wakeup_substrate_schedule_transition(actor_id, wakeup_key) {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
         Err(error) => {
           polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
@@ -951,7 +962,7 @@ impl<T: Config> Pallet<T> {
 
   fn try_wakeup_substrate_schedule_transition(
     actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
+    wakeup_block: WakeupKey<BlockNumberFor<T>>,
   ) -> Result<(), EnqueueOutcome> {
     let Some(hot) = ActorHot::<T>::get(actor_id) else {
       return Err(EnqueueOutcome::CorruptedTopology);
@@ -967,7 +978,7 @@ impl<T: Config> Pallet<T> {
       let Some(cursor_index) = bucket.cursor_index else {
         return Err(EnqueueOutcome::CorruptedTopology);
       };
-      if Self::wakeup_cursor_get(cursor_index) != Some(wakeup_block) {
+      if Self::wakeup_cursor_get(wakeup_block.clock(), cursor_index) != Some(wakeup_block) {
         return Err(EnqueueOutcome::CorruptedTopology);
       }
       let tail_key = (wakeup_block, bucket.tail_page);
@@ -1075,7 +1086,7 @@ impl<T: Config> Pallet<T> {
 
   fn set_wakeup_pointer(
     actor_id: ActorId,
-    block: BlockNumberFor<T>,
+    block: WakeupKey<BlockNumberFor<T>>,
     page_id: WakeupPageId,
     slot: WakeupSlot,
   ) -> Result<(), EnqueueOutcome> {
@@ -1098,7 +1109,7 @@ impl<T: Config> Pallet<T> {
 
   pub fn wakeup_substrate_schedule(actor_id: ActorId, wakeup_block: BlockNumberFor<T>) -> bool {
     let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if Self::wakeup_substrate_schedule_inner(actor_id, wakeup_block) {
+      if Self::wakeup_substrate_schedule_inner(actor_id, WakeupKey::Block(wakeup_block)) {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       } else {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
@@ -1110,7 +1121,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn wakeup_substrate_drain_block_inner(
-    wakeup_block: BlockNumberFor<T>,
+    wakeup_block: WakeupKey<BlockNumberFor<T>>,
     max_entries_scanned: u32,
   ) -> Option<(BoundedVec<ActorId, T::MaxWakeupsPerBlock>, WakeupDrainStats)> {
     let mut ready = BoundedVec::<ActorId, T::MaxWakeupsPerBlock>::default();
@@ -1125,7 +1136,7 @@ impl<T: Config> Pallet<T> {
     let Some(cursor_index) = bucket.cursor_index else {
       return None;
     };
-    if Self::wakeup_cursor_get(cursor_index) != Some(wakeup_block) {
+    if Self::wakeup_cursor_get(wakeup_block.clock(), cursor_index) != Some(wakeup_block) {
       return None;
     }
     let mut page_id = bucket.head_page;
@@ -1216,13 +1227,13 @@ impl<T: Config> Pallet<T> {
     Some((ready, stats))
   }
 
-  pub fn wakeup_substrate_drain_block(
-    wakeup_block: BlockNumberFor<T>,
+  fn wakeup_substrate_drain_key(
+    wakeup_key: WakeupKey<BlockNumberFor<T>>,
     max_entries_scanned: u32,
   ) -> (BoundedVec<ActorId, T::MaxWakeupsPerBlock>, WakeupDrainStats) {
     let result: Result<_, DispatchError> =
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        match Self::wakeup_substrate_drain_block_inner(wakeup_block, max_entries_scanned) {
+        match Self::wakeup_substrate_drain_block_inner(wakeup_key, max_entries_scanned) {
           Some(result) => {
             polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(result))
           }
@@ -1234,19 +1245,36 @@ impl<T: Config> Pallet<T> {
     result.unwrap_or_default()
   }
 
+  pub fn wakeup_substrate_drain_block(
+    wakeup_block: BlockNumberFor<T>,
+    max_entries_scanned: u32,
+  ) -> (BoundedVec<ActorId, T::MaxWakeupsPerBlock>, WakeupDrainStats) {
+    Self::wakeup_substrate_drain_key(WakeupKey::Block(wakeup_block), max_entries_scanned)
+  }
+
   fn wakeup_cursor_page_and_slot(index: WakeupCursorIndex) -> (WakeupPageId, usize) {
     let page_size = T::WakeupPageSize::get().max(1);
     (u64::from(index / page_size), (index % page_size) as usize)
   }
 
-  pub(crate) fn wakeup_cursor_get(index: WakeupCursorIndex) -> Option<BlockNumberFor<T>> {
+  pub(crate) fn wakeup_cursor_get(
+    clock: WakeupClock,
+    index: WakeupCursorIndex,
+  ) -> Option<WakeupKey<BlockNumberFor<T>>> {
     let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
-    WakeupCursorPages::<T>::get(page_id).and_then(|page| page.get(slot).copied())
+    WakeupCursorPages::<T>::get((clock, page_id)).and_then(|page| page.get(slot).copied())
   }
 
-  fn wakeup_cursor_set(index: WakeupCursorIndex, block: BlockNumberFor<T>) -> bool {
+  fn wakeup_cursor_set(
+    clock: WakeupClock,
+    index: WakeupCursorIndex,
+    block: WakeupKey<BlockNumberFor<T>>,
+  ) -> bool {
+    if block.clock() != clock {
+      return false;
+    }
     let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
-    let mut page = WakeupCursorPages::<T>::get(page_id).unwrap_or_default();
+    let mut page = WakeupCursorPages::<T>::get((clock, page_id)).unwrap_or_default();
     if slot < page.len() {
       page[slot] = block;
     } else if slot == page.len() {
@@ -1256,13 +1284,13 @@ impl<T: Config> Pallet<T> {
     } else {
       return false;
     }
-    WakeupCursorPages::<T>::insert(page_id, page);
+    WakeupCursorPages::<T>::insert((clock, page_id), page);
     true
   }
 
-  fn wakeup_cursor_remove_tail(index: WakeupCursorIndex) -> bool {
+  fn wakeup_cursor_remove_tail(clock: WakeupClock, index: WakeupCursorIndex) -> bool {
     let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
-    let Some(mut page) = WakeupCursorPages::<T>::get(page_id) else {
+    let Some(mut page) = WakeupCursorPages::<T>::get((clock, page_id)) else {
       return false;
     };
     if slot.checked_add(1) != Some(page.len()) {
@@ -1270,18 +1298,22 @@ impl<T: Config> Pallet<T> {
     }
     page.pop();
     if page.is_empty() {
-      WakeupCursorPages::<T>::remove(page_id);
+      WakeupCursorPages::<T>::remove((clock, page_id));
     } else {
-      WakeupCursorPages::<T>::insert(page_id, page);
+      WakeupCursorPages::<T>::insert((clock, page_id), page);
     }
     true
   }
 
-  fn wakeup_cursor_swap(left: WakeupCursorIndex, right: WakeupCursorIndex) -> bool {
-    let Some(left_block) = Self::wakeup_cursor_get(left) else {
+  fn wakeup_cursor_swap(
+    clock: WakeupClock,
+    left: WakeupCursorIndex,
+    right: WakeupCursorIndex,
+  ) -> bool {
+    let Some(left_block) = Self::wakeup_cursor_get(clock, left) else {
       return false;
     };
-    let Some(right_block) = Self::wakeup_cursor_get(right) else {
+    let Some(right_block) = Self::wakeup_cursor_get(clock, right) else {
       return false;
     };
     let Some(mut left_bucket) = WakeupBuckets::<T>::get(left_block) else {
@@ -1293,7 +1325,9 @@ impl<T: Config> Pallet<T> {
     if left_bucket.cursor_index != Some(left) || right_bucket.cursor_index != Some(right) {
       return false;
     }
-    if !Self::wakeup_cursor_set(left, right_block) || !Self::wakeup_cursor_set(right, left_block) {
+    if !Self::wakeup_cursor_set(clock, left, right_block)
+      || !Self::wakeup_cursor_set(clock, right, left_block)
+    {
       return false;
     }
     right_bucket.cursor_index = Some(left);
@@ -1307,39 +1341,40 @@ impl<T: Config> Pallet<T> {
     u32::BITS.saturating_sub(T::MaxActiveActors::get().max(1).leading_zeros())
   }
 
-  fn wakeup_cursor_insert_inner(block: BlockNumberFor<T>) -> bool {
+  fn wakeup_cursor_insert_inner(block: WakeupKey<BlockNumberFor<T>>) -> bool {
+    let clock = block.clock();
     let Some(mut bucket) = WakeupBuckets::<T>::get(block) else {
       return false;
     };
     if let Some(index) = bucket.cursor_index {
-      return Self::wakeup_cursor_get(index) == Some(block);
+      return Self::wakeup_cursor_get(clock, index) == Some(block);
     }
-    let len = WakeupCursorLen::<T>::get();
+    let len = WakeupCursorLen::<T>::get(clock);
     let Some(next_len) = len.checked_add(1) else {
       return false;
     };
-    if len >= T::MaxActiveActors::get() || !Self::wakeup_cursor_set(len, block) {
+    if len >= T::MaxActiveActors::get() || !Self::wakeup_cursor_set(clock, len, block) {
       return false;
     }
     bucket.cursor_index = Some(len);
     WakeupBuckets::<T>::insert(block, bucket);
-    WakeupCursorLen::<T>::put(next_len);
+    WakeupCursorLen::<T>::insert(clock, next_len);
     let mut current = len;
     for _ in 0..Self::wakeup_cursor_height_bound() {
       if current == 0 {
         break;
       }
       let parent = current.saturating_sub(1) / 2;
-      let Some(parent_block) = Self::wakeup_cursor_get(parent) else {
+      let Some(parent_block) = Self::wakeup_cursor_get(clock, parent) else {
         return false;
       };
-      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+      let Some(current_block) = Self::wakeup_cursor_get(clock, current) else {
         return false;
       };
       if parent_block <= current_block {
         break;
       }
-      if !Self::wakeup_cursor_swap(parent, current) {
+      if !Self::wakeup_cursor_swap(clock, parent, current) {
         return false;
       }
       current = parent;
@@ -1349,7 +1384,7 @@ impl<T: Config> Pallet<T> {
 
   pub fn wakeup_cursor_insert(block: BlockNumberFor<T>) -> bool {
     let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if Self::wakeup_cursor_insert_inner(block) {
+      if Self::wakeup_cursor_insert_inner(WakeupKey::Block(block)) {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       } else {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
@@ -1360,27 +1395,35 @@ impl<T: Config> Pallet<T> {
     result.is_ok()
   }
 
-  pub fn wakeup_cursor_peek() -> Option<BlockNumberFor<T>> {
-    (WakeupCursorLen::<T>::get() > 0)
-      .then(|| Self::wakeup_cursor_get(0))
+  fn wakeup_cursor_peek_key(clock: WakeupClock) -> Option<WakeupKey<BlockNumberFor<T>>> {
+    (WakeupCursorLen::<T>::get(clock) > 0)
+      .then(|| Self::wakeup_cursor_get(clock, 0))
       .flatten()
   }
 
-  fn wakeup_cursor_remove_inner(block: BlockNumberFor<T>) -> bool {
+  pub fn wakeup_cursor_peek() -> Option<BlockNumberFor<T>> {
+    match Self::wakeup_cursor_peek_key(WakeupClock::Block)? {
+      WakeupKey::Block(block) => Some(block),
+      WakeupKey::Tick(_) => None,
+    }
+  }
+
+  fn wakeup_cursor_remove_inner(block: WakeupKey<BlockNumberFor<T>>) -> bool {
+    let clock = block.clock();
     let Some(mut target_bucket) = WakeupBuckets::<T>::get(block) else {
       return false;
     };
     let Some(index) = target_bucket.cursor_index else {
       return false;
     };
-    let len = WakeupCursorLen::<T>::get();
-    if index >= len || Self::wakeup_cursor_get(index) != Some(block) {
+    let len = WakeupCursorLen::<T>::get(clock);
+    if index >= len || Self::wakeup_cursor_get(clock, index) != Some(block) {
       return false;
     }
     let Some(last_index) = len.checked_sub(1) else {
       return false;
     };
-    let Some(last_block) = Self::wakeup_cursor_get(last_index) else {
+    let Some(last_block) = Self::wakeup_cursor_get(clock, last_index) else {
       return false;
     };
     let mut last_bucket = if last_block == block {
@@ -1391,17 +1434,18 @@ impl<T: Config> Pallet<T> {
       };
       last_bucket
     };
-    if last_bucket.cursor_index != Some(last_index) || !Self::wakeup_cursor_remove_tail(last_index)
+    if last_bucket.cursor_index != Some(last_index)
+      || !Self::wakeup_cursor_remove_tail(clock, last_index)
     {
       return false;
     }
     target_bucket.cursor_index = None;
     WakeupBuckets::<T>::insert(block, target_bucket);
-    WakeupCursorLen::<T>::put(last_index);
+    WakeupCursorLen::<T>::insert(clock, last_index);
     if index == last_index {
       return true;
     }
-    if !Self::wakeup_cursor_set(index, last_block) {
+    if !Self::wakeup_cursor_set(clock, index, last_block) {
       return false;
     }
     last_bucket.cursor_index = Some(index);
@@ -1413,16 +1457,16 @@ impl<T: Config> Pallet<T> {
         break;
       }
       let parent = current.saturating_sub(1) / 2;
-      let Some(parent_block) = Self::wakeup_cursor_get(parent) else {
+      let Some(parent_block) = Self::wakeup_cursor_get(clock, parent) else {
         return false;
       };
-      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+      let Some(current_block) = Self::wakeup_cursor_get(clock, current) else {
         return false;
       };
       if parent_block <= current_block {
         break;
       }
-      if !Self::wakeup_cursor_swap(parent, current) {
+      if !Self::wakeup_cursor_swap(clock, parent, current) {
         return false;
       }
       current = parent;
@@ -1438,27 +1482,27 @@ impl<T: Config> Pallet<T> {
       }
       let right = left.saturating_add(1);
       let mut smallest = left;
-      let Some(left_block) = Self::wakeup_cursor_get(left) else {
+      let Some(left_block) = Self::wakeup_cursor_get(clock, left) else {
         return false;
       };
       if right < last_index {
-        let Some(right_block) = Self::wakeup_cursor_get(right) else {
+        let Some(right_block) = Self::wakeup_cursor_get(clock, right) else {
           return false;
         };
         if right_block < left_block {
           smallest = right;
         }
       }
-      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+      let Some(current_block) = Self::wakeup_cursor_get(clock, current) else {
         return false;
       };
-      let Some(smallest_block) = Self::wakeup_cursor_get(smallest) else {
+      let Some(smallest_block) = Self::wakeup_cursor_get(clock, smallest) else {
         return false;
       };
       if current_block <= smallest_block {
         break;
       }
-      if !Self::wakeup_cursor_swap(current, smallest) {
+      if !Self::wakeup_cursor_swap(clock, current, smallest) {
         return false;
       }
       current = smallest;
@@ -1468,7 +1512,7 @@ impl<T: Config> Pallet<T> {
 
   pub fn wakeup_cursor_remove(block: BlockNumberFor<T>) -> bool {
     let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if Self::wakeup_cursor_remove_inner(block) {
+      if Self::wakeup_cursor_remove_inner(WakeupKey::Block(block)) {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       } else {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
@@ -1479,21 +1523,23 @@ impl<T: Config> Pallet<T> {
     result.is_ok()
   }
 
-  fn wakeup_cursor_pop_min_inner() -> Option<BlockNumberFor<T>> {
-    let min_block = Self::wakeup_cursor_get(0)?;
+  fn wakeup_cursor_pop_min_inner(clock: WakeupClock) -> Option<WakeupKey<BlockNumberFor<T>>> {
+    let min_block = Self::wakeup_cursor_get(clock, 0)?;
     Self::wakeup_cursor_remove_inner(min_block).then_some(min_block)
   }
 
   pub fn wakeup_cursor_pop_min() -> Option<BlockNumberFor<T>> {
     let result: Result<BlockNumberFor<T>, DispatchError> =
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        match Self::wakeup_cursor_pop_min_inner() {
-          Some(block) => {
+        match Self::wakeup_cursor_pop_min_inner(WakeupClock::Block) {
+          Some(WakeupKey::Block(block)) => {
             polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(block))
           }
-          None => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-            Error::<T>::ActorNotFound.into(),
-          )),
+          Some(WakeupKey::Tick(_)) | None => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              Error::<T>::ActorNotFound.into(),
+            ))
+          }
         }
       });
     result.ok()
@@ -1506,6 +1552,11 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     if instance.lifecycle.is_paused() {
       return Self::schedule_window_expiry(actor_id, &instance);
+    }
+    if matches!(instance.trigger, Trigger::Cadenced { .. })
+      && instance.cadence_anchor_tick.is_none()
+    {
+      return Self::defer_tick_wakeup(actor_id, 0);
     }
     Self::schedule_next_work(actor_id, &instance, now, false)
   }
@@ -1532,6 +1583,20 @@ impl<T: Config> Pallet<T> {
     FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.set(true));
   }
 
+  fn defer_tick_wakeup(
+    actor_id: ActorId,
+    wakeup_tick: SchedulerTick,
+  ) -> Result<(), EnqueueOutcome> {
+    #[cfg(test)]
+    if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
+      return Err(EnqueueOutcome::WakeupCapacityExhausted);
+    }
+    match Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Tick(wakeup_tick)) {
+      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
+      Err(other) => Err(other),
+    }
+  }
+
   fn defer_wakeup(
     actor_id: ActorId,
     wakeup_block: BlockNumberFor<T>,
@@ -1544,7 +1609,7 @@ impl<T: Config> Pallet<T> {
       .and_then(|instance| Self::window_expiry_wakeup(&instance))
       .map(|expiry| wakeup_block.min(expiry))
       .unwrap_or(wakeup_block);
-    match Self::try_wakeup_substrate_schedule_inner(actor_id, target) {
+    match Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Block(target)) {
       Ok(()) => Ok(()),
       Err(EnqueueOutcome::AlreadyLive) => Ok(()),
       Err(other) => Err(other),
@@ -1565,7 +1630,7 @@ impl<T: Config> Pallet<T> {
         T::WeightInfo::scheduler_paged_append_existing_page()
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
-      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future())
+      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future().saturating_mul(2))
       .saturating_add(Self::scheduler_actor_hot_probe_weight_upper().saturating_mul(2))
       .saturating_add(Self::scheduler_actor_probe_weight_upper())
   }
@@ -1603,6 +1668,14 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(feature = "runtime-benchmarks")]
+  pub(crate) fn benchmark_defer_tick_wakeup(
+    actor_id: ActorId,
+    wakeup_tick: SchedulerTick,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::defer_tick_wakeup(actor_id, wakeup_tick)
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
   pub(crate) fn benchmark_scheduler_actor_contract_probe(
     actor_id: ActorId,
     hot: ActorHotStateOf<T>,
@@ -1627,31 +1700,52 @@ impl<T: Config> Pallet<T> {
     meter: &mut WeightMeter,
   ) -> WakeupDrainStats {
     let mut total = WakeupDrainStats::default();
-    let mut current_block = None;
+    let mut current_key = None;
+    let mut next_clock_after_success = None;
     let max_scans = T::MaxWakeupsPerBlock::get();
-    // Independent worker ceiling: the overdue wakeup worker may consume at most its configured
-    // two-dimensional envelope from the shared on_idle meter, mirroring the fanout worker's
-    // `ObservationFanoutWeightLimit`. Actor service receives the remaining budget; there is no
-    // guarantee lending (spec 8.4.5).
+    let now_tick = match Self::current_scheduler_tick() {
+      Ok(tick) => tick,
+      Err(_) => return total,
+    };
     let mut worker_meter = WeightMeter::with_limit(T::WakeupWeightLimit::get());
     while total.entries_scanned < max_scans {
-      let block_cursor = if let Some(block) = current_block {
-        block
+      let wakeup_key = if let Some(key) = current_key {
+        key
       } else {
-        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
-        if !worker_meter.can_consume(cursor_weight) || !meter.can_consume(cursor_weight) {
-          break;
+        let first_clock = NextWakeupClock::<T>::get();
+        let clocks = match first_clock {
+          WakeupClock::Block => [WakeupClock::Block, WakeupClock::Tick],
+          WakeupClock::Tick => [WakeupClock::Tick, WakeupClock::Block],
+        };
+        let mut selected = None;
+        for clock in clocks {
+          let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
+          if !worker_meter.can_consume(cursor_weight) || !meter.can_consume(cursor_weight) {
+            break;
+          }
+          worker_meter.consume(cursor_weight);
+          meter.consume(cursor_weight);
+          let Some(key) = Self::wakeup_cursor_peek_key(clock) else {
+            continue;
+          };
+          let due = match key {
+            WakeupKey::Block(block) => block <= now,
+            WakeupKey::Tick(tick) => tick <= now_tick,
+          };
+          if due {
+            selected = Some(key);
+            next_clock_after_success = Some(match clock {
+              WakeupClock::Block => WakeupClock::Tick,
+              WakeupClock::Tick => WakeupClock::Block,
+            });
+            break;
+          }
         }
-        worker_meter.consume(cursor_weight);
-        meter.consume(cursor_weight);
-        let Some(block) = Self::wakeup_cursor_peek() else {
+        let Some(key) = selected else {
           break;
         };
-        if block > now {
-          break;
-        }
-        current_block = Some(block);
-        block
+        current_key = Some(key);
+        key
       };
       let base_weight = Self::wakeup_cursor_drain_unit_weight_upper(false);
       if Self::combined_queue_occupancy() >= u64::from(T::MaxActiveActors::get())
@@ -1660,7 +1754,7 @@ impl<T: Config> Pallet<T> {
       {
         break;
       }
-      let Some(bucket) = WakeupBuckets::<T>::get(block_cursor) else {
+      let Some(bucket) = WakeupBuckets::<T>::get(wakeup_key) else {
         worker_meter.consume(base_weight);
         meter.consume(base_weight);
         break;
@@ -1674,11 +1768,53 @@ impl<T: Config> Pallet<T> {
       worker_meter.consume(unit_weight);
       meter.consume(unit_weight);
       let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let (ready, stats) = Self::wakeup_substrate_drain_block(block_cursor, 1);
+        let (ready, stats) = Self::wakeup_substrate_drain_key(wakeup_key, 1);
         if stats.entries_scanned == 0 {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(stats));
         }
         for actor_id in ready {
+          if matches!(wakeup_key, WakeupKey::Tick(_)) {
+            let Some(contract) = ActorContracts::<T>::get(actor_id) else {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner has no contract"),
+              ));
+            };
+            let Trigger::Cadenced { every_ticks } = contract.trigger else {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner is not cadenced"),
+              ));
+            };
+            let anchor_uninitialized =
+              ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.cadence_anchor_tick.is_none());
+            if anchor_uninitialized {
+              let Ok(Some(anchor_tick)) = Self::cadence_anchor_tick(&contract.trigger) else {
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                  polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence anchor failed"),
+                ));
+              };
+              let Some(due_tick) = next_cadence_due_tick(anchor_tick, every_ticks, now_tick) else {
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                  polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence deadline failed"),
+                ));
+              };
+              ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+                if let Some(hot) = maybe_hot {
+                  hot.cadence_anchor_tick = Some(anchor_tick);
+                }
+              });
+              if Self::defer_tick_wakeup(actor_id, due_tick).is_err() {
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                  polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence rearm failed"),
+                ));
+              }
+              continue;
+            }
+            ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+              if let Some(hot) = maybe_hot {
+                hot.pending_signal = true;
+              }
+            });
+          }
           if Self::enqueue(actor_id).is_err() {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
               polkadot_sdk::sp_runtime::DispatchError::Other("wakeup materialization failed"),
@@ -1693,19 +1829,44 @@ impl<T: Config> Pallet<T> {
       if stats.entries_scanned == 0 {
         break;
       }
+      if let Some(next_clock) = next_clock_after_success.take() {
+        NextWakeupClock::<T>::put(next_clock);
+      }
       total.entries_scanned = total.entries_scanned.saturating_add(stats.entries_scanned);
       total.ready_entries = total.ready_entries.saturating_add(stats.ready_entries);
       total.stale_entries = total.stale_entries.saturating_add(stats.stale_entries);
       total.pages_touched = total.pages_touched.saturating_add(stats.pages_touched);
       total.pages_deleted = total.pages_deleted.saturating_add(stats.pages_deleted);
-      if !WakeupBuckets::<T>::contains_key(block_cursor) {
-        current_block = None;
+      if !WakeupBuckets::<T>::contains_key(wakeup_key) {
+        current_key = None;
       }
     }
     total
   }
 
-  /// The Active-epoch clock anchor. Set to the current block (clamped to window
+  pub(crate) fn current_scheduler_tick() -> Result<SchedulerTick, EnqueueOutcome> {
+    scheduler_tick_floor(
+      <T::Time as polkadot_sdk::frame_support::traits::Time>::now(),
+      T::CadenceTickMillis::get(),
+    )
+    .ok_or(EnqueueOutcome::SchedulerIndexExhausted)
+  }
+
+  pub(crate) fn cadence_anchor_tick(
+    trigger: &TriggerOf<T>,
+  ) -> Result<Option<SchedulerTick>, EnqueueOutcome> {
+    if !matches!(trigger, Trigger::Cadenced { .. }) {
+      return Ok(None);
+    }
+    scheduler_tick_ceil(
+      <T::Time as polkadot_sdk::frame_support::traits::Time>::now(),
+      T::CadenceTickMillis::get(),
+    )
+    .map(Some)
+    .ok_or(EnqueueOutcome::SchedulerIndexExhausted)
+  }
+
+  /// The Active-epoch block anchor. Set to the current block (clamped to window
   /// start) at Active installation and schedule replacement; reactivation with
   /// `cycle_nonce > 0` uses it as the conservative cooldown anchor when no
   /// active-epoch `last_cycle_block` exists (spec 4.3).
@@ -1720,7 +1881,7 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn cadence_at_or_after(
     schedule_anchor: BlockNumberFor<T>,
-    every_blocks: u32,
+    every_ticks: u64,
     lower: BlockNumberFor<T>,
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let origin = schedule_anchor;
@@ -1728,7 +1889,7 @@ impl<T: Config> Pallet<T> {
       return Ok(origin);
     }
     let delta: u64 = lower.saturating_sub(origin).saturated_into();
-    let period = u64::from(every_blocks);
+    let period = every_ticks;
     let periods = delta.div_ceil(period);
     let offset = periods
       .checked_mul(period)
@@ -1765,7 +1926,7 @@ impl<T: Config> Pallet<T> {
     if !include_timer {
       return Ok(lower);
     }
-    let Trigger::Cadenced { every_blocks, .. } = instance.trigger else {
+    let Trigger::Cadenced { every_ticks } = instance.trigger else {
       return Ok(lower);
     };
     if let Some(last_cycle_block) = instance.last_cycle_block {
@@ -1775,7 +1936,7 @@ impl<T: Config> Pallet<T> {
           .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?,
       );
     }
-    Self::cadence_at_or_after(instance.schedule_anchor, every_blocks, lower)
+    Self::cadence_at_or_after(instance.schedule_anchor, every_ticks, lower)
   }
 
   pub(crate) fn retry_backoff_blocks(cursor_local_attempt: u32) -> u32 {
@@ -1817,15 +1978,21 @@ impl<T: Config> Pallet<T> {
     if instance.lifecycle.is_paused() {
       return Self::schedule_window_expiry(actor_id, instance);
     }
+    if instance.cycle_state != CycleState::Suspended
+      && let Trigger::Cadenced { every_ticks } = instance.trigger
+    {
+      let anchor_tick = instance
+        .cadence_anchor_tick
+        .ok_or(EnqueueOutcome::CorruptedTopology)?;
+      let due_tick =
+        next_cadence_due_tick(anchor_tick, every_ticks, Self::current_scheduler_tick()?)
+          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+      return Self::defer_tick_wakeup(actor_id, due_tick);
+    }
     let eligible_at = if instance.cycle_state == CycleState::Suspended {
       Self::retry_eligible_at(actor_id, instance)?
     } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now, instance.trigger.cadence_blocks().is_some())?
-    } else if matches!(instance.trigger, Trigger::Cadenced { .. }) {
-      let exact_next_block = now
-        .checked_add(&One::one())
-        .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-      Self::next_eligible_at(instance, exact_next_block, true)?
+      Self::next_eligible_at(instance, now, false)?
     } else {
       return Self::schedule_window_expiry(actor_id, instance);
     };
@@ -2003,22 +2170,35 @@ impl<T: Config> Pallet<T> {
       } else {
         ActorExecutionPhase::Ready
       }
+    } else if let Trigger::Cadenced { every_ticks } = instance.trigger {
+      if instance.pending_signal {
+        ActorExecutionPhase::Ready
+      } else if instance.cadence_anchor_tick.is_none() {
+        let Some(WakeupPointer {
+          block: WakeupKey::Tick(initialization_tick),
+          ..
+        }) = ActorHot::<T>::get(actor_id).and_then(|hot| hot.wakeup_pointer)
+        else {
+          return Err(ActorClassificationError::ActorInvariant);
+        };
+        ActorExecutionPhase::WaitingCadenceTick(initialization_tick)
+      } else {
+        let anchor_tick = instance
+          .cadence_anchor_tick
+          .ok_or(ActorClassificationError::ActorInvariant)?;
+        let now_tick = Self::current_scheduler_tick()
+          .map_err(|_| ActorClassificationError::ComputationOverflow)?;
+        let due_tick = next_cadence_due_tick(anchor_tick, every_ticks, now_tick)
+          .ok_or(ActorClassificationError::ComputationOverflow)?;
+        ActorExecutionPhase::WaitingCadenceTick(due_tick)
+      }
     } else {
       let now = frame_system::Pallet::<T>::block_number();
-      let include_timer = instance.trigger.cadence_blocks().is_some();
-      let eligible_at = Self::next_eligible_at(instance, now, include_timer)
+      let eligible_at = Self::next_eligible_at(instance, now, false)
         .map_err(|_| ActorClassificationError::ComputationOverflow)?;
       if eligible_at > now {
-        ActorExecutionPhase::WaitingTemporal(eligible_at)
-      } else if matches!(
-        instance.trigger,
-        Trigger::Immediate { .. }
-          | Trigger::Cadenced {
-            sources: Some(_),
-            ..
-          }
-      ) && !instance.pending_signal
-      {
+        ActorExecutionPhase::WaitingBlock(eligible_at)
+      } else if !instance.pending_signal {
         ActorExecutionPhase::WaitingSignal
       } else {
         ActorExecutionPhase::Ready
@@ -2388,25 +2568,23 @@ impl<T: Config> Pallet<T> {
     if classification.terminal_reason == Some(CloseReason::WindowExpired) {
       return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
     }
-    let mut signal_matched = false;
-    if apply_trigger && let Some(sources) = instance.trigger.sources() {
-      for trigger_source in sources {
-        if let TriggerSource::OnAddressEvent {
-          source_filter,
-          asset_filter,
-        } = trigger_source
-        {
-          signal_matched |= Self::source_matches_filter(source_filter, &instance.owner, source)
-            && Self::asset_matches_filter(asset_filter, asset);
+    let signal_matched = if apply_trigger
+      && let Trigger::AddressEvent {
+        source_filter,
+        asset_filter,
+      } = &instance.trigger
+    {
+      Self::source_matches_filter(source_filter, &instance.owner, source)
+        && Self::asset_matches_filter(asset_filter, asset)
+    } else {
+      false
+    };
+    if signal_matched && !instance.pending_signal {
+      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+        if let Some(hot) = maybe_hot {
+          hot.pending_signal = true;
         }
-      }
-      if signal_matched && !instance.pending_signal {
-        ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-          if let Some(hot) = maybe_hot {
-            hot.pending_signal = true;
-          }
-        });
-      }
+      });
     }
     if apply_funding && amount > Zero::zero() {
       let mut funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;

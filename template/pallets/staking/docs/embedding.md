@@ -14,7 +14,7 @@ A host runtime must provide the `Config` asset, currency, origin, identity, valu
 
 The host session owner must implement `SecurityEpochProvider` from its canonical session identity. Block cadence, maintenance progress, or an off-chain index must not redefine `SecurityEpoch`.
 
-The host must select explicit finite values for participant, operator, nomination, claim-horizon, batch-claim, and unlock-delay bounds. Runtime `WeightInfo` must cover those configured bounds and mandatory session work.
+The host must select explicit finite values for participant, operator, nomination, claim-horizon, batch-claim, and unlock-delay bounds. Runtime `WeightInfo` must cover those configured bounds and mandatory session work. The `SubstrateWeight` and `()` implementations shipped in `src/weights.rs` are hand-written estimates rather than benchmark output; generate weights against your own runtime and bind those instead.
 
 ## Asset and custody obligations
 

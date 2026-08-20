@@ -3,7 +3,10 @@ use crate::*;
 use alloc::{collections::BTreeSet, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_support::transactional;
-use polkadot_sdk::sp_runtime::{Perbill, traits::SaturatedConversion};
+use polkadot_sdk::sp_runtime::{
+  Perbill,
+  traits::{SaturatedConversion, Saturating},
+};
 
 /// Core policy outcome for a proposal given its vote weights.
 /// This is the single source of truth for turnout, tie, approval, and winner selection.
@@ -111,6 +114,7 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
+  #[transactional]
   pub fn cast_active_proposal_vote(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -383,6 +387,12 @@ impl<T: Config> Pallet<T> {
         ))
       },
     )?;
+    let track = if matches!(vote, ProposalVoteKind::Veto | ProposalVoteKind::Pass) {
+      ProposalTrackFamily::Veto
+    } else {
+      ProposalTrackFamily::Ordinary
+    };
+    Self::update_vote_power_custody(domain, track, &account, vote_lock_until)?;
     Self::extend_governance_lock(account.clone(), vote_lock_until);
     if is_first_participation {
       Self::note_total_participation(domain, &account);
@@ -458,6 +468,54 @@ impl<T: Config> Pallet<T> {
     let primary_close_epoch =
       Self::proposal_effective_primary_close_epoch(domain, item_id, submitted_epoch)?;
     Self::add_epochs(primary_close_epoch, T::ProposalEnactmentDelay::get())
+  }
+
+  fn update_vote_power_custody(
+    domain: T::DomainId,
+    track: ProposalTrackFamily,
+    account: &T::AccountId,
+    lock_until: T::Epoch,
+  ) -> DispatchResult {
+    let Some(lock_id) = T::VotePowerCustody::lock_id(domain, track) else {
+      return Ok(());
+    };
+    let previous = VotePowerCustodyByAccount::<T>::get(account, lock_id);
+    let previous_amount = previous
+      .as_ref()
+      .map(|position| position.amount)
+      .unwrap_or_default();
+    let target = T::VotePowerCustody::target_amount(domain, track, account, previous_amount);
+    ensure!(
+      target >= previous_amount,
+      Error::<T>::VotePowerCustodyTargetDecreased
+    );
+    let additional = target.saturating_sub(previous_amount);
+    if !additional.is_zero() {
+      T::VotePowerCustody::lock(account, lock_id, additional)?;
+    }
+    let new_lock_until = previous
+      .as_ref()
+      .map(|position| position.lock_until.max(lock_until))
+      .unwrap_or(lock_until);
+    if target.is_zero() {
+      return Ok(());
+    }
+    VotePowerCustodyByAccount::<T>::insert(
+      account,
+      lock_id,
+      VotePowerCustodyPosition {
+        amount: target,
+        lock_until: new_lock_until,
+      },
+    );
+    Self::deposit_event(Event::VotePowerCustodyUpdated {
+      account: account.clone(),
+      lock_id,
+      previous_amount,
+      new_amount: target,
+      lock_until: new_lock_until,
+    });
+    Ok(())
   }
 
   fn extend_governance_lock(account: T::AccountId, lock_until: T::Epoch) {

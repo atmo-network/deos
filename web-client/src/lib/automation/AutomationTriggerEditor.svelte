@@ -1,6 +1,6 @@
 <!--
 Domain: Actors trigger authoring
-Owns: Bounded source-set and admission-gate controls for one typed authoring trigger.
+Owns: One scalar Manual, AddressEvent, ObservationChange, or Cadenced trigger control.
 Excludes: Runtime admission, scheduler execution, conditions, graph control, and artifact encoding.
 Zone: Automation presentation helper; edits the canonical trigger draft without inventing another trigger model.
 -->
@@ -11,7 +11,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     type ActorAuthoringAsset,
     type ActorAuthoringObservationFeed,
     type ActorAuthoringTrigger,
-    type ActorAuthoringTriggerSource,
     DEOS_ACTORS_AUTHORING_LIMITS,
   } from '$lib/automation/authoring';
   import {
@@ -31,79 +30,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   };
 
   let { trigger = $bindable(), compact = false }: Props = $props();
-  let rememberedSources = $state<ActorAuthoringTriggerSource[]>(
-    trigger.type === 'Immediate'
-      ? trigger.sources
-      : trigger.mode.type === 'WhenSignalled'
-        ? trigger.mode.sources
-        : [{ type: 'Manual' }],
-  );
-
-  const sources = $derived(
-    trigger.type === 'Immediate'
-      ? trigger.sources
-      : trigger.mode.type === 'WhenSignalled'
-        ? trigger.mode.sources
-        : [],
-  );
-  const canAddSource = $derived(
-    sources.length < DEOS_ACTORS_AUTHORING_LIMITS.maxTriggerSources,
-  );
-  const hasManual = $derived(
-    sources.some((source) => source.type === 'Manual'),
-  );
-
-  function setSources(nextSources: ActorAuthoringTriggerSource[]) {
-    rememberedSources = nextSources;
-    if (trigger.type === 'Immediate') {
-      trigger = { ...trigger, sources: nextSources };
-      return;
-    }
-    if (trigger.mode.type === 'WhenSignalled') {
-      trigger = {
-        ...trigger,
-        mode: { ...trigger.mode, sources: nextSources },
-      };
-    }
-  }
-
-  function selectAdmission(event: Event) {
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Immediate'
-      | 'Cadenced';
-    if (type === trigger.type) return;
-    const currentSources =
-      trigger.type === 'Immediate'
-        ? trigger.sources
-        : trigger.mode.type === 'WhenSignalled'
-          ? trigger.mode.sources
-          : rememberedSources;
-    trigger =
-      type === 'Immediate'
-        ? {
-            type,
-            sources: currentSources,
-          }
-        : {
-            type,
-            everyBlocks: 1,
-            mode: { type: 'WhenSignalled', sources: currentSources },
-          };
-  }
-
-  function selectCadenceMode(event: Event) {
-    if (trigger.type !== 'Cadenced') return;
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Always'
-      | 'WhenSignalled';
-    if (trigger.mode.type === 'WhenSignalled') {
-      rememberedSources = trigger.mode.sources;
-    }
-    trigger = {
-      ...trigger,
-      mode: type === 'Always' ? { type } : { type, sources: rememberedSources },
-    };
-  }
 
   function defaultObservationFeed(): ActorAuthoringObservationFeed {
     return {
@@ -115,167 +41,142 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     };
   }
 
-  function addSource(
-    type: 'Manual' | 'OnAddressEvent' | 'OnObservationChange',
-  ) {
-    if (!canAddSource || (type === 'Manual' && hasManual)) return;
-    const source: ActorAuthoringTriggerSource =
-      type === 'Manual'
-        ? { type }
-        : type === 'OnAddressEvent'
-          ? {
-              type,
-              sourceFilter: { type: 'Any' },
-              assetFilter: { type: 'Any' },
-            }
-          : { type, feed: defaultObservationFeed() };
-    setSources([...sources, source]);
+  function selectTriggerType(event: Event) {
+    const type = (event.currentTarget as HTMLSelectElement)
+      .value as ActorAuthoringTrigger['type'];
+    if (type === trigger.type) return;
+    switch (type) {
+      case 'Manual':
+        trigger = { type };
+        return;
+      case 'AddressEvent':
+        trigger = {
+          type,
+          sourceFilter: { type: 'Any' },
+          assetFilter: { type: 'Any' },
+        };
+        return;
+      case 'ObservationChange':
+        trigger = { type, feed: defaultObservationFeed() };
+        return;
+      case 'Cadenced':
+        trigger = { type, everyTicks: 1 };
+    }
   }
 
-  function selectObservationAggregation(index: number, event: Event) {
-    const source = sources[index];
-    if (source?.type !== 'OnObservationChange') return;
+  function selectSourceFilter(event: Event) {
+    if (trigger.type !== 'AddressEvent') return;
+    const type = (event.currentTarget as HTMLSelectElement).value as
+      | 'Any'
+      | 'OwnerOnly'
+      | 'Whitelist';
+    trigger = {
+      ...trigger,
+      sourceFilter: type === 'Whitelist' ? { type, accounts: [''] } : { type },
+    };
+  }
+
+  function updateAccountWhitelist(value: string) {
+    if (
+      trigger.type !== 'AddressEvent' ||
+      trigger.sourceFilter.type !== 'Whitelist'
+    )
+      return;
+    trigger = {
+      ...trigger,
+      sourceFilter: {
+        type: 'Whitelist',
+        accounts: value.split('\n').map((account) => account.trim()),
+      },
+    };
+  }
+
+  function selectAssetFilter(event: Event) {
+    if (trigger.type !== 'AddressEvent') return;
+    const type = (event.currentTarget as HTMLSelectElement).value as
+      | 'Any'
+      | 'Whitelist';
+    trigger = {
+      ...trigger,
+      assetFilter:
+        type === 'Whitelist'
+          ? { type, assets: [{ type: 'Native' }] }
+          : { type },
+    };
+  }
+
+  function addAsset() {
+    if (
+      trigger.type !== 'AddressEvent' ||
+      trigger.assetFilter.type !== 'Whitelist' ||
+      trigger.assetFilter.assets.length >=
+        DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize
+    )
+      return;
+    trigger = {
+      ...trigger,
+      assetFilter: {
+        ...trigger.assetFilter,
+        assets: [...trigger.assetFilter.assets, { type: 'Local', id: 0 }],
+      },
+    };
+  }
+
+  function replaceAsset(index: number, asset: ActorAuthoringAsset) {
+    if (
+      trigger.type !== 'AddressEvent' ||
+      trigger.assetFilter.type !== 'Whitelist'
+    )
+      return;
+    trigger = {
+      ...trigger,
+      assetFilter: {
+        ...trigger.assetFilter,
+        assets: trigger.assetFilter.assets.map((candidate, candidateIndex) =>
+          candidateIndex === index ? asset : candidate,
+        ),
+      },
+    };
+  }
+
+  function selectAssetType(index: number, event: Event) {
+    const type = (event.currentTarget as HTMLSelectElement).value as
+      | 'Native'
+      | 'Local'
+      | 'Foreign';
+    replaceAsset(index, type === 'Native' ? { type } : { type, id: 0 });
+  }
+
+  function removeAsset(index: number) {
+    if (
+      trigger.type !== 'AddressEvent' ||
+      trigger.assetFilter.type !== 'Whitelist'
+    )
+      return;
+    trigger = {
+      ...trigger,
+      assetFilter: {
+        ...trigger.assetFilter,
+        assets: trigger.assetFilter.assets.filter(
+          (_, candidate) => candidate !== index,
+        ),
+      },
+    };
+  }
+
+  function selectObservationAggregation(event: Event) {
+    if (trigger.type !== 'ObservationChange') return;
     const type = (event.currentTarget as HTMLSelectElement).value;
-    replaceSource(index, {
-      ...source,
+    trigger = {
+      ...trigger,
       feed: {
-        ...source.feed,
+        ...trigger.feed,
         aggregation:
           type === 'Ema'
             ? { type, halfLifeBlocks: 100 }
             : { type: 'LastValue' },
       },
-    });
-  }
-
-  function replaceSource(index: number, source: ActorAuthoringTriggerSource) {
-    setSources(
-      sources.map((candidate, candidateIndex) =>
-        candidateIndex === index ? source : candidate,
-      ),
-    );
-  }
-
-  function removeSource(index: number) {
-    setSources(sources.filter((_, candidate) => candidate !== index));
-  }
-
-  function selectSourceFilter(index: number, event: Event) {
-    const source = sources[index];
-    if (source?.type !== 'OnAddressEvent') return;
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Any'
-      | 'OwnerOnly'
-      | 'Whitelist';
-    replaceSource(index, {
-      ...source,
-      sourceFilter: type === 'Whitelist' ? { type, accounts: [''] } : { type },
-    });
-  }
-
-  function updateAccountWhitelist(index: number, value: string) {
-    const source = sources[index];
-    if (
-      source?.type !== 'OnAddressEvent' ||
-      source.sourceFilter.type !== 'Whitelist'
-    )
-      return;
-    replaceSource(index, {
-      ...source,
-      sourceFilter: {
-        type: 'Whitelist',
-        accounts: value.split('\n').map((account) => account.trim()),
-      },
-    });
-  }
-
-  function selectAssetFilter(index: number, event: Event) {
-    const source = sources[index];
-    if (source?.type !== 'OnAddressEvent') return;
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Any'
-      | 'Whitelist';
-    replaceSource(index, {
-      ...source,
-      assetFilter:
-        type === 'Whitelist'
-          ? { type, assets: [{ type: 'Native' }] }
-          : { type },
-    });
-  }
-
-  function addAsset(index: number) {
-    const source = sources[index];
-    if (
-      source?.type !== 'OnAddressEvent' ||
-      source.assetFilter.type !== 'Whitelist' ||
-      source.assetFilter.assets.length >=
-        DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize
-    )
-      return;
-    replaceSource(index, {
-      ...source,
-      assetFilter: {
-        ...source.assetFilter,
-        assets: [...source.assetFilter.assets, { type: 'Local', id: 0 }],
-      },
-    });
-  }
-
-  function replaceAsset(
-    sourceIndex: number,
-    assetIndex: number,
-    asset: ActorAuthoringAsset,
-  ) {
-    const source = sources[sourceIndex];
-    if (
-      source?.type !== 'OnAddressEvent' ||
-      source.assetFilter.type !== 'Whitelist'
-    )
-      return;
-    replaceSource(sourceIndex, {
-      ...source,
-      assetFilter: {
-        ...source.assetFilter,
-        assets: source.assetFilter.assets.map((candidate, candidateIndex) =>
-          candidateIndex === assetIndex ? asset : candidate,
-        ),
-      },
-    });
-  }
-
-  function selectAssetType(
-    sourceIndex: number,
-    assetIndex: number,
-    event: Event,
-  ) {
-    const type = (event.currentTarget as HTMLSelectElement).value as
-      | 'Native'
-      | 'Local'
-      | 'Foreign';
-    replaceAsset(
-      sourceIndex,
-      assetIndex,
-      type === 'Native' ? { type } : { type, id: 0 },
-    );
-  }
-
-  function removeAsset(sourceIndex: number, assetIndex: number) {
-    const source = sources[sourceIndex];
-    if (
-      source?.type !== 'OnAddressEvent' ||
-      source.assetFilter.type !== 'Whitelist'
-    )
-      return;
-    replaceSource(sourceIndex, {
-      ...source,
-      assetFilter: {
-        ...source.assetFilter,
-        assets: source.assetFilter.assets.filter(
-          (_, candidate) => candidate !== assetIndex,
-        ),
-      },
-    });
+    };
   }
 </script>
 
@@ -284,248 +185,186 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
 >
   <header class="grid gap-1">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="text-xs font-semibold text-(--mono-text)">
-        Trigger admission
-      </div>
-      <Badge variant="xyk">OR-only · max 4 sources</Badge>
+      <div class="text-xs font-semibold text-(--mono-text)">Trigger</div>
+      <Badge variant="xyk">One trigger · one pipeline</Badge>
     </div>
     <p class="text-[10px] text-(--mono-muted)">
-      Sources mark readiness. Admission decides whether readiness enters the
-      scheduler now or at a fixed cadence.
+      Select one readiness source. Independent event sources require separate
+      Actors; composite conditions belong in step preconditions.
     </p>
   </header>
 
   <div class={compact ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
     <SelectField
-      label="Admission"
+      label="Trigger type"
       value={trigger.type}
-      onchange={selectAdmission}
+      onchange={selectTriggerType}
       selectClass="h-9 py-1.5 text-xs"
     >
-      <option value="Immediate">Immediate</option>
+      <option value="Manual">Manual</option>
+      <option value="AddressEvent">Address event</option>
+      <option value="ObservationChange">Observation change</option>
       <option value="Cadenced">Cadenced</option>
     </SelectField>
     {#if trigger.type === 'Cadenced'}
       <NumberInput
-        label="Every blocks"
+        label="Every 500 ms ticks"
         min={1}
-        max={4294967295}
+        max={DEOS_ACTORS_AUTHORING_LIMITS.maxCadenceTicks}
         step={1}
-        bind:value={trigger.everyBlocks}
+        bind:value={trigger.everyTicks}
         class="h-9 py-1.5 text-xs tabnum"
       />
-      <SelectField
-        label="Cadence mode"
-        value={trigger.mode.type}
-        onchange={selectCadenceMode}
-        selectClass="h-9 py-1.5 text-xs"
-      >
-        <option value="Always">Always</option>
-        <option value="WhenSignalled">When signalled</option>
-      </SelectField>
     {/if}
   </div>
 
-  {#if trigger.type === 'Immediate' || trigger.mode.type === 'WhenSignalled'}
-    <div class="grid gap-2">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-          Readiness sources · {sources.length}/{DEOS_ACTORS_AUTHORING_LIMITS.maxTriggerSources}
-        </div>
-        <div class="flex flex-wrap gap-1">
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!canAddSource || hasManual}
-            onclick={() => addSource('Manual')}
-          >
-            <Plus size={12} /> Manual
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!canAddSource}
-            onclick={() => addSource('OnAddressEvent')}
-          >
-            <Plus size={12} /> Address event
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={!canAddSource}
-            onclick={() => addSource('OnObservationChange')}
-          >
-            <Plus size={12} /> Observation
-          </Button>
-        </div>
+  {#if trigger.type === 'Manual'}
+    <p class="rounded-xl bg-(--mono-bg) p-2.5 text-[10px] text-(--mono-muted)">
+      Readiness is latched only by the authorized manual trigger call.
+    </p>
+  {:else if trigger.type === 'AddressEvent'}
+    <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
+      <div class={compact ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
+        <SelectField
+          label="Sender filter"
+          value={trigger.sourceFilter.type}
+          onchange={selectSourceFilter}
+          selectClass="h-9 py-1.5 text-xs"
+        >
+          <option value="Any">Any sender</option>
+          <option value="OwnerOnly">Owner only</option>
+          <option value="Whitelist">Whitelist</option>
+        </SelectField>
+        <SelectField
+          label="Asset filter"
+          value={trigger.assetFilter.type}
+          onchange={selectAssetFilter}
+          selectClass="h-9 py-1.5 text-xs"
+        >
+          <option value="Any">Any asset</option>
+          <option value="Whitelist">Whitelist</option>
+        </SelectField>
       </div>
 
-      {#each sources as source, sourceIndex}
-        <article class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
+      {#if trigger.sourceFilter.type === 'Whitelist'}
+        <TextArea
+          label="Sender whitelist"
+          helper="One SS58 or 32-byte hex account per line. Canonical order is applied during lowering."
+          value={trigger.sourceFilter.accounts.join('\n')}
+          oninput={(event) =>
+            updateAccountWhitelist(
+              (event.currentTarget as HTMLTextAreaElement).value,
+            )}
+          rows={3}
+          textareaClass="font-mono text-xs"
+        />
+      {/if}
+
+      {#if trigger.assetFilter.type === 'Whitelist'}
+        <div class="grid gap-1.5">
           <div class="flex items-center justify-between gap-2">
-            <div class="text-xs font-medium text-(--mono-text)">
-              {source.type === 'Manual'
-                ? 'Manual'
-                : source.type === 'OnAddressEvent'
-                  ? 'Address event'
-                  : 'Observation change'}
-            </div>
-            <IconButton
-              label={`Remove source ${sourceIndex + 1}`}
-              onclick={() => removeSource(sourceIndex)}
+            <div class="text-[10px] text-(--mono-muted)">Asset whitelist</div>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={trigger.assetFilter.assets.length >=
+                DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize}
+              onclick={addAsset}
             >
-              <Trash2 size={13} />
-            </IconButton>
+              <Plus size={12} /> Asset
+            </Button>
           </div>
-
-          {#if source.type === 'OnAddressEvent'}
-            <div class={compact ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
+          {#each trigger.assetFilter.assets as asset, assetIndex}
+            <div
+              class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-1.5"
+            >
               <SelectField
-                label="Sender filter"
-                value={source.sourceFilter.type}
-                onchange={(event) => selectSourceFilter(sourceIndex, event)}
+                label={`Asset ${assetIndex + 1}`}
+                value={asset.type}
+                onchange={(event) => selectAssetType(assetIndex, event)}
                 selectClass="h-9 py-1.5 text-xs"
               >
-                <option value="Any">Any sender</option>
-                <option value="OwnerOnly">Owner only</option>
-                <option value="Whitelist">Whitelist</option>
+                <option value="Native">Native</option>
+                <option value="Local">Local</option>
+                <option value="Foreign">Foreign</option>
               </SelectField>
-              <SelectField
-                label="Asset filter"
-                value={source.assetFilter.type}
-                onchange={(event) => selectAssetFilter(sourceIndex, event)}
-                selectClass="h-9 py-1.5 text-xs"
-              >
-                <option value="Any">Any asset</option>
-                <option value="Whitelist">Whitelist</option>
-              </SelectField>
-            </div>
-
-            {#if source.sourceFilter.type === 'Whitelist'}
-              <TextArea
-                label="Sender whitelist"
-                helper="One SS58 or 32-byte hex account per line. Canonical order is applied during lowering."
-                value={source.sourceFilter.accounts.join('\n')}
-                oninput={(event) =>
-                  updateAccountWhitelist(
-                    sourceIndex,
-                    (event.currentTarget as HTMLTextAreaElement).value,
-                  )}
-                rows={3}
-                textareaClass="font-mono text-xs"
-              />
-            {/if}
-
-            {#if source.assetFilter.type === 'Whitelist'}
-              <div class="grid gap-1.5">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="text-[10px] text-(--mono-muted)">
-                    Asset whitelist
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={source.assetFilter.assets.length >=
-                      DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize}
-                    onclick={() => addAsset(sourceIndex)}
-                  >
-                    <Plus size={12} /> Asset
-                  </Button>
-                </div>
-                {#each source.assetFilter.assets as asset, assetIndex}
-                  <div
-                    class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-1.5"
-                  >
-                    <SelectField
-                      label={`Asset ${assetIndex + 1}`}
-                      value={asset.type}
-                      onchange={(event) =>
-                        selectAssetType(sourceIndex, assetIndex, event)}
-                      selectClass="h-9 py-1.5 text-xs"
-                    >
-                      <option value="Native">Native</option>
-                      <option value="Local">Local</option>
-                      <option value="Foreign">Foreign</option>
-                    </SelectField>
-                    {#if asset.type !== 'Native'}
-                      <NumberInput
-                        label="Asset ID"
-                        min={0}
-                        max={4294967295}
-                        step={1}
-                        bind:value={asset.id}
-                        class="h-9 py-1.5 text-xs tabnum"
-                      />
-                    {:else}
-                      <div></div>
-                    {/if}
-                    <div class="self-end pb-0.5">
-                      <IconButton
-                        label={`Remove asset ${assetIndex + 1}`}
-                        onclick={() => removeAsset(sourceIndex, assetIndex)}
-                      >
-                        <Trash2 size={13} />
-                      </IconButton>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {:else if source.type === 'OnObservationChange'}
-            <p class="text-[10px] text-(--mono-muted)">
-              Latest-state reconsideration only. Thresholds belong to plan
-              conditions; this source carries no amount or revision payload.
-            </p>
-            <div class="grid gap-2 sm:grid-cols-2">
-              <AutomationAssetEditor
-                label="Input asset"
-                bind:asset={source.feed.assetIn}
-                {compact}
-              />
-              <AutomationAssetEditor
-                label="Output asset"
-                bind:asset={source.feed.assetOut}
-                {compact}
-              />
-            </div>
-            <div class="grid gap-2 sm:grid-cols-3">
-              <SelectField
-                label="Aggregation"
-                value={source.feed.aggregation.type}
-                onchange={(event) =>
-                  selectObservationAggregation(sourceIndex, event)}
-                selectClass="h-9 py-1.5 text-xs"
-              >
-                <option value="LastValue">Last value</option>
-                <option value="Ema">EMA</option>
-              </SelectField>
-              <NumberInput
-                label="Scale"
-                min={0}
-                max={255}
-                step={1}
-                bind:value={source.feed.scale}
-                class="h-9 py-1.5 text-xs tabnum"
-              />
-              {#if source.feed.aggregation.type === 'Ema'}
+              {#if asset.type !== 'Native'}
                 <NumberInput
-                  label="EMA half-life"
-                  min={1}
+                  label="Asset ID"
+                  min={0}
                   max={4294967295}
                   step={1}
-                  bind:value={source.feed.aggregation.halfLifeBlocks}
+                  bind:value={asset.id}
                   class="h-9 py-1.5 text-xs tabnum"
                 />
+              {:else}
+                <div></div>
               {/if}
+              <div class="self-end pb-0.5">
+                <IconButton
+                  label={`Remove asset ${assetIndex + 1}`}
+                  onclick={() => removeAsset(assetIndex)}
+                >
+                  <Trash2 size={13} />
+                </IconButton>
+              </div>
             </div>
-          {/if}
-        </article>
-      {/each}
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {:else if trigger.type === 'ObservationChange'}
+    <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
+      <p class="text-[10px] text-(--mono-muted)">
+        Latest-state reconsideration only. Thresholds belong to plan conditions;
+        this trigger carries no amount or revision payload.
+      </p>
+      <div class="grid gap-2 sm:grid-cols-2">
+        <AutomationAssetEditor
+          label="Input asset"
+          bind:asset={trigger.feed.assetIn}
+          {compact}
+        />
+        <AutomationAssetEditor
+          label="Output asset"
+          bind:asset={trigger.feed.assetOut}
+          {compact}
+        />
+      </div>
+      <div class="grid gap-2 sm:grid-cols-3">
+        <SelectField
+          label="Aggregation"
+          value={trigger.feed.aggregation.type}
+          onchange={selectObservationAggregation}
+          selectClass="h-9 py-1.5 text-xs"
+        >
+          <option value="LastValue">Last value</option>
+          <option value="Ema">EMA</option>
+        </SelectField>
+        <NumberInput
+          label="Scale"
+          min={0}
+          max={255}
+          step={1}
+          bind:value={trigger.feed.scale}
+          class="h-9 py-1.5 text-xs tabnum"
+        />
+        {#if trigger.feed.aggregation.type === 'Ema'}
+          <NumberInput
+            label="EMA half-life"
+            min={1}
+            max={4294967295}
+            step={1}
+            bind:value={trigger.feed.aggregation.halfLifeBlocks}
+            class="h-9 py-1.5 text-xs tabnum"
+          />
+        {/if}
+      </div>
     </div>
   {:else}
     <p class="rounded-xl bg-(--mono-bg) p-2.5 text-[10px] text-(--mono-muted)">
-      Always admits once per fixed actor cadence and has no readiness source
-      set.
+      Consensus time is quantized into 500 ms ticks. Delayed periods coalesce
+      into one opportunity without catch-up execution.
     </p>
   {/if}
 </section>

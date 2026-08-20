@@ -21,7 +21,7 @@ impl PoolIndexExtension {
           <crate::weights::pallet_oracle::SubstrateWeight<Runtime> as pallet_oracle::WeightInfo>::register_feed_new_producer(),
         );
     <Runtime as frame_system::Config>::DbWeight::get()
-      .reads_writes(5, 1)
+      .reads_writes(13, 1)
       .saturating_add(feed_registration.saturating_mul(2))
   }
 
@@ -31,6 +31,21 @@ impl PoolIndexExtension {
         pallet_asset_conversion::Call::create_pool { asset1, asset2 }
         | pallet_asset_conversion::Call::add_liquidity { asset1, asset2, .. },
       ) => Some((**asset1, **asset2)),
+      _ => None,
+    }
+  }
+
+  fn expected_lp_token(call: &RuntimeCall, pair: (AssetKind, AssetKind)) -> Option<u32> {
+    match call {
+      RuntimeCall::AssetConversion(pallet_asset_conversion::Call::create_pool { .. }) => {
+        pallet_asset_conversion::NextPoolAssetId::<Runtime>::get()
+      }
+      RuntimeCall::AssetConversion(pallet_asset_conversion::Call::add_liquidity { .. }) => {
+        let pool_id =
+          <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&pair.0, &pair.1)
+            .ok()?;
+        pallet_asset_conversion::Pools::<Runtime>::get(pool_id).map(|pool| pool.lp_token)
+      }
       _ => None,
     }
   }
@@ -58,7 +73,14 @@ impl TransactionExtension<RuntimeCall> for PoolIndexExtension {
     _info: &DispatchInfoOf<RuntimeCall>,
     _len: usize,
   ) -> Result<Self::Pre, TransactionValidityError> {
-    Ok(Self::pair(call))
+    let Some(pair) = Self::pair(call) else {
+      return Ok(None);
+    };
+    if let Some(lp_token) = Self::expected_lp_token(call, pair) {
+      crate::configs::assets_config::preflight_register_pool_lp_pair(pair.0, pair.1, lp_token)
+        .map_err(|_| InvalidTransaction::Custom(41))?;
+    }
+    Ok(Some(pair))
   }
 
   fn post_dispatch_details(

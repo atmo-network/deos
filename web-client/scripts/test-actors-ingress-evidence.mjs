@@ -28,7 +28,6 @@ const EXPECTED_PRODUCER_IDS = [
   'DeosRouter::route_fee',
   'XCM asset deposit',
   'XCM deposit without origin',
-  'TmctolFeeCollector',
 ];
 
 async function run() {

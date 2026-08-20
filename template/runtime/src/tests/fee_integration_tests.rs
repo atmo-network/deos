@@ -1,5 +1,6 @@
 use super::common::{
   ALICE, BOB, INITIAL_BALANCE, actor_fee_sink_account, add_liquidity, create_pool, new_test_ext,
+  set_consensus_timestamp,
 };
 use crate::{
   Actors, Assets, Balances, Runtime, RuntimeOrigin, Staking,
@@ -8,7 +9,7 @@ use crate::{
     actor_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemActors},
   },
 };
-use pallet_deos_actors::{AssetOps, FeeCollector};
+use pallet_deos_actors::{AssetOps, FeeCollector, WakeupKey};
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
@@ -20,6 +21,38 @@ use polkadot_sdk::frame_support::{
   weights::Weight,
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
+
+fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
+  let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+  let key = if Actors::actor_hot(fee_sink_id).is_some_and(|hot| hot.cadence_anchor_tick.is_none()) {
+    initialize_genesis_fee_sink_cadence(1_000)
+  } else {
+    key
+  };
+  let WakeupKey::Tick(tick) = key else {
+    panic!("cadenced actor must own a timestamp-tick wakeup");
+  };
+  set_consensus_timestamp(
+    tick.saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+  );
+  let block = crate::System::block_number().saturating_add(1);
+  crate::System::set_block_number(block);
+  let _ = Actors::on_initialize(block);
+  let _ = Actors::on_idle(block, Weight::MAX);
+}
+
+fn initialize_genesis_fee_sink_cadence(timestamp_millis: u64) -> WakeupKey<crate::BlockNumber> {
+  let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+  set_consensus_timestamp(timestamp_millis);
+  let block = crate::System::block_number().saturating_add(1);
+  crate::System::set_block_number(block);
+  let _ = Actors::on_initialize(block);
+  let _ = Actors::on_idle(block, Weight::MAX);
+  Actors::actor_hot(fee_sink_id)
+    .and_then(|hot| hot.wakeup_pointer)
+    .expect("Fee Sink cadence rearms after first consensus timestamp")
+    .block
+}
 
 #[test]
 fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
@@ -42,6 +75,102 @@ fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
 }
 
 #[test]
+fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
+  new_test_ext().execute_with(|| {
+    let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let fee_sink = actor_fee_sink_account();
+    let staking_pool = Staking::pool_account_for(0);
+    let staking_liquidity_actor = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+    );
+    let amount = 1_000_000_000_000u128;
+    let pool_before = Balances::free_balance(&staking_pool);
+    let liquidity_before = Balances::free_balance(&staking_liquidity_actor);
+    let credit = <Balances as Balanced<_>>::withdraw(
+      &ALICE,
+      amount,
+      Precision::Exact,
+      Preservation::Preserve,
+      Fortitude::Polite,
+    )
+    .expect("Alice has enough balance for fee withdrawal");
+    RuntimeFeeCollector::on_unbalanced(credit);
+    assert!(!Actors::pending_signal(fee_sink_id));
+    let cadence_block = Actors::actor_hot(fee_sink_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("Fee Sink cadence remains scheduled")
+      .block;
+
+    run_at_cadence_tick(cadence_block);
+
+    let pool_delta = Balances::free_balance(&staking_pool).saturating_sub(pool_before);
+    let liquidity_delta =
+      Balances::free_balance(&staking_liquidity_actor).saturating_sub(liquidity_before);
+    assert_eq!(
+      pool_delta.saturating_add(liquidity_delta),
+      primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount)
+    );
+    assert_eq!(
+      Balances::free_balance(&fee_sink),
+      crate::EXISTENTIAL_DEPOSIT.saturating_add(
+        amount
+          .saturating_sub(primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount),),
+      )
+    );
+  });
+}
+
+#[test]
+fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_early() {
+  new_test_ext().execute_with(|| {
+    let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let initial = Actors::actor_hot(fee_sink_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("Fee Sink cadence bootstrap remains armed")
+      .block;
+    assert_eq!(initial, WakeupKey::Tick(0));
+    assert_eq!(
+      Actors::actor_hot(fee_sink_id).unwrap().cadence_anchor_tick,
+      None
+    );
+
+    let due = initialize_genesis_fee_sink_cadence(1_000);
+    assert_eq!(due, WakeupKey::Tick(122));
+    assert_eq!(
+      Actors::active_actor_state(fee_sink_id)
+        .expect("Fee Sink remains active")
+        .identity
+        .cycle_nonce,
+      0,
+    );
+
+    set_consensus_timestamp(60_999);
+    crate::System::set_block_number(10_000);
+    let _ = Actors::on_initialize(10_000);
+    let _ = Actors::on_idle(10_000, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(fee_sink_id)
+        .expect("Fee Sink remains active")
+        .identity
+        .cycle_nonce,
+      0,
+    );
+
+    set_consensus_timestamp(61_000);
+    crate::System::set_block_number(10_001);
+    let _ = Actors::on_initialize(10_001);
+    let _ = Actors::on_idle(10_001, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(fee_sink_id)
+        .expect("Fee Sink remains active")
+        .identity
+        .cycle_nonce,
+      1,
+    );
+  });
+}
+
+#[test]
 fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures() {
   new_test_ext().execute_with(|| {
     let fee_sink = actor_fee_sink_account();
@@ -54,25 +183,56 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
     assert_eq!(Balances::free_balance(&staking_pool), anchor);
     assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor);
 
-    for block in [2, 12, 22] {
+    for _ in 0..3 {
       assert_ok!(TmctolFeeCollector::collect_fee(
         &ALICE,
         &fee_sink,
         AssetKind::Native,
         2,
       ));
-      crate::System::set_block_number(block);
-      let _ = Actors::on_initialize(block);
-      let _ = Actors::on_idle(block, Weight::MAX);
+      let cadence_block = Actors::actor_hot(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
+        .and_then(|hot| hot.wakeup_pointer)
+        .expect("Fee Sink cadence remains armed")
+        .block;
+      run_at_cadence_tick(cadence_block);
     }
 
-    assert_eq!(Balances::free_balance(&fee_sink), anchor);
-    assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
-    assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor + 3);
+    assert_eq!(Balances::free_balance(&fee_sink), anchor + 6);
+    assert_eq!(Balances::free_balance(&staking_pool), anchor);
+    assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor);
     let actor = Actors::active_actor_state(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
       .expect("Fee Sink actor remains active");
     assert_eq!(actor.identity.cycle_nonce, 3);
     assert_eq!(actor.hot.unsuccessful_attempt_streak, 0);
+  });
+}
+
+#[test]
+fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
+  new_test_ext().execute_with(|| {
+    let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let fee_sink = actor_fee_sink_account();
+    let staking_pool = Staking::pool_account_for(0);
+    let staking_liquidity_actor = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+    );
+    let anchor = crate::EXISTENTIAL_DEPOSIT;
+    let amount = anchor.saturating_mul(20);
+    assert_ok!(TmctolFeeCollector::collect_fee(
+      &ALICE,
+      &fee_sink,
+      AssetKind::Native,
+      amount,
+    ));
+    let cadence_block = Actors::actor_hot(fee_sink_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("Fee Sink cadence remains armed")
+      .block;
+    run_at_cadence_tick(cadence_block);
+
+    assert_eq!(Balances::free_balance(&staking_pool), anchor * 2);
+    assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor * 2);
+    assert_eq!(Balances::free_balance(&fee_sink), anchor + 18 * anchor);
   });
 }
 
@@ -149,14 +309,15 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
       AssetKind,
       crate::Balance,
     >>::mint(&fee_sink, AssetKind::Native, amount));
-    crate::System::set_block_number(2);
-    let _ = Actors::on_initialize(2);
-    let _ = Actors::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));
-    for block in 3..=12 {
-      crate::System::set_block_number(block);
-      let _ = Actors::on_initialize(block);
-      let _ = Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
-    }
+    let cadence = Actors::actor_hot(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("Fee Sink cadence remains armed")
+      .block;
+    run_at_cadence_tick(cadence);
+    let followup_block = crate::System::block_number().saturating_add(1);
+    crate::System::set_block_number(followup_block);
+    let _ = Actors::on_initialize(followup_block);
+    let _ = Actors::on_idle(followup_block, Weight::MAX);
     let lp_supply_after =
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
         pool.lp_token,
@@ -176,7 +337,10 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
     assert!(Assets::balance(staked_asset_id, &pool_account) > lp_pool_staked_before);
     assert_eq!(
       Balances::free_balance(&fee_sink),
-      crate::EXISTENTIAL_DEPOSIT
+      crate::EXISTENTIAL_DEPOSIT.saturating_add(
+        amount
+          .saturating_sub(primitives::ecosystem::params::FEE_SINK_BUFFER_PCT.mul_floor(amount),),
+      )
     );
   });
 }

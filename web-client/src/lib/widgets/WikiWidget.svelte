@@ -108,10 +108,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
     );
   }
 
-  function formatConfidence(value: number) {
-    return `${Math.round(value * 100)}%`;
-  }
-
   function localizedSources(value: Record<string, string[]>) {
     return value[currentLocale] ?? value[wikiState.default_locale] ?? [];
   }
@@ -371,7 +367,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           relationTarget: 'Цель',
           provenance: 'Происхождение сведений',
           status: 'Статус',
-          confidence: 'Степень обоснованности',
           generatedAt: 'Собрано',
           sources: 'Источники',
           aliasMatch: 'Псевдоним',
@@ -405,7 +400,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           relationTarget: 'Target',
           provenance: 'Compiled provenance',
           status: 'Status',
-          confidence: 'Confidence',
           generatedAt: 'Generated',
           sources: 'Sources',
           aliasMatch: 'Alias',
@@ -710,7 +704,7 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
                 >
                   {widgetText.provenance}
                 </div>
-                <div class="grid gap-1 sm:grid-cols-3">
+                <div class="grid gap-1 sm:grid-cols-2">
                   <div
                     class="rounded-lg border border-(--mono-border) bg-white px-3 py-2"
                   >
@@ -721,18 +715,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
                     </div>
                     <div class="mt-1 font-medium">
                       {formatStatus(selectedPageState.status)}
-                    </div>
-                  </div>
-                  <div
-                    class="rounded-lg border border-(--mono-border) bg-white px-3 py-2"
-                  >
-                    <div
-                      class="text-[10px] uppercase tracking-[0.08em] text-(--mono-muted)"
-                    >
-                      {widgetText.confidence}
-                    </div>
-                    <div class="mt-1 font-medium">
-                      {formatConfidence(selectedPageState.confidence)}
                     </div>
                   </div>
                   <div

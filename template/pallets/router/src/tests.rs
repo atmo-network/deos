@@ -1554,6 +1554,21 @@ fn price_oracle_test() {
 }
 
 #[test]
+fn scaled_price_preserves_boundary_ratios_with_widened_arithmetic() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      crate::Pallet::<Test>::scaled_price(u128::MAX, u128::MAX),
+      Some(primitives::ecosystem::params::PRECISION)
+    );
+    assert_eq!(
+      crate::Pallet::<Test>::scaled_price(u128::MAX, 1),
+      Some(u128::MAX)
+    );
+    assert_eq!(crate::Pallet::<Test>::scaled_price(1, 0), None);
+  });
+}
+
+#[test]
 fn tmc_interface_test() {
   new_test_ext().execute_with(|| {
     let user = 1u64;

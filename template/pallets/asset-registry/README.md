@@ -29,7 +29,8 @@ Deterministic hashing is used to derive an ID **only at registration time**; aft
 Foreign assets are an identity/namespace surface, not a policy engine:
 
 - Registrations must land in the foreign namespace
-- Collisions must be rejected or explicitly resolved by governance
+- Collisions against live ledger assets or retained reverse identities must be rejected or explicitly resolved by governance
+- Mapping creation and token-domain notification must commit atomically
 - Location migration must preserve balances and identity
 - Economic activation remains downstream runtime policy
 

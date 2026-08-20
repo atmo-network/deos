@@ -20,7 +20,8 @@ export type ActorExecutionPhase =
   | { type: 'GlobalCircuitBreaker' }
   | { type: 'WaitingSignal' }
   | { type: 'WaitingRetry'; block: number }
-  | { type: 'WaitingTemporal'; block: number };
+  | { type: 'WaitingBlock'; block: number }
+  | { type: 'WaitingCadenceTick'; tick: number };
 
 export type ActorEligibilityView =
   | { type: 'NotRegistered' }
@@ -69,15 +70,29 @@ function asBlock(value: unknown, field: string): number {
   return value;
 }
 
+function asTick(value: unknown): number {
+  if (typeof value === 'bigint') {
+    const tick = Number(value);
+    if (value >= 0n && Number.isSafeInteger(tick)) return tick;
+  }
+  return asBlock(value, 'WaitingCadenceTick tick');
+}
+
 function projectExecutionPhase(value: unknown): ActorExecutionPhase {
   const phase = asVariant(value, 'ActorClassification.execution_phase');
   if (SCALAR_EXECUTION_PHASES.has(phase.type)) {
     return { type: phase.type } as ActorExecutionPhase;
   }
-  if (phase.type === 'WaitingRetry' || phase.type === 'WaitingTemporal') {
+  if (phase.type === 'WaitingRetry' || phase.type === 'WaitingBlock') {
     return {
       type: phase.type,
       block: asBlock(phase.value, `${phase.type} block`),
+    };
+  }
+  if (phase.type === 'WaitingCadenceTick') {
+    return {
+      type: phase.type,
+      tick: asTick(phase.value),
     };
   }
   throw new Error(`Unsupported runtime execution phase ${phase.type}`);

@@ -20,8 +20,6 @@ tags:
 related:
   - Tech Stack
   - DEOS Framework Overview
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Repository Structure
@@ -60,7 +58,7 @@ The historical and authoritative mathematical proving ground written in JavaScri
 
 ### `/wiki/`
 
-The generated bilingual semantic projection of `/docs`, with frontend-renderable pages and shared navigation, graph, alias, locale, confidence, and provenance metadata.
+The generated bilingual semantic projection of `/docs`, with frontend-renderable pages and shared navigation, graph, alias, locale, lifecycle, and provenance metadata.
 
 ### `/.agents/`
 

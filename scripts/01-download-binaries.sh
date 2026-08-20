@@ -6,7 +6,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 POLKADOT_SDK_RELEASE="polkadot-stable2606-1"
 REPOSITORY="paritytech/polkadot-sdk"
 BASE_URL="https://github.com/$REPOSITORY/releases/download/$POLKADOT_SDK_RELEASE"
-BINARY_NAMES=(polkadot polkadot-omni-node polkadot-prepare-worker polkadot-execute-worker)
+BINARY_NAMES=(
+    polkadot
+    polkadot-omni-node
+    polkadot-prepare-worker
+    polkadot-execute-worker
+    frame-omni-bencher
+)
 ASSET_SUFFIX=""
 CHECKSUMS=()
 CHECKSUM_COMMAND=()
@@ -15,7 +21,7 @@ usage() {
     cat <<'EOF'
 Usage: 01-download-binaries.sh [OPTIONS]
 
-Downloads the pinned Polkadot SDK node bundle required by the DEOS local network.
+Downloads the pinned Polkadot SDK executable bundle required by DEOS operations.
 
 Options:
   -h, --help        Show this help message
@@ -34,6 +40,7 @@ Outputs:
   ./bin/polkadot-omni-node
   ./bin/polkadot-prepare-worker
   ./bin/polkadot-execute-worker
+  ./bin/frame-omni-bencher
   ./bin/.polkadot-sdk-release
 
 Side effects:
@@ -69,6 +76,7 @@ resolve_platform() {
                 ff8e5253e8a3e30b421c83d938a3245bdc5de222d807aaf3648575ae029faece
                 5e67a05516e24d5e9b9616bacb3a2d58235beb3392de14dfbe51ff6914244267
                 cc642041ef2582d972071cd4f7122e9803703bc7775e8d432b2d7626f5011b21
+                501f92ba8f1dd7eabfe84aa3990f517fd448c3d5e0de6f408b29656933e39576
             )
             ;;
         Darwin:arm64)
@@ -80,6 +88,7 @@ resolve_platform() {
                 a05f64056b45af27a3fdca9f2c90f5cf5c4f12c0621003cfa029617494e20104
                 3658c4315c1a6762e5984b1f7bde89c22d7c7390e4aa50b6e4257c0c91527cb2
                 5125a83632a9c975a32b158aec2542e2f65a37cffc6e50230fdda6dc281d5159
+                5fac0fed05278899eef17e613ee865510011e106b529e966d17cd0eb20bd91ab
             )
             ;;
         *)
@@ -136,7 +145,7 @@ download_bundle() {
     printf '%s\n' "$POLKADOT_SDK_RELEASE" >"$BIN_DIR/.polkadot-sdk-release"
     trap - EXIT
     rm -rf -- "$staging_dir"
-    log_success "Pinned node bundle published to $BIN_DIR"
+    log_success "Pinned executable bundle published to $BIN_DIR"
 }
 
 verify_bundle() {
@@ -152,12 +161,13 @@ verify_bundle() {
     done
     "$BIN_DIR/polkadot" --version
     "$BIN_DIR/polkadot-omni-node" --version
-    log_success "Pinned Polkadot SDK node bundle verified"
+    "$BIN_DIR/frame-omni-bencher" --version
+    log_success "Pinned Polkadot SDK executable bundle verified"
 }
 
 main() {
     parse_args "$@"
-    phase_banner "DEOS node binary download"
+    phase_banner "DEOS executable bundle download"
     check_prerequisites
     download_bundle
     verify_bundle

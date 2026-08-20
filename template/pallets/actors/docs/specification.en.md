@@ -384,14 +384,11 @@ struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
   auto_close_at_cycle_nonce: Option<u64>,
 }
 struct ScheduleWindow<BlockNumber> { start: BlockNumber, end: BlockNumber }
-enum Trigger<Sources> {
-  Immediate { sources: Sources },
-  Cadenced { every_blocks: u32, sources: Option<Sources> },
-}
-enum TriggerSource<AccountId, AssetId, FeedId> {
+enum Trigger<AccountId, AssetId, FeedId> {
   Manual,
-  OnAddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },
-  OnObservationChange { feed: FeedId },
+  AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },
+  ObservationChange { feed: FeedId },
+  Cadenced { every_ticks: u64 },
 }
 enum SourceFilter<AccountId> { Any, OwnerOnly, Whitelist(BoundedVec<AccountId, MaxWhitelistSize>) }
 enum AssetFilter<AssetId> { Any, Whitelist(BoundedVec<AssetId, MaxWhitelistSize>) }
@@ -468,27 +465,30 @@ Every `Task` variant contains at most two `AmountResolution` fields. Each contri
 
 For each Step, `1 <= clauses <= MaxPreconditionClauses`, `1 <= predicates_per_clause <= MaxPredicatesPerClause`, and the sum of clause predicates is at most `P`. Opening capture plus full Step evaluation therefore costs at most `2 * P` atomic evaluation units per Step and `2 * S * P` per attempt. Weight and User evaluation fees split those units into chunks of at most `P` before calling the benchmarked `predicate_set_evaluation` component; no runtime call relies on its defensive clamp.
 
-`Immediate.sources` and `Cadenced::WhenSignalled.sources` contain `1..=MaxTriggerSources` atoms. `Cadenced::Always` has no source set.
+Each Actor Contract contains exactly one Trigger. `Manual`, `AddressEvent`, and `ObservationChange` are externally signalled; `Cadenced` is internally timed and has no signal source. No Trigger variant contains an OR-set, nested Trigger, priority, or secondary admission source.
 
-Canonical source sets and list/set variants are duplicate-free and strictly ordered by canonical SCALE bytes. `Immediate.sources`, `WhenSignalled.sources`, every `Whitelist`, and `SignedAllowlist` are nonempty. Runtime admission MUST reject non-canonical order, duplicates, or non-canonical set/list encoding and MUST NOT sort, deduplicate, or otherwise normalize submitted values. Admission rejects repeated Manual atoms, repeated address-filter pairs, repeated feeds, and duplicate members.
+Every `Whitelist` and `SignedAllowlist` is nonempty, duplicate-free, and strictly ordered by canonical SCALE bytes. Runtime admission MUST reject non-canonical order, duplicates, or non-canonical list/set encoding and MUST NOT sort, deduplicate, or otherwise normalize submitted values.
 
 Actor composition is asynchronous and provides no same-block or one-event-one-cycle guarantee. `SourceFilter::Any` permits any certified positive movement that is not self/no-op and satisfies the authored `AssetFilter`, independently of funding acceptance, to set `pending_signal`. Actors charges no signaller, requires no accepted funding, and imposes no trigger-specific minimum amount; any resulting User attempt charges the actor's fee budget.
 
 ### 3.2 Triggers and Timing
 
-| Policy | Readiness |
+| Trigger | Readiness |
 | --- | --- |
-| `Immediate` | requires `pending_signal` |
-| `Cadenced::WhenSignalled` | latches immediately; opens no earlier than cadence |
-| `Cadenced::Always` | opens on cadence without a latch; rearms after terminal cycle while Active |
+| `Manual` | An admitted owner signal sets `pending_signal` |
+| `AddressEvent` | One matching certified positive movement sets `pending_signal` |
+| `ObservationChange` | One matching deferred feed publication sets `pending_signal` |
+| `Cadenced` | One internal timestamp deadline materializes readiness without a latch |
 
-Sources compose as OR and are fully evaluated without short-circuit. A trigger changes readiness only. `pending_signal` is the sole latch; matches only set `false -> true`. An AddressEvent without concrete source matches only `SourceFilter::Any`.
+A Trigger changes readiness only. `pending_signal` is the sole external-signal latch; matches only set `false -> true`. An AddressEvent without concrete source matches only `SourceFilter::Any`. One Actor never combines independent readiness sources.
 
 `pending_signal` has no direct clear call. Fresh opening consumes it; deactivation deletes it. Mutable deactivation followed by activation is the only actor-control reset. An Immutable actor retains an accepted latch until opening or close.
 
-Fresh Active installation does not set `pending_signal`. `Immediate` and `Cadenced { sources: Some(_) }` remain unready until one configured source matches. `every_blocks` defines eligibility, not execution frequency.
+Fresh Active installation does not set `pending_signal`. `Manual`, `AddressEvent`, and `ObservationChange` remain unready until their one source matches. `every_ticks` defines eligibility, not execution frequency.
 
-`Immediate` has no cadence arithmetic. Its temporal eligibility uses only cooldown and window arithmetic. `Cadenced` uses `schedule_anchor` as its exact origin and adds no actor-specific phase.
+The reference cadence tick is 500 milliseconds of consensus timestamp. `now_tick = floor(timestamp_millis / 500)` decides readiness. Fresh activation uses `anchor_tick = ceil(timestamp_millis / 500)` and sets its first deadline to `anchor_tick + every_ticks`, so quantization never shortens the authored period. Genesis has no consensus timestamp: it stores an uninitialized anchor and one tick-zero bootstrap wakeup. The first ordinary wakeup service after timestamp inherent application sets the same ceiled anchor and full-period deadline without latching readiness or entering FIFO.
+
+`Cadenced` requires `cooldown_blocks == 0` and no ScheduleWindow. This keeps each Actor in at most one temporal membership across the timestamp cadence index and the block-keyed retry/window substrate. A suspended Cadenced Actor temporarily uses only its ordinary block retry wakeup; after the cycle terminates, cadence rearms strictly after the observed tick.
 
 Contract timing admission uses:
 
@@ -498,20 +498,15 @@ ensure!(
   Error::ExecutionDelayTooLong
 );
 
-if let Trigger::Cadenced { every_blocks, .. } = contract.trigger {
-  ensure!(
-    every_blocks > 0,
-    Error::InvalidTriggerConfiguration
-  );
-
-  ensure!(
-    every_blocks <= MaxExecutionDelayBlocks,
-    Error::ExecutionDelayTooLong
-  );
+if let Trigger::Cadenced { every_ticks } = contract.trigger {
+  ensure!(every_ticks > 0, Error::InvalidTriggerConfiguration);
+  ensure!(every_ticks <= MaxExecutionDelayTicks, Error::ExecutionDelayTooLong);
+  ensure!(contract.cooldown_blocks == 0, Error::InvalidTriggerConfiguration);
+  ensure!(contract.window.is_none(), Error::InvalidScheduleWindow);
 }
 ```
 
-A zero cadence returns `InvalidTriggerConfiguration`. A delay above the protocol horizon returns `ExecutionDelayTooLong`. Overflow of otherwise valid future-block arithmetic returns `SchedulerIndexExhausted`.
+A zero cadence returns `InvalidTriggerConfiguration`. A delay above its protocol horizon returns `ExecutionDelayTooLong`. Overflow of otherwise valid cadence arithmetic returns `SchedulerIndexExhausted`.
 
 ```text
 cooldown_anchor =
@@ -524,64 +519,34 @@ cooldown_eligible_at =
     otherwise
 ```
 
-For `Cadenced`, every `checked_*` or final narrowing failure in the following semantic function returns `SchedulerIndexExhausted`:
+Cadence arithmetic is constant-time:
 
 ```rust
-fn cadence_at_or_after(
-  schedule_anchor: BlockNumber,
-  every_blocks: u32,
-  lower: BlockNumber,
-) -> Result<BlockNumber, Error> {
-  if wide(lower) <= wide(schedule_anchor) {
-    return Ok(schedule_anchor);
-  }
+fn first_cadence_due_tick(timestamp_millis, tick_millis, every_ticks) {
+  checked_add(ceil(timestamp_millis / tick_millis), every_ticks)
+}
 
-  let delta =
-    checked_sub(wide(lower), wide(schedule_anchor))?;
-
-  let period =
-    wide(every_blocks);
-
-  let k =
-    checked_add(
-      checked_div(
-        checked_sub(delta, 1)?,
-        period,
-      )?,
-      1,
-    )?;
-
-  checked_narrow(
-    checked_add(
-      wide(schedule_anchor),
-      checked_mul(k, period)?,
-    )?,
-  )
+fn next_cadence_due_tick(anchor_tick, every_ticks, now_tick) {
+  first_due = checked_add(anchor_tick, every_ticks);
+  lower = checked_add(now_tick, 1);
+  if lower <= first_due { return first_due; }
+  periods = ceil(checked_sub(lower, anchor_tick) / every_ticks);
+  checked_add(anchor_tick, checked_mul(periods, every_ticks))
 }
 ```
 
-Admission guarantees `every_blocks > 0`. The function performs a constant number of arithmetic operations and MUST NOT iterate over cadence points.
+Admission guarantees nonzero `tick_millis` and `every_ticks`. Readiness floors the current timestamp; activation anchors ceil it. Rearming chooses the first cadence point strictly after the observed tick, so delayed service coalesces missed points into one opportunity and never creates catch-up cycles.
 
 ```text
 window_floor =
   schedule_window.start when a window exists;
   BlockNumber::zero() otherwise
 
-temporal_eligible_at(lower) =
+signal_eligible_at(lower) =
   max(lower, cooldown_eligible_at, window_floor)
-    for Immediate;
-  cadence_at_or_after(
-    max(
-      lower,
-      cooldown_eligible_at,
-      window_floor,
-      checked_add(last_cycle_block, 1) when last_cycle_block exists
-    )
-  )
-    for Cadenced
 ```
 
-Classification uses `lower = now`. Post-cutoff rearm uses `lower = now + 1`. Prospective Active validation uses `lower = schedule_anchor`. Signal-driven policies additionally require `pending_signal`.
+Classification for `Manual`, `AddressEvent`, and `ObservationChange` uses block-number eligibility plus `pending_signal`. `Cadenced` uses only its current timestamp tick while Idle, and block retry eligibility while Suspended.
 
 If `cycle_nonce == 0 && last_cycle_block == None`, cooldown begins at `schedule_anchor` without addition. Otherwise cooldown is added to `last_cycle_block.or(schedule_anchor)`.
 
@@ -595,7 +560,7 @@ retry_eligible_at =
   )
 ```
 
-Missed cadence points coalesce; they do not create catch-up cycles. Every actor with the same `schedule_anchor` and cadence has the same temporal gates; FIFO admission and bounded service, not an authored or derived phase, determine execution order.
+Every Cadenced Actor with the same `anchor_tick` and period has the same temporal gates. FIFO admission and bounded service, not an authored or derived phase, determine execution order.
 
 For window installation:
 
@@ -607,7 +572,7 @@ first_temporal_eligible =
   temporal_eligible_at(schedule_anchor) under the prospective Active state
 ```
 
-Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, `now <= end`, `start_delay <= MaxExecutionDelayBlocks`, and `first_temporal_eligible <= end`. For `Immediate` and `Cadenced::WhenSignalled`, the final predicate proves only that a temporal opportunity exists; no future signal is assumed.
+Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, `now <= end`, `start_delay <= MaxExecutionDelayBlocks`, and `first_temporal_eligible <= end`. This ScheduleWindow contract applies only to `Manual`, `AddressEvent`, and `ObservationChange`; no future signal is assumed.
 
 ### 3.3 Precondition and Amounts
 
@@ -712,7 +677,7 @@ For a terminal custody drain only:
 - Transfer failure commits no Transfer or close and follows ordinary `AbortCycle` fee and failure semantics.
 - If `terminal_drain_balance == 0`, the sole step follows ordinary zero-resolution semantics: it emits `StepSkipped(ResolutionSkipped)`, increments `skipped_resolution`, completes the cycle with no committed effectful task, does not close with `ProductiveCycleCompleted`, and retains the actor under ordinary post-cycle placement. Actors defines no empty-drain close reason.
 
-A zero terminal drain under `Cadenced::Always` may therefore open later empty cycles and charge their User evaluation fees. This is an explicit consequence of requiring productive close rather than an implicit empty-balance terminal path; authors that do not want recurring probes use signal-driven readiness or another lifecycle policy.
+A zero terminal drain under `Cadenced` may therefore open later empty cycles and charge their User evaluation fees. This is an explicit consequence of requiring productive close rather than an implicit empty-balance terminal path; authors that do not want recurring probes use signal-driven readiness or another lifecycle policy.
 
 No other plan may debit `protected_minimum`. One terminal custody drain names one asset. Recovering multiple known assets requires repeated successful reattachment and terminal-drain cycles; Actors performs no custody asset scan.
 
@@ -994,7 +959,7 @@ Skip and pre-task resolution failure charge evaluation only. A task attempt char
 
 Successful User attempt admission proves that the payer holds `MinUserBalance` plus the complete current suffix fee envelope before attempt mutation. The reservation model prevents every ordinary task debit from consuming any fee amount still required by the current attempt. A conforming `FeeCollector::collect_fee` therefore MUST NOT fail solely because the payer lacks the reserved fee amount.
 
-Failure of `FeeCollector::collect_fee` is not a step outcome or `TaskFailure`. It denotes failure of fee-asset movement, FeeSink deposit, certified-ingress consequence, fee-path configuration, or an invariant.
+Failure of `FeeCollector::collect_fee` is not a step outcome or `TaskFailure`. It denotes failure of fee-asset movement, FeeSink deposit, an optional host-defined collection consequence, fee-path configuration, or an invariant. Actors assigns no trigger semantics to fee collection; the host may keep it ledger-only or pair it transactionally with certified ingress.
 
 Failure MUST roll back the complete scheduler-attempt transaction and MUST NOT invoke `StepErrorPolicy`. It persists no head consumption, fee, event, counter, nonce, cursor, snapshot, or task effect. It MUST NOT map to `InsufficientFee`, `BalanceExhausted`, or `FeeBudgetExhausted`, be represented as `TaskFailure`, or be processed by `StepErrorPolicy`.
 
@@ -1021,50 +986,29 @@ One logical FIFO owns ordinary readiness. Each actor has at most one live ticket
 
 Readiness `<= now` uses FIFO; later readiness remains an exact temporal target. A live ticket materialized before the cutoff MAY execute in the same block subject to FIFO order, the one-execution guard, and available Weight. A ticket created at or after the cutoff is necessarily `>= cutoff` and MUST NOT execute in that actor-service pass. Post-cutoff readiness for `now + 1` MAY therefore use a ticket only for a later pass. Queue saturation preserves readiness through an exact next-block target.
 
-At any actor state, at most one ordinary temporal target exists. Here `lower` is the Section 3.2 lower bound selected by the owning placement transition.
+At any actor state, at most one ordinary temporal target exists. It is either block-keyed or timestamp-tick-keyed, never both.
 
 ```rust
 let ordinary_target = if actor.lifecycle == ActiveLifecycle::Paused {
   None
 } else {
-  match (
-    actor.cycle_state,
-    actor.trigger,
-    actor.pending_signal,
-  ) {
+  match (actor.cycle_state, actor.trigger, actor.pending_signal) {
     (CycleState::Suspended, _, _) =>
-      Some(retry_eligible_at(actor)?),
-
-    (CycleState::Idle, Trigger::Immediate { .. }, true) =>
-      Some(temporal_eligible_at(actor, lower)?),
-
-    (CycleState::Idle,
-      Trigger::Cadenced { sources: Some(_), .. },
-      true) =>
-      Some(temporal_eligible_at(actor, lower)?),
-
-    (CycleState::Idle,
-      Trigger::Cadenced { sources: None, .. },
-      _) =>
-      Some(temporal_eligible_at(actor, lower)?),
-
-    (CycleState::Idle, _, _) =>
-      None,
+      Some(Block(retry_eligible_at(actor)?)),
+    (CycleState::Idle, Trigger::Cadenced { .. }, _) =>
+      Some(Tick(next_cadence_due_tick(actor)?)),
+    (CycleState::Idle, Trigger::Manual, true) |
+    (CycleState::Idle, Trigger::AddressEvent { .. }, true) |
+    (CycleState::Idle, Trigger::ObservationChange { .. }, true) =>
+      Some(Block(signal_eligible_at(actor, lower)?)),
+    (CycleState::Idle, _, _) => None,
   }
-};
-
-let selected_target = match (ordinary_target, actor.terminal_at) {
-  (None, None) => None,
-  (Some(ordinary), None) => Some(ordinary),
-  (None, Some(terminal)) => Some(terminal),
-  (Some(ordinary), Some(terminal)) =>
-    Some(min(ordinary, terminal)),
 };
 ```
 
-A retry target and an Idle schedule target never coexist. A Paused actor has no ordinary target. `terminal_at` independently stores the terminal target. A future `selected_target` is represented by `wakeup_pointer`; its block, page, and slot identify the actor-owned physical membership exactly. A due target materializes into FIFO under the cutoff rules above.
+A retry target and an Idle cadence target never coexist. A Paused actor has no ordinary target. Cadenced disallows ScheduleWindow, so timestamp cadence and a block terminal target never coexist. Signal-driven actors may select the earlier of their ordinary block target and `terminal_at`, retaining terminal precedence on equality.
 
-A live FIFO ticket and `wakeup_pointer` are mutually exclusive. The non-selected terminal requirement remains stored in `terminal_at`; the non-selected ordinary requirement remains derivable from canonical cycle and schedule state and is not stored as a second pointer. If ordinary and terminal targets are equal, one physical target exists and actor classification applies terminal precedence when it materializes.
+A future target is represented by one typed `wakeup_pointer`; its domain, key, page, and slot identify the actor-owned physical membership exactly. Both bounded temporal indexes are owned by one coordinator and only materialize due readiness into the same FIFO. Neither index executes Actors directly.
 
 Due temporal work removes the physical wakeup and materializes one FIFO service obligation. Actor classification later evaluates terminal predicates before ordinary readiness. Under the global breaker, materialization MAY occur but scheduler-owned close waits until the breaker clears.
 
@@ -1099,9 +1043,9 @@ For every finite set of pre-cutoff tickets, recurring conforming reserve, finite
 
 ### 5.2 Observation Delivery
 
-Subscriptions derive only from `OnObservationChange`. Runtime maintains bounded exact actor/feed and reverse ownership; one fanout unit addresses at most `ObservationPageSize` positions. Physical topology is implementation-owned.
+Subscriptions derive only from `ObservationChange`. Runtime maintains bounded exact actor/feed and reverse ownership; one fanout unit addresses at most `ObservationPageSize` positions. Physical topology is implementation-owned.
 
-Total subscriptions are bounded by `MaxActiveActors * MaxTriggerSources`; distinct subscribed feeds cannot exceed total subscriptions; dirty obligations cannot exceed distinct subscribed feeds. No separate unbounded feed registry exists.
+Total subscriptions are bounded by `MaxActiveActors`; each Actor owns at most one observation feed. Distinct subscribed feeds cannot exceed total subscriptions, and dirty obligations cannot exceed distinct subscribed feeds. No separate unbounded feed registry exists.
 
 Creation/activation installs, schedule replacement diffs, and deactivation/close removes subscriptions inside the owning transaction. Installing the first subscriber infers no historical revision and creates no dirty obligation. Publication while a feed has no subscribers allocates no baseline or dirty state. The first later accepted changed publication with subscribers sets the baseline and creates one dirty obligation. Removing the final subscriber deletes both.
 
@@ -1709,7 +1653,7 @@ Required bindings include `ActorsPalletId`, `FeeNativeAssetId`, `SystemOrigin`, 
 7. `MaxContractSteps * MaxRetryAttempts <= u32::MAX`, checked; this bounds every `OutcomeTotals` counter within one cycle.
 8. `MaxConsecutiveFailures > 0`.
 9. `MaxOpeningSnapshotEntries == 2 * MaxContractSteps` and `MaxOpeningPredicateResults == MaxContractSteps * MaxPredicatesPerStep`, checked; persisted funding entries fit `MaxFundingTrackedAssets`.
-10. `MaxActiveActors * MaxTriggerSources` is representable in `u32`; subscriptions and dirty obligations obey Section 5.2.
+10. Observation subscriptions and dirty obligations obey the `MaxActiveActors` bound in Section 5.2.
 11. `QueuePageSize`, `WakeupPageSize`, and `ObservationPageSize` are independently named and nonzero.
 12. `MaxSweepBatch > 0`.
 13. Every collection, scan, attempt, worker, and processing-unit bound is nonzero and has one owner.
@@ -1740,7 +1684,7 @@ MaxContractSteps = 8                 MaxRetryAttempts = 10
 MaxFundingTrackedAssets = 10              MaxOpeningSnapshotEntries = 16
 MaxOpeningPredicateResults = 32            MaxPreconditionClauses = 4
 MaxPredicatesPerClause = 4                 MaxPredicatesPerStep = 4
-MaxTriggerSources = 4                     MaxWhitelistSize = 16
+MaxExecutionDelayTicks = 631_152_000      MaxWhitelistSize = 16
 MaxSplitTransferLegs = 8                  MaxConsecutiveFailures = 10
 MaxQueueLength = 10_000                   MaxExecutionDelayBlocks = 52_596_000
 MinWindowLength = 100
@@ -1776,9 +1720,9 @@ A runtime conforms to this specification iff every requirement holds:
 12. Initial state and every completed migration contain no compatibility alias, dual write, stale derived cache, or permanent generic migration state.
 13. Close preserves custody without transfer; exact User-slot and System-locator reattachment derive the same sovereign account; an admitted terminal custody drain can exhaust one named asset, including the fee-native balance net of current attempt fees, and closes atomically on positive success while a zero drain follows the specified non-closing skip path.
 14. Canonical input tests prove runtime rejection without sorting or deduplication; task-shape tests prove at most two `AmountResolution` fields and at most two opening surfaces per step; opening-surface admission never truncates; every Section 3.4 step row has identical production, simulation, counter, and event behavior.
-15. Fee-collector failure rolls back the complete attempt, projects `FeeCollectionFailed` in simulation, cannot arise solely from missing reserved payer balance, and cannot be downgraded by authored step policy; a certified movement never silently degrades to balance-only; certified FeeSink ingress notifies exactly once.
+15. Fee-collector failure rolls back the complete attempt, projects `FeeCollectionFailed` in simulation, cannot arise solely from missing reserved payer balance, and cannot be downgraded by authored step policy. When a host elects certified FeeSink ingress, that movement never silently degrades to balance-only and notifies exactly once; ledger-only hosts create no trigger consequence.
 16. Cutoff tests prove the same-block `MAY`/`MUST NOT` boundary; maximum-plan tests prove bounded paid completion without structural starvation; Active Fee Sink tests prove first-signal placement at maximum canonical occupancy; fee-collection stalls may retry only through later ordinary actor service; no call-level path bypasses `InvariantStalledLiveHead`; deployed-lineage structural repair follows Section 9.4.
-17. Cursor-local retry tests distinguish fresh suspension, repeated suspension at the same cursor, and first suspension at a later cursor. Timing tests prove that `Immediate` evaluates no cadence arithmetic, `cadence_at_or_after` uses an exact constant-time closed form without actor phase, Paused actors have no ordinary target, and temporal membership selects the canonical ordinary/terminal target with terminal precedence on equal blocks.
+17. Cursor-local retry tests distinguish fresh suspension, repeated suspension at the same cursor, and first suspension at a later cursor. Timing tests prove floor-readiness, ceil-activation, a full first cadence period, constant-time missed-period coalescing, no cadence catch-up, Paused actors without ordinary targets, and one typed temporal membership per Actor.
 
 ---
 

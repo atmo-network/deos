@@ -27,8 +27,6 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-08-10
-confidence: 0.9
 ---
 
 # DEOS Router

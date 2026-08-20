@@ -21,7 +21,7 @@ The portable actor contract and crate implementation remain in [`template/pallet
 
 ## Temporal Binding
 
-The six-second DEOS slot binds `ActorMaxExecutionDelayBlocks` to `52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. `ten_julian_year_horizon_matches_six_second_runtime_binding` derives the value from `SLOT_DURATION`; package boundary tests reject unrepresentable exact-next-block, cooldown, exact cadence, retry, and window-terminal targets without mutation.
+The six-second DEOS slot binds block cooldown, retry, and window horizons through `ActorMaxExecutionDelayBlocks = 52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. Cadence instead uses consensus timestamp through `ActorCadenceTickMillis = 500`; the same numeric admission cap bounds `every_ticks` without converting ticks into blocks.
 
 ## Namespace and Sovereign Accounts
 
@@ -55,7 +55,7 @@ The complete DEOS deterministic System account map follows.
 | Lane | Role | actor_id | Genesis lifecycle |
 | --- | --- | ---: | --- |
 | Core | Burn Actor | 0 | Active burn plan |
-| Core | Fee Sink | 1 | Active phase-one fee allocation |
+| Core | Fee Sink | 1 | Active 120-tick/60-second 10% buffer allocation |
 | Core | Liquidity Actor | 2 | Dormant |
 | TOL | Bucket A | 3 | Custody-only |
 | TOL | Buckets B/C/D | 4–6 | Dormant |
@@ -66,7 +66,7 @@ The complete DEOS deterministic System account map follows.
 | BLDR | BLDR Treasury | 13 | Dormant |
 | Staking | Native staking LP provisioning actor | 14 | Dormant |
 
-Active genesis actors use the runtime System cooldown, `ActorType::System`, `Mutability::Mutable`, and no schedule window. Dormant entries occupy `ActorIdentities` and `SovereignIndex` without hot program, queue, wakeup, funding, fee, or Active-epoch state. Custody-only accounts occupy no actor identity.
+Active genesis actors use the runtime System cooldown, `ActorType::System`, `Mutability::Mutable`, and no schedule window. Fee Sink's tick-zero bootstrap wakeup anchors its 120-tick period from the first consensus timestamp without executing allocation. Dormant entries occupy `ActorIdentities` and `SovereignIndex` without hot program, queue, wakeup, funding, fee, or Active-epoch state. Custody-only accounts occupy no actor identity.
 
 The reference runtime configures no System Immutable actor, so it has no actor-specific emergency migration or custody disposition to execute. A downstream runtime that admits an indefinite System Immutable actor must ship its migration-specific source/target actor set, bounded Close or Deactivate disposition, custody handling, terminal invariant, and Continuation policy with the same upgrade. The ordinary DEOS Governance path exposes 3-day lead-in, 7-day vote, 7-day protection, and 3-day enactment delay—20 days before bounded maturity/operational delay. Protocol `L1RootAction` can use the separately governed 24-hour urgent path only with unanimous raw protection-track `Pass`; Actors promises neither path completes within a finite time.
 
@@ -79,6 +79,7 @@ The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs
 | Builder | Actor family | Composition |
 | --- | --- | --- |
 | `build_burn_contract_steps` | Burn Actor | Foreign balances → Native swap → burn |
+| `build_fee_sink_contract_steps` | Fee Sink | Above the per-leg ED threshold, process 10% of spendable Native → phase-aware allocation |
 | `build_zap_contract_steps` | Liquidity Actor | Add LP → surplus swap → split LP to buckets |
 | `build_bucket_lp_transfer_contract_steps` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
 | `build_treasury_lp_unwind_contract_steps` | Treasuries B/C/D | Remove configured LP into Treasury custody |
@@ -112,6 +113,8 @@ DEOS Router evaluates the direct XYK candidate and at most one reverse-quoted Na
 System swaps read the exact directional Oracle feed with `MAX_SYSTEM_REFERENCE_AGE_BLOCKS = 100` and enforce `ActorMaxSystemPriceDeviation = 5%`. Fresh nonzero truth at the exact age boundary remains eligible. Unavailable, Uninitialized, Stale, or invalid truth falls back to direct reserves; unavailable fallback or excessive deviation fails Temporary before mutation.
 
 User swaps retain Router's ordinary direct-pair guard and do not fail solely because the standalone Oracle feed is absent or uninitialized. Native-anchored System routes without a pair reference fail closed.
+
+Every reference-runtime System swap is Native-anchored: Burn and Liquidity Actors convert foreign assets to Native, and Treasury buyback converts Native to a target asset. A direct pool therefore always supplies the reserve fallback and the guard never runs dry. Configuring a System actor on a pair holding neither a direct pool nor a published feed leaves it retrying `SystemReferencePriceUnavailable` indefinitely, because Temporary failure alone never terminates; such a pair needs an Oracle feed before activation.
 
 The guard bounds authored execution loss; it does not prove external fair price, ordering safety, manipulation resistance, or MEV immunity.
 
@@ -169,7 +172,6 @@ Every producer path that can credit an Actors sovereign account uses one paired 
 | XCM asset deposit | Recipient sovereign | XCM origin / `Xcm` | `preflight_xcm_inbound` | `on_xcm_inbound` | `ActorAwareAssetTransactor` deposit revert | One-asset deposit generated weight |
 | XCM without origin | Recipient sovereign | Source-less / none | Implicit source-less preflight | `on_inbound_without_source` | Same deposit revert | Same one-asset weight |
 | Privileged/delegated producers | Recipient sovereign | Source-less candidate / none | Direct source-less preflight | Same source-less notify | Producer transaction revert | Producer-supplied weights |
-| FeeCollector | Fee Sink sovereign | Payer / `InternalProtocol` | `on_internal_inbound` preflight (window/zero/auth/tracked) | Same `on_internal_inbound` notify | Fee Sink transfer + ingress transaction revert | Fee collection generated weights |
 
 **Same-actor task/adapter outputs (intentionally excluded from the ingress boundary):** each executes inside the actor's own cycle and resolves against the actor's own balances, so it does not signal the actor or update its funding. They are named explicitly rather than claiming "all producers are covered":
 
@@ -185,7 +187,7 @@ Every producer path that can credit an Actors sovereign account uses one paired 
 
 Movement to a non-Actors recipient and a task transfer to the actor's own sovereign remain explicit exclusions: `resolve_actor` returns `None` for non-sovereign recipients and the pallet's recipient validation rejects self-transfers with `SelfTransferNotAllowed`.
 
-Fee collection is now an explicit certified producer to the configured Fee Sink (not an accidental side effect of `AssetOps::transfer`): it moves exactly the fee-native amount and submits one paired AddressEvent with payer source and typed internal-protocol provenance in the same transaction, latching Fee Sink readiness. The inventory is certified by `ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY`, the generated ingress runtime evidence (which scans the complete runtime-config Rust tree for typed-boundary bypasses), the paired-executive tests, and the independent embedding fixture; any new crediting path must register here before acceptance.
+Fee collection is intentionally excluded from certified AddressEvent ingress. Actor, transaction-payment, governance-opening, and XCM fee collectors credit the Fee Sink ledger without creating trigger or funding state; its single cadence owns allocation. `ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY`, generated ingress evidence, paired-executive tests, and the embedding fixture continue to cover paths that actually signal an actor.
 
 ## Fee Composition
 
@@ -193,7 +195,7 @@ The package-owned `attempt_fee_envelope` derives each task and complete-plan res
 
 Package-generated `actors-fee-envelope-vectors.json` constrains browser forecast fee policy across User/System suffixes, reservation release, rollback pricing, and the direct User fee-native floor. One selected fee charges per executed or failed task attempt; skipped steps charge evaluation only.
 
-`TmctolFeeCollector` is the explicit certified fee-ingress producer: it transfers the complete charge into Fee Sink System Actors `1` via a ledger-only movement primitive (no generic transfer/transaction-extension ingress, no staking bridge) and submits exactly one paired AddressEvent (payer source, internal-protocol provenance) in the same transaction so the Fee Sink actor latches readiness. One charge yields exactly one preflight, one movement, and one notification; zero/no-op collection emits no ingress; failure rolls back movement and all Actors state. Collection never pays the current author directly and never recursively charges an Actors fee. The Fee Sink's current phase-one plan allocates available Native value equally between staking ingress and native liquidity provisioning while retaining indivisible remainder.
+`TmctolFeeCollector` transfers the complete charge into Fee Sink System Actor `1` through a ledger-only movement, matching transaction-payment and XCM-trader collection without fabricating AddressEvent readiness. One 120-tick cadence under the 500 ms consensus clock owns a stable 60-second allocation period. Its plan processes 10% of the current spendable Native buffer only when each configured split leg receives at least one ED, allocates the processed amount under the current phase policy, and retains the unprocessed buffer plus indivisible remainder. Runtime regressions prove collection-only custody, threshold skips, timestamp readiness, and no early execution.
 
 Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admission reserves transient Native fees without consuming the persistent sovereign ED anchor.
 
@@ -262,7 +264,7 @@ Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorContr
 
 The runtime simulation API executes the same package evaluator and finalizer used by scheduler service. Its bounded records carry canonical `StepOutcome` values, including concrete failure cause plus retry disposition, and its status is the shared `AttemptDisposition`; DEOS adds no adapter-side simulation model.
 
-The read-only `ActorEligibilityApi::actor_eligibility` projection reports `NotRegistered`, `Dormant`, or the canonical Active classification at one finalized block, preserving terminal reason and exact retry/temporal block payloads so the browser never reimplements cadence, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
+The read-only `ActorEligibilityApi::actor_eligibility` projection reports `NotRegistered`, `Dormant`, or the canonical Active classification at one finalized block, preserving terminal reason plus exact retry/block/timestamp-tick payloads so the browser never reimplements cadence, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 
 The browser's authoring, artifact, matching-Wasm, simulation, observation, and governance-composition surfaces live under `web-client/src/lib/automation/` and `web-client/src/lib/observation/`. They bind metadata and runtime identity rather than recreating pallet semantics.
 

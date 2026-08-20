@@ -23,8 +23,6 @@ related:
   - Routing and Minting Loop
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-08-13
-confidence: 0.85
 ---
 
 # Staking

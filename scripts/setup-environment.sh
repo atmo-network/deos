@@ -52,6 +52,12 @@ parse_args() {
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_commands python3
+    # `tomllib` is the only reason this script needs Python at all, and it landed in 3.11.
+    # Checking the version here turns a later traceback into a named prerequisite failure.
+    if ! python3 -c 'import tomllib' 2>/dev/null; then
+        log_error "python3 with tomllib (3.11 or newer) is required to read rust-toolchain.toml, found $(python3 --version 2>&1)"
+        exit 1
+    fi
     [[ -f "$TEMPLATE_DIR/rust-toolchain.toml" ]] || { log_error "Rust toolchain authority not found"; exit 1; }
     [[ -f "$PACKAGE_JSON" ]] || { log_error "Web-client package authority not found"; exit 1; }
     if [[ "$MODE" == "rust" || "$MODE" == "full" ]]; then
@@ -88,7 +94,7 @@ setup_rust() {
 }
 
 expected_node_version() {
-    python3 -c 'import json,pathlib; print(json.loads(pathlib.Path("web-client/package.json").read_text())["volta"]["node"])'
+    node -e 'const p=require(process.argv[1]); process.stdout.write(p.volta?.node ?? "")' "$PACKAGE_JSON"
 }
 
 verify_node() {
@@ -107,7 +113,7 @@ verify_node() {
 setup_client() {
     phase_banner "Step 4: Client environment"
     local expected_npm actual_npm
-    expected_npm="$(python3 -c 'import json,pathlib; print(json.loads(pathlib.Path("web-client/package.json").read_text())["packageManager"].split("@", 1)[1])')"
+    expected_npm="$(node -e 'const p=require(process.argv[1]); process.stdout.write(String(p.packageManager).split("@").pop())' "$PACKAGE_JSON")"
     actual_npm="$(npm --version)"
     if [[ "$actual_npm" != "$expected_npm" ]]; then
         npm install --global "npm@$expected_npm"

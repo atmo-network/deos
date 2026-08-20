@@ -19,7 +19,7 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_core::U256;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
-use crate::{AssetConversion, RuntimeOrigin};
+use crate::{AssetConversion, RuntimeOrigin, Timestamp};
 use pallet_deos_actors::{
   ActorType, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FeeCollector, FundingAuthority,
   LiquidityOps, TaskFailure,
@@ -30,6 +30,7 @@ parameter_types! {
 
   pub const ActorsPalletId: PalletId = PalletId(*ecosystem::pallet_ids::ACTORS_PALLET_ID);
   pub const ActorFeeNativeAssetId: AssetKind = AssetKind::Native;
+  pub const ActorCadenceTickMillis: u64 = ecosystem::params::ACTOR_CADENCE_TICK_MILLIS;
   /// User Actors slot capacity per owner; System Actors is not constrained by this limit
   pub const ActorMaxOwnerSlots: u8 = 255;
 
@@ -50,7 +51,6 @@ parameter_types! {
 pub const ActorMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
     pub const ActorMinWindowLength: BlockNumber = 100;
   pub const ActorMaxWhitelistSize: u32 = 16;
-  pub const ActorMaxTriggerSources: u32 = 4;
 
   // --- Scheduler controls ---
 
@@ -117,37 +117,14 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
   fn collect_fee(
     payer: &AccountId,
     fee_sink: &AccountId,
-    native_asset: AssetKind,
+    _native_asset: AssetKind,
     amount: Balance,
   ) -> DispatchResult {
     if amount == 0 {
       return Ok(());
     }
-    // Fee collection is one explicit certified producer: exactly one read-only
-    // ingress preflight, one fee-native ledger movement, and one post-movement
-    // notification in the same transaction. The ledger-only primitive performs
-    // NO generic AssetOps ingress, transaction-extension ingress, or native-
-    // staking bridge, so notifying the same movement twice is impossible.
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
-      let result = (|| -> DispatchResult {
-        TmctolAssetOps::transfer_native_ledger_only(payer, fee_sink, amount)
-          .map_err(|failure| failure.error)?;
-        crate::configs::RuntimeAddressEventIngress::on_internal_inbound(
-          fee_sink,
-          native_asset,
-          amount,
-          payer,
-        )
-        .map_err(|failure| failure.error)?;
-        Ok(())
-      })();
-      match result {
-        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
+    TmctolAssetOps::transfer_native_ledger_only(payer, fee_sink, amount)
+      .map_err(|failure| failure.error)
   }
 }
 
@@ -916,7 +893,7 @@ impl
     // --- Burn Actor (actor_id = 0) ---
     // Omnivorous intake: any verified inbound value signals one bounded pass that
     // swaps configured foreign balances to native and burns available native.
-    let burn_trigger = Trigger::immediate_manual_and_address_event(
+    let burn_trigger = Trigger::address_event(
       pallet_deos_actors::SourceFilter::Any,
       pallet_deos_actors::AssetFilter::Any,
     );
@@ -927,12 +904,8 @@ impl
       Self::build_burn_contract_steps(alloc::vec![], dust);
 
     // --- Fee Sink (actor_id = 1) ---
-    // Inbound-driven mode-aware fan-out distributes accumulated native fees/rewards
-    // into certified security funding, staking-pool yield, and native LP-donation ingress.
-    let fee_sink_trigger = Trigger::immediate_manual_and_address_event(
-      pallet_deos_actors::SourceFilter::Any,
-      pallet_deos_actors::AssetFilter::Any,
-    );
+    // Collection only grows the ledger buffer; one ordinary cadence owns allocation.
+    let fee_sink_trigger = Trigger::cadenced(ecosystem::params::FEE_SINK_CADENCE_TICKS);
     let fee_sink_contract_steps: pallet_deos_actors::ContractSteps<Runtime> =
       Self::build_fee_sink_contract_steps();
 
@@ -957,7 +930,7 @@ impl
         Mutability::Mutable,
         ActorContract {
           trigger: fee_sink_trigger,
-          cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
+          cooldown_blocks: 0,
           window: None,
           steps: fee_sink_contract_steps,
           funding: FundingSourcePolicy::RuntimePolicy,
@@ -972,7 +945,7 @@ impl
         governance,
         Mutability::Mutable,
         ActorContract {
-          trigger: Trigger::immediate_manual_and_address_event(
+          trigger: Trigger::address_event(
             pallet_deos_actors::SourceFilter::Any,
             pallet_deos_actors::AssetFilter::Any,
           ),
@@ -1040,6 +1013,17 @@ impl TmctolGenesisSystemActors {
     })
   }
 
+  fn minimum_base_for_perbill_output(minimum_output: Balance, share: Perbill) -> Balance {
+    let parts = u128::from(share.deconstruct());
+    assert!(parts > 0, "Fee Sink allocation shares must be nonzero");
+    let accuracy = u128::from(Perbill::one().deconstruct());
+    let numerator =
+      sp_core::U256::from(minimum_output).saturating_mul(sp_core::U256::from(accuracy));
+    let rounded = numerator.saturating_add(sp_core::U256::from(parts.saturating_sub(1)))
+      / sp_core::U256::from(parts);
+    rounded.try_into().unwrap_or(Balance::MAX)
+  }
+
   pub fn build_fee_sink_contract_steps() -> pallet_deos_actors::ContractSteps<Runtime> {
     use pallet_deos_actors::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
     let lp_backed = crate::Staking::native_security_mode()
@@ -1075,11 +1059,34 @@ impl TmctolGenesisSystemActors {
         },
       ]
     };
+    let mut minimum_processed = 0;
+    for leg in &legs {
+      minimum_processed = minimum_processed.max(Self::minimum_base_for_perbill_output(
+        ExistentialDeposit::get(),
+        leg.share,
+      ));
+    }
+    assert!(
+      minimum_processed > 0,
+      "Fee Sink has at least one allocation leg"
+    );
+    let required_spendable = Self::minimum_base_for_perbill_output(
+      minimum_processed,
+      ecosystem::params::FEE_SINK_BUFFER_PCT,
+    );
+    let minimum_balance = ExistentialDeposit::get()
+      .saturating_add(required_spendable)
+      .saturating_sub(1);
     alloc::vec![Step {
-      precondition: None,
+      precondition: Self::all_conditions(alloc::vec![
+        pallet_deos_actors::Predicate::BalanceAbove {
+          asset: AssetKind::Native,
+          threshold: minimum_balance,
+        },
+      ]),
       task: Task::SplitTransfer {
         asset: AssetKind::Native,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT,),
         legs: legs
           .try_into()
           .expect("phase-aware fee-sink split legs fit"),
@@ -1413,7 +1420,7 @@ impl TmctolGenesisSystemActors {
       RuntimeOrigin::root(),
       ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
       pallet_deos_actors::ActorContract {
-        trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
+        trigger: pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
           pallet_deos_actors::AssetFilter::Any,
         ),
@@ -1605,9 +1612,12 @@ impl pallet_deos_actors::adapters::SovereignAccountPolicy<AccountId>
   fn is_reserved(account: &AccountId) -> bool {
     // The deterministic genesis System Actors custody accounts (including the Fee Sink) are
     // host-reserved; a hashed sovereign derivation can never alias them.
-    (primitives::ecosystem::actor_ids::BURN_ACTOR_ID
-      ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID)
-      .any(|id| account == &pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(id))
+    account == &crate::configs::governance_config::governance_vote_power_custody_account()
+      || (primitives::ecosystem::actor_ids::BURN_ACTOR_ID
+        ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID)
+        .any(|id| {
+          account == &pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(id)
+        })
   }
 }
 
@@ -1655,6 +1665,8 @@ impl pallet_deos_actors::Config for Runtime {
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
   type LiquidityOps = TmctolLiquidityOps;
+  type Time = Timestamp;
+  type CadenceTickMillis = ActorCadenceTickMillis;
   type ActorCreationFee = ActorCreationFee;
   type FeeSink = ActorFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
@@ -1691,7 +1703,6 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxSplitTransferLegs = ActorMaxSplitTransferLegs;
   type MaxSweepBatch = ActorMaxSweepBatch;
   type MaxWhitelistSize = ActorMaxWhitelistSize;
-  type MaxTriggerSources = ActorMaxTriggerSources;
   type MinUserBalance = ActorMinUserBalanceGuard;
   type MinWindowLength = ActorMinWindowLength;
   type WeightInfo = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
@@ -1716,6 +1727,96 @@ impl RuntimeActorsBenchmarkHelper {
         1,
       )?;
     }
+    Ok(())
+  }
+
+  /// Adds a thin direct pool for a non-Native pair so Router quotes both the direct XYK candidate
+  /// and the Native-anchored path. Liquidity stays three orders below the Native pools, so the
+  /// multi-hop route still wins execution while the extra candidate is still enumerated, which is
+  /// the worst case for route selection.
+  fn ensure_thin_direct_pool(
+    owner: &AccountId,
+    asset_a: AssetKind,
+    asset_b: AssetKind,
+    liquidity: Balance,
+  ) -> Result<(), DispatchError> {
+    AssetConversion::create_pool(
+      RuntimeOrigin::signed(owner.clone()),
+      alloc::boxed::Box::new(asset_a),
+      alloc::boxed::Box::new(asset_b),
+    )
+    .map_err(|_| DispatchError::Other("CreateDirectPoolForBenchmarkFailed"))?;
+    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
+    let pool_account =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("DirectPoolAddressUnavailable"))?;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&pool_account, EXISTENTIAL_DEPOSIT);
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("DirectPoolIdUnavailable"))?;
+    let pool_info = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("DirectPoolNotCreated"))?;
+    if <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+      u32,
+      AccountId,
+    >>::should_touch(pool_info.lp_token, owner)
+      && <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+        u32,
+        AccountId,
+      >>::touch(pool_info.lp_token, owner, owner)
+      .is_err()
+    {
+      return Err(DispatchError::Other("TouchDirectLpAccountFailed"));
+    }
+    AssetConversion::add_liquidity(
+      RuntimeOrigin::signed(owner.clone()),
+      alloc::boxed::Box::new(asset_a),
+      alloc::boxed::Box::new(asset_b),
+      liquidity,
+      liquidity,
+      0,
+      0,
+      owner.clone(),
+    )
+    .map_err(|_| DispatchError::Other("AddDirectPoolLiquidityFailed"))?;
+    Ok(())
+  }
+
+  /// Registers a TMC curve on the swap target so Router enumerates its third candidate family
+  /// alongside direct XYK and the Native-anchored path. The curve is priced so minting loses to
+  /// XYK, which keeps the multi-hop route executing while every candidate is still quoted.
+  fn ensure_losing_tmc_curve(
+    token_asset: AssetKind,
+    collateral_asset: AssetKind,
+  ) -> Result<(), DispatchError> {
+    if pallet_tmc::Pallet::<Runtime>::has_curve(token_asset) {
+      return Ok(());
+    }
+    pallet_tmc::Pallet::<Runtime>::create_curve(
+      RuntimeOrigin::root(),
+      token_asset,
+      collateral_asset,
+      ecosystem::params::PRECISION,
+      0,
+    )
+  }
+
+  /// Publishes the Router pool reference a System swap consults, so `ensure_system_reference_price`
+  /// measures its full Oracle-plus-reserves read path instead of missing early. Both benchmark
+  /// pools carry equal liquidity, so the pair prices 1:1 at `PRECISION` and a two-leg fee of about
+  /// one percent stays well inside `MAX_SYSTEM_PRICE_DEVIATION`.
+  fn publish_system_reference_price(
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+  ) -> Result<(), DispatchError> {
+    let producer = crate::DeosRouter::account_id();
+    crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)?;
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
+    crate::Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      ecosystem::params::PRECISION,
+    )?;
     Ok(())
   }
 }
@@ -1948,11 +2049,12 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       &BurnActorAccount::get(),
       EXISTENTIAL_DEPOSIT,
     );
-    Ok((
-      AssetKind::Local(100_000),
-      AssetKind::Local(100_001),
-      1_000_000,
-    ))
+    let asset_in = AssetKind::Local(100_000);
+    let asset_out = AssetKind::Local(100_001);
+    Self::ensure_thin_direct_pool(owner, asset_in, asset_out, 1_000_000_00)?;
+    Self::ensure_losing_tmc_curve(asset_out, asset_in)?;
+    Self::publish_system_reference_price(asset_in, asset_out)?;
+    Ok((asset_in, asset_out, 1_000_000))
   }
 
   fn setup_swap_exact_out(
@@ -1963,12 +2065,12 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       &BurnActorAccount::get(),
       EXISTENTIAL_DEPOSIT,
     );
-    Ok((
-      AssetKind::Local(100_000),
-      AssetKind::Local(100_001),
-      100_000,
-      1_000_000_000,
-    ))
+    let asset_in = AssetKind::Local(100_000);
+    let asset_out = AssetKind::Local(100_001);
+    Self::ensure_thin_direct_pool(owner, asset_in, asset_out, 1_000_000_00)?;
+    Self::ensure_losing_tmc_curve(asset_out, asset_in)?;
+    Self::publish_system_reference_price(asset_in, asset_out)?;
+    Ok((asset_in, asset_out, 100_000, 1_000_000_000))
   }
 
   fn funding_assets(max: u32) -> alloc::vec::Vec<AssetKind> {

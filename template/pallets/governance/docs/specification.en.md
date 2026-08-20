@@ -329,17 +329,21 @@ At cast time, the implementation resolves the applicable base backing surface, a
 That means:
 
 - if the backing balance, stake, staking exchange rate, or LP reserve state changes after the vote, the already-cast ballot's stored weight does not change
-- if the backing position later moves to another account, the old ballot remains fixed and the new holder must cast its own eligible ballot on later items
+- a transferable backing position used by a ballot MUST NOT move to another account while its governance lock is active; otherwise the same fungible units can be frozen repeatedly through different accounts on one item
 - one account may still cast at most one primary-track ballot and one protection-track ballot per item
 - implementations MUST surface this honestly in queries/UI so users understand that recorded ballot weight is a vote-time snapshot, not a live balance view
 
-A conforming governance implementation SHOULD maintain one aggregate account-level governance lock horizon. Each accepted ballot extends that account's `lock_until` to at least the proposal's enactment horizon:
+If canonical protection power is wider than the stored ballot integer, account power and total eligible supply MUST use one common proportional normalization with enough headroom for the maximum temporal multiplier. Independently saturating account power and total supply is forbidden because it can make a minority position appear to own the full protection supply.
+
+A conforming governance implementation MUST maintain one aggregate account-level governance lock horizon. Each accepted ballot extends that account's `lock_until` to at least the proposal's enactment horizon:
 
 ```text
 lock_until = max(current_lock_until, proposal_primary_close + enactment_delay)
 ```
 
-The lock horizon is account-level, not a per-referendum unlock ledger. Runtime-specific staking, asset, or LP custody layers may use that horizon to enforce source locks, but the ballot record remains the frozen vote-power fact for the proposal.
+The lock horizon is account-level, not a per-referendum unlock ledger. Runtime-specific staking, asset, or LP custody layers enforce source locks, while the ballot record remains the frozen vote-power fact for the proposal.
+
+For a transferable backing source, the implementation MUST retain one O(1) custody position per account and source. A ballot may increase that position from newly available free balance but MUST NOT sum the same locked quantity once per simultaneous proposal. Vote-power reads include free plus custody, so already locked units remain reusable across concurrent items without being transferable. The position amount and horizon only increase while active; explicit release after `current_epoch >= lock_until` returns the complete source position. Custody transfer, position mutation, ballot insertion, and immediate terminal handling share one transaction.
 
 ### 5.2 Declining Power
 

@@ -8,7 +8,7 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_deos_actors::{
-  ActorContract, FundingSourcePolicy, Mutability, StepErrorPolicy, Task, Trigger, TriggerSource,
+  ActorContract, FundingSourcePolicy, Mutability, StepErrorPolicy, Task, Trigger,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
 use polkadot_sdk::{
@@ -241,10 +241,7 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
         crate::configs::oracle_config::ensure_deos_router_pool_feeds(feed.asset_in, feed.asset_out,)
       );
       let schedule = Schedule {
-        trigger: Trigger::Immediate {
-          sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
-            .expect("one observation source fits"),
-        },
+        trigger: Trigger::observation_change(feed),
         cooldown_blocks: 0,
       };
       let contract_steps = BoundedVec::try_from(vec![pallet_deos_actors::Step {
@@ -269,8 +266,7 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
       ));
     }
 
-    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
-      * <Runtime as pallet_deos_actors::Config>::MaxTriggerSources::get();
+    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
     pallet_deos_actors::DirtyObservationListState::<Runtime>::put(
       pallet_deos_actors::DirtyObservationList {
         count: maximum,
@@ -347,8 +343,9 @@ fn pool_index_extension_declares_two_worst_case_feed_registrations() {
     crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_existing_producer()
       .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_new_producer())
       .saturating_mul(2);
-  assert!(declared.ref_time() >= registration.ref_time());
-  assert!(declared.proof_size() >= registration.proof_size());
+  let index_work =
+    <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(13, 1);
+  assert_eq!(declared, registration.saturating_add(index_work));
 }
 
 #[test]
@@ -513,10 +510,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
     System::set_block_number(1);
     let feed = directional_feed(asset_in, asset_out);
     let schedule = Schedule {
-      trigger: Trigger::Immediate {
-        sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
-          .expect("one observation source fits"),
-      },
+      trigger: Trigger::observation_change(feed),
       cooldown_blocks: 0,
     };
     let contract_steps = BoundedVec::try_from(vec![pallet_deos_actors::Step {

@@ -388,10 +388,10 @@ Zone: Observation domain UI; receives provider capabilities from its composition
                   valueClass="tabnum"
                 />
                 <DetailRow
-                  label="Wakeup block"
+                  label="Wakeup clock / deadline"
                   value={actor.wakeup == null
                     ? 'None'
-                    : actor.wakeup.block.toString()}
+                    : `${actor.wakeup.key.type} / ${actor.wakeup.key.value.toString()}`}
                   valueClass="tabnum"
                 />
                 <DetailRow

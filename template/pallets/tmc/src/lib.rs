@@ -182,6 +182,13 @@ pub mod pallet {
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+      assert!(
+        !T::Precision::get().is_zero(),
+        "TMC Precision must be nonzero"
+      );
+    }
+
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
@@ -305,7 +312,10 @@ pub mod pallet {
         initial_price > Balance::from(0u32) || slope > Balance::from(0u32),
         Error::<T>::InvalidParameters
       );
-      ensure!(token_asset != foreign_asset, Error::<T>::InvalidParameters);
+      ensure!(
+        Self::assets_are_distinct(token_asset, foreign_asset),
+        Error::<T>::InvalidParameters
+      );
       Self::ensure_asset_exists(token_asset)?;
       Self::ensure_asset_exists(foreign_asset)?;
       T::DomainGlueHook::on_curve_created(token_asset, foreign_asset)?;
@@ -334,8 +344,8 @@ pub mod pallet {
   }
 
   impl<T: Config> Pallet<T> {
-    /// Calculate current spot price
-    pub(crate) fn calculate_spot_price(curve: &CurveConfig) -> Price {
+    /// Calculate current spot price with widened intermediate arithmetic.
+    pub(crate) fn calculate_spot_price(curve: &CurveConfig) -> Result<Price, DispatchError> {
       let total_issuance: u128 = match curve.minted_asset {
         AssetKind::Native => T::Currency::total_issuance().unique_saturated_into(),
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
@@ -343,10 +353,20 @@ pub mod pallet {
         }
       };
       let effective_supply = total_issuance.saturating_sub(curve.initial_issuance);
-      let slope_contribution = curve.slope.saturating_mul(effective_supply);
       let precision: u128 = T::Precision::get().unique_saturated_into();
-      let normalized = slope_contribution / precision;
-      curve.initial_price.saturating_add(normalized)
+      ensure!(precision > 0, Error::<T>::InvalidParameters);
+      let normalized = U256::from(curve.slope)
+        .checked_mul(U256::from(effective_supply))
+        .and_then(|value| value.checked_div(U256::from(precision)))
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
+      let price = U256::from(curve.initial_price)
+        .checked_add(normalized)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
+      ensure!(
+        price <= U256::from(u128::MAX),
+        Error::<T>::ArithmeticOverflow
+      );
+      Ok(price.as_u128())
     }
 
     /// Check if a bonding curve exists for the given token asset
@@ -373,6 +393,8 @@ pub mod pallet {
       let initial_price = curve.initial_price;
       let slope = curve.slope;
       let precision = T::Precision::get();
+      let k_val: u128 = precision.unique_saturated_into();
+      ensure!(k_val > 0, Error::<T>::InvalidParameters);
       // Handle zero slope (constant price)
       if slope.is_zero() {
         if initial_price.is_zero() {
@@ -383,11 +405,10 @@ pub mod pallet {
         // Amount = Cost * Precision / Price_stored
         let amount_val: u128 = foreign_amount.unique_saturated_into();
         let price_val: u128 = initial_price.unique_saturated_into();
-        let precision_val: u128 = precision.unique_saturated_into();
         let result = U256::from(amount_val)
-          .saturating_mul(U256::from(precision_val))
-          .checked_div(U256::from(price_val))
-          .unwrap_or(U256::zero());
+          .checked_mul(U256::from(k_val))
+          .and_then(|value| value.checked_div(U256::from(price_val)))
+          .ok_or(Error::<T>::ArithmeticOverflow)?;
         if result > U256::from(u128::MAX) {
           return Err(Error::<T>::ArithmeticOverflow.into());
         }
@@ -395,10 +416,10 @@ pub mod pallet {
       }
       // Use quadratic formula to solve for Delta S (amount to mint)
       // derived from Cost = Integral(P(s) ds)
-      // Delta S = (sqrt((K*P)^2 + 2*m*K*Cost) - K*P) / m
-      let p_current = Self::calculate_spot_price(&curve);
+      // Delta S = (sqrt((K*P)^2 + 2*m*K^2*Cost) - K*P) / m
+      let p_current = Self::calculate_spot_price(&curve)?;
       // Convert to u128 explicitly to avoid U256::from ambiguity
-      let k_val: u128 = precision.unique_saturated_into();
+
       let m_val: u128 = slope.unique_saturated_into();
       let p_val: u128 = p_current.unique_saturated_into();
       let cost_val: u128 = foreign_amount.unique_saturated_into();
@@ -407,24 +428,28 @@ pub mod pallet {
       let p_u256 = U256::from(p_val);
       let cost_u256 = U256::from(cost_val);
       // K * P
-      let kp = k_u256.saturating_mul(p_u256);
+      let kp = k_u256
+        .checked_mul(p_u256)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       // (K * P)^2
-      let kp_sq = kp.saturating_mul(kp);
+      let kp_sq = kp.checked_mul(kp).ok_or(Error::<T>::ArithmeticOverflow)?;
       // 2 * m * K^2 * Cost (scaled for precision)
       let two_m_k_cost = U256::from(2)
-        .saturating_mul(m_u256)
-        .saturating_mul(k_u256)
-        .saturating_mul(k_u256)
-        .saturating_mul(cost_u256);
+        .checked_mul(m_u256)
+        .and_then(|value| value.checked_mul(k_u256))
+        .and_then(|value| value.checked_mul(k_u256))
+        .and_then(|value| value.checked_mul(cost_u256))
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       // Inside sqrt
-      let inside_sqrt = kp_sq.saturating_add(two_m_k_cost);
+      let inside_sqrt = kp_sq
+        .checked_add(two_m_k_cost)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       // Sqrt
       let sqrt_res = inside_sqrt.integer_sqrt();
       // Numerator: sqrt - KP
-      if sqrt_res < kp {
-        return Ok(Zero::zero());
-      }
-      let numerator = sqrt_res.saturating_sub(kp);
+      let numerator = sqrt_res
+        .checked_sub(kp)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       // Result: Numerator / m
       let result_u256 = numerator
         .checked_div(m_u256)
@@ -434,6 +459,17 @@ pub mod pallet {
         return Err(Error::<T>::ArithmeticOverflow.into());
       }
       Ok(result_u256.as_u128().unique_saturated_into())
+    }
+
+    fn assets_are_distinct(left: AssetKind, right: AssetKind) -> bool {
+      match (left, right) {
+        (AssetKind::Native, AssetKind::Native) => false,
+        (
+          AssetKind::Local(left_id) | AssetKind::Foreign(left_id),
+          AssetKind::Local(right_id) | AssetKind::Foreign(right_id),
+        ) => left_id != right_id,
+        _ => true,
+      }
     }
 
     fn ensure_asset_exists(asset: AssetKind) -> Result<(), DispatchError> {
@@ -462,6 +498,10 @@ pub mod pallet {
       let curve = TokenCurves::<T>::get(token_asset).ok_or(Error::<T>::NoCurveExists)?;
       ensure!(
         curve.foreign_asset == foreign_asset,
+        Error::<T>::InvalidForeignAsset
+      );
+      ensure!(
+        Self::assets_are_distinct(token_asset, foreign_asset),
         Error::<T>::InvalidForeignAsset
       );
       Self::ensure_asset_exists(token_asset)?;
@@ -549,20 +589,10 @@ pub mod pallet {
             "TokenCurves key does not match CurveConfig.minted_asset",
           ));
         }
-        // Invariant 2: Current total issuance ≥ initial issuance (unidirectional minting)
-        let total_issuance: Balance = match curve.minted_asset {
-          AssetKind::Native => T::Currency::total_issuance().unique_saturated_into(),
-          AssetKind::Local(id) | AssetKind::Foreign(id) => {
-            T::Assets::total_issuance(id).unique_saturated_into()
-          }
-        };
-        if total_issuance < curve.initial_issuance {
-          return Err(TryRuntimeError::Other(
-            "Total issuance is less than initial issuance (conservation violation)",
-          ));
-        }
-        // Invariant 3: Spot price ≥ initial price (linear curve is monotonically increasing)
-        let spot_price = Self::calculate_spot_price(&curve);
+        // Burns may legitimately reduce issuance below the creation baseline; effective
+        // supply then clamps to zero and the spot price returns to its initial value.
+        let spot_price = Self::calculate_spot_price(&curve)
+          .map_err(|_| TryRuntimeError::Other("Stored curve price is not representable"))?;
         if spot_price < curve.initial_price {
           return Err(TryRuntimeError::Other(
             "Spot price is below initial price (monotonicity violation)",
@@ -588,6 +618,14 @@ pub mod pallet {
     fn build(&self) {
       frame_system::Pallet::<T>::inc_providers(&Pallet::<T>::account_id());
       for (minted_asset, collateral_asset, initial_price, slope) in &self.curves {
+        assert!(
+          Pallet::<T>::assets_are_distinct(*minted_asset, *collateral_asset),
+          "TMC genesis curve assets must resolve to distinct ledgers"
+        );
+        assert!(
+          *initial_price > 0 || *slope > 0,
+          "TMC genesis curve price and slope cannot both be zero"
+        );
         let initial_issuance: Balance = match minted_asset {
           AssetKind::Native => T::Currency::total_issuance().unique_saturated_into(),
           AssetKind::Local(id) | AssetKind::Foreign(id) => {

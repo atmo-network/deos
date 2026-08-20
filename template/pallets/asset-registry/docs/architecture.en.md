@@ -31,11 +31,11 @@ Asset Registry is primarily an identity/namespace layer, not a policy engine.
 
 Token lifecycle orchestration remains documented in `core.architecture.en.md` and executed by runtime policy wiring across economic pallets.
 
-Current coupling status in runtime:
+Current coupling status in the DEOS runtime:
 
-- registration/link extrinsics can trigger deterministic TOL domain bootstrap via runtime hook
-- TMC `create_curve` then confirms/updates token-domain coupling and enables liquidity-provisioning actor processing for that token
-- result: for activated tokens, Asset Registry identity is effectively connected to TMC + liquidity provisioning + TOL flow without a dedicated orchestration pallet
+- registration and linking establish foreign identity only; the configured token-domain hook is currently a no-op
+- TMC curve creation and governance-controlled Actor activation remain separate explicit onboarding transitions
+- Asset Registry therefore does not silently install TOL, liquidity, routing, or other economic policy
 
 ### System Architecture
 
@@ -77,7 +77,8 @@ graph TD
 
 1. Verify `(asset_id & MASK_TYPE) == TYPE_FOREIGN` → ensures 0xF... namespace
 2. Check `!ForeignAssetMapping::contains_key(location)` → no duplicate Location
-3. Check `!pallet_assets::asset_exists(asset_id)` → no ID collision
+3. Check generated and manual IDs both satisfy the `0xF...` namespace contract
+4. Reject collisions against both live `pallet-assets` identity and any retained reverse mapping, including a mapping whose ledger asset was later destroyed
 
 `Asset Creation (Delegation)`:
 
@@ -115,7 +116,8 @@ graph TD
 
 `link_existing_asset(location, asset_id)`:
 
-- Links pre-existing `pallet-assets` asset to XCM Location
+- Links a pre-existing `pallet-assets` asset to one previously unused XCM Location and reverse identity
+- Executes mapping, token-domain hook, and event atomically; hook rejection leaves both mapping directions unchanged
 - Use case: Retroactive registration after manual asset creation
 - Skips `force_create`, only stores mapping
 
@@ -232,7 +234,7 @@ The current pallet already provides chain-native bounded reads for foreign-asset
 - `asset_to_location(asset_id)` / `MaybeEquivalence::convert_back(asset_id)` as the bounded reverse projection
 - the linked `pallet-assets` existence/metadata surface for a known `AssetId`
 - governance-controlled registration and migration events/state transitions for known assets
-- deterministic namespace validation (`0xF...`) and runtime hook side effects that make a registered foreign asset economically visible to the rest of TMCTOL
+- deterministic namespace validation (`0xF...`); downstream economic activation remains separate from registry identity in the current DEOS runtime
 
 These are the authoritative bounded surfaces for live foreign-asset identity in both directions.
 
@@ -334,7 +336,7 @@ migrate_location_key(
 
 - `Mechanism`: Governance-triggered registration (no user extrinsics).
 - `Strategy`: Hybrid (deterministic generation + persistent storage).
-- `Security`: Bitmask validation + RegistryOrigin + collision checks.
+- `Security`: RegistryOrigin, generated/manual bitmask validation, live-ledger plus retained-reverse collision checks, and transactional hook composition.
 - `Migration Path`: `migrate_location_key` for XCM upgrades.
 - `Integration`: Full support in Router, Burn Actor, and liquidity-provisioning actors via `pallet-assets`.
-- `Domain Bootstrap Hook`: Runtime can auto-bootstrap token domain mapping (e.g., TOL domain create/bind) on registration.
+- `Domain Bootstrap Hook`: A host may compose idempotent token-domain bootstrap on registration; the current DEOS binding is intentionally no-op.

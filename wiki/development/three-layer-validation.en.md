@@ -19,8 +19,6 @@ tags:
 related:
   - Repository Structure
   - Tech Stack
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Three-Layer Validation

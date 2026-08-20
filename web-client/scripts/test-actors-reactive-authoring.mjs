@@ -37,10 +37,7 @@ const canonicalContract = {
   actorType: 'User',
   mutability: 'Mutable',
   completionPolicy: 'CloseAfterProductiveCycle',
-  trigger: {
-    type: 'Immediate',
-    sources: [{ type: 'OnObservationChange', feed }],
-  },
+  trigger: { type: 'ObservationChange', feed },
   cooldownBlocks: 0,
   scheduleWindow: null,
   fundingPolicy: { type: 'OwnerOnly' },
@@ -154,10 +151,7 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   );
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
-  assert.equal(
-    inspection.projection.trigger.value.sources[0].type,
-    'OnObservationChange',
-  );
+  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
   assert.deepEqual(
     inspection.projection.steps[0].precondition[0].map((timed) => [
       timed.timing.type,
@@ -208,10 +202,7 @@ test('reactive strategy preserves topology under persistent lifecycle policy', (
   assert.equal(inspection.valid, true);
   if (!inspection.valid) return;
   assert.equal(inspection.projection.completion.type, 'Persistent');
-  assert.equal(
-    inspection.projection.trigger.value.sources[0].type,
-    'OnObservationChange',
-  );
+  assert.equal(inspection.projection.trigger.type, 'ObservationChange');
   assert.equal(inspection.projection.steps[0].task.type, 'SwapIn');
   assert.notEqual(persistentArtifact.contractId, artifact.contractId);
 });
@@ -368,7 +359,7 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
   const source = sources.join('\n');
   assert(sources[1].includes('ACTORS_AUTHORING_CONDITION_TYPES'));
   for (const control of [
-    'OnObservationChange',
+    'ObservationChange',
     'SwapIn',
     'RetryLater',
     'Close after productive cycle',

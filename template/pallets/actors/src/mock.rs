@@ -3,7 +3,7 @@ use frame::prelude::*;
 use polkadot_sdk::{
   frame_support::{
     PalletId, construct_runtime,
-    traits::{ConstU8, ConstU32, ConstU64, ConstU128, Get},
+    traits::{ConstU8, ConstU32, ConstU64, ConstU128, Get, Time},
   },
   frame_system::EnsureRoot,
   sp_runtime::{
@@ -153,7 +153,6 @@ thread_local! {
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
-  static CORRUPT_QUEUE_AFTER_TRANSFER: RefCell<bool> = RefCell::new(false);
   static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
   static OBSERVATIONS: RefCell<
     alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
@@ -176,10 +175,6 @@ thread_local! {
   static BENCHMARK_INGRESS: RefCell<Option<(AccountId, AccountId, Balance)>> = RefCell::new(None);
   #[cfg(feature = "runtime-benchmarks")]
   static BENCHMARK_ASSET_OPS_INGRESS: RefCell<bool> = RefCell::new(false);
-}
-
-pub fn set_corrupt_queue_after_transfer(enabled: bool) {
-  CORRUPT_QUEUE_AFTER_TRANSFER.with(|value| *value.borrow_mut() = enabled);
 }
 
 pub fn set_asset_minimum_balance(amount: Balance) {
@@ -234,7 +229,6 @@ pub fn reset_mock_adapters() {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
-  CORRUPT_QUEUE_AFTER_TRANSFER.with(|v| *v.borrow_mut() = false);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
@@ -322,13 +316,6 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         map.insert((*to, asset), dst + amount);
         Ok(())
       })?,
-    }
-    if CORRUPT_QUEUE_AFTER_TRANSFER.with(|enabled| {
-      let corrupt = *enabled.borrow();
-      *enabled.borrow_mut() = false;
-      corrupt
-    }) {
-      crate::QueueTail::<Test>::mutate(|tail| *tail = tail.saturating_add(1));
     }
     #[cfg(feature = "runtime-benchmarks")]
     if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow()) {
@@ -1047,6 +1034,16 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
   }
 }
 
+pub struct MockTime;
+
+impl Time for MockTime {
+  type Moment = u64;
+
+  fn now() -> Self::Moment {
+    System::block_number().saturating_mul(500)
+  }
+}
+
 impl pallet_deos_actors::Config for Test {
   type AssetId = TestAsset;
   type Balance = Balance;
@@ -1059,6 +1056,8 @@ impl pallet_deos_actors::Config for Test {
   type DexOps = MockDexOps;
   type StakingOps = MockStakingOps;
   type LiquidityOps = MockLiquidityOps;
+  type Time = MockTime;
+  type CadenceTickMillis = ConstU64<500>;
   type MinWindowLength = frame::traits::ConstU64<100>;
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -1083,7 +1082,6 @@ impl pallet_deos_actors::Config for Test {
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepBatch = TestMaxSweepBatch;
   type MaxWhitelistSize = ConstU32<16>;
-  type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<8>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;

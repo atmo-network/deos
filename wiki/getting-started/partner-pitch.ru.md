@@ -24,8 +24,6 @@ tags:
 related:
   - DEOS за 60 секунд
   - Создание форка DEOS
-last_compiled: 2026-07-20
-confidence: 0.8
 ---
 
 # Предложение для партнёров

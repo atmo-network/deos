@@ -20,8 +20,6 @@ tags:
 related:
   - Стандарт TMCTOL
   - Контур маршрутизации и эмиссии
-last_compiled: 2026-07-20
-confidence: 0.85
 ---
 
 # Формулы TMCTOL

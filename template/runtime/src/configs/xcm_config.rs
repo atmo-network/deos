@@ -4,7 +4,7 @@ use crate::{
   ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee,
   XcmpQueue,
 };
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -12,7 +12,7 @@ use polkadot_sdk::{
   staging_xcm as xcm, staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor, *,
 };
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 use frame_support::traits::tokens::imbalance::{
   ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting,
 };
@@ -47,6 +47,7 @@ parameter_types! {
   // register single-asset until an instruction-specific weigher replaces this launch contract.
   pub const MaxAssetsIntoHolding: u32 = 1;
   pub const MaxInstructions: u32 = 100;
+  pub const NativeLocation: Location = Location::here();
   pub const RelayLocation: Location = Location::parent();
   pub const RelayNetwork: Option<NetworkId> = None;
   pub RelayChainOrigin: RuntimeOrigin = cumulus_pallet_xcm::Origin::Relay.into();
@@ -74,7 +75,7 @@ pub type LocalAssetTransactor = FungibleAdapter<
   // Use this currency:
   Balances,
   // Use this currency when it is a fungible asset matching the given location or name:
-  IsConcrete<RelayLocation>,
+  IsConcrete<NativeLocation>,
   // Do a simple punn to convert an AccountId32 Location into a native chain account ID:
   LocationToAccountId,
   // Our chain's account ID type (we can't get away without mentioning it explicitly):
@@ -143,7 +144,7 @@ impl ActorAwareAssetTransactor {
       _ => return None,
     };
     let AssetId(location) = &what.id;
-    if location == &RelayLocation::get() {
+    if location == &NativeLocation::get() {
       return Some((AssetKind::Native, amount));
     }
     let foreign_id = AssetRegistry::location_to_asset(location.clone())?;
@@ -202,11 +203,11 @@ impl ActorAwareAssetTransactor {
   }
 }
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 #[derive(Clone)]
 struct BenchmarkCredit(Balance);
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 impl UnsafeConstructorDestructor<Balance> for BenchmarkCredit {
   fn unsafe_clone(&self) -> Box<dyn ImbalanceAccounting<Balance>> {
     Box::new(Self(self.0))
@@ -217,7 +218,7 @@ impl UnsafeConstructorDestructor<Balance> for BenchmarkCredit {
   }
 }
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 impl UnsafeManualAccounting<Balance> for BenchmarkCredit {
   fn saturating_subsume(&mut self, mut other: Box<dyn ImbalanceAccounting<Balance>>) {
     self.0 = self.0.saturating_add(other.amount());
@@ -225,7 +226,7 @@ impl UnsafeManualAccounting<Balance> for BenchmarkCredit {
   }
 }
 
-#[cfg(feature = "runtime-benchmarks")]
+#[cfg(any(test, feature = "runtime-benchmarks"))]
 impl ImbalanceAccounting<Balance> for BenchmarkCredit {
   fn amount(&self) -> Balance {
     self.0
@@ -508,7 +509,7 @@ impl xcm_executor::Config for XcmConfig {
   type SafeCallFilter = Nothing;
   type SubscriptionService = PolkadotXcm;
   type Trader =
-    UsingComponents<WeightToFee, RelayLocation, AccountId, Balances, RuntimeFeeCollector>;
+    UsingComponents<WeightToFee, NativeLocation, AccountId, Balances, RuntimeFeeCollector>;
   type TransactionalProcessor = FrameTransactionalProcessor;
   type UniversalAliases = Nothing;
   type UniversalLocation = UniversalLocation;
@@ -545,7 +546,7 @@ impl pallet_xcm::Config for Runtime {
   type XcmExecutor = XcmExecutor<XcmConfig>;
   type XcmReserveTransferFilter = ReserveAssetsFrom;
   type XcmRouter = XcmRouter;
-  type XcmTeleportFilter = Everything;
+  type XcmTeleportFilter = Nothing;
 
   const VERSION_DISCOVERY_QUEUE_SIZE: u32 = 100;
 }
@@ -577,6 +578,75 @@ mod tests {
       <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::xcm_asset_deposit()
     );
     assert!(UnitWeightCost::get().proof_size() > 0);
+  }
+
+  #[test]
+  fn xcm_asset_identity_and_teleport_policy_fail_closed() {
+    assert_eq!(NativeLocation::get(), Location::here());
+    assert_eq!(RelayLocation::get(), Location::parent());
+    assert_eq!(crate::configs::FeeAssetId::get(), AssetId(Location::here()));
+    assert!(
+      !<<Runtime as pallet_xcm::Config>::XcmTeleportFilter as Contains<(
+        Location,
+        Vec<Asset>,
+      )>>::contains(&(Location::parent(), vec![]))
+    );
+  }
+
+  #[test]
+  fn relay_reserve_deposit_uses_registered_foreign_ledger_not_native_supply() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      let relay_location = Location::parent();
+      crate::AssetRegistry::register_foreign_asset(
+        RuntimeOrigin::root(),
+        relay_location.clone(),
+        primitives::assets::CurrencyMetadata {
+          name: b"Relay Reserve".to_vec(),
+          symbol: b"RLY".to_vec(),
+          decimals: 12,
+        },
+        1,
+        true,
+      )
+      .expect("relay reserve asset registration must succeed");
+      let asset_id = crate::AssetRegistry::location_to_asset(relay_location.clone())
+        .expect("registered relay reserve must resolve");
+      let recipient = AccountId::new([77u8; 32]);
+      let recipient_location = Location::new(
+        0,
+        [AccountId32 {
+          network: None,
+          id: recipient.clone().into(),
+        }],
+      );
+      let native_before = crate::Balances::free_balance(&recipient);
+      let mut holding = AssetsInHolding::new();
+      holding
+        .fungible
+        .insert(AssetId(relay_location), Box::new(BenchmarkCredit(100)));
+
+      <ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
+        holding,
+        &recipient_location,
+        None,
+      )
+      .expect("registered relay reserve deposit must succeed");
+
+      assert_eq!(crate::Balances::free_balance(&recipient), native_before);
+      assert_eq!(
+        <crate::Assets as frame_support::traits::fungibles::Inspect<AccountId>>::balance(
+          asset_id, &recipient,
+        ),
+        100
+      );
+      assert_eq!(
+        ActorAwareAssetTransactor::to_asset_kind_and_amount(&Asset {
+          id: AssetId(Location::here()),
+          fun: Fungibility::Fungible(100),
+        }),
+        Some((AssetKind::Native, 100))
+      );
+    });
   }
 
   #[test]

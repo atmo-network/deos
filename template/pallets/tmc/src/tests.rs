@@ -247,6 +247,57 @@ mod tests {
   }
 
   #[test]
+  fn spot_price_preserves_representable_boundary_products() {
+    use crate::mock::{Assets, Test, new_test_ext};
+    use crate::types::AssetKind;
+    use polkadot_sdk::{frame_support::traits::fungibles::Mutate, sp_core::U256};
+
+    new_test_ext().execute_with(|| {
+      let asset = AssetKind::Local(1);
+      Assets::mint_into(1, &10, 2).expect("boundary issuance fits");
+      let curve = crate::CurveConfig {
+        initial_price: 0,
+        slope: u128::MAX,
+        initial_issuance: 0,
+        foreign_asset: AssetKind::Native,
+        minted_asset: asset,
+      };
+      let precision = primitives::ecosystem::params::PRECISION;
+      let expected = (U256::from(u128::MAX) * U256::from(2) / U256::from(precision)).as_u128();
+
+      assert_eq!(
+        crate::Pallet::<Test>::calculate_spot_price(&curve).expect("price is representable"),
+        expected
+      );
+    });
+  }
+
+  #[test]
+  fn quadratic_intermediate_overflow_fails_closed() {
+    use crate::mock::{Test, new_test_ext};
+    use crate::types::AssetKind;
+
+    new_test_ext().execute_with(|| {
+      let asset = AssetKind::Local(1);
+      crate::TokenCurves::<Test>::insert(
+        asset,
+        crate::CurveConfig {
+          initial_price: u128::MAX,
+          slope: 1,
+          initial_issuance: 0,
+          foreign_asset: AssetKind::Native,
+          minted_asset: asset,
+        },
+      );
+
+      assert_eq!(
+        crate::Pallet::<Test>::calculate_total_mint(asset, 1),
+        Err(crate::Error::<Test>::ArithmeticOverflow.into())
+      );
+    });
+  }
+
+  #[test]
   fn zero_slope_minting_behavior() {
     // Verify system behaves as a stablecoin issuer when slope is zero
     use crate::mock::{Test, new_test_ext};
@@ -552,6 +603,16 @@ mod tests {
         ),
         crate::Error::<crate::mock::Test>::InvalidParameters
       );
+      assert_noop!(
+        TokenMintingCurve::create_curve(
+          RuntimeOrigin::root(),
+          AssetKind::Local(1),
+          AssetKind::Foreign(1),
+          1_000_000_000u128,
+          1_000_000_000u128,
+        ),
+        crate::Error::<crate::mock::Test>::InvalidParameters
+      );
     });
   }
 
@@ -746,6 +807,38 @@ mod tests {
     });
   }
 
+  #[cfg(feature = "try-runtime")]
+  #[test]
+  fn try_state_accepts_intended_burn_compression_below_curve_baseline() {
+    use crate::mock::{Balances, RuntimeOrigin, TokenMintingCurve, new_test_ext};
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{
+      assert_ok,
+      traits::{Currency, fungible::Mutate},
+    };
+
+    new_test_ext().execute_with(|| {
+      let user = 10u64;
+      assert_ok!(Balances::mint_into(&user, 1_000));
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Native,
+        AssetKind::Local(1),
+        primitives::ecosystem::params::PRECISION,
+        primitives::ecosystem::params::TMC_SLOPE_PARAMETER,
+      ));
+      let (_, remainder) = Balances::slash(&user, 500);
+      assert_eq!(remainder, 0);
+      assert!(
+        Balances::total_issuance()
+          < TokenMintingCurve::get_curve(AssetKind::Native)
+            .expect("native curve exists")
+            .initial_issuance
+      );
+      assert_ok!(TokenMintingCurve::do_try_state());
+    });
+  }
+
   #[test]
   fn conservation_invariant_property_test() {
     // Property: user_allocation + zap_allocation == total for all values
@@ -822,7 +915,8 @@ mod proptest_tmc {
           let minted = result.unwrap_or(0);
           let ia: u128 = <Balances as polkadot_sdk::frame_support::traits::fungible::Inspect<u64>>::total_issuance();
           let curve = crate::Pallet::<Test>::get_curve(token_asset).unwrap();
-          let sp = crate::pallet::Pallet::<Test>::calculate_spot_price(&curve);
+          let sp = crate::pallet::Pallet::<Test>::calculate_spot_price(&curve)
+            .expect("configured price remains representable");
           (minted, ib, ia, sp, curve.initial_price)
         });
       if mint_amount > 0 {
@@ -860,7 +954,10 @@ mod proptest_tmc {
             &user, &user, token_asset, foreign_asset, *amount,
           );
           let curve = crate::Pallet::<Test>::get_curve(token_asset).unwrap();
-          recorded.push(crate::pallet::Pallet::<Test>::calculate_spot_price(&curve));
+          recorded.push(
+            crate::pallet::Pallet::<Test>::calculate_spot_price(&curve)
+              .expect("configured price remains representable"),
+          );
         }
         recorded
       });

@@ -34,8 +34,6 @@ related:
   - Стандарт TMCTOL
   - Система Actors
   - Сценарии корзин TOL
-last_compiled: 2026-07-20
-confidence: 0.9
 ---
 
 # Экономика созидателей `$BLDR`

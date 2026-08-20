@@ -13,6 +13,7 @@ import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import {
   ACTORS_AUTHORING_CONDITION_TYPES,
   ACTORS_AUTHORING_TASK_TYPES,
+  DEOS_ACTORS_AUTHORING_LIMITS,
   appendActorStep,
   createActorArtifactFromAuthoring,
   createActorAuthoringPredicate,
@@ -72,18 +73,13 @@ const observationFeed = {
 };
 const fixed = (value = '10') => ({ type: 'Fixed', value });
 const addressTrigger = {
-  type: 'Immediate',
-  sources: [
-    {
-      type: 'OnAddressEvent',
-      sourceFilter: { type: 'Any' },
-      assetFilter: { type: 'Any' },
-    },
-  ],
+  type: 'AddressEvent',
+  sourceFilter: { type: 'Any' },
+  assetFilter: { type: 'Any' },
 };
 const observationTrigger = {
-  type: 'Immediate',
-  sources: [{ type: 'OnObservationChange', feed: observationFeed }],
+  type: 'ObservationChange',
+  feed: observationFeed,
 };
 
 const weightModel = {
@@ -127,7 +123,7 @@ function contract(steps = [authoringStep('step-0')], overrides = {}) {
     actorType: 'User',
     mutability: 'Mutable',
     completionPolicy: 'Persistent',
-    trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
+    trigger: { type: 'Manual' },
     cooldownBlocks: 0,
     scheduleWindow: null,
     fundingPolicy: { type: 'OwnerOnly' },
@@ -274,25 +270,23 @@ test('RetryLater editor exposes explicit bounded unsuccessful-attempt semantics'
   }
 });
 
-test('trigger editor exposes admission and bounded source controls without graph vocabulary', () => {
+test('trigger editor exposes one scalar trigger without graph vocabulary', () => {
   for (const control of [
-    'Immediate',
     'Cadenced',
-    'Always',
-    'WhenSignalled',
     'Manual',
-    'OnAddressEvent',
-    'OnObservationChange',
+    'AddressEvent',
+    'ObservationChange',
     'OwnerOnly',
     'Whitelist',
+    'everyTicks',
   ]) {
     assert(
       triggerEditorSource.includes(control),
       `${control} control is missing`,
     );
   }
-  assert(triggerEditorSource.includes('maxTriggerSources'));
-  assert(triggerEditorSource.includes('this source carries no amount'));
+  assert(!triggerEditorSource.includes('maxTriggerSources'));
+  assert(triggerEditorSource.includes('this trigger carries no amount'));
   for (const rejected of ['successor', 'callback', 'branch target']) {
     assert(!triggerEditorSource.toLowerCase().includes(rejected));
   }
@@ -308,8 +302,8 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
   });
   assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
   const lowered = lowerActorAuthoringContract(observationOnly);
-  assert.deepEqual(lowered.trigger.value.sources[0], {
-    type: 'OnObservationChange',
+  assert.deepEqual(lowered.trigger, {
+    type: 'ObservationChange',
     value: {
       feed: {
         asset_in: { type: 'Native', value: undefined },
@@ -320,13 +314,12 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
       },
     },
   });
-  const mixed = contract([openingAmountStep], {
-    trigger: {
-      type: 'Immediate',
-      sources: [addressTrigger.sources[0], observationTrigger.sources[0]],
-    },
-  });
-  assert.equal(validateActorAuthoringContract(mixed).valid, true);
+  assert.equal(
+    validateActorAuthoringContract(
+      contract([openingAmountStep], { trigger: addressTrigger }),
+    ).valid,
+    true,
+  );
 });
 
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
@@ -735,21 +728,36 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     );
   }
   assert.equal(validateActorAuthoringContract(contract([])).valid, false);
+  for (const overrides of [
+    { trigger: { type: 'Cadenced', everyTicks: 0 } },
+    {
+      trigger: {
+        type: 'Cadenced',
+        everyTicks: DEOS_ACTORS_AUTHORING_LIMITS.maxCadenceTicks + 1,
+      },
+    },
+    {
+      trigger: { type: 'Cadenced', everyTicks: 1 },
+      cooldownBlocks: 1,
+    },
+    {
+      trigger: { type: 'Cadenced', everyTicks: 1 },
+      scheduleWindow: { start: 10, end: 20 },
+    },
+  ]) {
+    assert.equal(
+      validateActorAuthoringContract(contract(undefined, overrides)).valid,
+      false,
+    );
+  }
   assert.equal(
     validateActorAuthoringContract(
       contract(undefined, {
         trigger: {
-          type: 'Immediate',
-          sources: [{ type: 'Manual' }, { type: 'Manual' }],
+          type: 'AddressEvent',
+          sourceFilter: { type: 'Any' },
+          assetFilter: { type: 'Whitelist', assets: [] },
         },
-      }),
-    ).valid,
-    false,
-  );
-  assert.equal(
-    validateActorAuthoringContract(
-      contract(undefined, {
-        trigger: { type: 'Immediate', sources: [] },
       }),
     ).valid,
     false,
@@ -853,11 +861,7 @@ test('scenario corpus lowers every expressible or partial execution core without
     {
       name: 'Periodic DCA',
       contract: contract([authoringStep('dca', swap)], {
-        trigger: {
-          type: 'Cadenced',
-          everyBlocks: 10,
-          mode: { type: 'Always' },
-        },
+        trigger: { type: 'Cadenced', everyTicks: 10 },
       }),
       tasks: ['SwapIn'],
     },
@@ -941,47 +945,24 @@ test('scenario corpus lowers every expressible or partial execution core without
 test('trigger, completion, and funding policy variants lower as typed ActorContract fields', () => {
   const drafts = [
     contract(undefined, {
-      trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
+      trigger: { type: 'Manual' },
       fundingPolicy: { type: 'OwnerOnly' },
     }),
     contract(undefined, {
-      trigger: {
-        type: 'Cadenced',
-        everyBlocks: 10,
-        mode: { type: 'Always' },
-      },
+      trigger: { type: 'Cadenced', everyTicks: 10 },
       fundingPolicy: { type: 'RuntimePolicy' },
       actorType: 'System',
     }),
     contract(undefined, {
       trigger: {
-        type: 'Immediate',
-        sources: [
-          {
-            type: 'OnAddressEvent',
-            sourceFilter: { type: 'Whitelist', accounts: [accountA] },
-            assetFilter: { type: 'Whitelist', assets: [local, native] },
-          },
-          { type: 'Manual' },
-        ],
+        type: 'AddressEvent',
+        sourceFilter: { type: 'Whitelist', accounts: [accountA] },
+        assetFilter: { type: 'Whitelist', assets: [local, native] },
       },
       fundingPolicy: { type: 'SignedAllowlist', accounts: [accountA] },
     }),
     contract(undefined, {
-      trigger: {
-        type: 'Cadenced',
-        everyBlocks: 10,
-        mode: {
-          type: 'WhenSignalled',
-          sources: [
-            {
-              type: 'OnAddressEvent',
-              sourceFilter: { type: 'Any' },
-              assetFilter: { type: 'Any' },
-            },
-          ],
-        },
-      },
+      trigger: observationTrigger,
       fundingPolicy: { type: 'AnyVerifiedIngress' },
     }),
   ];
@@ -993,13 +974,9 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
     );
   }
   const lowered = lowerActorAuthoringContract(drafts[2]);
-  const sources = lowered.trigger.value.sources;
+  assert.equal(lowered.trigger.type, 'AddressEvent');
   assert.deepEqual(
-    sources.map((source) => source.type),
-    ['Manual', 'OnAddressEvent'],
-  );
-  assert.deepEqual(
-    sources[1].value.asset_filter.value.map((asset) => asset.type),
+    lowered.trigger.value.asset_filter.value.map((asset) => asset.type),
     ['Native', 'Local'],
   );
 });

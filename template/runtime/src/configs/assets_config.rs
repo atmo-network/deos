@@ -160,6 +160,15 @@ impl pallet_asset_registry::Config for Runtime {
   type WeightInfo = crate::weights::pallet_asset_registry::SubstrateWeight<Runtime>;
 }
 
+pub(crate) fn preflight_register_pool_lp_pair(
+  asset1: AssetKind,
+  asset2: AssetKind,
+  lp_token: u32,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  crate::DeosRouter::preflight_register_lp_pair(lp_token, (asset1, asset2))?;
+  super::oracle_config::preflight_deos_router_pool_feeds(asset1, asset2)
+}
+
 #[polkadot_sdk::frame_support::transactional]
 pub(crate) fn register_pool_lp_pair(
   asset1: AssetKind,
