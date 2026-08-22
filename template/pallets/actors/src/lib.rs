@@ -13,6 +13,7 @@ pub mod contract;
 
 pub mod types;
 
+mod crossing;
 mod execution;
 mod reactions;
 mod scheduler;
@@ -22,9 +23,10 @@ pub use scheduler::EnqueueOutcome;
 
 pub mod adapters;
 pub use adapters::{
-  AddressEventIngress, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FundingAuthority,
-  IngressFailure, LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass,
-  ScalarObservationState, SovereignAccountDeriver, StakingOps, TaskFailure,
+  AddressEventIngress, AssetOps, CanonicalObservationState, DexOps, DexSwapOutcome,
+  ExecutionContext, FundingAuthority, IngressFailure, LiquidityOps, ObservationProvider,
+  ObservationTransition, ObservationTransitionIngress, RetryClass, ScalarObservationState,
+  SovereignAccountDeriver, StakingOps, SystemActorContractValidator, TaskFailure,
 };
 pub use types::{AddressEvent, InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
 
@@ -248,13 +250,15 @@ sp_api::decl_runtime_apis! {
   /// the same pure owners as
   /// admission so clients do not reimplement cadence phase, cooldown, window
   /// floor, retry backoff, breaker, or latch arithmetic.
-  pub trait ActorEligibilityApi<BlockNumber>
+  #[api_version(2)]
+  pub trait ActorEligibilityApi<FeedId, BlockNumber>
   where
+    FeedId: codec::Codec,
     BlockNumber: codec::Codec,
   {
     fn actor_eligibility(
       actor_id: types::ActorId,
-    ) -> Result<types::ActorEligibility<BlockNumber>, types::ActorClassificationError>;
+    ) -> Result<types::ActorEligibility<FeedId, BlockNumber>, types::ActorClassificationError>;
   }
 }
 
@@ -267,6 +271,7 @@ pub mod pallet {
   };
   use crate::adapters::{
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
+    SystemActorContractValidator as _,
   };
   use frame::prelude::*;
   use polkadot_sdk::{
@@ -346,6 +351,18 @@ pub mod pallet {
     /// Physical I/O granularity for observation subscriber pages.
     #[pallet::constant]
     type ObservationPageSize: Get<u32>;
+    #[pallet::constant]
+    type MaxCrossingTransitionsPerFeed: Get<u32>;
+    #[pallet::constant]
+    type MaxCrossingTransitionsPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxCrossingLeavesPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxCrossingPagesPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxCrossingActorsPerBlock: Get<u32>;
+    #[pallet::constant]
+    type CrossingWorkerWeightLimit: Get<Weight>;
     /// Independent ceiling for physical queue-entry inspection per scheduler pass.
     #[pallet::constant]
     type MaxQueueEntriesScannedPerBlock: Get<u32>;
@@ -411,6 +428,9 @@ pub mod pallet {
     /// Provides System Actors specs to initialize at genesis.
     /// Use `()` for no genesis System Actors (default).
     type GenesisSystemActors: GenesisSystemActors<Self::AccountId, ActorContractOf<Self>>;
+    /// Host policy for bounded System Actor effect topology. User Actor
+    /// contracts intentionally remain outside this reference-runtime DAG.
+    type SystemActorContractValidator: crate::SystemActorContractValidator<ActorContractOf<Self>>;
 
     #[cfg(feature = "runtime-benchmarks")]
     type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::AssetId, Self::Balance, Self::ObservationFeedId>;
@@ -429,6 +449,13 @@ pub mod pallet {
   pub type ObservationSubscriberPageOf<T> =
     ObservationSubscriberPage<<T as Config>::ObservationPageSize>;
   pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::ObservationPageSize>;
+  pub type CrossingMemberPageOf<T> = CrossingMemberPage<<T as Config>::ObservationPageSize>;
+  pub type CrossingLeafKeyOf<T> = CrossingLeafKey<<T as Config>::ObservationFeedId>;
+  pub type CrossingRadixNodeKeyOf<T> = CrossingRadixNodeKey<<T as Config>::ObservationFeedId>;
+  pub type CrossingMembershipLocatorOf<T> =
+    CrossingMembershipLocator<<T as Config>::ObservationFeedId>;
+  pub type CrossingTransitionQueueOf<T> =
+    BoundedVec<CrossingTransitionObligation, <T as Config>::MaxCrossingTransitionsPerFeed>;
 
   pub type TriggerOf<T> = Trigger<
     <T as frame_system::Config>::AccountId,
@@ -554,7 +581,7 @@ pub mod pallet {
   #[pallet::storage_version(STORAGE_VERSION)]
   pub struct Pallet<T>(_);
 
-  const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+  const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
   #[pallet::storage]
   #[pallet::getter(fn next_actor_id)]
@@ -605,6 +632,7 @@ pub mod pallet {
         unsuccessful_attempt_streak: hot.unsuccessful_attempt_streak,
         pending_signal: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
+        wakeup_pointer: hot.wakeup_pointer,
         last_control_mutation_block: identity.last_control_mutation_block,
         schedule_anchor: hot.schedule_anchor,
         cadence_anchor_tick: hot.cadence_anchor_tick,
@@ -647,15 +675,11 @@ pub mod pallet {
       ))
     }
 
-    pub(crate) fn active_actor_for_control(
+    pub(crate) fn active_actor_state_for_control(
       actor_id: ActorId,
-    ) -> Result<ActiveActorViewOf<T>, Error<T>> {
+    ) -> Result<ActiveActorStateOf<T>, Error<T>> {
       match Self::load_actor_state(actor_id) {
-        LoadedActorStateOf::Active(state) => Ok(Self::derive_active_actor_view(
-          state.identity,
-          state.hot,
-          state.contract,
-        )),
+        LoadedActorStateOf::Active(state) => Ok(state),
         LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
           Err(Error::<T>::ActorNotFound)
         }
@@ -706,6 +730,7 @@ pub mod pallet {
       hot: ActorHotStateOf<T>,
       contract: ActorContractOf<T>,
     ) -> DispatchResult {
+      Self::replace_crossing_membership(actor_id, &contract.trigger)?;
       Self::replace_observation_subscriptions(actor_id, &contract.trigger)?;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
@@ -714,6 +739,7 @@ pub mod pallet {
     }
 
     pub(crate) fn remove_active_actor(actor_id: ActorId) -> DispatchResult {
+      Self::remove_crossing_membership(actor_id)?;
       Self::remove_observation_subscriptions(actor_id)?;
       ActorHot::<T>::remove(actor_id);
       ActorContracts::<T>::remove(actor_id);
@@ -903,6 +929,73 @@ pub mod pallet {
   pub type DirtyObservationListState<T: Config> =
     StorageValue<_, DirtyObservationList<T::ObservationFeedId>, ValueQuery>;
 
+  /// Exact current Crossing obligation owned by one active Actor.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_membership)]
+  pub type CrossingMemberships<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, CrossingMembershipLocatorOf<T>, OptionQuery>;
+
+  /// Dense bounded membership pages at one exact occupied threshold leaf.
+  #[pallet::storage]
+  pub type CrossingMemberPages<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    CrossingLeafKeyOf<T>,
+    Blake2_128Concat,
+    u32,
+    CrossingMemberPageOf<T>,
+    OptionQuery,
+  >;
+
+  /// Allocation and cardinality state for one exact occupied threshold leaf.
+  #[pallet::storage]
+  pub type CrossingLeafStates<T: Config> =
+    StorageMap<_, Blake2_128Concat, CrossingLeafKeyOf<T>, CrossingLeafState, OptionQuery>;
+
+  /// Sixteen-way occupancy at each sparse u128 threshold radix node.
+  #[pallet::storage]
+  pub type CrossingRadixNodes<T: Config> =
+    StorageMap<_, Blake2_128Concat, CrossingRadixNodeKeyOf<T>, u16, OptionQuery>;
+
+  /// Exact live Crossing membership count per feed.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_feed_membership_count)]
+  pub type CrossingFeedMembershipCount<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, u32, ValueQuery>;
+
+  /// Exact bounded revision queue retained while one feed has Crossing members.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_transition_queue)]
+  pub type CrossingTransitionQueues<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::ObservationFeedId,
+    CrossingTransitionQueueOf<T>,
+    OptionQuery,
+  >;
+
+  /// Linked ownership for feeds with at least one pending Crossing transition.
+  #[pallet::storage]
+  pub type CrossingPendingFeeds<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::ObservationFeedId,
+    CrossingPendingFeedState<T::ObservationFeedId>,
+    OptionQuery,
+  >;
+
+  /// Fair cursor across feeds with pending Crossing transition work.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_pending_feed_list)]
+  pub type CrossingPendingFeedListState<T: Config> =
+    StorageValue<_, CrossingPendingFeedList<T::ObservationFeedId>, ValueQuery>;
+
+  /// Exact suffix cursor for the head transition currently materializing on one feed.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_range_cursor)]
+  pub type CrossingRangeCursors<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, CrossingRangeCursor, OptionQuery>;
+
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
@@ -1011,6 +1104,8 @@ pub mod pallet {
           .expect("genesis precondition formulas must have valid bounded DNF");
         Pallet::<T>::validate_contract_steps_shape(ActorType::System, &contract.steps)
           .expect("genesis execution plan must have valid task and predicate shapes");
+        T::SystemActorContractValidator::validate(actor_id, &contract)
+          .expect("genesis System Actor topology must be valid"); // deos-bypass: panic-owner — genesis integrity validation fails closed before launch.
         Pallet::<T>::validate_recipient_configuration(&contract.steps, &sovereign_account)
           .expect("genesis execution plan cannot transfer to its own sovereign account");
         Pallet::<T>::validate_opening_snapshot_surfaces(&contract.steps)
@@ -1245,6 +1340,22 @@ pub mod pallet {
         "ObservationPageSize must be non-zero"
       );
       assert!(
+        T::MaxCrossingTransitionsPerFeed::get() > 0,
+        "MaxCrossingTransitionsPerFeed must be non-zero"
+      );
+      assert!(
+        T::MaxCrossingTransitionsPerBlock::get() > 0
+          && T::MaxCrossingLeavesPerBlock::get() > 0
+          && T::MaxCrossingPagesPerBlock::get() > 0
+          && T::MaxCrossingActorsPerBlock::get() > 0,
+        "Crossing worker component caps must be non-zero"
+      );
+      let crossing_limit = T::CrossingWorkerWeightLimit::get();
+      assert!(
+        crossing_limit.ref_time() > 0 && crossing_limit.proof_size() > 0,
+        "Crossing worker Weight limit must be non-zero in both dimensions"
+      );
+      assert!(
         T::MaxQueueEntriesScannedPerBlock::get() > 0
           && T::MaxQueueEntriesScannedPerBlock::get() <= T::MaxQueueLength::get(),
         "queue scan ceiling must be independently bounded by physical capacity"
@@ -1321,17 +1432,25 @@ pub mod pallet {
       Self::drain_overdue_wakeups_cursor(now, &mut wakeup_meter);
       let wakeup_weight = wakeup_meter.consumed();
       let remaining_after_wakeups = remaining_after_cleanup.saturating_sub(wakeup_weight);
-      // Fanout pass: observation fanout under ObservationFanoutWeightLimit, after wakeups and
-      // before the cutoff/actor-execution pass.
-      let fanout_weight = if DirtyObservationListState::<T>::get().count > 0 {
-        Self::fanout_dirty_observations(remaining_after_wakeups)
+      // Crossing pass: revision-ordered sparse threshold materialization before broad fanout.
+      let crossing_weight = if CrossingPendingFeedListState::<T>::get().count > 0 {
+        Self::service_crossing_transitions(remaining_after_wakeups)
       } else {
         Weight::zero()
       };
-      let remaining_after_housekeeping = remaining_after_wakeups.saturating_sub(fanout_weight);
+      let remaining_after_crossing = remaining_after_wakeups.saturating_sub(crossing_weight);
+      // Fanout pass: observation fanout under ObservationFanoutWeightLimit, after wakeups and
+      // before the cutoff/actor-execution pass.
+      let fanout_weight = if DirtyObservationListState::<T>::get().count > 0 {
+        Self::fanout_dirty_observations(remaining_after_crossing)
+      } else {
+        Weight::zero()
+      };
+      let remaining_after_housekeeping = remaining_after_crossing.saturating_sub(fanout_weight);
       let housekeeping_weight = base_weight
         .saturating_add(saturated_cleanup_weight)
         .saturating_add(wakeup_weight)
+        .saturating_add(crossing_weight)
         .saturating_add(fanout_weight);
       if breaker_active {
         return housekeeping_weight;
@@ -1601,6 +1720,14 @@ pub mod pallet {
     InvalidObservationRevision,
     DirtyObservationCapacityExceeded,
     DirtyObservationInvariant,
+    ObservationUnavailable,
+    ObservationUninitialized,
+    CrossingIndexCapacityExceeded,
+    CrossingIndexInvariant,
+    CrossingGenerationExhausted,
+    CrossingTransitionCapacityExceeded,
+    CrossingTransitionInvariant,
+    SystemActorTopologyInvalid,
     AdmissionBoundOverflow,
   }
 
@@ -1670,10 +1797,12 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_control(actor_id)?;
+      let continuation = state.continuation;
+      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::expiry_substitution_due(actor_id, &snapshot)? {
+      if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
       if snapshot.lifecycle.is_paused() {
@@ -1701,10 +1830,12 @@ pub mod pallet {
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_control(actor_id)?;
+      let continuation = state.continuation;
+      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::expiry_substitution_due(actor_id, &snapshot)? {
+      if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
       if !snapshot.lifecycle.is_paused() {
@@ -1731,10 +1862,12 @@ pub mod pallet {
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_control(actor_id)?;
+      let continuation = state.continuation;
+      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::expiry_substitution_due(actor_id, &snapshot)? {
+      if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::ActorPaused);
@@ -1743,15 +1876,11 @@ pub mod pallet {
         Error::<T>::ManualSourceDisabled
       );
       Self::with_control_transaction(|| {
-        if !snapshot.pending_signal {
-          ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
-            let hot = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
-            hot.pending_signal = true;
-            Ok(())
-          })?;
+        let outcome = Self::request_activation(actor_id).map_err(Self::activation_failure_error)?;
+        if matches!(outcome, crate::scheduler::ActivationOutcome::Latched) {
           Self::deposit_event(Event::ManualTriggerSet { actor_id });
         }
-        Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
+        Ok(())
       })
     }
 
@@ -1788,7 +1917,9 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_future_schedule_targets(&contract)?;
-      let snapshot = Self::active_actor_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_control(actor_id)?;
+      let continuation = state.continuation;
+      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       let current_contract =
         ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
@@ -1797,7 +1928,7 @@ pub mod pallet {
       }
       Self::ensure_retry_later_allowed(snapshot.mutability, &contract.steps)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::expiry_substitution_due(actor_id, &snapshot)? {
+      if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(
@@ -1812,6 +1943,10 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::validate_contract_steps_shape(snapshot.actor_class.actor_type(), &contract.steps)?;
+      if snapshot.actor_class.actor_type() == ActorType::System {
+        T::SystemActorContractValidator::validate(actor_id, &contract)
+          .map_err(|_| Error::<T>::SystemActorTopologyInvalid)?;
+      }
       Self::validate_recipient_configuration(&contract.steps, &snapshot.sovereign_account)?;
       Self::validate_opening_snapshot_surfaces(&contract.steps)?;
       Self::ensure_contract_steps_fits_idle_budget(
@@ -1849,6 +1984,7 @@ pub mod pallet {
           false
         };
         if schedule_changed {
+          Self::replace_crossing_membership(actor_id, &contract.trigger)?;
           Self::replace_observation_subscriptions(actor_id, &contract.trigger)?;
         }
         ActorContracts::<T>::insert(actor_id, contract.clone());
@@ -1943,14 +2079,19 @@ pub mod pallet {
         let mut missing = 0u32;
         let requested = actor_ids.len() as u32;
         for actor_id in actor_ids {
-          let Some(instance) = Self::active_actor_for_classification(actor_id)
-            .map_err(Self::classification_dispatch_error)?
-          else {
-            missing = missing.saturating_add(1);
-            continue;
+          let state = match Self::load_actor_state(actor_id) {
+            LoadedActorStateOf::Active(state) => state,
+            LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+              missing = missing.saturating_add(1);
+              continue;
+            }
+            LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
           };
-          if let Some(reason) = Self::sweep_close_reason(actor_id, &instance)
+          let continuation = state.continuation;
+          let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+          if let Some(reason) = Self::classify_actor_loaded(&instance, continuation.as_ref())
             .map_err(Self::classification_dispatch_error)?
+            .terminal_reason
           {
             Self::finalize_actor(actor_id, &instance, reason)?;
             closed = closed.saturating_add(1);
@@ -2008,13 +2149,15 @@ pub mod pallet {
     #[pallet::call_index(19)]
     #[pallet::weight(T::WeightInfo::continuation_cancel())]
     pub fn cancel_continuation(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let instance = Self::active_actor_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_control(actor_id)?;
+      let continuation = state.continuation;
+      let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin, &instance)?;
       ensure!(
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableActor
       );
-      if Self::expiry_substitution_due(actor_id, &instance)? {
+      if Self::expiry_substitution_due_loaded(&instance, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
@@ -2220,6 +2363,7 @@ pub mod pallet {
           remaining.checked_sub(&T::WeightInfo::scheduler_paged_tombstone_drain(1))
         })
         .and_then(|remaining| remaining.checked_sub(&T::WakeupWeightLimit::get()))
+        .and_then(|remaining| remaining.checked_sub(&T::CrossingWorkerWeightLimit::get()))
         .and_then(|remaining| remaining.checked_sub(&T::ObservationFanoutWeightLimit::get()))
     }
 
@@ -2637,6 +2781,10 @@ pub mod pallet {
         !Self::active_actor_exists(actor_id) && !ActorIdentities::<T>::contains_key(actor_id),
         Error::<T>::ActorIdOccupied
       );
+      if actor_type == ActorType::System {
+        T::SystemActorContractValidator::validate(actor_id, &contract)
+          .map_err(|_| Error::<T>::SystemActorTopologyInvalid)?;
+      }
       let system_sovereign_id = requested_system_sovereign_id.unwrap_or(actor_id);
       if actor_type == ActorType::System {
         match requested_system_sovereign_id {
@@ -2830,6 +2978,10 @@ pub mod pallet {
       }
       Self::validate_future_schedule_targets(&contract)?;
       Self::validate_contract_steps_shape(actor_type, &contract.steps)?;
+      if actor_type == ActorType::System {
+        T::SystemActorContractValidator::validate(actor_id, &contract)
+          .map_err(|_| Error::<T>::SystemActorTopologyInvalid)?;
+      }
       Self::validate_recipient_configuration(&contract.steps, &identity.sovereign_account)?;
       Self::validate_opening_snapshot_surfaces(&contract.steps)?;
       Self::ensure_retry_later_allowed(identity.mutability, &contract.steps)?;
@@ -2963,11 +3115,17 @@ pub mod pallet {
       false
     }
 
-    fn validate_trigger(trigger: &TriggerOf<T>, cooldown_blocks: u32) -> DispatchResult {
+    pub(crate) fn validate_trigger(trigger: &TriggerOf<T>, cooldown_blocks: u32) -> DispatchResult {
       ensure!(
         trigger.has_canonical_filters(),
         Error::<T>::InvalidTriggerConfiguration
       );
+      if let Some(crossing) = trigger.observation_crossing_contract() {
+        ensure!(
+          crossing.has_valid_hysteresis(),
+          Error::<T>::InvalidTriggerConfiguration
+        );
+      }
       let max_block_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
       if let Trigger::Cadenced { every_ticks } = trigger {
         ensure!(*every_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
@@ -4449,6 +4607,7 @@ pub mod pallet {
       }
       Self::do_try_state_observation_subscriptions()?;
       Self::do_try_state_dirty_observations()?;
+      Self::do_try_state_crossing()?;
       Ok(())
     }
   }

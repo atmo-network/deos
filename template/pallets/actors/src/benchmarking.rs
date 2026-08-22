@@ -1160,6 +1160,45 @@ mod benches {
     NextActorId::<T>::get().saturating_sub(1)
   }
 
+  fn bench_create_system_crossing<T: Config>(
+    owner: T::AccountId,
+    feed: T::ObservationFeedId,
+    threshold: u128,
+  ) -> ActorId {
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_contract::<T>(schedule, make_inert_contract_steps::<T>()),
+    )
+    .expect("Crossing benchmark actor creation must succeed");
+    NextActorId::<T>::get().saturating_sub(1)
+  }
+
+  fn prepare_crossing_work<T: Config>(threshold: u128) -> (T::ObservationFeedId, ActorId) {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("Crossing benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one Crossing benchmark feed is required");
+    let owner: T::AccountId = account("crossing-worker", 0, 0);
+    let actor_id = bench_create_system_crossing::<T>(owner, feed, threshold);
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("Crossing benchmark transition must be admitted");
+    (feed, actor_id)
+  }
+
   fn bench_create_system_manual<T: Config>(seed: u32) -> ActorId {
     let owner: T::AccountId = account("wakeup_owner", seed, 0);
     let schedule = Schedule {
@@ -2492,6 +2531,60 @@ mod benches {
           .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_none() })
       );
     }
+  }
+
+  #[benchmark]
+  fn crossing_worker_base() {
+    #[block]
+    {
+      core::hint::black_box(CrossingPendingFeedListState::<T>::get().count);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_transition_unit() {
+    let (feed, _) = prepare_crossing_work::<T>(u128::MAX);
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("no-match Crossing work must succeed");
+    }
+    assert!(CrossingRangeCursors::<T>::get(feed).is_some_and(|cursor| cursor.exhausted));
+  }
+
+  #[benchmark]
+  fn crossing_leaf_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("matched Crossing leaf work must succeed");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.pending_signal));
+  }
+
+  #[benchmark]
+  fn crossing_page_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("matched Crossing page work must succeed");
+    }
+    assert!(
+      CrossingMemberships::<T>::get(actor_id)
+        .is_some_and(|locator| locator.phase == CrossingPhase::WaitingForRearm)
+    );
+  }
+
+  #[benchmark]
+  fn crossing_actor_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    NextQueueTicket::<T>::put(u64::MAX);
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit()
+        .expect("matched Crossing actor terminal cleanup must succeed");
+    }
+    assert!(!ActorHot::<T>::contains_key(actor_id));
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
   }
 
   #[benchmark]

@@ -86,12 +86,7 @@ impl<T: Config> Pallet<T> {
           Error::<T>::ProposalSubmitterNotPrimaryEligible
         );
       }
-      T::ProposalPayloadPreimageProvider::validate_for_submission(
-        domain,
-        payload_kind,
-        payload_hash,
-      )
-      .map_err(Self::proposal_preimage_admission_error)?;
+      Self::ensure_payload_admission_witness(domain, payload_kind, payload_hash)?;
     }
     ensure!(
       !ActiveProposals::<T>::contains_key(domain, item_id),
@@ -118,6 +113,40 @@ impl<T: Config> Pallet<T> {
       maturity_epoch,
       opening_fee: signed.then_some(policy.opening_fee).flatten(),
     })
+  }
+
+  fn ensure_payload_admission_witness(
+    domain: T::DomainId,
+    payload_kind: ProposalPayloadKind,
+    payload_hash: &T::Hash,
+  ) -> DispatchResult {
+    ensure!(
+      T::ProposalPayloadPreimageProvider::have_preimage(payload_hash),
+      Error::<T>::ProposalPreimageMissing
+    );
+    let payload_len = T::ProposalPayloadPreimageProvider::preimage_len(payload_hash)
+      .ok_or(Error::<T>::ProposalPreimageInvalid)?;
+    let payload_length_ceiling =
+      T::ProposalPayloadPreimageProvider::payload_length_ceiling(domain, payload_kind)
+        .map_err(Self::proposal_preimage_admission_error)?;
+    ensure!(
+      payload_len <= payload_length_ceiling,
+      Error::<T>::ProposalPreimageOversized
+    );
+    let witness = PayloadAdmissionWitnesses::<T>::get(payload_hash, (domain, payload_kind))
+      .ok_or(Error::<T>::ProposalPreimageWitnessMissing)?;
+    let (execution_authority, compatibility) =
+      T::ProposalPayloadPreimageProvider::current_compatibility(domain, payload_kind)
+        .map_err(Self::proposal_preimage_admission_error)?;
+    ensure!(
+      witness.domain == domain
+        && witness.payload_kind == payload_kind
+        && witness.payload_len == payload_len
+        && witness.execution_authority == execution_authority
+        && witness.compatibility == compatibility,
+      Error::<T>::ProposalPreimageWitnessStale
+    );
+    Ok(())
   }
 
   #[transactional]

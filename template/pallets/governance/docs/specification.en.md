@@ -618,12 +618,12 @@ Contract rules:
 1. Signed strategic submission MUST be admitted only for runtime-declared protocol / Native domain combinations; the current strategic surface contains `L1RootAction` and `Intent`
 2. Signed protocol-domain `L1RootAction` and `Intent` admission MUST require a runtime provider to confirm that the signer has nonzero primary-track governance power for that domain; protection-track power MUST NOT satisfy this predicate
 3. Signed `Intent` may remain public without primary-track eligibility only in tactical or other explicitly public non-protocol domains
-4. Every signed proposal MUST reference an available preimage that passes the runtime's bounded payload-kind/domain validator before capacity or fee mutation; missing, oversized, malformed, trailing-byte, and incompatible payloads MUST fail with typed admission errors and exact pre-state
+4. Every signed proposal MUST reference an available preimage with a current compact payload-admission witness produced by the runtime's bounded payload-kind/domain validator; missing, stale, oversized, malformed, trailing-byte, and incompatible payloads MUST fail with typed admission errors and exact pre-state
 5. Administrative submission MAY retain hash-first bootstrap/recovery behavior, but it MUST pass the same item, domain, author, maturity, and capacity classifier and gains no signed-ingress bypass
-6. The eligible signed path MUST retain the ordinary signed proposal opening fee, bounded active-proposal capacity, duplicate rejection, proposer identity, authorship counters, preimage contract, and transactional rollback behavior
+6. The eligible signed path MUST retain the ordinary signed proposal opening fee, bounded active-proposal capacity, duplicate rejection, proposer identity, authorship counters, witnessed-preimage contract, and transactional rollback behavior
 7. Each domain MUST reserve `StrategicProposalReserve` slots inside `MaxActiveProposalsPerDomain`; general proposals stop at `MaxActiveProposalsPerDomain - StrategicProposalReserve`, while protocol-domain `L1RootAction` may consume the complete domain cap
 8. One admission classifier MUST derive submission authority, required signer eligibility, capacity limit, author bound, opening-fee applicability, and rejection precedence before economic mutation; dispatch and bounded authority/fee views MUST consume that classifier rather than reimplementing policy
-9. Rejection precedence MUST be signed authority, primary eligibility when required, signed preimage availability and compatibility, duplicate identity, domain/capacity lane, canonical author-index integrity, per-author capacity, and maturity-bucket capacity, followed only then by fee collection and proposal insertion
+9. Rejection precedence MUST be signed authority, primary eligibility when required, compact signed-preimage witness availability and compatibility, duplicate identity, domain/capacity lane, canonical author-index integrity, per-author capacity, and maturity-bucket capacity, followed only then by fee collection and proposal insertion
 10. Admission MUST compute the exact maturity epoch and prove room in that bounded bucket before fee transfer; the later transactional insertion MUST use the admitted epoch, so no intervening policy or time recomputation can move the proposal to a different bucket
 11. Strategic capacity classification MUST derive internally from the existing `(domain, payload_kind)` submission-authority binding; callers MUST NOT select a priority, lane, or proposal class
 12. The reserve MUST be nonzero and strictly below the domain cap; it creates no second proposal collection or count cache, and every ordinary terminal path releases capacity by removing the proposal from the existing active set
@@ -658,20 +658,25 @@ Contract rules:
 
 ### 7.3 Payload Preimage Admission Policy
 
-A proposal always binds one `payload_hash`, while signed admission requires its exact bounded typed preimage to be available before capacity, fee, event, authorship, maturity, or active-state mutation.
+A proposal always binds one `payload_hash`. Signed admission requires a current compact witness proving that the exact bounded typed preimage was validated before capacity, fee, event, authorship, maturity, or active-state mutation; the signed proposal call itself MUST NOT load the generic preimage byte value.
 
 Canonical policy:
 
-1. Every signed payload kind, including `Intent` and `L2SignalToL1`, MUST pass the runtime's domain/payload-kind preimage validator before admission
-2. Missing, oversized, malformed, trailing-byte, and domain-incompatible signed preimages MUST fail with typed errors and exact pre-state
-3. A requested-but-unavailable preimage is not sufficient for signed admission
-4. Administrative bootstrap/recovery submission MAY remain hash-first, but it MUST use the same item, author, capacity, and maturity classifier and gains no signed authority or fee bypass
-5. Executable payload enactment MUST revalidate runtime-visible payload availability and compatibility because retained bytes or runtime policy may change after admission
-6. Advisory payloads remain non-executable, but signed advisory authors MUST still bind voting to canonical typed bytes rather than an opaque hash
-7. Query surfaces MUST expose noted/requested status so authoring clients can require the note step and inspection clients can describe administrative hash-first state honestly
-8. Product UX and write adapters MUST block signed submission until the exact preimage is available
+1. Every signed payload kind, including `Intent` and `L2SignalToL1`, MUST have one current payload-admission witness keyed physically by `payload_hash` plus its semantic domain/kind validation context; the hash remains the committed byte identity, while the semantic suffix prevents validation for one context from overwriting another for the same bytes
+2. The witness MUST bind the exact encoded byte length, decoded `ProposalPayloadKind`, compatible `GovernanceDomain`, derived execution authority, runtime/schema compatibility identity, depositor, and nonzero runtime-configured storage deposit needed by that payload family
+3. Each payload kind MUST have its own defensible encoded-length ceiling; the Governance proof contract MUST NOT inherit the generic pallet-preimage maximum
+4. Witness creation or refresh MUST accept the exact payload bytes under one global call bound, require their runtime hash and length to match compact current preimage status, pass them through one bounded typed runtime validator, reject missing, mismatched, oversized, malformed, trailing-byte, domain-incompatible, authority-incompatible, or schema-incompatible payloads, and commit no witness on failure; it MUST NOT read the generic preimage value from storage
+5. A caller MUST NOT supply or write arbitrary validated witness fields independently from the committed payload hash; the validator derives the complete witness from the bytes and runtime contract
+6. Signed proposal submission MUST read only the compact witness and compact current preimage status, then require exact hash-key, length, kind, domain, authority, and compatibility agreement before any capacity or fee mutation; successful submission consumes the witness and releases its storage deposit transactionally
+7. Removal, unavailability, current-length mismatch, or runtime/schema incompatibility MUST invalidate or reject the witness; a requested-but-unavailable preimage is not sufficient for signed admission
+8. Administrative bootstrap/recovery submission MAY remain hash-first, but it MUST use the same item, author, capacity, and maturity classifier and gains no signed authority or fee bypass
+9. Executable enactment MUST load the bytes under the exact proposal `payload_hash`, revalidate the witnessed kind/domain/authority/compatibility contract, decode with no trailing bytes, and execute only that byte sequence
+10. Advisory payloads remain non-executable, but signed advisory authors MUST still bind voting to canonical typed bytes rather than an opaque hash
+11. Query surfaces MUST expose noted/requested status and compact witness state so authoring clients can require note-and-witness preparation and inspection clients can describe administrative hash-first state honestly
+12. Product UX and write adapters MUST block signed submission until the exact preimage is available and its witness is current
+13. Every retained witness MUST keep a nonzero native deposit reserved from its preparer, so abandoned witnesses remain economically bounded even if the generic preimage is unnoted; replacement transfers liability only after the new depositor reserves the complete amount
 
-Rationale: hard signed admission gives one canonical typed proposal identity before economic mutation, while the explicit administrative exception preserves bounded bootstrap and recovery without weakening public authoring.
+Rationale: the separate bounded validation boundary gives signed admission one canonical typed proposal identity without charging either public preparation or proposal submission the generic preimage value's maximum ProofSize. The exact bounded call bytes remain tied to the noted preimage through runtime hashing plus compact status, while enactment alone reads the hash-selected stored bytes. The explicit administrative exception preserves bounded bootstrap and recovery without weakening public authoring.
 
 ---
 

@@ -7,3 +7,9 @@
 {"timestamp":"2026-08-21T13:53:58Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/proposal_resolution.rs"}
 {"timestamp":"2026-08-21T16:51:38Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/reward_memory.rs"}
 {"timestamp":"2026-08-21T17:14:22Z","severity":"FATAL","rule":"Unowned Reference Runtime Panic Surface","files":"/home/llb/Repos/deos/template/runtime/src/configs/xcm_config.rs"}
+{"timestamp":"2026-08-22T10:56:54Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/reward_memory.rs"}
+{"timestamp":"2026-08-22T14:48:03Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/actors/src/crossing.rs"}
+{"timestamp":"2026-08-22T14:48:06Z","severity":"FATAL","rule":"Unowned Actors Pallet Panic Surface","files":"/home/llb/Repos/deos/template/pallets/actors/src/lib.rs"}
+{"timestamp":"2026-08-22T14:48:06Z","severity":"FATAL","rule":"Unowned Reference Runtime Panic Surface","files":"/home/llb/Repos/deos/template/runtime/src/configs/actor_config.rs"}
+{"timestamp":"2026-08-22T14:48:07Z","severity":"FATAL","rule":"Unowned Runtime Panic Surface","files":"/home/llb/Repos/deos/template/pallets/actors/src/lib.rs,/home/llb/Repos/deos/template/runtime/src/configs/actor_config.rs"}
+{"timestamp":"2026-08-22T14:48:57Z","severity":"FATAL","rule":"Unowned Actors Pallet Panic Surface","files":"/home/llb/Repos/deos/template/pallets/actors/src/lib.rs"}

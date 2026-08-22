@@ -205,6 +205,13 @@ export type ActorAuthoringTrigger =
         | { type: 'Whitelist'; assets: ActorAuthoringAsset[] };
     }
   | { type: 'ObservationChange'; feed: ActorAuthoringObservationFeed }
+  | {
+      type: 'ObservationCrossing';
+      feed: ActorAuthoringObservationFeed;
+      direction: 'Rising' | 'Falling';
+      threshold: string;
+      rearmThreshold: string;
+    }
   | { type: 'Cadenced'; everyTicks: number };
 
 export type ActorAuthoringCompletionPolicy =
@@ -505,6 +512,27 @@ function validatePositiveBalanceBound(
       message: `${label} must be greater than zero and fit u128`,
     });
   }
+}
+
+function validateObservationValue(
+  value: string,
+  path: string,
+  label: string,
+  issues: ActorAuthoringIssue[],
+): bigint | null {
+  if (!UNSIGNED_INTEGER.test(value)) {
+    issues.push({
+      path,
+      message: `${label} must be a canonical unsigned integer`,
+    });
+    return null;
+  }
+  const parsed = BigInt(value);
+  if (parsed > U128_MAX) {
+    issues.push({ path, message: `${label} must fit u128` });
+    return null;
+  }
+  return parsed;
 }
 
 function validateObservationFeed(
@@ -811,6 +839,47 @@ function validateTrigger(
     case 'ObservationChange':
       validateObservationFeed(trigger.feed, 'trigger.feed', issues);
       return;
+    case 'ObservationCrossing': {
+      validateObservationFeed(trigger.feed, 'trigger.feed', issues);
+      const threshold = validateObservationValue(
+        trigger.threshold,
+        'trigger.threshold',
+        'Fire threshold',
+        issues,
+      );
+      const rearm = validateObservationValue(
+        trigger.rearmThreshold,
+        'trigger.rearmThreshold',
+        'Rearm threshold',
+        issues,
+      );
+      if (threshold != null && rearm != null) {
+        const valid =
+          trigger.direction === 'Rising'
+            ? rearm < threshold
+            : trigger.direction === 'Falling' && rearm > threshold;
+        if (!valid) {
+          issues.push({
+            path: 'trigger.rearmThreshold',
+            message:
+              trigger.direction === 'Rising'
+                ? 'Rising crossings require the rearm threshold below the fire threshold'
+                : trigger.direction === 'Falling'
+                  ? 'Falling crossings require the rearm threshold above the fire threshold'
+                  : 'Crossing direction must be Rising or Falling',
+          });
+        }
+      } else if (
+        trigger.direction !== 'Rising' &&
+        trigger.direction !== 'Falling'
+      ) {
+        issues.push({
+          path: 'trigger.direction',
+          message: 'Crossing direction must be Rising or Falling',
+        });
+      }
+      return;
+    }
     case 'Cadenced':
       if (
         !Number.isSafeInteger(trigger.everyTicks) ||
@@ -1265,6 +1334,13 @@ function lowerTrigger(trigger: ActorAuthoringTrigger) {
     case 'ObservationChange':
       return runtimeVariant('ObservationChange', {
         feed: lowerObservationFeed(trigger.feed),
+      });
+    case 'ObservationCrossing':
+      return runtimeVariant('ObservationCrossing', {
+        feed: lowerObservationFeed(trigger.feed),
+        direction: runtimeVariant(trigger.direction),
+        threshold: BigInt(trigger.threshold),
+        rearm_threshold: BigInt(trigger.rearmThreshold),
       });
     case 'Cadenced':
       return runtimeVariant('Cadenced', {

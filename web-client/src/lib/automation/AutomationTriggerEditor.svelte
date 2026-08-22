@@ -1,6 +1,6 @@
 <!--
 Domain: Actors trigger authoring
-Owns: One scalar Manual, AddressEvent, ObservationChange, or Cadenced trigger control.
+Owns: One scalar Manual, AddressEvent, ObservationChange, ObservationCrossing, or Cadenced trigger control.
 Excludes: Runtime admission, scheduler execution, conditions, graph control, and artifact encoding.
 Zone: Automation presentation helper; edits the canonical trigger draft without inventing another trigger model.
 -->
@@ -20,6 +20,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     NumberInput,
     SelectField,
     TextArea,
+    TextField,
   } from '$lib/ui';
 
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
@@ -58,6 +59,15 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
         return;
       case 'ObservationChange':
         trigger = { type, feed: defaultObservationFeed() };
+        return;
+      case 'ObservationCrossing':
+        trigger = {
+          type,
+          feed: defaultObservationFeed(),
+          direction: 'Rising',
+          threshold: '1000000000000',
+          rearmThreshold: '900000000000',
+        };
         return;
       case 'Cadenced':
         trigger = { type, everyTicks: 1 };
@@ -165,7 +175,11 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   }
 
   function selectObservationAggregation(event: Event) {
-    if (trigger.type !== 'ObservationChange') return;
+    if (
+      trigger.type !== 'ObservationChange' &&
+      trigger.type !== 'ObservationCrossing'
+    )
+      return;
     const type = (event.currentTarget as HTMLSelectElement).value;
     trigger = {
       ...trigger,
@@ -204,6 +218,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
       <option value="Manual">Manual</option>
       <option value="AddressEvent">Address event</option>
       <option value="ObservationChange">Observation change</option>
+      <option value="ObservationCrossing">Observation crossing</option>
       <option value="Cadenced">Cadenced</option>
     </SelectField>
     {#if trigger.type === 'Cadenced'}
@@ -313,12 +328,43 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
         </div>
       {/if}
     </div>
-  {:else if trigger.type === 'ObservationChange'}
+  {:else if trigger.type === 'ObservationChange' || trigger.type === 'ObservationCrossing'}
     <div class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
-      <p class="text-[10px] text-(--mono-muted)">
-        Latest-state reconsideration only. Thresholds belong to plan conditions;
-        this trigger carries no amount or revision payload.
-      </p>
+      {#if trigger.type === 'ObservationChange'}
+        <p class="text-[10px] text-(--mono-muted)">
+          Broad semantics: reconsider on every committed change to this feed.
+          High-cardinality feeds fan out to every subscribed Actor.
+        </p>
+      {:else}
+        <p class="text-[10px] text-(--mono-muted)">
+          Sparse semantics: creation never retrofires, and one directional fire
+          must cross the opposite rearm boundary before it can fire again.
+        </p>
+        <div class={compact ? 'grid gap-2' : 'grid grid-cols-3 gap-2'}>
+          <SelectField
+            label="Direction"
+            bind:value={trigger.direction}
+            selectClass="h-9 py-1.5 text-xs"
+          >
+            <option value="Rising">Rising</option>
+            <option value="Falling">Falling</option>
+          </SelectField>
+          <TextField
+            label="Fire threshold"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            bind:value={trigger.threshold}
+            class="h-9 py-1.5 font-mono text-xs tabnum"
+          />
+          <TextField
+            label="Rearm threshold"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            bind:value={trigger.rearmThreshold}
+            class="h-9 py-1.5 font-mono text-xs tabnum"
+          />
+        </div>
+      {/if}
       <div class="grid gap-2 sm:grid-cols-2">
         <AutomationAssetEditor
           label="Input asset"

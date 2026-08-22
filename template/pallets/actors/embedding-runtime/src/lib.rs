@@ -464,6 +464,17 @@ impl Get<Weight> for WakeupWeightLimit {
   }
 }
 
+pub struct CrossingWorkerWeightLimit;
+impl Get<Weight> for CrossingWorkerWeightLimit {
+  fn get() -> Weight {
+    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
+      polkadot_sdk::frame_system::limits::BlockWeights,
+    >>::get()
+    .max_block;
+    polkadot_sdk::sp_runtime::Perbill::from_percent(5) * max_block
+  }
+}
+
 pub struct ActorOnIdleReserve;
 impl Get<Weight> for ActorOnIdleReserve {
   fn get() -> Weight {
@@ -615,6 +626,12 @@ impl pallet_deos_actors::Config for Runtime {
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
   type ObservationPageSize = ConstU32<8>;
+  type MaxCrossingTransitionsPerFeed = ConstU32<8>;
+  type MaxCrossingTransitionsPerBlock = ConstU32<2>;
+  type MaxCrossingLeavesPerBlock = ConstU32<4>;
+  type MaxCrossingPagesPerBlock = ConstU32<4>;
+  type MaxCrossingActorsPerBlock = ConstU32<8>;
+  type CrossingWorkerWeightLimit = CrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ConstU32<128>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<8>;
   type ObservationFanoutWeightLimit = ObservationFanoutWeightLimit;
@@ -641,6 +658,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MinUserBalance = ConstU128<10>;
   type WeightInfo = pallet_deos_actors::weights::SubstrateWeight<Runtime>;
   type GenesisSystemActors = ();
+  type SystemActorContractValidator = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = FixtureBenchmarkHelper;
 }
@@ -681,6 +699,10 @@ mod tests {
 
   #[test]
   fn observation_boundary_is_independently_fail_closed() {
+    assert_eq!(
+      <() as pallet_deos_actors::ObservationProvider<u32, BlockNumber>>::current(&7),
+      pallet_deos_actors::CanonicalObservationState::Unavailable
+    );
     assert_eq!(
       <() as pallet_deos_actors::ObservationProvider<u32, BlockNumber>>::observe(&7, 1, 10),
       pallet_deos_actors::ScalarObservationState::Unavailable
@@ -953,7 +975,7 @@ mod tests {
   #[test]
   fn independent_runtime_starts_from_the_fresh_schema_without_system_topology() {
     new_test_ext().execute_with(|| {
-      let baseline = StorageVersion::new(1);
+      let baseline = StorageVersion::new(2);
       assert_eq!(Actors::in_code_storage_version(), baseline);
       assert_eq!(Actors::on_chain_storage_version(), baseline);
       assert_eq!(Actors::actor_identity_count(), 0);
@@ -1628,6 +1650,8 @@ mod tests {
         before.hot.cycle_state,
         pallet_deos_actors::CycleState::Suspended
       );
+      assert!(before_hot.wakeup_pointer.is_some());
+      assert!(before_hot.queue_ticket.is_none());
 
       let sovereign = before.identity.sovereign_account;
       let first_call =
@@ -1644,7 +1668,7 @@ mod tests {
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
       assert!(after.hot.pending_signal);
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
-      assert!(after_hot.queue_ticket.is_some());
+      assert_eq!(after_hot.queue_ticket, before_hot.queue_ticket);
       let repeated_call =
         RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
           dest: sovereign,

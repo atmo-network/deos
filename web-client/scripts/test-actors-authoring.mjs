@@ -276,6 +276,9 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     'Manual',
     'AddressEvent',
     'ObservationChange',
+    'ObservationCrossing',
+    'Rising',
+    'Falling',
     'OwnerOnly',
     'Whitelist',
     'everyTicks',
@@ -286,7 +289,8 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
     );
   }
   assert(!triggerEditorSource.includes('maxTriggerSources'));
-  assert(triggerEditorSource.includes('this trigger carries no amount'));
+  assert(triggerEditorSource.includes('Broad semantics'));
+  assert(triggerEditorSource.includes('creation never retrofires'));
   for (const rejected of ['successor', 'callback', 'branch target']) {
     assert(!triggerEditorSource.toLowerCase().includes(rejected));
   }
@@ -320,6 +324,40 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
     ).valid,
     true,
   );
+});
+
+test('ObservationCrossing validates hysteresis and lowers exact u128 semantics', () => {
+  const rising = contract(undefined, {
+    trigger: {
+      type: 'ObservationCrossing',
+      feed: observationTrigger.feed,
+      direction: 'Rising',
+      threshold: '100',
+      rearmThreshold: '80',
+    },
+  });
+  assert.equal(validateActorAuthoringContract(rising).valid, true);
+  assert.deepEqual(lowerActorAuthoringContract(rising).trigger, {
+    type: 'ObservationCrossing',
+    value: {
+      feed: lowerActorAuthoringContract(
+        contract(undefined, { trigger: observationTrigger }),
+      ).trigger.value.feed,
+      direction: { type: 'Rising', value: undefined },
+      threshold: 100n,
+      rearm_threshold: 80n,
+    },
+  });
+  for (const trigger of [
+    { ...rising.trigger, rearmThreshold: '100' },
+    { ...rising.trigger, direction: 'Falling', rearmThreshold: '80' },
+    { ...rising.trigger, threshold: `${1n << 128n}` },
+  ]) {
+    assert.equal(
+      validateActorAuthoringContract(contract(undefined, { trigger })).valid,
+      false,
+    );
+  }
 });
 
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
@@ -963,6 +1001,16 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
     }),
     contract(undefined, {
       trigger: observationTrigger,
+      fundingPolicy: { type: 'AnyVerifiedIngress' },
+    }),
+    contract(undefined, {
+      trigger: {
+        type: 'ObservationCrossing',
+        feed: observationTrigger.feed,
+        direction: 'Falling',
+        threshold: '80',
+        rearmThreshold: '100',
+      },
       fundingPolicy: { type: 'AnyVerifiedIngress' },
     }),
   ];

@@ -3,9 +3,6 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    tags: ["v*"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,9 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  pull-request-validation:
+  validation:
     name: validation-gate
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     env:
@@ -36,46 +32,3 @@ jobs:
 
       - name: Prepare pinned dependencies and run heavy validation
         run: ./scripts/validate-local.sh heavy
-
-  heavy-validation:
-    name: heavy-validation
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 240
-    env:
-      CARGO_INCREMENTAL: 0
-      SKIP_WASM_BUILD: 1
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install validation prerequisites
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
-
-      - name: Setup pinned Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: web-client/package.json
-
-      - name: Prepare pinned dependencies and run heavy validation
-        run: ./scripts/validate-local.sh heavy
-
-  full-validation:
-    name: full-validation
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    env:
-      CARGO_INCREMENTAL: 0
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install validation prerequisites
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
-
-      - name: Setup pinned Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version-file: web-client/package.json
-
-      - name: Prepare pinned dependencies and run full validation
-        run: ./scripts/validate-local.sh full

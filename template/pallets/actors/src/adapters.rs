@@ -8,15 +8,41 @@ use polkadot_sdk::{
 
 use crate::types::AddressEvent;
 
+/// Host-owned validation boundary for System Actor contract topology.
+///
+/// Generic Actors does not infer product-specific effect graphs. A composing
+/// runtime may reject a System contract whose declared host topology would be
+/// invalid; User contracts never pass through this boundary.
+pub trait SystemActorContractValidator<Contract> {
+  fn validate(actor_id: crate::ActorId, contract: &Contract) -> DispatchResult;
+}
+
+impl<Contract> SystemActorContractValidator<Contract> for () {
+  fn validate(_: crate::ActorId, _: &Contract) -> DispatchResult {
+    Ok(())
+  }
+}
+
 /// Deterministic host-owned derivation of canonical Actor custody accounts.
 pub trait SovereignAccountDeriver<AccountId> {
   fn user(pallet_id: PalletId, owner: &AccountId, owner_slot: u8) -> AccountId;
   fn system(pallet_id: PalletId, actor_id: crate::ActorId) -> AccountId;
 }
 
-/// Certified bounded ingress for one externally owned observation revision.
-pub trait ObservationChangeIngress<FeedId> {
-  fn note_observation_changed(feed: FeedId, revision: u64) -> DispatchResult;
+/// Exact certified transition produced by one committed canonical observation update.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct ObservationTransition {
+  pub revision: u64,
+  pub previous: Option<u128>,
+  pub current: u128,
+}
+
+/// Certified bounded ingress for one externally owned observation transition.
+pub trait ObservationTransitionIngress<FeedId> {
+  fn note_observation_transition(feed: FeedId, transition: ObservationTransition)
+  -> DispatchResult;
 }
 
 /// Minimal authoritative actor context for adapter operations whose policy depends on Actors type.
@@ -158,11 +184,22 @@ pub enum ScalarObservationState<BlockNumber> {
   Stale,
 }
 
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum CanonicalObservationState {
+  Unavailable,
+  Uninitialized,
+  Available { value: u128, revision: u64 },
+}
+
 /// Bounded current-scalar observation reads supplied by the host runtime.
 ///
 /// The provider classifies availability and freshness. Actors never depends on a concrete oracle,
 /// history store, producer, or off-chain service through this boundary.
 pub trait ObservationProvider<FeedId, BlockNumber> {
+  fn current(feed: &FeedId) -> CanonicalObservationState;
+
   fn observe(
     feed: &FeedId,
     now: BlockNumber,
@@ -171,6 +208,10 @@ pub trait ObservationProvider<FeedId, BlockNumber> {
 }
 
 impl<FeedId, BlockNumber> ObservationProvider<FeedId, BlockNumber> for () {
+  fn current(_: &FeedId) -> CanonicalObservationState {
+    CanonicalObservationState::Unavailable
+  }
+
   fn observe(_: &FeedId, _: BlockNumber, _: u32) -> ScalarObservationState<BlockNumber> {
     ScalarObservationState::Unavailable
   }

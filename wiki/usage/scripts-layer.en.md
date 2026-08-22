@@ -50,7 +50,7 @@ Numbered scripts perform specific leaf operations and do not orchestrate each ot
 Named workflow scripts compose atomic steps into larger developer flows:
 
 - `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
-- `validate-local.sh`: Run the selected `fast`, `heavy`, or `full` validation profile; GitHub Actions runs heavy validation for pull requests and verified `main` pushes, while version tags run full validation with checksum-verified binaries and regenerated production runtime and client artifacts
+- `validate-local.sh`: Run the selected `fast`, `heavy`, or `full` validation profile; GitHub Actions runs heavy validation only through the required pull-request `validation-gate`, while local full validation owns pre-`1.0` release acceptance with checksum-verified binaries and regenerated production runtime and client artifacts
 - `actors-assurance.sh`: Run heavy stress and capacity proofs for the Actors scheduler
 - `network-assurance-local.sh`: Compose topology, finality, failover, restart, and signed-transfer evidence; `SESSION_TRANSITION=1` adds the multi-hour session proof and `COMPOSED_PATH=1` adds finalized Router, Oracle, and Burn Actor evidence
 - `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows

@@ -133,11 +133,11 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber> for Runtime {
+    impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, BlockNumber> for Runtime {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
-            pallet_deos_actors::ActorEligibility<BlockNumber>,
+            pallet_deos_actors::ActorEligibility<primitives::OracleFeedId, BlockNumber>,
             pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)

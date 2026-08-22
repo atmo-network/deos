@@ -289,10 +289,12 @@ fn changed_hook_is_transactional_and_equal_refresh_is_hook_free() {
 
     set_hook_failure(false);
     assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 10));
-    assert_eq!(hook_calls(), vec![(1, 1)]);
+    assert_eq!(hook_calls(), vec![(1, 1, None, 10)]);
     System::set_block_number(2);
     assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 10));
-    assert_eq!(hook_calls(), vec![(1, 1)]);
+    assert_eq!(hook_calls(), vec![(1, 1, None, 10)]);
+    assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 12));
+    assert_eq!(hook_calls(), vec![(1, 1, None, 10), (1, 2, Some(10), 12)]);
   });
 }
 

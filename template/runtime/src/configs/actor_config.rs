@@ -65,14 +65,21 @@ parameter_types! {
   pub const ActorWakeupPageSize: u32 = 32;
   /// Independent observation subscriber/fanout page granularity.
   pub const ActorObservationPageSize: u32 = 64;
+  pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
+  pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
+  pub const ActorMaxCrossingLeavesPerBlock: u32 = 64;
+  pub const ActorMaxCrossingPagesPerBlock: u32 = 64;
+  pub const ActorMaxCrossingActorsPerBlock: u32 = 256;
   pub const ActorMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const ActorMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const ActorMaxWakeupsPerBlock: u32 = 512;
   pub ActorObservationFanoutWeightLimit: Weight =
     Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
+  pub ActorCrossingWorkerWeightLimit: Weight =
+    Perbill::from_percent(10) * MAXIMUM_BLOCK_WEIGHT;
   /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
   /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
-  pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
+  pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(15) * MAXIMUM_BLOCK_WEIGHT;
   pub ActorOnIdleReserve: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
   // --- Lifecycle and sweep controls ---
@@ -843,6 +850,405 @@ fn liquidity_lp_balance(who: &AccountId, asset_a: AssetKind, asset_b: AssetKind)
 /// and can be computed offline for use in other configs.
 pub struct TmctolGenesisSystemActors;
 
+const SYSTEM_ACTOR_TOPOLOGY_IDS: [pallet_deos_actors::ActorId; 15] = [
+  ecosystem::actor_ids::BURN_ACTOR_ID,
+  ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
+  ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+  ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+  ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
+  ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
+  ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
+  ecosystem::actor_ids::TREASURY_B_ACTORS_ID,
+  ecosystem::actor_ids::TREASURY_C_ACTORS_ID,
+  ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
+  ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
+  ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
+  ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+  ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+  ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+];
+
+const SYSTEM_ACTIVATION_MANIFEST_EDGES: [(
+  pallet_deos_actors::ActorId,
+  pallet_deos_actors::ActorId,
+); 12] = [
+  (
+    ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
+    ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+  ),
+  (
+    ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+    ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+    ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+    ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+    ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
+    ecosystem::actor_ids::TREASURY_B_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
+    ecosystem::actor_ids::TREASURY_C_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
+    ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
+    ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
+  ),
+  (
+    ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
+    ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
+    ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+  ),
+  (
+    ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+    ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+  ),
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemActivationEffect {
+  CertifiedActorTransfer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SystemActivationEdge {
+  pub source: pallet_deos_actors::ActorId,
+  pub target: pallet_deos_actors::ActorId,
+  pub effect: SystemActivationEffect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SystemActivationNode {
+  pub actor_id: pallet_deos_actors::ActorId,
+  pub rank: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SystemActivationTopology {
+  pub nodes: alloc::vec::Vec<SystemActivationNode>,
+  pub edges: alloc::vec::Vec<SystemActivationEdge>,
+}
+
+pub struct DeosSystemActorContractValidator;
+
+impl DeosSystemActorContractValidator {
+  fn known_target(account: &AccountId) -> Option<pallet_deos_actors::ActorId> {
+    SYSTEM_ACTOR_TOPOLOGY_IDS
+      .into_iter()
+      .find(|actor_id| crate::Actors::sovereign_account_id_system(*actor_id) == *account)
+  }
+
+  fn declared_targets(
+    contract: &pallet_deos_actors::ActorContractOf<Runtime>,
+  ) -> alloc::vec::Vec<pallet_deos_actors::ActorId> {
+    let mut targets = alloc::vec::Vec::new();
+    for step in &contract.steps {
+      match &step.task {
+        pallet_deos_actors::Task::Transfer { to, .. } => {
+          if let Some(target) = Self::known_target(to)
+            && !targets.contains(&target)
+          {
+            targets.push(target);
+          }
+        }
+        pallet_deos_actors::Task::SplitTransfer { legs, .. } => {
+          for leg in legs {
+            if let Some(target) = Self::known_target(&leg.to)
+              && !targets.contains(&target)
+            {
+              targets.push(target);
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+    targets
+  }
+
+  fn contract_set(
+    candidate: Option<(
+      pallet_deos_actors::ActorId,
+      &pallet_deos_actors::ActorContractOf<Runtime>,
+    )>,
+  ) -> Result<
+    alloc::vec::Vec<(
+      pallet_deos_actors::ActorId,
+      pallet_deos_actors::ActorContractOf<Runtime>,
+    )>,
+    DispatchError,
+  > {
+    let mut contracts = alloc::vec::Vec::new();
+    for actor_id in SYSTEM_ACTOR_TOPOLOGY_IDS {
+      let contract = candidate
+        .filter(|(candidate_id, _)| *candidate_id == actor_id)
+        .map(|(_, contract)| contract.clone())
+        .or_else(|| pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
+      if let Some(contract) = contract {
+        contracts.push((actor_id, contract));
+      }
+    }
+    Ok(contracts)
+  }
+
+  fn target_actor(
+    account: &AccountId,
+    contracts: &[(
+      pallet_deos_actors::ActorId,
+      pallet_deos_actors::ActorContractOf<Runtime>,
+    )],
+  ) -> Option<pallet_deos_actors::ActorId> {
+    contracts.iter().find_map(|(actor_id, contract)| {
+      let target = crate::Actors::sovereign_account_id_system(*actor_id);
+      (target == *account
+        && matches!(
+          contract.trigger,
+          pallet_deos_actors::Trigger::AddressEvent { .. }
+        ))
+      .then_some(*actor_id)
+    })
+  }
+
+  fn derive_edges(
+    contracts: &[(
+      pallet_deos_actors::ActorId,
+      pallet_deos_actors::ActorContractOf<Runtime>,
+    )],
+  ) -> alloc::vec::Vec<SystemActivationEdge> {
+    let mut edges = alloc::vec::Vec::new();
+    for (source, contract) in contracts {
+      for step in &contract.steps {
+        match &step.task {
+          pallet_deos_actors::Task::Transfer { to, .. } => {
+            if let Some(target) = Self::target_actor(to, contracts) {
+              let edge = SystemActivationEdge {
+                source: *source,
+                target,
+                effect: SystemActivationEffect::CertifiedActorTransfer,
+              };
+              if !edges.contains(&edge) {
+                edges.push(edge);
+              }
+            }
+          }
+          pallet_deos_actors::Task::SplitTransfer { legs, .. } => {
+            for leg in legs {
+              if let Some(target) = Self::target_actor(&leg.to, contracts) {
+                let edge = SystemActivationEdge {
+                  source: *source,
+                  target,
+                  effect: SystemActivationEffect::CertifiedActorTransfer,
+                };
+                if !edges.contains(&edge) {
+                  edges.push(edge);
+                }
+              }
+            }
+          }
+          _ => {}
+        }
+      }
+    }
+    edges
+  }
+
+  fn topology_from_contracts(
+    contracts: alloc::vec::Vec<(
+      pallet_deos_actors::ActorId,
+      pallet_deos_actors::ActorContractOf<Runtime>,
+    )>,
+  ) -> Result<SystemActivationTopology, DispatchError> {
+    let edges = Self::derive_edges(&contracts);
+    let mut ranks = [0u8; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    let mut indegree = [0u8; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    let mut present = [false; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    for (actor_id, _) in &contracts {
+      let index = SYSTEM_ACTOR_TOPOLOGY_IDS
+        .iter()
+        .position(|known| known == actor_id)
+        .ok_or(DispatchError::Other("SystemActorOutsideTopologyManifest"))?;
+      present[index] = true;
+    }
+    for edge in &edges {
+      let target = SYSTEM_ACTOR_TOPOLOGY_IDS
+        .iter()
+        .position(|known| *known == edge.target)
+        .ok_or(DispatchError::Other("SystemActivationTargetUnknown"))?;
+      indegree[target] = indegree[target]
+        .checked_add(1)
+        .ok_or(DispatchError::Other("SystemActivationIndegreeOverflow"))?;
+    }
+    let mut processed = 0usize;
+    let mut admitted = [false; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    loop {
+      let next = (0..SYSTEM_ACTOR_TOPOLOGY_IDS.len())
+        .find(|index| present[*index] && !admitted[*index] && indegree[*index] == 0);
+      let Some(index) = next else { break };
+      admitted[index] = true;
+      processed += 1;
+      let source = SYSTEM_ACTOR_TOPOLOGY_IDS[index];
+      for edge in edges.iter().filter(|edge| edge.source == source) {
+        let target = SYSTEM_ACTOR_TOPOLOGY_IDS
+          .iter()
+          .position(|known| *known == edge.target)
+          .ok_or(DispatchError::Other("SystemActivationTargetUnknown"))?;
+        indegree[target] = indegree[target]
+          .checked_sub(1)
+          .ok_or(DispatchError::Other("SystemActivationIndegreeUnderflow"))?;
+        ranks[target] = ranks[target].max(
+          ranks[index]
+            .checked_add(1)
+            .ok_or(DispatchError::Other("SystemActivationRankOverflow"))?,
+        );
+      }
+    }
+    if processed != contracts.len() {
+      return Err(DispatchError::Other("SystemActivationCycle"));
+    }
+    let nodes = contracts
+      .iter()
+      .map(|(actor_id, _)| {
+        let index = SYSTEM_ACTOR_TOPOLOGY_IDS
+          .iter()
+          .position(|known| known == actor_id)
+          .expect("contract set contains only manifest actors"); // deos-bypass: panic-owner — the bounded manifest admission check above owns membership.
+        SystemActivationNode {
+          actor_id: *actor_id,
+          rank: ranks[index],
+        }
+      })
+      .collect();
+    Ok(SystemActivationTopology { nodes, edges })
+  }
+
+  pub fn projection() -> Result<SystemActivationTopology, DispatchError> {
+    Self::topology_from_contracts(Self::contract_set(None)?)
+  }
+
+  pub fn manifest() -> Result<SystemActivationTopology, DispatchError> {
+    let nodes = SYSTEM_ACTOR_TOPOLOGY_IDS
+      .into_iter()
+      .map(|actor_id| SystemActivationNode { actor_id, rank: 0 })
+      .collect::<alloc::vec::Vec<_>>();
+    let edges = SYSTEM_ACTIVATION_MANIFEST_EDGES
+      .into_iter()
+      .map(|(source, target)| SystemActivationEdge {
+        source,
+        target,
+        effect: SystemActivationEffect::CertifiedActorTransfer,
+      })
+      .collect();
+    Self::rank_topology(nodes, edges)
+  }
+
+  fn rank_topology(
+    nodes: alloc::vec::Vec<SystemActivationNode>,
+    edges: alloc::vec::Vec<SystemActivationEdge>,
+  ) -> Result<SystemActivationTopology, DispatchError> {
+    let mut ranked = SystemActivationTopology { nodes, edges };
+    let mut ranks = [0u8; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    let mut indegree = [0u8; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    for edge in &ranked.edges {
+      let target = SYSTEM_ACTOR_TOPOLOGY_IDS
+        .iter()
+        .position(|id| *id == edge.target)
+        .ok_or(DispatchError::Other("SystemActivationTargetUnknown"))?;
+      indegree[target] = indegree[target]
+        .checked_add(1)
+        .ok_or(DispatchError::Other("SystemActivationIndegreeOverflow"))?;
+    }
+    let mut admitted = [false; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
+    let mut processed = 0usize;
+    loop {
+      let Some(index) = (0..SYSTEM_ACTOR_TOPOLOGY_IDS.len())
+        .find(|index| !admitted[*index] && indegree[*index] == 0)
+      else {
+        break;
+      };
+      admitted[index] = true;
+      processed += 1;
+      for edge in ranked
+        .edges
+        .iter()
+        .filter(|edge| edge.source == SYSTEM_ACTOR_TOPOLOGY_IDS[index])
+      {
+        let target = SYSTEM_ACTOR_TOPOLOGY_IDS
+          .iter()
+          .position(|id| *id == edge.target)
+          .ok_or(DispatchError::Other("SystemActivationTargetUnknown"))?;
+        indegree[target] = indegree[target]
+          .checked_sub(1)
+          .ok_or(DispatchError::Other("SystemActivationIndegreeUnderflow"))?;
+        ranks[target] = ranks[target].max(
+          ranks[index]
+            .checked_add(1)
+            .ok_or(DispatchError::Other("SystemActivationRankOverflow"))?,
+        );
+      }
+    }
+    if processed != SYSTEM_ACTOR_TOPOLOGY_IDS.len() {
+      return Err(DispatchError::Other("SystemActivationCycle"));
+    }
+    for node in &mut ranked.nodes {
+      let index = SYSTEM_ACTOR_TOPOLOGY_IDS
+        .iter()
+        .position(|id| *id == node.actor_id)
+        .ok_or(DispatchError::Other("SystemActorOutsideTopologyManifest"))?;
+      node.rank = ranks[index];
+    }
+    Ok(ranked)
+  }
+
+  fn validate_candidate(
+    actor_id: pallet_deos_actors::ActorId,
+    contract: &pallet_deos_actors::ActorContractOf<Runtime>,
+  ) -> DispatchResult {
+    Self::manifest()?;
+    let targets = Self::declared_targets(contract);
+    if !SYSTEM_ACTOR_TOPOLOGY_IDS.contains(&actor_id) {
+      return if targets.is_empty() {
+        Ok(())
+      } else {
+        Err(DispatchError::Other("SystemActorOutsideTopologyManifest"))
+      };
+    }
+    for target in targets {
+      if !SYSTEM_ACTIVATION_MANIFEST_EDGES.contains(&(actor_id, target)) {
+        return Err(DispatchError::Other("SystemActivationEdgeUndeclared"));
+      }
+    }
+    Ok(())
+  }
+}
+
+impl pallet_deos_actors::SystemActorContractValidator<pallet_deos_actors::ActorContractOf<Runtime>>
+  for DeosSystemActorContractValidator
+{
+  fn validate(
+    actor_id: pallet_deos_actors::ActorId,
+    contract: &pallet_deos_actors::ActorContractOf<Runtime>,
+  ) -> DispatchResult {
+    Self::validate_candidate(actor_id, contract)
+  }
+}
+
 impl TmctolGenesisSystemActors {
   /// Runtime-topology accounts that retain one free native ED so arbitrarily small native ingress
   /// remains admissible under `pallet-balances` semantics.
@@ -995,6 +1401,12 @@ impl
     };
 
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
+    DeosSystemActorContractValidator::manifest()
+      .expect("System Actor activation manifest must be acyclic"); // deos-bypass: panic-owner — runtime integrity owns the bounded static catalog.
+    for (actor_id, _, _, contract) in Self::system_actors() {
+      DeosSystemActorContractValidator::validate_candidate(actor_id, &contract)
+        .expect("genesis System Actor effects must fit the activation manifest"); // deos-bypass: panic-owner — runtime integrity owns the bounded genesis catalog.
+    }
     let system_control_account: AccountId = ActorsPalletId::get().into_account_truncating();
     for (_, owner, _, _) in Self::system_actors() {
       assert_eq!(
@@ -1787,6 +2199,22 @@ pub struct TmctolObservationProvider;
 impl pallet_deos_actors::ObservationProvider<primitives::OracleFeedId, crate::BlockNumber>
   for TmctolObservationProvider
 {
+  fn current(feed: &primitives::OracleFeedId) -> pallet_deos_actors::CanonicalObservationState {
+    let Some(config) = pallet_oracle::Feeds::<Runtime>::get(*feed) else {
+      return pallet_deos_actors::CanonicalObservationState::Unavailable;
+    };
+    if config.lifecycle == pallet_oracle::FeedLifecycle::Deactivated {
+      return pallet_deos_actors::CanonicalObservationState::Unavailable;
+    }
+    match pallet_oracle::Observations::<Runtime>::get(*feed) {
+      Some(observation) => pallet_deos_actors::CanonicalObservationState::Available {
+        value: observation.value,
+        revision: observation.revision,
+      },
+      None => pallet_deos_actors::CanonicalObservationState::Uninitialized,
+    }
+  }
+
   fn observe(
     feed: &primitives::OracleFeedId,
     _now: crate::BlockNumber,
@@ -1833,6 +2261,7 @@ impl pallet_deos_actors::Config for Runtime {
   type FeeSink = ActorFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
   type GenesisSystemActors = TmctolGenesisSystemActors;
+  type SystemActorContractValidator = DeosSystemActorContractValidator;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = ActorMaxActiveActors;
   type MaxActorIdentities = ActorMaxActiveActors;
@@ -1852,6 +2281,12 @@ impl pallet_deos_actors::Config for Runtime {
   type QueuePageSize = ActorQueuePageSize;
   type WakeupPageSize = ActorWakeupPageSize;
   type ObservationPageSize = ActorObservationPageSize;
+  type MaxCrossingTransitionsPerFeed = ActorMaxCrossingTransitionsPerFeed;
+  type MaxCrossingTransitionsPerBlock = ActorMaxCrossingTransitionsPerBlock;
+  type MaxCrossingLeavesPerBlock = ActorMaxCrossingLeavesPerBlock;
+  type MaxCrossingPagesPerBlock = ActorMaxCrossingPagesPerBlock;
+  type MaxCrossingActorsPerBlock = ActorMaxCrossingActorsPerBlock;
+  type CrossingWorkerWeightLimit = ActorCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ActorMaxQueueEntriesScannedPerBlock;
   type MaxObservationFanoutPagesPerBlock = ActorMaxObservationFanoutPagesPerBlock;
   type ObservationFanoutWeightLimit = ActorObservationFanoutWeightLimit;

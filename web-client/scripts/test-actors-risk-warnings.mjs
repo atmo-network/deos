@@ -228,7 +228,7 @@ test('all warning kinds are declared in the stable enumeration', () => {
   const artifact = artifactFor({ steps: [step()] });
   const analysis = analyze(artifact);
   projectActorCompositionWarnings({ artifact, analysis });
-  assert.ok(ACTORS_COMPOSITION_WARNING_KINDS.length >= 6);
+  assert.ok(ACTORS_COMPOSITION_WARNING_KINDS.length >= 8);
   assert.ok(
     ACTORS_COMPOSITION_WARNING_KINDS.includes(
       'ImmutableWithoutReachableTerminal',
@@ -239,4 +239,33 @@ test('all warning kinds are declared in the stable enumeration', () => {
       'CompletedDoesNotImplyAllTasksSuccess',
     ),
   );
+  assert.ok(
+    ACTORS_COMPOSITION_WARNING_KINDS.includes('BroadObservationFanout'),
+  );
+  assert.ok(
+    ACTORS_COMPOSITION_WARNING_KINDS.includes('SparseObservationCrossing'),
+  );
+});
+
+test('high-cardinality broad observation projection escalates with the bounded subscriber count', () => {
+  const artifact = artifactFor({ steps: [step()] });
+  const base = analyze(artifact);
+  const analysis = {
+    ...base,
+    trigger: {
+      kind: 'ObservationChange',
+      sourceKinds: ['ObservationChange'],
+      feed: 7,
+    },
+  };
+  const warnings = projectActorCompositionWarnings({
+    artifact,
+    analysis,
+    observationSubscriberCount: 1_000,
+  });
+  const warning = warnings.find(
+    (entry) => entry.kind === 'BroadObservationFanout',
+  );
+  assert.equal(warning?.severity, 'warning');
+  assert.match(warning?.evidence ?? '', /subscribers=1000/);
 });

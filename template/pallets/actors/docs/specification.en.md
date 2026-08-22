@@ -390,8 +390,11 @@ enum Trigger<AccountId, AssetId, FeedId> {
   Manual,
   AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },
   ObservationChange { feed: FeedId },
+  ObservationCrossing { feed: FeedId, direction: CrossingDirection,
+    threshold: u128, rearm_threshold: u128 },
   Cadenced { every_ticks: u64 },
 }
+enum CrossingDirection { Rising, Falling }
 enum SourceFilter<AccountId> { Any, OwnerOnly, Whitelist(BoundedVec<AccountId, MaxWhitelistSize>) }
 enum AssetFilter<AssetId> { Any, Whitelist(BoundedVec<AssetId, MaxWhitelistSize>) }
 enum FundingSourcePolicy<AccountId> {
@@ -467,11 +470,15 @@ Every `Task` variant contains at most two `AmountResolution` fields. Each contri
 
 For each Step, `1 <= clauses <= MaxPreconditionClauses`, `1 <= predicates_per_clause <= MaxPredicatesPerClause`, and the sum of clause predicates is at most `P`. Opening capture plus full Step evaluation therefore costs at most `2 * P` atomic evaluation units per Step and `2 * S * P` per attempt. Weight and User evaluation fees split those units into chunks of at most `P` before calling the benchmarked `predicate_set_evaluation` component; no runtime call relies on its defensive clamp.
 
-Each Actor Contract contains exactly one Trigger. `Manual`, `AddressEvent`, and `ObservationChange` are externally signalled; `Cadenced` is internally timed and has no signal source. No Trigger variant contains an OR-set, nested Trigger, priority, or secondary admission source.
+Each Actor Contract contains exactly one Trigger. `Manual`, `AddressEvent`, `ObservationChange`, and `ObservationCrossing` are externally signalled; `Cadenced` is internally timed and has no signal source. No Trigger variant contains an OR-set, nested Trigger, priority, or secondary admission source.
 
 Every `Whitelist` and `SignedAllowlist` is nonempty, duplicate-free, and strictly ordered by canonical SCALE bytes. Runtime admission MUST reject non-canonical order, duplicates, or non-canonical list/set encoding and MUST NOT sort, deduplicate, or otherwise normalize submitted values.
 
 Actor composition is asynchronous and provides no same-block or one-event-one-cycle guarantee. `SourceFilter::Any` permits any certified positive movement that is not self/no-op and satisfies the authored `AssetFilter`, independently of funding acceptance, to set `pending_signal`. Actors charges no signaller, requires no accepted funding, and imposes no trigger-specific minimum amount; any resulting User attempt charges the actor's fee budget.
+
+User Actors MAY form externally closed self-cycles and arbitrary multi-Actor cycles. Actors performs no User graph analysis, stores no topological rank, and imposes no authored cycle prohibition. The FIFO cutoff and one live latch/ticket prevent synchronous recursion and more than one execution per Actor per block; every admitted User attempt still pays its complete suffix fee envelope, and an unreplenished cycle closes through `BalanceExhausted` or `FeeBudgetExhausted`.
+
+System-to-System activation policy is host-owned. Before an Active System Contract is installed or replaced, the pallet invokes the configured `SystemActorContractValidator` with the assigned Actor id and candidate Contract. The default validator accepts all contracts; a host MAY reject candidates against a bounded runtime-owned manifest. Host graph rank, edge metadata, and external-effect inventory are neither Actor Contract identity nor User authoring surface.
 
 ### 3.2 Triggers and Timing
 
@@ -480,13 +487,26 @@ Actor composition is asynchronous and provides no same-block or one-event-one-cy
 | `Manual` | An admitted owner signal sets `pending_signal` |
 | `AddressEvent` | One matching certified positive movement sets `pending_signal` |
 | `ObservationChange` | One matching deferred feed publication sets `pending_signal` |
+| `ObservationCrossing` | One armed directional boundary crossing sets `pending_signal`; rearm crossings change detection state only |
 | `Cadenced` | One internal timestamp deadline materializes readiness without a latch |
 
-A Trigger changes readiness only. `pending_signal` is the sole external-signal latch; matches only set `false -> true`. An AddressEvent without concrete source matches only `SourceFilter::Any`. One Actor never combines independent readiness sources.
+A Trigger changes readiness only. Every detector converges through one activation operation that sets `pending_signal` `false -> true` and requests the same canonical placement contract. `pending_signal` is the sole external-signal latch. An AddressEvent without concrete source matches only `SourceFilter::Any`. One Actor never combines independent readiness sources.
 
 `pending_signal` has no direct clear call. Fresh opening consumes it; deactivation deletes it. Mutable deactivation followed by activation is the only actor-control reset. An Immutable actor retains an accepted latch until opening or close.
 
-Fresh Active installation does not set `pending_signal`. `Manual`, `AddressEvent`, and `ObservationChange` remain unready until their one source matches. `every_ticks` defines eligibility, not execution frequency.
+Fresh Active installation does not set `pending_signal`. `Manual`, `AddressEvent`, `ObservationChange`, and `ObservationCrossing` remain unready until their one source matches. `every_ticks` defines eligibility, not execution frequency.
+
+`ObservationCrossing` authored identity contains exactly `feed`, `direction`, `threshold`, and `rearm_threshold`. Rising requires `rearm_threshold < threshold`; Falling requires `rearm_threshold > threshold`. Equality is invalid. One shared semantic validator owns this rule for creation, activation, replacement, genesis, simulation expected-value validation, and runtime integrity.
+
+An armed Rising crossing fires exactly when `previous < threshold && current >= threshold`; its disarmed state rearms exactly when `previous > rearm_threshold && current <= rearm_threshold`. An armed Falling crossing fires exactly when `previous > threshold && current <= threshold`; its disarmed state rearms exactly when `previous < rearm_threshold && current >= rearm_threshold`. Repeated equal observations cause neither transition.
+
+Active installation, reactivation, or semantic replacement initializes Crossing state from the current canonical observation without retroactive activation. A Rising value already `>= threshold`, or a Falling value already `<= threshold`, starts disarmed and waits for rearm; every other valid current value starts armed. Unavailable or uninitialized current state rejects Active admission through a typed error. Dormant authoring remains valid because it establishes no derived detection membership.
+
+One fire disarms the Crossing before requesting activation and atomically moves its derived membership to the rearm boundary. Queue pressure, delayed activation materialization, duplicate publication, and a set `pending_signal` cannot produce another fire before a qualifying rearm. Rearm requests no activation and atomically restores fire membership. Detection owns armed state; the canonical FIFO owns eventual execution.
+
+Every committed canonical observation update owns a monotonically increasing feed revision and one exact `previous -> current` transition. A transition that could fire or rearm is either durably admitted for bounded ordered processing or the observation publication fails atomically. Implementations MUST NOT coalesce revisions when an intermediate reversal, fire, or rearm could be lost, and later revisions for one feed cannot overtake its earlier incomplete transition.
+
+`ObservationChange` remains a separate broad trigger over every committed change. It may share the same revision identity with Crossing processing, but it retains its subscriber pages and MUST NOT be reinterpreted as a threshold crossing or optimized by dropping subscribers.
 
 The reference cadence tick is 500 milliseconds of consensus timestamp. `now_tick = floor(timestamp_millis / 500)` decides readiness. Fresh activation uses `anchor_tick = ceil(timestamp_millis / 500)` and sets its first deadline to `anchor_tick + every_ticks`, so quantization never shortens the authored period. Genesis has no consensus timestamp: it stores an uninitialized anchor and one tick-zero bootstrap wakeup. The first ordinary wakeup service after timestamp inherent application sets the same ceiled anchor and full-period deadline without latching readiness or entering FIFO.
 
@@ -548,7 +568,7 @@ signal_eligible_at(lower) =
   max(lower, cooldown_eligible_at, window_floor)
 ```
 
-Classification for `Manual`, `AddressEvent`, and `ObservationChange` uses block-number eligibility plus `pending_signal`. `Cadenced` uses only its current timestamp tick while Idle, and block retry eligibility while Suspended.
+Classification for `Manual`, `AddressEvent`, `ObservationChange`, and `ObservationCrossing` uses block-number eligibility plus `pending_signal`. `Cadenced` uses only its current timestamp tick while Idle, and block retry eligibility while Suspended.
 
 If `cycle_nonce == 0 && last_cycle_block == None`, cooldown begins at `schedule_anchor` without addition. Otherwise cooldown is added to `last_cycle_block.or(schedule_anchor)`.
 
@@ -574,7 +594,7 @@ first_temporal_eligible =
   temporal_eligible_at(schedule_anchor) under the prospective Active state
 ```
 
-Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, `now <= end`, `start_delay <= MaxExecutionDelayBlocks`, and `first_temporal_eligible <= end`. This ScheduleWindow contract applies only to `Manual`, `AddressEvent`, and `ObservationChange`; no future signal is assumed.
+Validation requires `end > start`, representable `end + 1`, inclusive length `>= MinWindowLength`, `now <= end`, `start_delay <= MaxExecutionDelayBlocks`, and `first_temporal_eligible <= end`. This ScheduleWindow contract applies only to `Manual`, `AddressEvent`, `ObservationChange`, and `ObservationCrossing`; no future signal is assumed.
 
 ### 3.3 Precondition and Amounts
 
@@ -1002,7 +1022,8 @@ let ordinary_target = if actor.lifecycle == ActiveLifecycle::Paused {
       Some(Tick(next_cadence_due_tick(actor)?)),
     (CycleState::Idle, Trigger::Manual, true) |
     (CycleState::Idle, Trigger::AddressEvent { .. }, true) |
-    (CycleState::Idle, Trigger::ObservationChange { .. }, true) =>
+    (CycleState::Idle, Trigger::ObservationChange { .. }, true) |
+    (CycleState::Idle, Trigger::ObservationCrossing { .. }, true) =>
       Some(Block(signal_eligible_at(actor, lower)?)),
     (CycleState::Idle, _, _) => None,
   }
@@ -1046,13 +1067,13 @@ For every finite set of pre-cutoff tickets, recurring conforming reserve, finite
 
 ### 5.2 Observation Delivery
 
-Subscriptions derive only from `ObservationChange`. Runtime maintains bounded exact actor/feed and reverse ownership; one fanout unit addresses at most `ObservationPageSize` positions. Physical topology is implementation-owned.
+Broad subscriber pages derive only from `ObservationChange`. Runtime maintains bounded exact actor/feed and reverse ownership; one fanout unit addresses at most `ObservationPageSize` positions. `ObservationCrossing` instead derives sparse ordered fire/rearm membership from the same feed identity. Physical topology is implementation-owned and neither representation changes authored Trigger identity.
 
 Total subscriptions are bounded by `MaxActiveActors`; each Actor owns at most one observation feed. Distinct subscribed feeds cannot exceed total subscriptions, and dirty obligations cannot exceed distinct subscribed feeds. No separate unbounded feed registry exists.
 
 Creation/activation installs, schedule replacement diffs, and deactivation/close removes subscriptions inside the owning transaction. Installing the first subscriber infers no historical revision and creates no dirty obligation. Publication while a feed has no subscribers allocates no baseline or dirty state. The first later accepted changed publication with subscribers sets the baseline and creates one dirty obligation. Removing the final subscriber deletes both.
 
-The generated certified-publisher inventory is the sole observation-publication authority. Each certified publisher owns the monotonically increasing revision sequence for its feeds and calls `ObservationChangeIngress::note_observation_changed(feed, revision)`. Actors validates but does not synthesize revisions.
+The generated certified-publisher inventory is the sole observation-publication authority. Each certified publisher owns the monotonically increasing revision sequence and exact previous/current scalar values for its feeds and calls `ObservationTransitionIngress::note_observation_transition(feed, transition)`. Actors validates but does not synthesize revisions or transition values.
 
 Changed publication atomically maintains one highest accepted revision and one pending obligation per subscribed feed. Revision `0` or regression fails; equality is exact no-op; greater revision updates. Publication is O(1) and does not inspect subscriber groups, mutate actors, enqueue, evaluate, or execute. A path outside the certified inventory has no Actors observation effect.
 
@@ -1211,8 +1232,11 @@ trait AddressEventIngress<A, I, B> {
   fn preflight(event: &AddressEvent<A, I, B>) -> Result<(), IngressFailure>;
   fn notify(event: &AddressEvent<A, I, B>) -> Result<(), IngressFailure>;
 }
-trait ObservationChangeIngress<F> {
-  fn note_observation_changed(feed: F, revision: ObservationRevision) -> DispatchResult;
+struct ObservationTransition {
+  revision: ObservationRevision, previous: Option<u128>, current: u128,
+}
+trait ObservationTransitionIngress<F> {
+  fn note_observation_transition(feed: F, transition: ObservationTransition) -> DispatchResult;
 }
 ```
 
@@ -1566,7 +1590,10 @@ enum Error {
   RecipientDepositUnavailable,
   ObservationSubscriptionCapacityExceeded, ObservationSubscriptionInvariant,
   InvalidObservationRevision, DirtyObservationCapacityExceeded,
-  DirtyObservationInvariant, AdmissionBoundOverflow,
+  DirtyObservationInvariant, ObservationUnavailable, ObservationUninitialized,
+  CrossingIndexCapacityExceeded, CrossingIndexInvariant, CrossingGenerationExhausted,
+  CrossingTransitionCapacityExceeded, CrossingTransitionInvariant,
+  SystemActorTopologyInvalid, AdmissionBoundOverflow,
 }
 ```
 

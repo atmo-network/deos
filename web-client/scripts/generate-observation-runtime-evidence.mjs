@@ -192,7 +192,7 @@ function certifiedObservationPublishers(source, runtimeConfigSources) {
     fail('Actors observation publisher inventory must be nonempty and unique');
   }
   const ingressCalls = runtimeConfigSources.filter(({ source: candidate }) =>
-    /ObservationChangeIngress<[^>]+>>::note_observation_changed\(/.test(
+    /ObservationTransitionIngress<[^>]+>>::note_observation_transition\(/.test(
       candidate,
     ),
   );

@@ -47,6 +47,30 @@ pub enum EnqueueOutcome {
   CorruptedTopology,
 }
 
+/// Semantic result of admitting one trigger activation through the canonical
+/// pending latch and FIFO/wakeup substrate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActivationOutcome {
+  IgnoredStale,
+  Coalesced,
+  Latched,
+  Closed,
+}
+
+/// Typed activation failure. Temporary pressure preserves the producer's
+/// retryable work; permanent corruption fails the enclosing transition closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActivationFailure {
+  Temporary(DispatchError),
+  Permanent(DispatchError),
+}
+
+impl From<DispatchError> for ActivationFailure {
+  fn from(error: DispatchError) -> Self {
+    Self::Permanent(error)
+  }
+}
+
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 
 #[cfg(test)]
@@ -288,8 +312,9 @@ impl<T: Config> Pallet<T> {
       return FifoStepResult::Progress { executed: false };
     }
     let actor_id = entry.actor_id;
+    let loaded_continuation = state.continuation;
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
-    match Self::apply_admission(actor_id, &instance, cycle_meter) {
+    match Self::apply_admission_loaded(&instance, loaded_continuation.as_ref(), cycle_meter) {
       AdmissionDecision::Admit {
         weight,
         terminal_cleanup_reserved,
@@ -390,7 +415,9 @@ impl<T: Config> Pallet<T> {
           return FifoStepResult::Blocked(BlockKind::Weight);
         }
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-          if Self::paged_consume_head_at(position).is_err() {
+          if Self::paged_consume_loaded_head_at(position, actor_id, entry.ticket, queue_owner_hot)
+            .is_err()
+          {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
               polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue topology changed"),
             ));
@@ -612,6 +639,94 @@ impl<T: Config> Pallet<T> {
   fn close_for_scheduler_index_exhaustion(actor_id: ActorId) -> DispatchResult {
     let instance = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorInvariant)?;
     Self::finalize_actor(actor_id, &instance, CloseReason::SchedulerIndexExhausted)
+  }
+
+  pub(crate) fn request_activation(
+    actor_id: ActorId,
+  ) -> Result<ActivationOutcome, ActivationFailure> {
+    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+      return Self::request_activation_inner(actor_id);
+    }
+    polkadot_sdk::frame_support::storage::with_transaction(|| match Self::request_activation_inner(
+      actor_id,
+    ) {
+      Ok(outcome) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome)),
+      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
+    })
+  }
+
+  fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Ok(ActivationOutcome::IgnoredStale);
+      }
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::Corrupt => {
+        return Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ));
+      }
+    };
+    let already_pending = state.hot.pending_signal;
+    let continuation = state.continuation;
+    let mut hot = state.hot;
+    if !already_pending {
+      hot.pending_signal = true;
+      ActorHot::<T>::insert(actor_id, &hot);
+    }
+    let instance = Self::derive_active_actor_view(state.identity, hot, state.contract);
+    let classification =
+      Self::classify_actor_loaded(&instance, continuation.as_ref()).map_err(|error| {
+        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
+      })?;
+    if classification.terminal_reason == Some(CloseReason::WindowExpired) {
+      Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired)
+        .map_err(ActivationFailure::Permanent)?;
+      return Ok(ActivationOutcome::Closed);
+    }
+
+    if instance.queue_ticket.is_some() {
+      return Ok(if already_pending {
+        ActivationOutcome::Coalesced
+      } else {
+        ActivationOutcome::Latched
+      });
+    }
+
+    let placement = if matches!(instance.trigger, Trigger::Cadenced { .. }) {
+      Self::enqueue(actor_id)
+    } else {
+      Self::prime_actor_schedule_loaded(actor_id, &instance)
+    };
+    match placement {
+      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(if already_pending {
+        ActivationOutcome::Coalesced
+      } else {
+        ActivationOutcome::Latched
+      }),
+      Err(EnqueueOutcome::CapacityUnavailable | EnqueueOutcome::WakeupCapacityExhausted) => Err(
+        ActivationFailure::Temporary(Error::<T>::QueueCapacityUnavailable.into()),
+      ),
+      Err(
+        outcome @ (EnqueueOutcome::TicketExhausted
+        | EnqueueOutcome::SchedulerIndexExhausted
+        | EnqueueOutcome::WakeupIndexExhausted),
+      ) => {
+        let _ = outcome;
+        Self::close_for_scheduler_index_exhaustion(actor_id)
+          .map_err(ActivationFailure::Permanent)?;
+        Ok(ActivationOutcome::Closed)
+      }
+      Err(EnqueueOutcome::CorruptedTopology) => Err(ActivationFailure::Permanent(
+        Error::<T>::SchedulerIndexExhausted.into(),
+      )),
+    }
+  }
+
+  pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {
+    match error {
+      ActivationFailure::Temporary(error) | ActivationFailure::Permanent(error) => error,
+    }
   }
 
   /// Maps a placement result to the public error surface for extrinsic boundaries.
@@ -1683,6 +1798,13 @@ impl<T: Config> Pallet<T> {
     let Some(instance) = Self::loaded_active_view_for_placement(actor_id)? else {
       return Ok(());
     };
+    Self::prime_actor_schedule_loaded(actor_id, &instance)
+  }
+
+  fn prime_actor_schedule_loaded(
+    actor_id: ActorId,
+    instance: &ActiveActorViewOf<T>,
+  ) -> Result<(), EnqueueOutcome> {
     let now = frame_system::Pallet::<T>::block_number();
     if instance.lifecycle.is_paused() {
       return Self::schedule_window_expiry(actor_id, &instance);
@@ -1923,8 +2045,21 @@ impl<T: Config> Pallet<T> {
               }
               continue;
             }
-            state.hot.pending_signal = true;
-            ActorHot::<T>::insert(actor_id, state.hot);
+            match Self::request_activation(actor_id) {
+              Ok(ActivationOutcome::IgnoredStale) => {
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                  polkadot_sdk::sp_runtime::DispatchError::Other("cadence owner is stale"),
+                ));
+              }
+              Ok(ActivationOutcome::Closed) => closed_for_exhaustion = true,
+              Ok(ActivationOutcome::Coalesced | ActivationOutcome::Latched) => {}
+              Err(_) => {
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                  polkadot_sdk::sp_runtime::DispatchError::Other("cadence activation failed"),
+                ));
+              }
+            }
+            continue;
           }
           if let Err(error) = Self::enqueue(actor_id) {
             if !Self::scheduler_index_is_exhausted(error)
@@ -2031,6 +2166,13 @@ impl<T: Config> Pallet<T> {
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let continuation =
       ContinuationStateStore::<T>::get(actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
+    Self::retry_eligible_at_loaded(instance, &continuation)
+  }
+
+  fn retry_eligible_at_loaded(
+    instance: &ActiveActorViewOf<T>,
+    continuation: &ContinuationStateOf<T>,
+  ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let cooldown: BlockNumberFor<T> = instance.cooldown_blocks.into();
     let cursor_local_attempt = continuation
       .unsuccessful_attempts_at_cursor
@@ -2124,20 +2266,13 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  pub(crate) fn expiry_substitution_due(
-    actor_id: ActorId,
+  pub(crate) fn expiry_substitution_due_loaded(
     instance: &ActiveActorViewOf<T>,
+    continuation: Option<&ContinuationStateOf<T>>,
   ) -> Result<bool, Error<T>> {
-    Self::classify_actor(actor_id, instance)
+    Self::classify_actor_loaded(instance, continuation)
       .map(|classification| classification.terminal_reason == Some(CloseReason::WindowExpired))
       .map_err(Self::classification_dispatch_error)
-  }
-
-  pub(crate) fn sweep_close_reason(
-    actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-  ) -> Result<Option<CloseReason>, ActorClassificationError> {
-    Self::classify_actor(actor_id, instance).map(|classification| classification.terminal_reason)
   }
 
   // Deterministic User viability precedence is BalanceExhausted, then
@@ -2164,25 +2299,19 @@ impl<T: Config> Pallet<T> {
     None
   }
 
-  pub(crate) fn active_actor_for_classification(
-    actor_id: ActorId,
-  ) -> Result<Option<ActiveActorViewOf<T>>, ActorClassificationError> {
-    match Self::load_actor_state(actor_id) {
-      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => Ok(None),
-      LoadedActorStateOf::Active(state) => Ok(Some(Self::derive_active_actor_view(
-        state.identity,
-        state.hot,
-        state.contract,
-      ))),
-      LoadedActorStateOf::Corrupt => Err(ActorClassificationError::ActorInvariant),
-    }
-  }
-
+  #[cfg(test)]
   pub(crate) fn classify_actor(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
   ) -> Result<ActorClassification<BlockNumberFor<T>>, ActorClassificationError> {
     let continuation = ContinuationStateStore::<T>::get(actor_id);
+    Self::classify_actor_loaded(instance, continuation.as_ref())
+  }
+
+  pub(crate) fn classify_actor_loaded(
+    instance: &ActiveActorViewOf<T>,
+    continuation: Option<&ContinuationStateOf<T>>,
+  ) -> Result<ActorClassification<BlockNumberFor<T>>, ActorClassificationError> {
     if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
       return Err(ActorClassificationError::ContinuationInvariant);
     }
@@ -2233,11 +2362,14 @@ impl<T: Config> Pallet<T> {
     } else if terminal_reason.is_some() {
       ActorExecutionPhase::Ready
     } else if instance.cycle_state == CycleState::Suspended {
-      let eligible_at =
-        Self::retry_eligible_at(actor_id, instance).map_err(|outcome| match outcome {
-          EnqueueOutcome::SchedulerIndexExhausted => ActorClassificationError::ComputationOverflow,
-          _ => ActorClassificationError::ContinuationInvariant,
-        })?;
+      let eligible_at = Self::retry_eligible_at_loaded(
+        instance,
+        continuation.ok_or(ActorClassificationError::ContinuationInvariant)?,
+      )
+      .map_err(|outcome| match outcome {
+        EnqueueOutcome::SchedulerIndexExhausted => ActorClassificationError::ComputationOverflow,
+        _ => ActorClassificationError::ContinuationInvariant,
+      })?;
       let now = frame_system::Pallet::<T>::block_number();
       if eligible_at > now {
         ActorExecutionPhase::WaitingRetry(eligible_at)
@@ -2248,13 +2380,10 @@ impl<T: Config> Pallet<T> {
       if instance.pending_signal {
         ActorExecutionPhase::Ready
       } else {
-        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
-          return Err(ActorClassificationError::ActorInvariant);
-        };
         let Some(WakeupPointer {
           block: WakeupKey::Tick(due_tick),
           ..
-        }) = state.hot.wakeup_pointer
+        }) = instance.wakeup_pointer
         else {
           return Err(ActorClassificationError::ActorInvariant);
         };
@@ -2351,12 +2480,12 @@ impl<T: Config> Pallet<T> {
     weight
   }
 
-  fn apply_admission(
-    actor_id: ActorId,
+  fn apply_admission_loaded(
     instance: &ActiveActorViewOf<T>,
+    continuation: Option<&ContinuationStateOf<T>>,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
-    let Ok(classification) = Self::classify_actor(actor_id, instance) else {
+    let Ok(classification) = Self::classify_actor_loaded(instance, continuation) else {
       return AdmissionDecision::Invariant;
     };
     if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
@@ -2369,7 +2498,7 @@ impl<T: Config> Pallet<T> {
       return AdmissionDecision::Skip;
     }
     let continuation = if instance.cycle_state == CycleState::Suspended {
-      let Some(continuation) = ContinuationStateStore::<T>::get(actor_id) else {
+      let Some(continuation) = continuation else {
         return AdmissionDecision::Skip;
       };
       Some(continuation)
@@ -2404,18 +2533,82 @@ impl<T: Config> Pallet<T> {
   /// Projects the canonical actor classifier without stripping temporal payloads.
   pub fn actor_eligibility(
     actor_id: ActorId,
-  ) -> Result<ActorEligibility<BlockNumberFor<T>>, ActorClassificationError> {
-    let instance = match Self::load_actor_state(actor_id) {
+  ) -> Result<ActorEligibility<T::ObservationFeedId, BlockNumberFor<T>>, ActorClassificationError>
+  {
+    let state = match Self::load_actor_state(actor_id) {
       LoadedActorStateOf::NotRegistered => return Ok(ActorEligibility::NotRegistered),
       LoadedActorStateOf::Dormant(_) => return Ok(ActorEligibility::Dormant),
-      LoadedActorStateOf::Active(state) => {
-        Self::derive_active_actor_view(state.identity, state.hot, state.contract)
-      }
+      LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::Corrupt => return Err(ActorClassificationError::ActorInvariant),
     };
-    Ok(ActorEligibility::Active(Self::classify_actor(
-      actor_id, &instance,
-    )?))
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    if state
+      .hot
+      .wakeup_pointer
+      .is_some_and(|pointer| !Self::wakeup_page_entry_matches(pointer, actor_id))
+    {
+      return Err(ActorClassificationError::ActorInvariant);
+    }
+    let placement = match (state.hot.queue_ticket, state.hot.wakeup_pointer) {
+      (None, None) => ActorActivationPlacement::Unplaced,
+      (Some(ticket), None) => ActorActivationPlacement::Queue(ticket),
+      (None, Some(pointer)) => ActorActivationPlacement::Wakeup(pointer.block),
+      // A live FIFO ticket may coexist with the actor's terminal window wakeup;
+      // the queue ticket is the current activation placement.
+      (Some(ticket), Some(_)) => ActorActivationPlacement::Queue(ticket),
+    };
+    let trigger = match &state.contract.trigger {
+      Trigger::Manual => ActorTriggerActivation::Manual,
+      Trigger::AddressEvent { .. } => ActorTriggerActivation::AddressEvent,
+      Trigger::ObservationChange { feed } => {
+        let feeds = ActorObservationFeeds::<T>::get(actor_id)
+          .ok_or(ActorClassificationError::ActorInvariant)?;
+        if feeds.as_slice() != [*feed] || !ObservationSubscriptionSlot::<T>::contains_key(actor_id)
+        {
+          return Err(ActorClassificationError::ActorInvariant);
+        }
+        ActorTriggerActivation::ObservationChange {
+          feed: *feed,
+          subscriber_count: ObservationSubscriberCount::<T>::get(feed),
+          pending_revision: DirtyObservationFeeds::<T>::get(feed)
+            .map(|dirty| dirty.latest_revision),
+        }
+      }
+      Trigger::ObservationCrossing { .. } => {
+        let crossing = Self::crossing_from_trigger(&state.contract.trigger)
+          .ok_or(ActorClassificationError::ActorInvariant)?;
+        let locator = CrossingMemberships::<T>::get(actor_id)
+          .ok_or(ActorClassificationError::ActorInvariant)?;
+        let (key, role) = Self::crossing_obligation(&crossing, locator.phase);
+        if locator.key != key || locator.role != role {
+          return Err(ActorClassificationError::ActorInvariant);
+        }
+        ActorTriggerActivation::ObservationCrossing {
+          feed: crossing.feed,
+          direction: crossing.direction,
+          threshold: crossing.threshold,
+          rearm_threshold: crossing.rearm_threshold,
+          phase: locator.phase,
+          pending_revisions: CrossingTransitionQueues::<T>::get(crossing.feed)
+            .map_or(0, |queue| queue.len() as u32),
+          processing_revision: CrossingRangeCursors::<T>::get(crossing.feed)
+            .map(|cursor| cursor.revision),
+        }
+      }
+      Trigger::Cadenced { every_ticks } => ActorTriggerActivation::Cadenced {
+        every_ticks: *every_ticks,
+      },
+    };
+    Ok(ActorEligibility::Active(ActiveActorActivation {
+      trigger,
+      pending_signal: state.hot.pending_signal,
+      placement,
+      eligibility: Self::classify_actor_loaded(&instance, state.continuation.as_ref())?,
+    }))
   }
 
   fn source_matches_filter(
@@ -2538,8 +2731,8 @@ impl<T: Config> Pallet<T> {
     );
     let funding = state.funding;
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
-    let classification =
-      Self::classify_actor(actor_id, &instance).map_err(Self::classification_dispatch_error)?;
+    let classification = Self::classify_actor_loaded(&instance, state.continuation.as_ref())
+      .map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) || amount.is_zero() {
       return Ok(());
     }
@@ -2650,8 +2843,8 @@ impl<T: Config> Pallet<T> {
     );
     let mut funding = state.funding;
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
-    let classification =
-      Self::classify_actor(actor_id, &instance).map_err(Self::classification_dispatch_error)?;
+    let classification = Self::classify_actor_loaded(&instance, state.continuation.as_ref())
+      .map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) {
       return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
     }
@@ -2666,13 +2859,6 @@ impl<T: Config> Pallet<T> {
     } else {
       false
     };
-    if signal_matched && !instance.pending_signal {
-      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-        if let Some(hot) = maybe_hot {
-          hot.pending_signal = true;
-        }
-      });
-    }
     if apply_funding && amount > Zero::zero() {
       if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
         let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
@@ -2697,21 +2883,24 @@ impl<T: Config> Pallet<T> {
       }
     }
     if signal_matched {
-      // Queue capacity exhaustion preserves readiness through an exact later
-      // wakeup (spec 8.1.4); monotonic ticket/page namespace exhaustion and wakeup
-      // placement failure are not retryable queue-full and fail closed, rolling
-      // back the producer movement in the same transaction.
-      Self::enqueue_outcome_error(Self::enqueue(actor_id))?;
+      Self::request_activation(actor_id).map_err(Self::activation_failure_error)?;
     }
     Ok(())
   }
 
   pub(crate) fn evaluate_actor_liveness(actor_id: ActorId) -> DispatchResult {
-    let instance = Self::active_actor_for_classification(actor_id)
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Err(Error::<T>::ActorNotFound.into());
+      }
+      LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
+    };
+    let continuation = state.continuation;
+    let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+    if let Some(reason) = Self::classify_actor_loaded(&instance, continuation.as_ref())
       .map_err(Self::classification_dispatch_error)?
-      .ok_or(Error::<T>::ActorNotFound)?;
-    if let Some(reason) =
-      Self::sweep_close_reason(actor_id, &instance).map_err(Self::classification_dispatch_error)?
+      .terminal_reason
     {
       return Self::finalize_actor(actor_id, &instance, reason);
     }

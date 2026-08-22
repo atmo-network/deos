@@ -105,6 +105,7 @@
         "genesis auto-close target must be nonzero",
         "genesis precondition formulas must have valid bounded DNF",
         "genesis execution plan must have valid task and predicate shapes",
+        "genesis System Actor topology must be valid",
         "genesis execution plan cannot transfer to its own sovereign account",
         "genesis opening snapshot surfaces must be valid",
         "genesis System Immutable Actors cannot use RetryLater",

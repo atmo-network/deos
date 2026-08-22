@@ -128,7 +128,7 @@ The pallet exposes bounded current truth only. Historical revision lookup, chart
 
 ## 9. Transactional Change Hook
 
-The package exposes `OnObservationChanged(feed, revision) -> DispatchResult`. It calls the hook exactly once after computing a changed published scalar and before committing the transition.
+The package exposes `OnObservationChanged(feed, revision, previous, current) -> DispatchResult`. It calls the hook exactly once after computing a changed published scalar and before committing the transition. `previous` is absent only for revision `1`; every later changed revision carries the exact previously committed value.
 
 Hook work MUST remain O(1), bounded, and independent of subscriber count. The hook reports its conservative Weight separately, and dispatch publication adds that bound to the measured oracle path. Hook failure rolls back observation state, revision, oracle event, and every mutation enclosed by the producer's outer transaction. Equal-output refreshes do not call the hook.
 

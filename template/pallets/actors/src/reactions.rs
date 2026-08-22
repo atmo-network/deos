@@ -1,4 +1,5 @@
 use crate::pallet::*;
+use crate::scheduler::{ActivationFailure, ActivationOutcome};
 use crate::types::{DirtyObservationList, DirtyObservationState, ObservationRevision};
 use crate::weights::WeightInfo as _;
 use polkadot_sdk::frame_support::{ensure, storage::TransactionOutcome, traits::Get};
@@ -6,6 +7,162 @@ use polkadot_sdk::frame_system::{Pallet as System, pallet_prelude::BlockNumberFo
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult};
 
 impl<T: Config> Pallet<T> {
+  fn append_crossing_pending_feed(feed: T::ObservationFeedId) -> DispatchResult {
+    ensure!(
+      !CrossingPendingFeeds::<T>::contains_key(feed),
+      Error::<T>::CrossingTransitionInvariant
+    );
+    let mut list = CrossingPendingFeedListState::<T>::get();
+    ensure!(
+      list.count < T::MaxActiveActors::get(),
+      Error::<T>::CrossingTransitionCapacityExceeded
+    );
+    if let Some(tail) = list.tail {
+      CrossingPendingFeeds::<T>::try_mutate(tail, |maybe| -> DispatchResult {
+        let state = maybe
+          .as_mut()
+          .ok_or(Error::<T>::CrossingTransitionInvariant)?;
+        ensure!(
+          state.next.is_none(),
+          Error::<T>::CrossingTransitionInvariant
+        );
+        state.next = Some(feed);
+        Ok(())
+      })?;
+    } else {
+      ensure!(
+        list.head.is_none() && list.cursor.is_none() && list.count == 0,
+        Error::<T>::CrossingTransitionInvariant
+      );
+      list.head = Some(feed);
+      list.cursor = Some(feed);
+    }
+    CrossingPendingFeeds::<T>::insert(
+      feed,
+      crate::CrossingPendingFeedState {
+        previous: list.tail,
+        next: None,
+      },
+    );
+    list.tail = Some(feed);
+    list.count = list
+      .count
+      .checked_add(1)
+      .ok_or(Error::<T>::CrossingTransitionCapacityExceeded)?;
+    CrossingPendingFeedListState::<T>::put(list);
+    Ok(())
+  }
+
+  fn unlink_crossing_pending_feed(feed: T::ObservationFeedId) -> DispatchResult {
+    let state =
+      CrossingPendingFeeds::<T>::get(feed).ok_or(Error::<T>::CrossingTransitionInvariant)?;
+    let mut list = CrossingPendingFeedListState::<T>::get();
+    ensure!(list.count > 0, Error::<T>::CrossingTransitionInvariant);
+    if let Some(previous) = state.previous {
+      CrossingPendingFeeds::<T>::try_mutate(previous, |maybe| -> DispatchResult {
+        let previous_state = maybe
+          .as_mut()
+          .ok_or(Error::<T>::CrossingTransitionInvariant)?;
+        ensure!(
+          previous_state.next == Some(feed),
+          Error::<T>::CrossingTransitionInvariant
+        );
+        previous_state.next = state.next;
+        Ok(())
+      })?;
+    } else {
+      ensure!(
+        list.head == Some(feed),
+        Error::<T>::CrossingTransitionInvariant
+      );
+      list.head = state.next;
+    }
+    if let Some(next) = state.next {
+      CrossingPendingFeeds::<T>::try_mutate(next, |maybe| -> DispatchResult {
+        let next_state = maybe
+          .as_mut()
+          .ok_or(Error::<T>::CrossingTransitionInvariant)?;
+        ensure!(
+          next_state.previous == Some(feed),
+          Error::<T>::CrossingTransitionInvariant
+        );
+        next_state.previous = state.previous;
+        Ok(())
+      })?;
+    } else {
+      ensure!(
+        list.tail == Some(feed),
+        Error::<T>::CrossingTransitionInvariant
+      );
+      list.tail = state.previous;
+    }
+    if list.cursor == Some(feed) {
+      list.cursor = state.next.or(list.head);
+    }
+    list.count -= 1;
+    CrossingPendingFeeds::<T>::remove(feed);
+    if list.count == 0 {
+      ensure!(
+        list.head.is_none() && list.tail.is_none() && list.cursor.is_none(),
+        Error::<T>::CrossingTransitionInvariant
+      );
+      CrossingPendingFeedListState::<T>::kill();
+    } else {
+      CrossingPendingFeedListState::<T>::put(list);
+    }
+    Ok(())
+  }
+
+  pub(crate) fn clear_crossing_transition_queue(feed: T::ObservationFeedId) -> DispatchResult {
+    let has_queue = CrossingTransitionQueues::<T>::contains_key(feed);
+    let has_link = CrossingPendingFeeds::<T>::contains_key(feed);
+    ensure!(
+      has_queue == has_link,
+      Error::<T>::CrossingTransitionInvariant
+    );
+    CrossingRangeCursors::<T>::remove(feed);
+    if has_link {
+      Self::unlink_crossing_pending_feed(feed)?;
+      CrossingTransitionQueues::<T>::remove(feed);
+    }
+    Ok(())
+  }
+
+  pub(crate) fn advance_crossing_pending_feed(feed: T::ObservationFeedId) -> DispatchResult {
+    let state =
+      CrossingPendingFeeds::<T>::get(feed).ok_or(Error::<T>::CrossingTransitionInvariant)?;
+    CrossingPendingFeedListState::<T>::try_mutate(|list| -> DispatchResult {
+      ensure!(
+        list.cursor == Some(feed),
+        Error::<T>::CrossingTransitionInvariant
+      );
+      list.cursor = state.next.or(list.head);
+      Ok(())
+    })
+  }
+
+  pub(crate) fn complete_crossing_transition(
+    feed: T::ObservationFeedId,
+    revision: u64,
+  ) -> DispatchResult {
+    let mut queue =
+      CrossingTransitionQueues::<T>::get(feed).ok_or(Error::<T>::CrossingTransitionInvariant)?;
+    ensure!(
+      queue.first().is_some_and(|item| item.revision == revision),
+      Error::<T>::CrossingTransitionInvariant
+    );
+    queue.remove(0);
+    CrossingRangeCursors::<T>::remove(feed);
+    if queue.is_empty() {
+      Self::unlink_crossing_pending_feed(feed)?;
+      CrossingTransitionQueues::<T>::remove(feed);
+    } else {
+      CrossingTransitionQueues::<T>::insert(feed, queue);
+      Self::advance_crossing_pending_feed(feed)?;
+    }
+    Ok(())
+  }
+
   fn maximum_dirty_observation_feeds() -> Result<u32, DispatchError> {
     Ok(T::MaxActiveActors::get())
   }
@@ -133,6 +290,67 @@ impl<T: Config> Pallet<T> {
     Self::with_reused_transaction(|| Self::do_note_observation_changed(feed, revision))
   }
 
+  fn do_note_observation_transition(
+    feed: T::ObservationFeedId,
+    transition: crate::ObservationTransition,
+  ) -> DispatchResult {
+    ensure!(
+      transition.revision > 0,
+      Error::<T>::InvalidObservationRevision
+    );
+    if let Some(previous) = transition.previous {
+      ensure!(
+        previous != transition.current,
+        Error::<T>::CrossingTransitionInvariant
+      );
+    } else {
+      ensure!(
+        transition.revision == 1,
+        Error::<T>::CrossingTransitionInvariant
+      );
+    }
+    Self::do_note_observation_changed(feed, transition.revision)?;
+    if CrossingFeedMembershipCount::<T>::get(feed) == 0 || transition.previous.is_none() {
+      return Ok(());
+    }
+    let was_empty = !CrossingTransitionQueues::<T>::contains_key(feed);
+    ensure!(
+      was_empty == !CrossingPendingFeeds::<T>::contains_key(feed),
+      Error::<T>::CrossingTransitionInvariant
+    );
+    CrossingTransitionQueues::<T>::try_mutate(feed, |maybe| -> DispatchResult {
+      let queue = maybe.get_or_insert_default();
+      if let Some(last) = queue.last() {
+        ensure!(
+          transition.revision == last.revision.saturating_add(1)
+            && transition.previous == Some(last.current),
+          Error::<T>::CrossingTransitionInvariant
+        );
+      }
+      queue
+        .try_push(crate::CrossingTransitionObligation {
+          revision: transition.revision,
+          previous: transition
+            .previous
+            .ok_or(Error::<T>::CrossingTransitionInvariant)?,
+          current: transition.current,
+        })
+        .map_err(|_| Error::<T>::CrossingTransitionCapacityExceeded)?;
+      Ok(())
+    })?;
+    if was_empty {
+      Self::append_crossing_pending_feed(feed)?;
+    }
+    Ok(())
+  }
+
+  pub fn note_observation_transition(
+    feed: T::ObservationFeedId,
+    transition: crate::ObservationTransition,
+  ) -> DispatchResult {
+    Self::with_reused_transaction(|| Self::do_note_observation_transition(feed, transition))
+  }
+
   pub(crate) fn preflight_clear_dirty_observation_feeds(
     feeds: &[T::ObservationFeedId],
   ) -> DispatchResult {
@@ -207,17 +425,17 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
-  fn signal_observation_subscriber(actor_id: ActorId) -> bool {
-    let mut exists = false;
-    let mut has_admission_path = false;
-    ActorHot::<T>::mutate(actor_id, |maybe| {
-      if let Some(hot) = maybe {
-        hot.pending_signal = true;
-        exists = true;
-        has_admission_path = hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some();
-      }
-    });
-    !exists || has_admission_path || Self::paged_enqueue(actor_id)
+  pub(crate) fn signal_observation_subscriber(actor_id: ActorId) -> Result<bool, DispatchError> {
+    match Self::request_activation(actor_id) {
+      Ok(
+        ActivationOutcome::IgnoredStale
+        | ActivationOutcome::Coalesced
+        | ActivationOutcome::Latched
+        | ActivationOutcome::Closed,
+      ) => Ok(true),
+      Err(ActivationFailure::Temporary(_)) => Ok(false),
+      Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
+    }
   }
 
   pub fn dirty_observation_feed_count() -> u32 {
@@ -275,7 +493,7 @@ impl<T: Config> Pallet<T> {
     let next_page = page.next;
     let mut page_complete = true;
     for actor_id in page.entries.into_iter().flatten() {
-      page_complete &= Self::signal_observation_subscriber(actor_id);
+      page_complete &= Self::signal_observation_subscriber(actor_id)?;
     }
     if !page_complete {
       Self::advance_dirty_observation_cursor(&mut list, &state);
@@ -425,8 +643,11 @@ impl<T: Config> Pallet<T> {
   }
 }
 
-impl<T: Config> crate::ObservationChangeIngress<T::ObservationFeedId> for Pallet<T> {
-  fn note_observation_changed(feed: T::ObservationFeedId, revision: u64) -> DispatchResult {
-    Pallet::<T>::note_observation_changed(feed, revision)
+impl<T: Config> crate::ObservationTransitionIngress<T::ObservationFeedId> for Pallet<T> {
+  fn note_observation_transition(
+    feed: T::ObservationFeedId,
+    transition: crate::ObservationTransition,
+  ) -> DispatchResult {
+    Pallet::<T>::note_observation_transition(feed, transition)
   }
 }

@@ -49,6 +49,7 @@ At overview level, the shape is:
 - A protection lane decides whether the proposal should be blocked or allowed through;
 - Proposal payloads are typed rather than hidden inside opaque bytes;
 - Every signed proposal requires its exact bounded typed preimage before admission, while hash-first submission remains an explicit administrative bootstrap/recovery exception;
+- Signed admission carries a compact hash/domain/kind witness rather than charging the maximum proposal-preimage proof on every call; validation rechecks that witness against the exact stored preimage status before fees, and enactment reads the selected bytes through its separately measured path;
 - Live governance UX reads bounded runtime views, while archive search and long timelines belong to indexed or materialized layers.
 
 This is why DEOS Governance looks more like a constitutional layer above a deterministic kernel than a generic voting portal.

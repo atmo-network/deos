@@ -30,6 +30,7 @@ parameter_types! {
   pub const ProposalUrgentVotingPeriod: BlockNumber = 24 * HOURS;
   pub const ProposalEnactmentDelay: BlockNumber = 3 * 24 * HOURS;
   pub const ProposalOpeningFee: Balance = 10 * EXISTENTIAL_DEPOSIT;
+  pub const PayloadAdmissionWitnessDeposit: Balance = EXISTENTIAL_DEPOSIT;
   pub ProposalFastTrackPassThreshold: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(100);
   pub ProposalApprovalThreshold: polkadot_sdk::sp_runtime::Perbill =
@@ -549,7 +550,7 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balan
 {
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<(AssetId, Hash), polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(AssetId, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError> {
     use polkadot_sdk::frame_support::traits::{Currency, fungibles::Mutate};
     let domain = protocol_governance_domain();
     if !<crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(domain) {
@@ -573,9 +574,43 @@ impl pallet_governance::BenchmarkHelper<AccountId, AssetId, Hash, AssetId, Balan
     }
     .encode();
     let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
-    crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload)
+    crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload.clone())
       .map_err(|error| error.error)?;
-    Ok((domain, payload_hash))
+    Ok((domain, payload_hash, payload))
+  }
+
+  fn prepare_maximum_payload_witness(
+    account: &AccountId,
+  ) -> Result<
+    (
+      AssetId,
+      pallet_governance::ProposalPayloadKind,
+      Hash,
+      Vec<u8>,
+    ),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    use polkadot_sdk::frame_support::traits::Currency;
+    let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(
+      account,
+      primitives::ecosystem::params::PRECISION,
+    );
+    let payload = (
+      Some(Hash::repeat_byte(1)),
+      alloc::vec![b'a'; 128],
+      Some(alloc::vec![b'b'; 96]),
+    )
+      .encode();
+    debug_assert_eq!(payload.len(), 262);
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+    crate::Preimage::note_preimage(RuntimeOrigin::signed(account.clone()), payload.clone())
+      .map_err(|error| error.error)?;
+    Ok((
+      protocol_governance_domain(),
+      pallet_governance::ProposalPayloadKind::Intent,
+      payload_hash,
+      payload,
+    ))
   }
 
   fn prepare_protection_voter(
@@ -723,18 +758,24 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
     <crate::Preimage as QueryPreimage>::len(hash)
   }
 
-  fn validate_for_submission(
+  fn validate_for_witness(
     domain: AssetId,
     payload_kind: pallet_governance::ProposalPayloadKind,
     hash: &Hash,
-  ) -> Result<(), pallet_governance::ProposalPreimageAdmissionError> {
+    bytes: &[u8],
+  ) -> Result<
+    pallet_governance::ValidatedProposalPayload,
+    pallet_governance::ProposalPreimageAdmissionError,
+  > {
     use pallet_governance::ProposalPreimageAdmissionError as Error;
-    let bytes =
-      <crate::Preimage as PreimageProvider<Hash>>::get_preimage(hash).ok_or(Error::Missing)?;
-    if bytes.len() > 256 {
+    if <Runtime as frame_system::Config>::Hashing::hash(bytes) != *hash {
+      return Err(Error::Invalid);
+    }
+    let (execution_authority, compatibility) = Self::current_compatibility(domain, payload_kind)?;
+    if bytes.len() > proposal_payload_length_ceiling(payload_kind) {
       return Err(Error::Oversized);
     }
-    let mut input = &bytes[..];
+    let mut input = bytes;
     match payload_kind {
       pallet_governance::ProposalPayloadKind::L1RootAction => {
         if domain != protocol_governance_domain() {
@@ -762,14 +803,71 @@ impl pallet_governance::ProposalPayloadPreimageProvider<Hash, AssetId>
       }
       pallet_governance::ProposalPayloadKind::Intent
       | pallet_governance::ProposalPayloadKind::L2SignalToL1 => {
-        validate_advisory_payload(&bytes)?;
+        validate_advisory_payload(bytes)?;
         input = &[];
       }
     }
     if !input.is_empty() {
       return Err(Error::Invalid);
     }
-    Ok(())
+    let payload_len = u32::try_from(bytes.len()).map_err(|_| Error::Oversized)?;
+    Ok(pallet_governance::ValidatedProposalPayload {
+      payload_len,
+      execution_authority,
+      compatibility,
+    })
+  }
+
+  fn current_compatibility(
+    domain: AssetId,
+    payload_kind: pallet_governance::ProposalPayloadKind,
+  ) -> Result<
+    (
+      pallet_governance::ProposalExecutionAuthority,
+      pallet_governance::ProposalPayloadCompatibility,
+    ),
+    pallet_governance::ProposalPreimageAdmissionError,
+  > {
+    use pallet_governance::{
+      ProposalExecutionAuthority as Authority, ProposalPayloadKind as Kind,
+      ProposalPreimageAdmissionError as Error,
+    };
+    let authority = match payload_kind {
+      Kind::L1RootAction if domain == protocol_governance_domain() => Authority::Root,
+      Kind::L2ParameterChange if domain == protocol_governance_domain() => {
+        Authority::DomainParameters
+      }
+      Kind::L2TreasurySpend if domain == tactical_governance_domain() => Authority::DomainTreasury,
+      Kind::Intent => Authority::NonExecutable,
+      Kind::L2SignalToL1 if domain == tactical_governance_domain() => Authority::NonExecutable,
+      _ => return Err(Error::Incompatible),
+    };
+    Ok((
+      authority,
+      pallet_governance::ProposalPayloadCompatibility {
+        schema_version: 1,
+        runtime_spec_version: Some(crate::VERSION.spec_version),
+      },
+    ))
+  }
+
+  fn payload_length_ceiling(
+    domain: AssetId,
+    payload_kind: pallet_governance::ProposalPayloadKind,
+  ) -> Result<u32, pallet_governance::ProposalPreimageAdmissionError> {
+    Self::current_compatibility(domain, payload_kind)?;
+    u32::try_from(proposal_payload_length_ceiling(payload_kind))
+      .map_err(|_| pallet_governance::ProposalPreimageAdmissionError::Oversized)
+  }
+}
+
+fn proposal_payload_length_ceiling(payload_kind: pallet_governance::ProposalPayloadKind) -> usize {
+  use pallet_governance::ProposalPayloadKind as Kind;
+  match payload_kind {
+    Kind::L1RootAction => StrategicRuntimeUpgradePayload::max_encoded_len(),
+    Kind::L2ParameterChange => 6,
+    Kind::L2TreasurySpend => TacticalTreasuryInvoicePayload::max_encoded_len(),
+    Kind::Intent | Kind::L2SignalToL1 => 262,
   }
 }
 
@@ -950,6 +1048,7 @@ impl pallet_governance::Config for Runtime {
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
+  type PayloadAdmissionWitnessDeposit = PayloadAdmissionWitnessDeposit;
   type ProposalFeeRecipient = crate::configs::actor_config::ActorFeeRecipient;
   type DomainId = AssetId;
   type VotePowerLockId = AssetId;
@@ -967,6 +1066,7 @@ impl pallet_governance::Config for Runtime {
   type MaxWinningVoteItemsPerEpoch = MaxWinningVoteItemsPerEpoch;
   type MaxWinningVoteResolutionItemsPerEpoch = MaxWinningVoteResolutionItemsPerEpoch;
   type MaxWinningVoteAccountsPerCall = MaxWinningVoteAccountsPerCall;
+  type MaxProposalPayloadBytes = ConstU32<262>;
   type MaxActiveProposalsPerDomain = MaxActiveProposalsPerDomain;
   type StrategicProposalReserve = StrategicProposalReserve;
   type MaxActiveProposalsPerAuthor = MaxActiveProposalsPerAuthor;

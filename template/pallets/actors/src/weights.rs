@@ -33,6 +33,11 @@ pub trait WeightInfo {
   fn observation_change_ingress() -> Weight;
   fn observation_fanout_base() -> Weight;
   fn observation_fanout_page() -> Weight;
+  fn crossing_worker_base() -> Weight { Weight::from_parts(25_000_000, 8_000) }
+  fn crossing_transition_unit() -> Weight { Weight::from_parts(75_000_000, 24_000) }
+  fn crossing_leaf_unit() -> Weight { Weight::from_parts(500_000_000, 180_000) }
+  fn crossing_page_unit() -> Weight { Weight::from_parts(100_000_000, 48_000) }
+  fn crossing_actor_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
   fn predicate_set_evaluation(predicates: u32) -> Weight;
@@ -557,4 +562,3 @@ impl WeightInfo for TestWeightInfo {
     )
   }
 }
-

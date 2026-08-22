@@ -1,5 +1,5 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
-use pallet_deos_actors::ObservationChangeIngress;
+use pallet_deos_actors::{ObservationTransition, ObservationTransitionIngress};
 use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional, weights::Weight},
@@ -129,9 +129,16 @@ impl pallet_oracle::OnObservationChanged<OracleFeedId> for ActorObservationChang
   fn on_observation_changed(
     feed: OracleFeedId,
     revision: pallet_oracle::Revision,
+    previous: Option<pallet_oracle::OracleValue>,
+    current: pallet_oracle::OracleValue,
   ) -> DispatchResult {
-    <crate::Actors as ObservationChangeIngress<OracleFeedId>>::note_observation_changed(
-      feed, revision,
+    <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision,
+        previous,
+        current,
+      },
     )
   }
 

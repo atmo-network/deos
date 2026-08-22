@@ -3,6 +3,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+VALIDATED_RELEASE_COMMIT=""
+
 usage() {
     cat <<'EOF'
 Usage: audit-release-line.sh [OPTIONS]
@@ -12,6 +14,9 @@ metadata, the current framework boundary, and package-owned documentation. The a
 standalone normative specification authority and stable package navigation.
 
 Options:
+  --validated-release-commit REF
+              Require the prepared vX.Y.Z tag and local main to identify the
+              exact commit and tree named by REF after local full validation
   -h, --help  Show this help message
 EOF
 }
@@ -19,6 +24,11 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --validated-release-commit)
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "--validated-release-commit requires a ref"; exit 1; }
+                VALIDATED_RELEASE_COMMIT="$2"
+                shift
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -51,8 +61,58 @@ check_prerequisites() {
         log_error "Canonical runtime-build atom not found"
         exit 1
     fi
-    require_commands rg awk grep head sed sort uniq jq
+    require_commands git rg awk grep head sed sort uniq jq
     log_success "Prerequisites checked"
+}
+
+check_release_ref_uniqueness() {
+    local version canonical_tag plain_refs
+    while IFS= read -r version; do
+        [[ -z "$version" ]] && continue
+        canonical_tag="refs/tags/v$version"
+        git -C "$PROJECT_ROOT" show-ref --verify --quiet "$canonical_tag" || continue
+        plain_refs="$(git -C "$PROJECT_ROOT" for-each-ref --format='%(refname)' \
+            refs/heads refs/remotes refs/tags | awk -v version="$version" '
+                $0 == "refs/heads/" version ||
+                $0 == "refs/tags/" version ||
+                $0 ~ ("^refs/remotes/[^/]+/" version "$") { print }
+            ')"
+        if [[ -n "$plain_refs" ]]; then
+            log_error "Canonical tag v$version has duplicate plain version refs"
+            printf '%s\n' "$plain_refs"
+            exit 1
+        fi
+    done < <(rg '^## [0-9]+\.[0-9]+\.[0-9]+:' "$PROJECT_ROOT/CHANGELOG.md" | \
+        sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+):.*/\1/')
+}
+
+check_validated_release_identity() {
+    local prepared_version="$1"
+    [[ -n "$VALIDATED_RELEASE_COMMIT" ]] || return 0
+    local canonical_tag="refs/tags/v$prepared_version"
+    git -C "$PROJECT_ROOT" show-ref --verify --quiet "$canonical_tag" || {
+        log_error "Validated release identity requires canonical tag v$prepared_version"
+        exit 1
+    }
+    git -C "$PROJECT_ROOT" show-ref --verify --quiet refs/heads/main || {
+        log_error "Validated release identity requires a local main branch"
+        exit 1
+    }
+    local validated_commit tag_commit main_commit validated_tree tag_tree
+    validated_commit="$(git -C "$PROJECT_ROOT" rev-parse --verify "${VALIDATED_RELEASE_COMMIT}^{commit}")" || {
+        log_error "Validated release ref is not a commit: $VALIDATED_RELEASE_COMMIT"
+        exit 1
+    }
+    tag_commit="$(git -C "$PROJECT_ROOT" rev-parse --verify "v${prepared_version}^{commit}")"
+    main_commit="$(git -C "$PROJECT_ROOT" rev-parse --verify 'main^{commit}')"
+    validated_tree="$(git -C "$PROJECT_ROOT" rev-parse --verify "${validated_commit}^{tree}")"
+    tag_tree="$(git -C "$PROJECT_ROOT" rev-parse --verify "v${prepared_version}^{tree}")"
+    if [[ "$tag_commit" != "$validated_commit" || "$main_commit" != "$validated_commit" || "$tag_tree" != "$validated_tree" ]]; then
+        log_error "Canonical release tag, local main, and validated release commit do not identify one exact tree"
+        printf 'validated commit: %s\nmain commit:      %s\ntag commit:       %s\nvalidated tree:   %s\ntag tree:         %s\n' \
+            "$validated_commit" "$main_commit" "$tag_commit" "$validated_tree" "$tag_tree"
+        exit 1
+    fi
 }
 
 latest_changelog_heading() {
@@ -328,6 +388,7 @@ run_audit() {
     fi
     check_changelog_order
     check_changelog_shape
+    check_release_ref_uniqueness
 
     local workspace_version
     workspace_version="$(extract_workspace_package_field version)"
@@ -358,6 +419,7 @@ run_audit() {
         echo "CHANGELOG: $latest_version"
         exit 1
     fi
+    check_validated_release_identity "$prepared_version"
     check_template_workspace_versions "$prepared_version"
     check_exact_line "$PROJECT_ROOT/web-client/package.json" "  \"version\": \"${prepared_version}\"," "Web-client package-version drift"
     check_exact_line "$PROJECT_ROOT/web-client/package-lock.json" "  \"version\": \"${prepared_version}\"," "Web-client lockfile-version drift"
@@ -384,6 +446,12 @@ run_audit() {
         exit 1
     fi
     check_markdown_release_marker "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" "Release line" "$prepared_version"
+    if [[ "$prepared_version" == "0.7.22" ]]; then
+        check_fixed_reference "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" 'The `0.7.22` package is fresh-genesis source only.' "Actors fresh-genesis boundary drift"
+        check_fixed_reference "$TEMPLATE_DIR/pallets/governance/docs/embedding.md" 'The `0.7.22` package is fresh-genesis source only.' "Governance fresh-genesis boundary drift"
+        check_fixed_reference "$TEMPLATE_DIR/README.md" 'The `0.7.22` reference runtime supports fresh genesis only.' "Runtime fresh-genesis boundary drift"
+        check_fixed_reference "$PROJECT_ROOT/scripts/README.md" 'The `0.7.22` release accepts only a fresh-genesis candidate.' "Release fresh-genesis boundary drift"
+    fi
     local package
     local integration_doc
     local integration_label

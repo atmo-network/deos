@@ -1,6 +1,6 @@
 use super::{
-  contract::{OpeningSurface, PredicateError, ScheduleWindow},
-  scheduler::WakeupPointer,
+  contract::{CrossingDirection, CrossingPhase, OpeningSurface, PredicateError, ScheduleWindow},
+  scheduler::{WakeupKey, WakeupPointer},
 };
 use frame::prelude::*;
 
@@ -235,6 +235,7 @@ pub enum SimulationError {
   ActorNotFound,
   TypeMismatch,
   MutabilityMismatch,
+  InvalidContract,
   ContractMismatch,
   ModeCycleStateMismatch,
   GlobalCircuitBreaker,
@@ -301,10 +302,54 @@ pub enum ActorClassificationError {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum ActorEligibility<BlockNumber> {
+pub enum ActorActivationPlacement<BlockNumber> {
+  Unplaced,
+  Queue(u64),
+  Wakeup(WakeupKey<BlockNumber>),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorTriggerActivation<FeedId> {
+  Manual,
+  AddressEvent,
+  ObservationChange {
+    feed: FeedId,
+    subscriber_count: u32,
+    pending_revision: Option<u64>,
+  },
+  ObservationCrossing {
+    feed: FeedId,
+    direction: CrossingDirection,
+    threshold: u128,
+    rearm_threshold: u128,
+    phase: CrossingPhase,
+    pending_revisions: u32,
+    processing_revision: Option<u64>,
+  },
+  Cadenced {
+    every_ticks: u64,
+  },
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActiveActorActivation<FeedId, BlockNumber> {
+  pub trigger: ActorTriggerActivation<FeedId>,
+  pub pending_signal: bool,
+  pub placement: ActorActivationPlacement<BlockNumber>,
+  pub eligibility: ActorClassification<BlockNumber>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorEligibility<FeedId, BlockNumber> {
   NotRegistered,
   Dormant,
-  Active(ActorClassification<BlockNumber>),
+  Active(ActiveActorActivation<FeedId, BlockNumber>),
 }
 
 #[derive(
@@ -431,6 +476,7 @@ pub(crate) struct ActiveActorView<AccountId, BlockNumber, Trigger, Steps> {
   pub unsuccessful_attempt_streak: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
+  pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub last_control_mutation_block: BlockNumber,
   pub schedule_anchor: BlockNumber,
   pub cadence_anchor_tick: Option<u64>,

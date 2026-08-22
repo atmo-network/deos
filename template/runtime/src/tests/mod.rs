@@ -11,6 +11,8 @@ pub mod common;
 #[cfg(test)]
 pub mod deos_router_integration_tests;
 #[cfg(test)]
+pub mod dispatchability_matrix_tests;
+#[cfg(test)]
 pub mod economic_metrics;
 #[cfg(test)]
 pub mod fee_integration_tests;

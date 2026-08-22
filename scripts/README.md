@@ -2,6 +2,8 @@
 
 This directory is the deterministic operator/developer automation layer of the DEOS reference stack. It supports testing, validation, benchmarking, generation, build, deployment preparation, local-network operation, release work, and repeatable coordination across `/docs`, `/template`, and `/web-client`; it is not the primary conceptual control plane.
 
+The `0.7.22` release accepts only a fresh-genesis candidate. Local full validation does not certify an upgrade from `0.7.21`, a deployed storage lineage, or a network launch; those remain outside the pre-`1.0` release boundary.
+
 This directory contains deterministic command surfaces, not agent strategy:
 
 - `Numbered scripts` are reusable atomic operations. They may depend on `_common.sh`, external tools, and artifacts on disk, but they do not orchestrate other numbered scripts.
@@ -77,7 +79,7 @@ Each numbered command is independently callable by a human or CI from any workin
   Run the local bootstrap chain: tools -> runtime build -> chain spec -> Zombienet, using Polkadot and Omni Node binaries already available in `PATH` or `./bin`. Start the web client directly from `web-client` with `npm run dev`.
 
 - [validate-local.sh](./validate-local.sh)
-  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns simulator tests and workspace CI; heavy adds client, Actors, and benchmark checks; full additionally prepares the checksum-verified binary bundle, then builds the production runtime and regenerates metadata and client artifacts with zero worktree drift. GitHub Actions runs heavy validation for pull requests and verified pushes to `main`, and full validation for version tags. No Skill audit, cache, hidden authority, network run, or release action is involved.
+  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns simulator tests and workspace CI; heavy adds client, Actors, and benchmark checks; full additionally prepares the checksum-verified binary bundle, then builds the production runtime and regenerates metadata and client artifacts with zero worktree drift. GitHub Actions runs heavy validation only through the required pull-request `validation-gate`; local full validation owns pre-`1.0` release acceptance. No Skill audit, cache, hidden authority, network run, or release action is involved.
 
 - [actors-assurance.sh](./actors-assurance.sh)
   Shared current-tree Actors proof contract for semantic-manifest and fee-envelope-vector freshness, cross-language semantics, scheduler stress, capacity, and independent-runtime embedding. Historical transition replay is release history rather than a routine validation dependency.
@@ -86,6 +88,8 @@ Each numbered command is independently callable by a human or CI from any workin
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
 
 Project-local audit leaves and targeted routes are documented in `/.agents/skills/alignment/SKILL.md`. Use the diff-aware completion gate for changed-scope work and `./scripts/validate-local.sh fast|heavy|full` only for the corresponding release-validation boundary.
+
+Before creating a release tag, run `./scripts/validate-local.sh full` against the intended commit. After that commit is accepted as local `main` and tagged, run `./.agents/skills/alignment/scripts/audit-release-line.sh --validated-release-commit <commit>`; the audit requires `main`, `vX.Y.Z`, and the explicitly supplied validated commit/tree to be identical and rejects a parallel plain version ref. It records no hidden validation state and does not discover branch or GitHub authority.
 
 Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
 
