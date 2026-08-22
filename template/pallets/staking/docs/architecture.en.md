@@ -110,7 +110,7 @@ The outer collection rule sends 100% of transaction, Actors, governance-opening,
 
 ### Per-asset sovereign pool
 
-Each registered staking asset has one deterministic `pool_account(asset_id)` for share-vault backing, stake deposits, and direct backing inflow. The runtime routes phase-one liquidity provisioning directly through Actors rather than maintaining generic per-asset reward channels. Native LP security uses separate deterministic `native_security_reward_account()` custody only with retained pots and exact liability accounting.
+Each registered staking asset has one deterministic `pool_account(asset_id)` for share-vault backing, stake deposits, and direct backing inflow. The runtime routes phase-one liquidity provisioning directly through Actors rather than maintaining generic per-asset reward channels. Native LP security uses host-supplied `NativeLpLockAccount` and `NativeSecurityRewardAccount` identities; the latter holds only retained pots with exact liability accounting. The reference runtime preserves the prior tagged hash identities without fallible `AccountId` decoding.
 
 ### Receipt asset lifecycle
 
@@ -188,9 +188,9 @@ Later locks, unlocks, redelegation, governance memory, pool valuation, or candid
 
 `fund_native_security_reward(amount)` is the typed certified pallet call. It derives the current `SecurityEpoch`, requires the configured funding origin, transfers native currency only from `SecurityRewardFundingSource`, and updates pot credit plus liability in one transaction. The runtime Fee Sink adapter also preflights and certifies only the exact Fee Sink-to-reward-account native leg. Direct reward-account balance has no accounting effect.
 
-The accepted `frame-omni-bencher 0.22.0` production-runtime run used 50 steps, 20 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `164,401,427 + 44,891,248p` RefTime plus database Weight and `11,052 + 2,854p + 2,597r` ProofSize.
+The accepted `frame-omni-bencher 0.22.0` production-runtime run used 50 steps, 20 repeats, and measured ProofSize with one distinct candidate operator per participant. For participants `p ∈ [1, 100]` and retained epochs `r ∈ [1, 13]`, planning charges `48,059,040 + 43,698,274p + 1,804,670r` RefTime plus database Weight and `11,052 + 2,854p + 2,597r` ProofSize.
 
-At `p = 100` and measured-success `r = 13`, planning charges 4,653,526,227 RefTime and 330,213 proof bytes before database Weight. The runtime conservatively charges one additional retained-epoch read/proof unit so full-window rejection is covered. Session retention at hard `r = 14` charges 241,435,775 RefTime, 290,294 ProofSize, 119 reads, and 105 writes. Trusted contraction charges 23,537,000 RefTime, 14,309 ProofSize, four reads, and four writes. All are Mandatory session work.
+At `p = 100` and measured-success `r = 13`, planning charges 4,441,347,150 RefTime and 330,213 proof bytes before database Weight. The runtime conservatively charges one additional retained-epoch read/proof unit so full-window rejection is covered. Session retention at hard `r = 14` charges 232,532,970 RefTime, 290,294 ProofSize, 119 reads, and 105 writes. Trusted contraction charges 23,258,000 RefTime, 14,309 ProofSize, four reads, and four writes. All are Mandatory session work.
 
 `MaxNativeSecurityParticipants = 100` follows the operator/candidate topology and measured range. `MaxNominationsPerAccount = 16` remains a position bound, while one account contributes at most one participant snapshot row.
 
@@ -224,7 +224,9 @@ else:
 
 Implementation details:
 
-- Math uses `U256` intermediates
+- Math uses checked `U256` multiplication/division with exact input/output narrowing; zero denominators and quotients above host `Balance` fail instead of truncating through `low_u128`
+- Native-security reward weights use checked `FixedU128` multiplication and exact narrowing, and proportional claims reuse the same checked mul/div owner
+- LP and governance unlock deadlines use checked block addition, while reward claim/expiry rejects future epochs before comparing bounded age
 - `sync_pool_state(asset_id)` runs before crediting shares
 - `total_shares == 0 && accounted_balance > 0` rejects as `PoolHasUnownedBalance`
 - Every successful stake mints the resolved `stXXX` receipt
@@ -282,13 +284,13 @@ Governance unlock requests are blocked while `NativeGovernanceLockProvider::lock
 
 ### 7. Conservative native-equivalent LP valuation
 
-Runtime valuation is centralized in `DelegationWeightedCollatorSessionManager::try_conservative_native_lp_value(locked_lp)`, with the legacy scalar wrapper reserved for non-security display/governance consumers:
+Runtime valuation is centralized in `DelegationWeightedCollatorSessionManager::try_conservative_native_lp_value(locked_lp)`. Governance's explicitly conservative projection uses `conservative_native_lp_value_or_zero`; security admission retains the typed unavailable result:
 
 ```text
 native_equivalent = 2 * min(reserve_NTVE, reserve_stNTVE * staking_exchange_rate) * locked_lp / lp_supply
 ```
 
-Missing receipt identity, pool identity, reserves, issuance, staking shares, or backing returns `None`. LP-backed readiness consumes that typed result and fails closed instead of treating unavailable valuation as zero backing; scalar consumers may explicitly narrow `None` to zero only outside security admission and snapshot readiness.
+Missing receipt identity, pool identity, reserves, issuance, staking shares, backing, or representable proportional arithmetic returns `None`. LP-backed readiness consumes that typed result and fails closed instead of treating unavailable valuation as zero backing; scalar consumers may explicitly narrow `None` to zero only outside security admission and snapshot readiness.
 
 This value is used by:
 
@@ -457,6 +459,6 @@ This repository is still the forkable framework line. Storage versions are curre
 ## Current Limitations and Remaining Work
 
 - Certified funding, retained snapshots/pots, exact liabilities, liquid/batch/compound settlement, claim markers, horizon admission, and atomic bounded expiry are implemented; deterministic package evidence runs four cleanup-free horizons and one LP-backed-to-Trusted transition with Open, Planned, partially claimed, compound-eligible, excess-custody, and pending-unlock state
-- The accepted 50-step, 20-repeat retention benchmark charges 241,435,775 RefTime, 290,294 ProofSize, 119 reads, and 105 writes at the 14-epoch/100-participant runtime bound
+- The accepted 50-step, 20-repeat retention benchmark charges 232,532,970 RefTime, 290,294 ProofSize, 119 reads, and 105 writes at the 14-epoch/100-participant runtime bound
 - Browser transport and staking-widget presentation expose mode-gated liquid claim and atomic compound with explicit epoch/operator/minimum-output inputs; composed runtime evidence proves claim consumption through canonical LP mint and operator lock, while live-network execution remains open
 - Runtime snapshot weights use accepted production measurement; production forks should rerun benchmarks on their target hardware and runtime profile before launch

@@ -2,6 +2,7 @@ use super::assets_config::AssetId;
 use super::*;
 
 use alloc::{boxed::Box, format};
+use codec::Encode;
 use polkadot_sdk::frame_support::traits::fungibles::metadata::Inspect as MetadataInspect;
 use polkadot_sdk::{
   frame_support::{PalletId, parameter_types},
@@ -14,6 +15,12 @@ parameter_types! {
   pub const StakingPalletId: PalletId = PalletId(*primitives::ecosystem::pallet_ids::STAKING_PALLET_ID);
   pub const NativeStakingAssetId: AssetId = 0;
   pub const NativeGovernanceDomainId: AssetId = 0;
+  pub NativeLpLockAccount: AccountId = AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+    &(StakingPalletId::get(), b"native-lp-lock").encode(),
+  ));
+  pub NativeSecurityRewardAccount: AccountId = AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+    &(StakingPalletId::get(), b"native-security-reward").encode(),
+  ));
   pub SecurityRewardFundingSource: AccountId = crate::Actors::sovereign_account_id_system(
     primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
   );
@@ -481,5 +488,7 @@ impl pallet_staking::Config for Runtime {
   type Balance = Balance;
   type Assets = crate::Assets;
   type PalletId = StakingPalletId;
+  type NativeLpLockAccount = NativeLpLockAccount;
+  type NativeSecurityRewardAccount = NativeSecurityRewardAccount;
   type WeightInfo = crate::weights::pallet_staking::SubstrateWeight<Runtime>;
 }

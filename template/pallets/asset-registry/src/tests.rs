@@ -61,6 +61,106 @@ fn register_foreign_asset_works() {
 }
 
 #[test]
+fn host_reserved_location_cannot_enter_or_receive_the_foreign_bijection() {
+  new_test_ext().execute_with(|| {
+    let metadata = CurrencyMetadata {
+      name: b"Reserved".to_vec(),
+      symbol: b"RSV".to_vec(),
+      decimals: 12,
+    };
+    assert_noop!(
+      crate::Pallet::<Test>::register_foreign_asset(
+        RuntimeOrigin::root(),
+        Location::here(),
+        metadata.clone(),
+        1,
+        true,
+      ),
+      Error::<Test>::ReservedLocation
+    );
+    let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+    assert_ok!(crate::Pallet::<Test>::register_foreign_asset(
+      RuntimeOrigin::root(),
+      location.clone(),
+      metadata,
+      1,
+      true,
+    ));
+    assert_noop!(
+      crate::Pallet::<Test>::link_existing_asset(
+        RuntimeOrigin::root(),
+        Location::here(),
+        TYPE_FOREIGN | 1000,
+      ),
+      Error::<Test>::ReservedLocation
+    );
+    assert_noop!(
+      crate::Pallet::<Test>::migrate_location_key(
+        RuntimeOrigin::root(),
+        location,
+        Location::here(),
+      ),
+      Error::<Test>::ReservedLocation
+    );
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_reconciles_exact_foreign_asset_bijection_and_ledger_identity() {
+  for corruption in 0u8..7 {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+      let asset_id = TYPE_FOREIGN | 1000;
+      assert_ok!(crate::Pallet::<Test>::register_foreign_asset(
+        RuntimeOrigin::root(),
+        location.clone(),
+        CurrencyMetadata {
+          name: b"Sibling Token".to_vec(),
+          symbol: b"SIBL".to_vec(),
+          decimals: 12,
+        },
+        10,
+        true,
+      ));
+      assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+      match corruption {
+        0 => crate::ForeignAssetLocationByAssetId::<Test>::remove(asset_id),
+        1 => crate::ForeignAssetLocationByAssetId::<Test>::insert(
+          asset_id,
+          Location::new(1, Junctions::X1(Arc::new([Parachain(2000)]))),
+        ),
+        2 => crate::ForeignAssetLocationByAssetId::<Test>::insert(
+          TYPE_FOREIGN | 2000,
+          Location::new(1, Junctions::X1(Arc::new([Parachain(2000)]))),
+        ),
+        3 => {
+          polkadot_sdk::pallet_assets::Asset::<Test>::remove(asset_id);
+        }
+        4 => crate::ForeignAssetMapping::<Test>::insert(
+          Location::new(1, Junctions::X1(Arc::new([Parachain(2000)]))),
+          asset_id,
+        ),
+        5 => {
+          let local_id = 123;
+          let local_location = Location::new(1, Junctions::X1(Arc::new([Parachain(3000)])));
+          crate::ForeignAssetMapping::<Test>::insert(&local_location, local_id);
+          crate::ForeignAssetLocationByAssetId::<Test>::insert(local_id, local_location);
+        }
+        6 => crate::ForeignAssetMapping::<Test>::insert(Location::here(), asset_id),
+        _ => unreachable!(),
+      }
+      assert!(
+        crate::Pallet::<Test>::do_try_state().is_err(),
+        "Asset Registry corruption case {corruption} must fail",
+      );
+    });
+  }
+}
+
+#[test]
 fn register_duplicate_fails() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -156,7 +256,7 @@ fn register_foreign_asset_fails_bad_origin() {
 #[test]
 fn generated_registration_rejects_non_foreign_namespace() {
   new_test_ext().execute_with(|| {
-    let location = Location::here();
+    let location = Location::parent();
     let metadata = CurrencyMetadata {
       name: b"Invalid Namespace".to_vec(),
       symbol: b"INV".to_vec(),

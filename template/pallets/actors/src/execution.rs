@@ -213,20 +213,21 @@ impl<T: Config> Pallet<T> {
     let Some(continuation) = ContinuationStateStore::<T>::get(actor_id) else {
       return Ok(false);
     };
-    let hot = ActorHot::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
     let identity = ActorIdentities::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
-    ensure!(
-      hot.cycle_state == CycleState::Suspended && identity.cycle_nonce > 0,
-      Error::<T>::ContinuationInvariant
-    );
-    ActorHot::<T>::mutate(actor_id, |maybe| {
-      let hot = maybe
-        .as_mut()
-        .expect("Continuation prevalidation requires active hot state");
+    ensure!(identity.cycle_nonce > 0, Error::<T>::ContinuationInvariant);
+    Self::wakeup_substrate_invalidate_inner(actor_id)
+      .map_err(|_| Error::<T>::ContinuationInvariant)?;
+    ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
+      let hot = maybe.as_mut().ok_or(Error::<T>::ContinuationInvariant)?;
+      ensure!(
+        hot.cycle_state == CycleState::Suspended,
+        Error::<T>::ContinuationInvariant
+      );
       hot.cycle_state = CycleState::Idle;
       hot.queue_ticket = None;
       hot.wakeup_pointer = None;
-    });
+      Ok(())
+    })?;
     ContinuationStateStore::<T>::remove(actor_id);
     let totals = outcomes.unwrap_or(continuation.cumulative_outcomes);
     Self::deposit_event(Event::CycleCancelled {
@@ -247,13 +248,16 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     state: Option<ContinuationStateOf<T>>,
   ) -> DispatchResult {
-    ensure!(
-      ActorHot::<T>::contains_key(actor_id),
-      Error::<T>::ActorNotFound
-    );
-    let identity = ActorIdentities::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+    let loaded = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Err(Error::<T>::ActorNotFound.into());
+      }
+      LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
+    };
+    let identity = loaded.identity;
     if let Some(continuation) = state.as_ref() {
-      let contract = ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ContinuationInvariant)?;
+      let contract = loaded.contract;
       ensure!(
         identity.mutability == Mutability::Mutable
           && continuation.cursor < contract.steps.len() as u32,
@@ -270,16 +274,17 @@ impl<T: Config> Pallet<T> {
       );
     }
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      ActorHot::<T>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("active actor existence was prevalidated")
-          .cycle_state = if state.is_some() {
+      let hot_update = ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
+        maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?.cycle_state = if state.is_some() {
           CycleState::Suspended
         } else {
           CycleState::Idle
         };
+        Ok(())
       });
+      if let Err(error) = hot_update {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
       if let Some(continuation) = state {
         ContinuationStateStore::<T>::insert(actor_id, continuation);
       } else {
@@ -312,21 +317,24 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     cycle_nonce: u64,
     now: BlockNumberFor<T>,
-  ) -> ContinuationStateOf<T> {
-    ContinuationStateStore::<T>::mutate(actor_id, |maybe| {
-      let continuation = maybe
-        .as_mut()
-        .expect("Suspended cycle_state requires ContinuationState");
+  ) -> Option<ContinuationStateOf<T>> {
+    let updated = ContinuationStateStore::<T>::mutate(actor_id, |maybe| {
+      let Some(continuation) = maybe.as_mut() else {
+        return false;
+      };
       continuation.last_attempt_block = now;
+      true
     });
-    let continuation = ContinuationStateStore::<T>::get(actor_id)
-      .expect("Suspended cycle_state requires ContinuationState");
+    if !updated {
+      return None;
+    }
+    let continuation = ContinuationStateStore::<T>::get(actor_id)?;
     Self::deposit_event(Event::CycleContinued {
       actor_id,
       cycle_nonce,
       cursor: continuation.cursor,
     });
-    continuation
+    Some(continuation)
   }
 
   pub(crate) fn record_stop_cycle_event(actor_id: ActorId, cycle_nonce: u64, step_index: u32) {
@@ -369,7 +377,7 @@ impl<T: Config> Pallet<T> {
     let is_continuation = instance.cycle_state == CycleState::Suspended;
     let actor = instance.sovereign_account.clone();
     let contract_steps = &instance.steps;
-    let fee_envelope = Self::attempt_fee_envelope(
+    let Ok(fee_envelope) = Self::attempt_fee_envelope(
       instance.actor_class.actor_type(),
       contract_steps,
       if is_continuation {
@@ -377,8 +385,14 @@ impl<T: Config> Pallet<T> {
       } else {
         0
       },
-    )
-    .expect("admitted execution plans have a checked fee envelope");
+    ) else {
+      return AttemptExecution {
+        weight: base_weight,
+        disposition: AttemptDisposition::Failed,
+        fee_collection_failed: false,
+        outcomes: OutcomeTotals::default(),
+      };
+    };
     let mut reserved_fee_remaining = fee_envelope.total;
     let mut fee_collection_failed = false;
     macro_rules! collect_step_fee {
@@ -400,7 +414,16 @@ impl<T: Config> Pallet<T> {
       opening_snapshot,
       opening_predicate_results,
     ) = if is_continuation {
-      let continuation = Self::begin_continuation_attempt(actor_id, instance.cycle_nonce, now);
+      let Some(continuation) =
+        Self::begin_continuation_attempt(actor_id, instance.cycle_nonce, now)
+      else {
+        return AttemptExecution {
+          weight: base_weight,
+          disposition: AttemptDisposition::Failed,
+          fee_collection_failed: false,
+          outcomes: OutcomeTotals::default(),
+        };
+      };
       (
         instance.cycle_nonce,
         continuation.cursor,
@@ -434,10 +457,7 @@ impl<T: Config> Pallet<T> {
         Self::capture_opening_predicate_results(&actor, contract_steps, reserved_fee_remaining);
       let Some(cycle_nonce) = ActorIdentities::<T>::mutate(actor_id, |maybe| {
         let identity = maybe.as_mut()?;
-        identity.cycle_nonce = identity
-          .cycle_nonce
-          .checked_add(1)
-          .expect("nonce-exhausted actors close before run opening");
+        identity.cycle_nonce = identity.cycle_nonce.checked_add(1)?;
         Some(identity.cycle_nonce)
       }) else {
         return AttemptExecution {
@@ -888,19 +908,19 @@ impl<T: Config> Pallet<T> {
     expected_contract: ActorContractOf<T>,
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
-    let instance = Self::active_actor_for_classification(actor_id)
-      .map_err(SimulationError::Classification)?
-      .ok_or(SimulationError::ActorNotFound)?;
-    ensure!(
-      ActorFunding::<T>::contains_key(actor_id),
-      SimulationError::Classification(ActorClassificationError::ActorInvariant)
-    );
-    let continuation = ContinuationStateStore::<T>::get(actor_id);
-    if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
-      return Err(SimulationError::Classification(
-        ActorClassificationError::ContinuationInvariant,
-      ));
-    }
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Err(SimulationError::ActorNotFound);
+      }
+      LoadedActorStateOf::Corrupt => {
+        return Err(SimulationError::Classification(
+          ActorClassificationError::ActorInvariant,
+        ));
+      }
+    };
+    let continuation = state.continuation;
+    let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     if instance.actor_class.actor_type() != expected_type {
       return Err(SimulationError::TypeMismatch);
     }
@@ -919,11 +939,42 @@ impl<T: Config> Pallet<T> {
       }
       _ => {}
     }
-    let (cycle_nonce, start_cursor, initial_outcomes) = match mode {
+    let classification =
+      Self::classify_actor(actor_id, &instance).map_err(SimulationError::Classification)?;
+    if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
+      return Err(SimulationError::GlobalCircuitBreaker);
+    }
+    if let Some(reason) = classification.terminal_reason {
+      let (start_cursor, cumulative_outcomes) = match mode {
+        SimulationMode::FreshCurrentPlan => (0, OutcomeTotals::default()),
+        SimulationMode::CurrentContinuation => {
+          let continuation = continuation
+            .as_ref()
+            .ok_or(SimulationError::Classification(
+              ActorClassificationError::ContinuationInvariant,
+            ))?;
+          (continuation.cursor, continuation.cumulative_outcomes)
+        }
+      };
+      return Ok(SimulationResult {
+        status: AttemptDisposition::Closed(reason),
+        cycle_nonce: instance.cycle_nonce,
+        start_cursor,
+        continuation_cursor: None,
+        unsuccessful_attempts_at_cursor: None,
+        cumulative_outcomes,
+        steps: BoundedVec::default(),
+      });
+    }
+    let (cycle_nonce, start_cursor) = match mode {
       SimulationMode::FreshCurrentPlan => (
-        instance.cycle_nonce.saturating_add(1),
+        instance
+          .cycle_nonce
+          .checked_add(1)
+          .ok_or(SimulationError::Classification(
+            ActorClassificationError::ActorInvariant,
+          ))?,
         0,
-        OutcomeTotals::default(),
       ),
       SimulationMode::CurrentContinuation => {
         let continuation = continuation
@@ -931,29 +982,9 @@ impl<T: Config> Pallet<T> {
           .ok_or(SimulationError::Classification(
             ActorClassificationError::ContinuationInvariant,
           ))?;
-        (
-          instance.cycle_nonce,
-          continuation.cursor,
-          continuation.cumulative_outcomes,
-        )
+        (instance.cycle_nonce, continuation.cursor)
       }
     };
-    let classification =
-      Self::classify_actor(actor_id, &instance).map_err(SimulationError::Classification)?;
-    if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
-      return Err(SimulationError::GlobalCircuitBreaker);
-    }
-    if let Some(reason) = classification.terminal_reason {
-      return Ok(SimulationResult {
-        status: AttemptDisposition::Closed(reason),
-        cycle_nonce: instance.cycle_nonce,
-        start_cursor,
-        continuation_cursor: None,
-        unsuccessful_attempts_at_cursor: None,
-        cumulative_outcomes: initial_outcomes,
-        steps: BoundedVec::default(),
-      });
-    }
     match classification.execution_phase {
       ActorExecutionPhase::Paused => return Err(SimulationError::Paused),
       ActorExecutionPhase::Ready => {}
@@ -1623,10 +1654,14 @@ impl<T: Config> Pallet<T> {
                 continue;
               }
               T::AssetOps::preflight_transfer(actor, &leg.to, asset, leg_amount)?;
-              effective_distributed = effective_distributed.saturating_add(leg_amount);
+              effective_distributed = effective_distributed
+                .checked_add(&leg_amount)
+                .ok_or_else(|| TaskFailure::permanent(Error::<T>::InvalidSplitTransfer))?;
               normalized_transfers.push((leg.to.clone(), leg_amount));
             }
-            let retained = total.saturating_sub(effective_distributed);
+            let retained = total
+              .checked_sub(&effective_distributed)
+              .ok_or_else(|| TaskFailure::permanent(Error::<T>::InvalidSplitTransfer))?;
             for (to, leg_amount) in normalized_transfers.iter() {
               T::AssetOps::transfer(actor, to, asset, *leg_amount)?;
             }
@@ -1970,8 +2005,12 @@ impl<T: Config> Pallet<T> {
     match T::ObservationProvider::observe(&feed, now, max_age_blocks) {
       ScalarObservationState::Fresh { value, observed_at } => {
         let maximum_age: BlockNumberFor<T> = max_age_blocks.saturated_into();
+        ensure!(observed_at <= now, PredicateError::InvalidObservation);
+        let observation_age = now
+          .checked_sub(&observed_at)
+          .ok_or(PredicateError::InvalidObservation)?;
         ensure!(
-          observed_at <= now && now.saturating_sub(observed_at) <= maximum_age,
+          observation_age <= maximum_age,
           PredicateError::InvalidObservation
         );
         Ok(Some(value))

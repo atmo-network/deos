@@ -208,10 +208,10 @@ The DEOS reference runtime extends its "Omnivorous" philosophy to the Polkadot e
 The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay Chain and Sibling Parachains after governance registration in the Asset Registry.
 
 - `Ingress Protocol`: The system accepts registered reserve assets through `ReserveAssetDeposited`; teleporting is disabled by both the executor and the pallet dispatch filter.
-- `Asset Identity`: The local balances currency `$NTVE` is concrete XCM `Here`. Relay `Parent` and sibling-origin assets are foreign reserves and enter their governance-registered `0xF...` `pallet-assets` ledgers; a relay reserve deposit cannot mint `$NTVE`.
+- `Asset Identity`: The local balances currency `$NTVE` is concrete XCM `Here`, and the runtime reserves that Location against foreign registration, linking, and migration. Relay `Parent` and distinct sibling-origin assets enter separate governance-registered `0xF...` `pallet-assets` ledgers; collision checks and the bidirectional registry prevent ledger aliasing, and a relay reserve deposit cannot mint `$NTVE`.
 - `Asset Mapping (Hybrid)`: Bidirectional `Location <-> AssetId` is stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
-- `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. The reference runtime caps this register at one asset while `FixedWeightBounds` is active, so one generated saturated foreign-asset Actors deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation.
-- `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; `SafeCallFilter = Nothing` makes `Transact` fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
+- `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. `XcmConfig::MaxAssetsIntoHolding = 1` caps this register while `FixedWeightBounds` is active, so one generated saturated foreign-asset Actors deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation. Ordinary and surplus-deposit tests preserve exact holdings and state on unknown mappings, unconvertible destinations, and Actors ingress rejection.
+- `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; both `XcmExecuteFilter = Nothing` and `SafeCallFilter = Nothing` keep arbitrary execution fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
 
 ### 5.2 Foreign Asset Transactor
 
@@ -280,6 +280,22 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 ### 7.2 Composition Boundary
 
 Actors replaces bespoke recurring manager loops with one bounded orchestration substrate, while dedicated pallets retain asset, market, staking, governance, and issuance mechanics. [DEOS Actors Integration](./actors.integration.en.md) owns the concrete reference composition; package documents remain reusable outside the DEOS actor catalog.
+
+### 7.3 Closed Authority Inventory
+
+The reference runtime admits no implicit governance-equivalent signer. Runtime integrity tests exercise every configured privileged origin against Root and an ordinary signed account, while subsystem specifications and tests own the explicit non-Root exceptions, typed execution paths, and their non-guarantees.
+
+| Surface | Admitted authority | Closed boundary |
+| --- | --- | --- |
+| Actors System control and global breaker | Root; mutable System actors are owned by the Actors pallet account | Every active and dormant genesis owner must equal the non-signable pallet-derived control account |
+| Governance administration | Root | Signed ingress creates only policy-admitted bounded proposals and cannot dispatch Root directly |
+| Governance payload execution | `L1RootAction -> Root-equivalent`; treasury and parameter kinds -> domain adapters; advisory kinds -> non-executable | The five payload kinds form one tested exhaustive authority map |
+| Runtime upgrades | Governance-approved typed `L1RootAction` authorizes one code hash; later external application may transport only the already-authorized bytes | Direct signed authorization fails `BadOrigin`; `$VETO` alone cannot create upgrade intent |
+| Router, Staking, TMC, Asset Registry, Oracle registration, preimage management, XCM administration, and XCMP control | Root | Ordinary signed origins are rejected by each configured origin |
+| Collator updates | Root or the explicit relay `StakingAdmin` executive plurality | Ordinary signed origins and unrelated XCM origins are rejected |
+| Oracle publication | Signed call plus feed-local producer identity | Signing alone grants no feed registration or publication authority for another producer |
+| XCM unpaid execution | Relay parent and its executive plurality only | Siblings require paid execution; arbitrary `Transact`, pallet execute, and teleport surfaces remain disabled |
+| Protocol custody | Distinct pallet-derived Fee Sink, staking ingress, security reward, liquidity, LP lock, and Governance custody accounts | Runtime integrity rejects account aliasing; custody identity grants no signing or control authority |
 
 ## 8. Conclusion
 

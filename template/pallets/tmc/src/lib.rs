@@ -252,10 +252,6 @@ pub mod pallet {
     CurveAlreadyExists,
     /// No curve exists for this token
     NoCurveExists,
-    /// Insufficient balance for operation
-    InsufficientBalance,
-    /// Exceeds maximum supply
-    ExceedsMaxSupply,
     /// Arithmetic overflow occurred
     ArithmeticOverflow,
     /// Invalid parameters provided
@@ -285,8 +281,10 @@ pub mod pallet {
         .unwrap_or(0);
       let total_minted = TotalNativeMinted::<T>::get();
       let current_issuance: Balance = T::Currency::total_issuance().unique_saturated_into();
-      let expected = genesis_issuance.saturating_add(total_minted);
-      expected.saturating_sub(current_issuance)
+      genesis_issuance
+        .checked_add(total_minted)
+        .and_then(|expected| expected.checked_sub(current_issuance))
+        .unwrap_or_default()
     }
   }
 
@@ -507,6 +505,18 @@ pub mod pallet {
       Self::ensure_asset_exists(token_asset)?;
       Self::ensure_asset_exists(foreign_asset)?;
       let mint_amount = Self::calculate_total_mint(token_asset, foreign_amount)?;
+      let next_native_total_minted = if token_asset == AssetKind::Native {
+        let next_total = TotalNativeMinted::<T>::get()
+          .checked_add(mint_amount)
+          .ok_or(Error::<T>::ArithmeticOverflow)?;
+        curve
+          .initial_issuance
+          .checked_add(next_total)
+          .ok_or(Error::<T>::ArithmeticOverflow)?;
+        Some(next_total)
+      } else {
+        None
+      };
       let outputs = T::MintOutputResolver::output_accounts(token_asset);
       T::MintDistributionHook::before_collateral_transfer(
         who,
@@ -534,7 +544,9 @@ pub mod pallet {
         }
       }
       let user_allocation = T::UserAllocationRatio::get().mul_floor(mint_amount);
-      let zap_allocation = mint_amount.saturating_sub(user_allocation);
+      let zap_allocation = mint_amount
+        .checked_sub(user_allocation)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       match token_asset {
         AssetKind::Native => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
@@ -546,7 +558,9 @@ pub mod pallet {
             zap_allocation,
           )?;
           T::Currency::mint_into(&outputs.minted, zap_allocation)?;
-          TotalNativeMinted::<T>::mutate(|acc| *acc = acc.saturating_add(mint_amount));
+          TotalNativeMinted::<T>::put(
+            next_native_total_minted.ok_or(Error::<T>::ArithmeticOverflow)?,
+          );
         }
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
@@ -581,6 +595,7 @@ pub mod pallet {
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
+      let mut native_curve_seen = false;
       let mut curve_iter = TokenCurves::<T>::iter();
       while let Some((asset_kind, curve)) = curve_iter.next() {
         // Invariant 1: Stored minted_asset matches the storage key
@@ -598,6 +613,26 @@ pub mod pallet {
             "Spot price is below initial price (monotonicity violation)",
           ));
         }
+        if asset_kind == AssetKind::Native {
+          native_curve_seen = true;
+          let expected_issuance = curve
+            .initial_issuance
+            .checked_add(TotalNativeMinted::<T>::get())
+            .ok_or(TryRuntimeError::Other(
+              "native issuance baseline plus cumulative mint overflowed",
+            ))?;
+          let current_issuance: Balance = T::Currency::total_issuance().unique_saturated_into();
+          if current_issuance > expected_issuance {
+            return Err(TryRuntimeError::Other(
+              "native issuance exceeds the TMC genesis-plus-mint baseline",
+            ));
+          }
+        }
+      }
+      if !native_curve_seen && TotalNativeMinted::<T>::get() != 0 {
+        return Err(TryRuntimeError::Other(
+          "native cumulative mint accounting has no native curve baseline",
+        ));
       }
       Ok(())
     }

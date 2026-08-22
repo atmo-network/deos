@@ -218,6 +218,7 @@ impl pallet_deos_router::Config for Runtime {
   type NativeAsset = NativeAsset;
   type DefaultRouterFee = DefaultRouterFee;
   type MaxLpPairs = ConstU32<8>;
+  type LpPairIntegrity = ();
   type MaxRouterFee = MaxRouterFee;
   type Precision = ConstU128<1_000_000_000_000>;
   type EmaHalfLife = ConstU32<100>;

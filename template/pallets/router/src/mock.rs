@@ -1,5 +1,6 @@
 use crate as pallet_deos_router;
 
+use codec::{Decode, Encode};
 use polkadot_sdk::frame_support::traits::fungible::Mutate as FungibleMutate;
 use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
 use polkadot_sdk::frame_support::traits::tokens::{Fortitude, Precision, Preservation};
@@ -19,25 +20,49 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::vec;
 
-// State containers for stateful mocks
-thread_local! {
-    // AMM Pools: (AssetA, AssetB) -> (ReserveA, ReserveB)
-    // Key is sorted: (min, max)
-    pub static POOLS: RefCell<BTreeMap<(AssetKind, AssetKind), (u128, u128)>> = const { RefCell::new(BTreeMap::new()) };
+type MockPools = BTreeMap<(AssetKind, AssetKind), (u128, u128)>;
+type MockOraclePrices = BTreeMap<(AssetKind, AssetKind), u128>;
+type MockOracleUpdates = Vec<(AssetKind, AssetKind, u128)>;
+type MockCollectedFees = Vec<(u64, AssetKind, u128)>;
 
+const POOLS_KEY: &[u8] = b":deos-router-mock:pools";
+const ORACLE_PRICES_KEY: &[u8] = b":deos-router-mock:oracle-prices";
+const ORACLE_UPDATES_KEY: &[u8] = b":deos-router-mock:oracle-updates";
+const COLLECTED_FEES_KEY: &[u8] = b":deos-router-mock:collected-fees";
+
+fn load_mock_state<T: Decode + Default>(key: &[u8]) -> T {
+  polkadot_sdk::sp_io::storage::get(key)
+    .and_then(|encoded| T::decode(&mut &encoded[..]).ok())
+    .unwrap_or_default()
+}
+
+fn store_mock_state<T: Encode>(key: &[u8], value: &T) {
+  polkadot_sdk::sp_io::storage::set(key, &value.encode());
+}
+
+fn mutate_mock_state<T: Decode + Default + Encode, R>(
+  key: &[u8],
+  mutate: impl FnOnce(&mut T) -> R,
+) -> R {
+  let mut value = load_mock_state(key);
+  let result = mutate(&mut value);
+  store_mock_state(key, &value);
+  result
+}
+
+pub fn oracle_updates() -> MockOracleUpdates {
+  load_mock_state(ORACLE_UPDATES_KEY)
+}
+
+// State containers for non-consensus call traces and deterministic fault switches.
+thread_local! {
     // TMC Curves: Token Asset -> (Allowed Collateral Asset, Native Amount per 1 Unit)
     pub static TMC_RATES: RefCell<BTreeMap<AssetKind, (AssetKind, u128)>> = const { RefCell::new(BTreeMap::new()) };
 
-    // Oracle Prices: (AssetA, AssetB) -> Price
-    pub static ORACLE_PRICES: RefCell<BTreeMap<(AssetKind, AssetKind), u128>> = const { RefCell::new(BTreeMap::new()) };
-    pub static ORACLE_UPDATES: RefCell<Vec<(AssetKind, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
     pub static FAIL_ORACLE_UPDATE_AT: RefCell<Option<usize>> = const { RefCell::new(None) };
     pub static XYK_EXECUTIONS: RefCell<Vec<(AssetKind, AssetKind)>> = const { RefCell::new(Vec::new()) };
     pub static EXACT_INPUT_QUOTE_CALLS: RefCell<Vec<(AssetKind, AssetKind)>> = const { RefCell::new(Vec::new()) };
     pub static ORACLE_VALIDATIONS: RefCell<Vec<(AssetKind, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
-
-    // Fee accumulator for verification
-    pub static COLLECTED_FEES: RefCell<Vec<(u64, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
 
     // Deterministic failure and outcome switches for atomicity regressions.
     pub static FORCE_FEE_FAILURE: RefCell<bool> = const { RefCell::new(false) };
@@ -50,8 +75,7 @@ thread_local! {
 
 // Helper methods to setup state
 pub fn set_pool(asset_a: AssetKind, asset_b: AssetKind, reserve_a: u128, reserve_b: u128) {
-  POOLS.with(|p| {
-    let mut pools = p.borrow_mut();
+  mutate_mock_state(POOLS_KEY, |pools: &mut MockPools| {
     if asset_a < asset_b {
       pools.insert((asset_a, asset_b), (reserve_a, reserve_b));
     } else {
@@ -67,13 +91,13 @@ pub fn set_tmc_curve(token_asset: AssetKind, foreign_asset: AssetKind, rate: u12
 }
 
 pub fn set_oracle_price(asset_a: AssetKind, asset_b: AssetKind, price: u128) {
-  ORACLE_PRICES.with(|p| {
-    p.borrow_mut().insert((asset_a, asset_b), price);
+  mutate_mock_state(ORACLE_PRICES_KEY, |prices: &mut MockOraclePrices| {
+    prices.insert((asset_a, asset_b), price);
   });
 }
 
 pub fn get_collected_fees() -> Vec<(u64, AssetKind, u128)> {
-  COLLECTED_FEES.with(|f| f.borrow().clone())
+  load_mock_state(COLLECTED_FEES_KEY)
 }
 
 pub fn set_force_fee_failure(should_fail: bool) {
@@ -110,7 +134,7 @@ pub fn get_pool(asset_a: AssetKind, asset_b: AssetKind) -> Option<(u128, u128)> 
   } else {
     (asset_b, asset_a)
   };
-  POOLS.with(|p| p.borrow().get(&key).cloned())
+  load_mock_state::<MockPools>(POOLS_KEY).get(&key).copied()
 }
 
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -381,7 +405,9 @@ impl pallet_deos_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter 
         pallet_deos_router::RetryDisposition::Permanent,
       ));
     }
-    COLLECTED_FEES.with(|f| f.borrow_mut().push((*who, asset, amount)));
+    mutate_mock_state(COLLECTED_FEES_KEY, |fees: &mut MockCollectedFees| {
+      fees.push((*who, asset, amount));
+    });
     let burn_mgr = 123;
 
     match asset {
@@ -417,8 +443,7 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
     asset_out: AssetKind,
     price: u128,
   ) -> Result<(), pallet_deos_router::AdapterFailure> {
-    let update_index = ORACLE_UPDATES.with(|calls| {
-      let mut calls = calls.borrow_mut();
+    let update_index = mutate_mock_state(ORACLE_UPDATES_KEY, |calls: &mut MockOracleUpdates| {
       let index = calls.len();
       calls.push((asset_in, asset_out, price));
       index
@@ -434,7 +459,9 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
     Ok(())
   }
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<u128> {
-    ORACLE_PRICES.with(|p| p.borrow().get(&(asset_in, asset_out)).cloned())
+    load_mock_state::<MockOraclePrices>(ORACLE_PRICES_KEY)
+      .get(&(asset_in, asset_out))
+      .copied()
   }
   fn validate_price_deviation(
     asset_in: AssetKind,
@@ -450,20 +477,20 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
 pub struct MockAssetConversionAdapter;
 impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConversionAdapter {
   fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
-    POOLS.with(|p| {
-      let pools = p.borrow();
-      if pools.contains_key(&(asset_a, asset_b)) {
-        Some((asset_a, asset_b))
-      } else if pools.contains_key(&(asset_b, asset_a)) {
-        Some((asset_b, asset_a))
-      } else {
-        None
-      }
-    })
+    let pools: MockPools = load_mock_state(POOLS_KEY);
+    if pools.contains_key(&(asset_a, asset_b)) {
+      Some((asset_a, asset_b))
+    } else if pools.contains_key(&(asset_b, asset_a)) {
+      Some((asset_b, asset_a))
+    } else {
+      None
+    }
   }
 
   fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(u128, u128)> {
-    POOLS.with(|p| p.borrow().get(&pool_id).cloned())
+    load_mock_state::<MockPools>(POOLS_KEY)
+      .get(&pool_id)
+      .copied()
   }
 
   fn quote_single_pool_exact_input(
@@ -555,9 +582,8 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
       // Update pool reserves
       let pool_id =
         Self::single_pool_id(hop_in, hop_out).ok_or(DispatchError::Other("Pool missing"))?;
-      POOLS.with(|p| {
-        let mut pools = p.borrow_mut();
-        let (res_a, res_b) = pools.get(&pool_id).cloned().unwrap();
+      mutate_mock_state(POOLS_KEY, |pools: &mut MockPools| {
+        let (res_a, res_b) = pools.get(&pool_id).copied().unwrap();
         let (new_res_a, new_res_b) = if pool_id.0 == hop_in {
           (
             res_a.saturating_add(current_amount),
@@ -697,6 +723,7 @@ impl pallet_deos_router::Config for Test {
   type EmaHalfLife = ConstU32<3600>;
   type MaxPriceDeviation = MaxPriceDeviationStub;
   type MaxLpPairs = ConstU32<500>;
+  type LpPairIntegrity = ();
   type MaxRouterFee = MaxRouterFeeStub;
   type FeeAdapter = MockFeeAdapter;
   type BurnActorAccount = ConstU64<123>;
@@ -767,7 +794,10 @@ impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128> for DeosRou
       (asset2, asset1)
     };
 
-    let (r1, r2) = POOLS.with(|p| p.borrow().get(&key).cloned().unwrap_or((0, 0)));
+    let (r1, r2) = load_mock_state::<MockPools>(POOLS_KEY)
+      .get(&key)
+      .copied()
+      .unwrap_or((0, 0));
 
     let (new_r1, new_r2) = if key.0 == asset1 {
       (r1 + amount1, r2 + amount2)
@@ -775,7 +805,9 @@ impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128> for DeosRou
       (r1 + amount2, r2 + amount1)
     };
 
-    POOLS.with(|p| p.borrow_mut().insert(key, (new_r1, new_r2)));
+    mutate_mock_state(POOLS_KEY, |pools: &mut MockPools| {
+      pools.insert(key, (new_r1, new_r2));
+    });
     Ok(())
   }
 }
@@ -786,16 +818,12 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     .unwrap();
   let mut ext: polkadot_sdk::sp_io::TestExternalities = ext.into();
 
-  // Reset thread locals
-  POOLS.with(|p| p.borrow_mut().clear());
+  // Reset non-consensus call traces and deterministic fault switches.
   TMC_RATES.with(|r| r.borrow_mut().clear());
-  ORACLE_PRICES.with(|p| p.borrow_mut().clear());
-  ORACLE_UPDATES.with(|calls| calls.borrow_mut().clear());
   FAIL_ORACLE_UPDATE_AT.with(|value| *value.borrow_mut() = None);
   XYK_EXECUTIONS.with(|calls| calls.borrow_mut().clear());
   EXACT_INPUT_QUOTE_CALLS.with(|calls| calls.borrow_mut().clear());
   ORACLE_VALIDATIONS.with(|calls| calls.borrow_mut().clear());
-  COLLECTED_FEES.with(|f| f.borrow_mut().clear());
   FORCE_FEE_FAILURE.with(|flag| *flag.borrow_mut() = false);
   EXACT_INPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = None);
   EXACT_OUTPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = None);

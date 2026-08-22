@@ -94,6 +94,32 @@ fn zero_amount_fee_calculation() {
 }
 
 #[test]
+fn exact_output_fee_and_informational_impact_fail_closed_at_u128_boundaries() {
+  new_test_ext().execute_with(|| {
+    let mut previous_fee = 0;
+    for required_input in [1, 1_000, PRECISION, u64::MAX.into()] {
+      let fee = DeosRouter::exact_output_router_fee(&1, required_input)
+        .expect("representable exact-output fee");
+      assert!(fee >= previous_fee);
+      assert!(required_input.checked_add(fee).is_some());
+      previous_fee = fee;
+    }
+    assert!(matches!(
+      DeosRouter::exact_output_router_fee(&1, u128::MAX),
+      Err(Error::<Test>::ArithmeticOverflow),
+    ));
+
+    let from = AssetKind::Local(1);
+    let to = AssetKind::Native;
+    set_oracle_price(from, to, u128::MAX);
+    assert_eq!(
+      DeosRouter::calculate_price_impact(from, to, u128::MAX, 1),
+      Perbill::one(),
+    );
+  });
+}
+
+#[test]
 fn quote_exact_input_view_matches_direct_xyk_policy_for_user() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -381,7 +407,7 @@ fn router_exact_output_selects_bounded_native_anchored_path_without_search() {
     );
     assert_eq!(spent.legs, quote.legs);
     assert_eq!(Assets::balance(3, user), output_before + amount_out);
-    let updates = ORACLE_UPDATES.with(|calls| calls.borrow().clone());
+    let updates = oracle_updates();
     assert_eq!(updates.len(), 2);
     assert_eq!((updates[0].0, updates[0].1), (from, native));
     assert_eq!((updates[1].0, updates[1].1), (native, to));
@@ -410,6 +436,8 @@ fn second_leg_publication_follows_first_leg_execution() {
     let output_before = Assets::balance(3, user);
     let events_before = System::events();
     set_fail_oracle_update_at(Some(1));
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
     assert_noop!(
       DeosRouter::swap(
@@ -427,11 +455,17 @@ fn second_leg_publication_follows_first_leg_execution() {
       XYK_EXECUTIONS.with(|calls| calls.borrow().as_slice().to_vec()),
       vec![(from, native)]
     );
-    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(from, native), Some(first_pool_before));
     assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert!(oracle_updates().is_empty());
+    assert!(get_collected_fees().is_empty());
     assert_eq!(Assets::balance(2, user), input_before);
     assert_eq!(Assets::balance(3, user), output_before);
     assert_eq!(System::events(), events_before);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
   });
 }
 
@@ -454,6 +488,8 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
     let output_before = Assets::balance(3, user);
     let events_before = System::events();
     set_fail_oracle_update_at(Some(1));
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
     assert_noop!(
       DeosRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user,),
@@ -467,11 +503,17 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
       XYK_EXECUTIONS.with(|calls| calls.borrow().as_slice().to_vec()),
       vec![(from, native)]
     );
-    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(from, native), Some(first_pool_before));
     assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert!(oracle_updates().is_empty());
+    assert!(get_collected_fees().is_empty());
     assert_eq!(Assets::balance(2, user), input_before);
     assert_eq!(Assets::balance(3, user), output_before);
     assert_eq!(System::events(), events_before);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
   });
 }
 
@@ -750,6 +792,11 @@ fn every_router_error_has_stable_failure_and_retry_classes() {
       RouterFailureClass::InvariantViolation,
       RetryDisposition::Permanent,
     ),
+    (
+      Error::<Test>::ArithmeticOverflow,
+      RouterFailureClass::InvariantViolation,
+      RetryDisposition::Permanent,
+    ),
   ];
   for (error, failure_class, retry_disposition) in cases {
     assert_eq!(error.failure_class(), failure_class);
@@ -962,7 +1009,7 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
       expected_xyk_out,
       RouteFamily::DirectXyk,
     );
-    assert_eq!(ORACLE_UPDATES.with(|calls| calls.borrow().len()), 1);
+    assert_eq!(oracle_updates().len(), 1);
     // Scenario 2: Protocol Liquidity is better (TMC recipient output > XYK)
     // We want TMC recipient allocation ~497, XYK ~249
     // TMC Rate for Native token: 2.0 -> 1990*P total emission and 497.5*P
@@ -995,7 +1042,7 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
       expected_tmc_out,
       RouteFamily::DirectMint,
     );
-    assert_eq!(ORACLE_UPDATES.with(|calls| calls.borrow().len()), 1);
+    assert_eq!(oracle_updates().len(), 1);
   });
 }
 
@@ -1468,10 +1515,13 @@ fn second_xyk_leg_failure_rolls_back_frame_state() {
     set_pool(from, native, 10_000 * PRECISION, 10_000 * PRECISION);
     set_pool(native, to, 10_000 * PRECISION, 10_000 * PRECISION);
     let first_pool_before = get_pool(from, native).unwrap();
+    let second_pool_before = get_pool(native, to).unwrap();
     let input_before = Assets::balance(2, user);
     let output_before = Assets::balance(3, user);
     set_fail_xyk_execution_at(Some(1));
     System::reset_events();
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert!(
       DeosRouter::swap(
         RuntimeOrigin::signed(user),
@@ -1488,10 +1538,17 @@ fn second_xyk_leg_failure_rolls_back_frame_state() {
       XYK_EXECUTIONS.with(|calls| calls.borrow().clone()),
       vec![(from, native), (native, to)]
     );
-    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert!(oracle_updates().is_empty());
+    assert!(get_collected_fees().is_empty());
     assert_eq!(Assets::balance(2, user), input_before);
     assert_eq!(Assets::balance(3, user), output_before);
     assert!(System::events().is_empty());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
   });
 }
 
@@ -1554,16 +1611,13 @@ fn price_oracle_test() {
 }
 
 #[test]
-fn scaled_price_preserves_boundary_ratios_with_widened_arithmetic() {
+fn scaled_price_preserves_representable_boundaries_and_rejects_overflow() {
   new_test_ext().execute_with(|| {
     assert_eq!(
       crate::Pallet::<Test>::scaled_price(u128::MAX, u128::MAX),
       Some(primitives::ecosystem::params::PRECISION)
     );
-    assert_eq!(
-      crate::Pallet::<Test>::scaled_price(u128::MAX, 1),
-      Some(u128::MAX)
-    );
+    assert_eq!(crate::Pallet::<Test>::scaled_price(u128::MAX, 1), None);
     assert_eq!(crate::Pallet::<Test>::scaled_price(1, 0), None);
   });
 }
@@ -2112,18 +2166,17 @@ fn multi_hop_pool_reserves_update_correctly() {
       u64::MAX,
     ));
     // Check pool 1 reserves changed (DOT increased, Native decreased)
-    POOLS.with(|p| {
-      let pools = p.borrow();
+    {
       let key = if dot < native {
         (dot, native)
       } else {
         (native, dot)
       };
-      let (res_a, res_b) = pools.get(&key).unwrap();
+      let (res_a, res_b) = get_pool(dot, native).expect("pool exists");
       let (dot_res, native_res) = if key.0 == dot {
-        (*res_a, *res_b)
+        (res_a, res_b)
       } else {
-        (*res_b, *res_a)
+        (res_b, res_a)
       };
       assert_eq!(
         dot_res,
@@ -2135,7 +2188,7 @@ fn multi_hop_pool_reserves_update_correctly() {
         pool_reserve - hop1_out,
         "Native reserve should decrease by hop1 output"
       );
-    });
+    }
   });
 }
 

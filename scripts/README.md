@@ -39,10 +39,10 @@ GitHub workflows invoke root shared implementations only. Skills never call sibl
 Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers form the logical local-network evidence ladder—binary prerequisites, Cargo tools, runtime, ChainSpec, network, liveness, basic mutation, temporal consensus, then composed economics—without making an atom depend implicitly on earlier scripts.
 
 - [01-download-binaries.sh](./01-download-binaries.sh)
-  Download the pinned Polkadot SDK `stable2606-1` relay node, Omni Node, preparation/execution workers, and `frame-omni-bencher` for the supported host, verify repository-recorded SHA-256 digests before publishing the complete bundle under ignored `/bin`, and reject unsupported platforms rather than selecting an approximate asset.
+  Download the pinned Polkadot SDK `stable2606-1` relay node, Omni Node, preparation/execution workers, and `frame-omni-bencher` for the supported host, verify repository-recorded SHA-256 digests before publishing the complete bundle under ignored `/bin`, and reject unsupported platforms rather than selecting an approximate asset. `--check` verifies the existing release marker, checksums, executable bits, and binary identities without downloading.
 
 - [02-install-tools.sh](./02-install-tools.sh)
-  Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).
+  Install exact versions of Zombienet and Chain Spec Builder plus Try Runtime from one immutable Git revision. Existing commands are reused only when their reported version matches the repository pin.
 
 - [03-build-runtime.sh](./03-build-runtime.sh)
   Stage the template at one fixed fail-closed physical build root, build the current `deos-runtime` Wasm from the locked graph and pinned Rust toolchain with the existing fat-LTO/single-codegen-unit production profile, remap source/Cargo/Rustup roots to canonical virtual prefixes, atomically publish only the successful artifact, then report its size and SHA-256 digest.
@@ -77,7 +77,7 @@ Each numbered command is independently callable by a human or CI from any workin
   Run the local bootstrap chain: tools -> runtime build -> chain spec -> Zombienet, using Polkadot and Omni Node binaries already available in `PATH` or `./bin`. Start the web client directly from `web-client` with `npm run dev`.
 
 - [validate-local.sh](./validate-local.sh)
-  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns simulator tests and workspace CI; heavy adds client, Actors, and benchmark checks; full adds production runtime and generated-artifact regeneration with zero worktree drift. No Skill audit, cache, hidden authority, network run, or release action is involved.
+  Prepare pinned repository dependencies and directly run the selected `fast`, `heavy`, or `full` validation profile. Fast owns simulator tests and workspace CI; heavy adds client, Actors, and benchmark checks; full additionally prepares the checksum-verified binary bundle, then builds the production runtime and regenerates metadata and client artifacts with zero worktree drift. GitHub Actions runs fast for pull requests, heavy after verified pushes to `main`, and full for version tags. No Skill audit, cache, hidden authority, network run, or release action is involved.
 
 - [actors-assurance.sh](./actors-assurance.sh)
   Shared current-tree Actors proof contract for semantic-manifest and fee-envelope-vector freshness, cross-language semantics, scheduler stress, capacity, and independent-runtime embedding. Historical transition replay is release history rather than a routine validation dependency.

@@ -22,6 +22,7 @@ const projectRoot = path.resolve(
 const EXPECTED_PRODUCER_IDS = [
   'AddressEventIngressExtension::signed_transfer',
   'AddressEventIngressExtension::transfer_all',
+  'AddressEventIngressExtension::privileged_or_delegated',
   'TmctolAssetOps::transfer',
   'TmctolAssetOps::mint',
   'TmctolMintDistributionIngress',
@@ -51,10 +52,11 @@ async function run() {
   for (const producer of certifiedProducers) {
     for (const field of [
       'id',
+      'protocol',
       'creditedSurface',
       'sourceProvenance',
       'preflightOwner',
-      'notifyOwner',
+      'consequenceOwner',
       'rollbackOwner',
       'weightOwner',
     ]) {
@@ -63,6 +65,14 @@ async function run() {
         `${producer.id} must carry a nonempty ${field}`,
       );
     }
+    assert.ok(
+      [
+        'PostMovementNotify',
+        'BlockAtomicPostDispatch',
+        'XcmTransactionalPrecommit',
+      ].includes(producer.protocol),
+      `${producer.id} must use a closed certified movement protocol`,
+    );
   }
   assert.equal(boundary.typedTrait, 'pallet_deos_actors::AddressEventIngress');
   assert.equal(boundary.adapter, 'RuntimeAddressEventIngress');

@@ -1,21 +1,39 @@
 use crate::proposal_resolution::CoreResolutionOutcome;
 use crate::{
-  ActiveProposalIdsByDomain, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
-  FinalizedProposalOutcome, FinalizedProposals, ProposalCadenceMode, ProposalExecutionAuthority,
-  ProposalMetadata, ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt,
+  ActiveProposalIdsByDomain, ActiveProposals, CurrentEpochServicePhase, EpochServicePhase, Error,
+  Event, ExpiringAccountTouch, ExpiryBuckets, FinalizedProposalOutcome, FinalizedProposals,
+  LastProcessedEpoch, ParticipationTotalsByAccount, ProposalAuthorshipTotalsByAccount,
+  ProposalBallot, ProposalCadenceMode, ProposalExecutionAuthority, ProposalMetadata,
+  ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt,
   ProposalPreimageAdmissionError, ProposalRejectionReason, ProposalTiming,
   ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally, ProposalVotesByItem,
-  WinningVoteWindows, mock::*,
+  WinningVoteResolutionWindows, WinningVoteWindows, mock::*,
 };
 use codec::Encode;
-use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok, traits::Hooks};
+use polkadot_sdk::frame_support::{
+  BoundedVec, assert_noop, assert_ok,
+  traits::{Get, Hooks},
+  weights::Weight,
+};
 use polkadot_sdk::sp_core::H256;
-use polkadot_sdk::sp_runtime::FixedU128;
+use polkadot_sdk::sp_runtime::{FixedU128, Perbill};
 
 const DEFAULT_PROPOSER: u64 = 99;
 
 fn active_proposal_count(domain: u32) -> u32 {
   Governance::active_proposal_ids(domain).len() as u32
+}
+
+fn service_governance_through(epoch: u64) {
+  for _ in 0..128 {
+    if LastProcessedEpoch::<Test>::get() >= epoch
+      && CurrentEpochServicePhase::<Test>::get() == EpochServicePhase::Maturing
+    {
+      return;
+    }
+    Governance::on_initialize(epoch);
+  }
+  panic!("governance epoch service did not converge in the test bound");
 }
 
 fn set_active_proposal_count(domain: u32, count: u32) {
@@ -191,6 +209,261 @@ fn submit_signed_intent_proposal(
 }
 
 #[test]
+fn epoch_catch_up_is_bounded_chronological_and_eventually_reaches_the_observed_epoch() {
+  new_test_ext().execute_with(|| {
+    WinningVoteWindows::<Test>::insert(7, 10, Governance::fresh_window(1));
+    ExpiryBuckets::<Test>::insert(
+      17,
+      BoundedVec::try_from(vec![ExpiringAccountTouch {
+        domain: 7,
+        account: 10,
+      }])
+      .expect("one expiry touch fits"),
+    );
+    System::set_block_number(20);
+    for expected in 1..=16 {
+      Governance::on_initialize(20);
+      assert_eq!(LastProcessedEpoch::<Test>::get(), expected);
+    }
+    assert!(WinningVoteWindows::<Test>::contains_key(7, 10));
+    assert_eq!(ExpiryBuckets::<Test>::get(17).len(), 1);
+
+    Governance::on_initialize(20);
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 17);
+    assert!(!WinningVoteWindows::<Test>::contains_key(7, 10));
+    assert!(ExpiryBuckets::<Test>::get(17).is_empty());
+
+    for expected in 18..=20 {
+      Governance::on_initialize(20);
+      assert_eq!(LastProcessedEpoch::<Test>::get(), expected);
+    }
+    let events_before = System::events();
+    assert_eq!(Governance::on_initialize(20), Weight::zero());
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 20);
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+#[cfg(feature = "try-runtime")]
+fn try_state_rejects_epoch_phase_advancing_past_an_owned_bucket() {
+  new_test_ext().execute_with(|| {
+    crate::ProposalMaturityBuckets::<Test>::insert(
+      1,
+      BoundedVec::try_from(vec![crate::MaturingProposalTouch {
+        domain: 7,
+        item_id: 100,
+      }])
+      .expect("one maturity touch fits"),
+    );
+    CurrentEpochServicePhase::<Test>::put(EpochServicePhase::PendingEnactment);
+    assert!(Governance::do_try_state().is_err());
+  });
+}
+
+#[test]
+fn full_reward_expiry_bucket_retains_ordered_remainder_under_the_per_block_cap() {
+  new_test_ext().execute_with(|| {
+    let touches = (0..513)
+      .map(|account| ExpiringAccountTouch { domain: 7, account })
+      .collect::<Vec<_>>();
+    ExpiryBuckets::<Test>::insert(
+      1,
+      BoundedVec::try_from(touches).expect("expiry fixture fits the epoch bucket"),
+    );
+    Governance::service_expiring_accounts(0, 1);
+    let remainder = ExpiryBuckets::<Test>::get(1);
+    assert_eq!(remainder.len(), 1);
+    assert_eq!(remainder[0].account, 512);
+    Governance::service_expiring_accounts(0, 1);
+    assert!(ExpiryBuckets::<Test>::get(1).is_empty());
+  });
+}
+
+#[test]
+fn epoch_conversion_and_deadline_arithmetic_reject_unrepresentable_horizons() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      Governance::epoch_to_u32(u64::from(u32::MAX) + 1),
+      Err(Error::<Test>::EpochArithmeticOverflow.into())
+    );
+    assert_eq!(
+      Governance::add_epochs(u64::from(u32::MAX), 1),
+      Err(Error::<Test>::EpochArithmeticOverflow.into())
+    );
+    assert_noop!(
+      Governance::schedule_expiry(7, &10, u64::from(u32::MAX)),
+      Error::<Test>::EpochArithmeticOverflow
+    );
+    assert!(ExpiryBuckets::<Test>::iter_keys().next().is_none());
+
+    let mut malformed_window = Governance::fresh_window(0);
+    malformed_window.last_epoch = u64::from(u32::MAX) + 1;
+    assert!(matches!(
+      Governance::rotate_window_to(&mut malformed_window, u64::from(u32::MAX) + 1),
+      Err(Error::<Test>::EpochArithmeticOverflow)
+    ));
+  });
+}
+
+#[test]
+fn reward_counters_fail_closed_and_resolution_ingress_rolls_back_late_overflow() {
+  new_test_ext().execute_with(|| {
+    let domain = 7;
+    let account = 10;
+    ParticipationTotalsByAccount::<Test>::insert(
+      domain,
+      account,
+      crate::ParticipationTotals {
+        total_participations: u64::MAX,
+        winning_participations: 0,
+      },
+    );
+    assert_noop!(
+      Governance::record_winning_vote(RuntimeOrigin::root(), domain, 100, account),
+      Error::<Test>::RewardCounterOverflow
+    );
+    assert!(WinningVoteResolutionWindows::<Test>::get(domain).is_none());
+    assert!(WinningVoteWindows::<Test>::get(domain, account).is_none());
+    assert_eq!(
+      ParticipationTotalsByAccount::<Test>::get(domain, account).total_participations,
+      u64::MAX
+    );
+
+    ParticipationTotalsByAccount::<Test>::insert(
+      domain,
+      account,
+      crate::ParticipationTotals {
+        total_participations: 0,
+        winning_participations: u64::MAX,
+      },
+    );
+    assert_noop!(
+      Governance::record_winning_vote(RuntimeOrigin::root(), domain, 101, account),
+      Error::<Test>::RewardCounterOverflow
+    );
+    assert!(WinningVoteResolutionWindows::<Test>::get(domain).is_none());
+    assert!(WinningVoteWindows::<Test>::get(domain, account).is_none());
+    assert_eq!(
+      ParticipationTotalsByAccount::<Test>::get(domain, account),
+      crate::ParticipationTotals {
+        total_participations: 0,
+        winning_participations: u64::MAX,
+      }
+    );
+
+    let mut window = Governance::fresh_window(0);
+    window.rolling_sum = u32::MAX;
+    WinningVoteWindows::<Test>::insert(domain, account, window.clone());
+    ParticipationTotalsByAccount::<Test>::remove(domain, account);
+    assert_noop!(
+      Governance::record_winning_vote(RuntimeOrigin::root(), domain, 102, account),
+      Error::<Test>::RewardCounterOverflow
+    );
+    let retained_window =
+      WinningVoteWindows::<Test>::get(domain, account).expect("overflow preserves prior window");
+    assert_eq!(retained_window.rolling_sum, window.rolling_sum);
+    assert!(
+      retained_window
+        .epochs
+        .iter()
+        .all(|slot| slot.item_ids.is_empty())
+    );
+    assert!(WinningVoteResolutionWindows::<Test>::get(domain).is_none());
+    assert_eq!(
+      ParticipationTotalsByAccount::<Test>::get(domain, account),
+      Default::default()
+    );
+
+    ProposalAuthorshipTotalsByAccount::<Test>::insert(
+      domain,
+      account,
+      crate::ProposalAuthorshipTotals {
+        authored_proposals: u64::MAX,
+        successful_authored_proposals: u64::MAX,
+      },
+    );
+    assert_noop!(
+      Governance::note_authored_proposal(domain, &account),
+      Error::<Test>::RewardCounterOverflow
+    );
+    assert_noop!(
+      Governance::note_successful_authored_proposal(domain, &account),
+      Error::<Test>::RewardCounterOverflow
+    );
+  });
+}
+
+#[test]
+fn vote_tally_and_derived_invoice_arithmetic_cover_u64_max_without_saturation() {
+  new_test_ext().execute_with(|| {
+    let ballots = BoundedVec::try_from(vec![
+      ProposalBallot {
+        account: 10,
+        vote_epoch: 0,
+        weight: u64::MAX,
+        raw_power: u64::MAX,
+      },
+      ProposalBallot {
+        account: 11,
+        vote_epoch: 0,
+        weight: 1,
+        raw_power: 1,
+      },
+    ])
+    .expect("two ballots fit");
+    assert_eq!(
+      Governance::proposal_vote_weight_sum(7, 100, 0, 0, 1, &ballots),
+      Err(Error::<Test>::ProposalVoteTallyOverflow.into())
+    );
+    assert_eq!(
+      Governance::proposal_raw_protection_weight_sum(7, &ballots),
+      Err(Error::<Test>::ProposalVoteTallyOverflow.into())
+    );
+    assert!(Governance::veto_weight_strictly_exceeds_threshold(
+      u64::MAX,
+      u64::MAX
+    ));
+    assert!(Governance::pass_weight_meets_fast_track_threshold(
+      u64::MAX,
+      u64::MAX
+    ));
+    assert!(!Governance::veto_weight_strictly_exceeds_threshold(
+      0,
+      u64::MAX
+    ));
+
+    let widened_positive_tally = crate::ProposalVoteTally {
+      aye_voters: 0,
+      nay_voters: 1,
+      amplify_voters: 1,
+      approve_voters: 1,
+      reduce_voters: 0,
+      veto_voters: 0,
+      pass_voters: 0,
+      aye_weight: 0,
+      nay_weight: u64::MAX,
+      amplify_weight: u64::MAX,
+      approve_weight: 1,
+      reduce_weight: 0,
+      veto_weight: 0,
+      pass_weight: 0,
+      turnout_weight: u64::MAX,
+      veto_turnout_weight: 0,
+    };
+    assert_eq!(
+      Governance::evaluate_core_resolution_policy(
+        crate::ProposalPrimaryTrackFamily::Invoice,
+        &widened_positive_tally,
+        0,
+        Perbill::from_percent(50),
+      ),
+      CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Amplify)
+    );
+  });
+}
+
+#[test]
 fn participation_coefficient_rotates_a_read_only_copy() {
   new_test_ext().execute_with(|| {
     assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
@@ -322,7 +595,7 @@ fn finalized_outcome_is_stored_and_later_expires() {
     );
     assert_eq!(recent[0].finalization.execution_detail, None);
     System::set_block_number(4);
-    Governance::on_initialize(4);
+    service_governance_through(4);
     assert!(Governance::finalized_proposal_outcome(7, 100).is_none());
     assert!(Governance::recent_finalized_proposals(7).is_empty());
   });
@@ -414,6 +687,36 @@ fn recent_finalized_proposals_are_sorted_newest_first_per_domain() {
 }
 
 #[test]
+fn recent_finalized_projection_truncates_overbound_storage_without_panicking() {
+  new_test_ext().execute_with(|| {
+    let max = <Test as crate::Config>::MaxRecentFinalizedProposalsPerDomain::get();
+    for item_id in 0..=max {
+      FinalizedProposals::<Test>::insert(
+        7,
+        item_id,
+        crate::FinalizedProposalRecord {
+          outcome: rejected_outcome(u64::from(item_id), ProposalRejectionReason::AdminRejected),
+          execution_detail: None,
+        },
+      );
+    }
+
+    let recent = Governance::recent_finalized_proposals(7).into_inner();
+    assert_eq!(recent.len(), max as usize);
+    assert_eq!(
+      recent.first().map(|proposal| proposal.identity.item_id),
+      Some(max)
+    );
+    assert_eq!(
+      recent.last().map(|proposal| proposal.identity.item_id),
+      Some(1)
+    );
+    #[cfg(feature = "try-runtime")]
+    assert!(Governance::do_try_state().is_err());
+  });
+}
+
+#[test]
 fn proposal_resolution_rejects_unknown_or_empty_winner_sets() {
   new_test_ext().execute_with(|| {
     let winners =
@@ -435,7 +738,7 @@ fn vote_resolution_without_ballots_rejects_the_proposal() {
   new_test_ext().execute_with(|| {
     assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     System::assert_last_event(RuntimeEvent::Governance(Event::ProposalRejected {
       domain: 7,
@@ -548,6 +851,42 @@ fn full_general_capacity_cannot_block_protocol_l1_root_action() {
 }
 
 #[test]
+fn same_epoch_maturity_bucket_retains_fifo_remainder_until_bounded_follow_up() {
+  new_test_ext().execute_with(|| {
+    for item_id in 100..104 {
+      assert_ok!(submit_test_proposal(7, item_id, DEFAULT_PROPOSER));
+    }
+    System::set_block_number(3);
+    Governance::on_initialize(3);
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 1);
+    Governance::on_initialize(3);
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 2);
+    Governance::on_initialize(3);
+    assert_eq!(Governance::proposal_maturity_bucket(3).len(), 1);
+    assert_eq!(Governance::proposal_maturity_bucket(3)[0].item_id, 103);
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 2);
+    assert_eq!(
+      CurrentEpochServicePhase::<Test>::get(),
+      EpochServicePhase::Maturing
+    );
+    assert!(!ActiveProposals::<Test>::contains_key(7, 100));
+    assert!(!ActiveProposals::<Test>::contains_key(7, 101));
+    assert!(!ActiveProposals::<Test>::contains_key(7, 102));
+    assert!(ActiveProposals::<Test>::contains_key(7, 103));
+
+    Governance::on_initialize(3);
+    assert!(Governance::proposal_maturity_bucket(3).is_empty());
+    assert!(!ActiveProposals::<Test>::contains_key(7, 103));
+    assert_eq!(
+      CurrentEpochServicePhase::<Test>::get(),
+      EpochServicePhase::PendingEnactment
+    );
+    service_governance_through(3);
+    assert_eq!(LastProcessedEpoch::<Test>::get(), 3);
+  });
+}
+
+#[test]
 fn on_initialize_auto_finalizes_matured_proposals() {
   new_test_ext().execute_with(|| {
     assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
@@ -571,7 +910,7 @@ fn on_initialize_auto_finalizes_matured_proposals() {
       ProposalVoteKind::Nay,
     ));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert!(!ActiveProposals::<Test>::contains_key(7, 100));
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -607,7 +946,7 @@ fn auto_finalization_defers_when_current_epoch_winner_cap_is_exhausted() {
       ));
     }
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert!(ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(Governance::proposal_maturity_bucket(4).len(), 1);
     System::assert_last_event(RuntimeEvent::Governance(
@@ -619,7 +958,7 @@ fn auto_finalization_defers_when_current_epoch_winner_cap_is_exhausted() {
       },
     ));
     System::set_block_number(4);
-    Governance::on_initialize(4);
+    service_governance_through(4);
     assert!(!ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -655,7 +994,7 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
       assert_ok!(submit_test_proposal(7, item_id, DEFAULT_PROPOSER));
     }
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert!(ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(Governance::proposal_maturity_bucket(4).len(), 4);
     assert!(
@@ -672,7 +1011,7 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
       },
     ));
     System::set_block_number(4);
-    Governance::on_initialize(4);
+    service_governance_through(4);
     assert!(ActiveProposals::<Test>::contains_key(7, 102));
     assert_ok!(Governance::requeue_proposal_for_auto_finalization(
       RuntimeOrigin::root(),
@@ -689,7 +1028,7 @@ fn admin_can_requeue_unscheduled_auto_finalization_recovery() {
       },
     ));
     System::set_block_number(5);
-    Governance::on_initialize(5);
+    service_governance_through(5);
     assert!(!ActiveProposals::<Test>::contains_key(7, 102));
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -1219,7 +1558,7 @@ fn pending_enactment_executes_when_due_and_executor_is_enabled() {
       })
     );
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(approved_outcome(
@@ -2643,6 +2982,75 @@ fn same_item_cannot_be_re_ingested_for_different_accounts_within_live_window() {
 }
 
 #[test]
+fn malformed_reward_windows_fail_closed_without_panicking() {
+  new_test_ext().execute_with(|| {
+    WinningVoteWindows::<Test>::insert(
+      7,
+      10,
+      crate::WinningVoteWindow {
+        last_epoch: 1,
+        epochs: BoundedVec::default(),
+        rolling_sum: 1,
+      },
+    );
+    crate::WinningVoteResolutionWindows::<Test>::insert(
+      8,
+      crate::WinningVoteResolutionWindow {
+        last_epoch: 1,
+        epochs: BoundedVec::default(),
+      },
+    );
+
+    #[cfg(feature = "try-runtime")]
+    assert!(Governance::do_try_state().is_err());
+    assert_eq!(
+      Governance::governance_participation_coefficient(7, 10),
+      FixedU128::from_inner(0)
+    );
+    assert_eq!(
+      Governance::govxp_counters(7, 10).rolling_winning_participation,
+      0
+    );
+    assert_noop!(
+      Governance::record_winning_vote(RuntimeOrigin::root(), 7, 100, 10),
+      Error::<Test>::RewardWindowInvariant
+    );
+    assert_noop!(
+      Governance::record_winning_vote(RuntimeOrigin::root(), 8, 100, 11),
+      Error::<Test>::RewardWindowInvariant
+    );
+
+    ExpiryBuckets::<Test>::insert(
+      2,
+      BoundedVec::try_from(vec![ExpiringAccountTouch {
+        domain: 7,
+        account: 10,
+      }])
+      .expect("one expiry touch fits"),
+    );
+    System::set_block_number(2);
+    Governance::on_initialize(2);
+    assert!(Governance::winning_vote_window(7, 10).is_some());
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn governance_try_state_accepts_coherent_reward_and_finalization_memory() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Governance::record_winning_vote(
+      RuntimeOrigin::root(),
+      7,
+      100,
+      10,
+    ));
+    assert_ok!(submit_test_proposal(7, 101, DEFAULT_PROPOSER));
+    assert_ok!(Governance::reject_proposal(RuntimeOrigin::root(), 7, 101));
+    assert_ok!(Governance::do_try_state());
+  });
+}
+
+#[test]
 fn batch_records_multiple_accounts_for_same_item() {
   new_test_ext().execute_with(|| {
     let accounts = polkadot_sdk::frame_support::BoundedVec::try_from(vec![10u64, 11u64])
@@ -2797,7 +3205,7 @@ fn expired_zero_sum_window_is_evicted_from_storage() {
     ));
     assert!(Governance::winning_vote_window(7, 10).is_some());
     System::set_block_number(4);
-    Governance::on_initialize(4);
+    service_governance_through(4);
     assert!(Governance::winning_vote_window(7, 10).is_none());
     assert_eq!(
       Governance::governance_participation_coefficient(7, 10),
@@ -3264,7 +3672,7 @@ fn sub_percent_veto_does_not_activate_final_veto_gate() {
       ProposalVoteKind::Veto,
     ));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(approved_outcome(
@@ -3307,7 +3715,7 @@ fn one_percent_veto_can_activate_final_veto_gate() {
       ProposalVoteKind::Veto,
     ));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(veto_cancelled_outcome(3, 10))
@@ -3394,7 +3802,7 @@ fn veto_track_blocks_at_maturity_without_immediate_threshold() {
       })
     );
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(veto_cancelled_outcome(3, 50))
@@ -3449,7 +3857,7 @@ fn veto_track_tie_blocks_proposal_at_maturity() {
       ProposalVoteKind::Pass,
     ));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(veto_cancelled_outcome(3, 20))
@@ -3491,7 +3899,7 @@ fn pass_outweighing_veto_allows_main_track_resolution() {
       ProposalVoteKind::Pass,
     ));
     System::set_block_number(3);
-    Governance::on_initialize(3);
+    service_governance_through(3);
     assert_eq!(
       Governance::finalized_proposal_outcome(7, 100),
       Some(approved_outcome(

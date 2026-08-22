@@ -12,8 +12,7 @@ The pallet source is now split into responsibility-scoped internal modules while
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-governance` core logic.
+This pallet is maintained against the DEOS workspace's pinned Polkadot SDK line.
 
 ## Scope
 
@@ -28,7 +27,7 @@ The current kernel slice provides:
 - Policy-aware admin early finalization through `force_resolve_proposal_from_votes(domain, item_id)`
 - Runtime-configured ordinary proposal vote weight, veto threshold/power source, voting period, approval threshold, and minimum turnout for the current vote-derived resolution slice
 - Runtime-queryable governance-domain policy declaration, backed by `template/runtime/src/configs/governance_config.rs`, that centralizes the current launch hierarchy (`$NTVE + $VETO` for protocol governance, `$BLDR + $NTVE` for the canonical tactical domain)
-- Bounded automatic proposal finalization through epoch-keyed maturity buckets, with stale entries ignored and retry deferral on failed automatic settlement
+- Bounded chronological epoch service through persisted maturity, pending-enactment, finalized-outcome, and reward-expiry phases, retaining same-epoch suffixes until each configured family drains
 - Sparse memory with zero-sum eviction once a window fully decays
 - Epoch expiry buckets that touch only accounts whose old winning votes are due to expire
 - Runtime-queryable governance participation coefficient derived from the live winning-vote window
@@ -38,7 +37,7 @@ The current kernel slice provides:
 - Explicit proposal rejection reasons for the current narrow lifecycle (`AdminRejected`, `NoVotes`, `VoteTie`, `TurnoutBelowMinimum`, `ApprovalThresholdNotMet`)
 - Public query helpers for bounded active proposal discovery, bounded recent-finalized proposal discovery, current weighted proposal tally, runtime-declared vote-power profile identity per live track, live resolution state, unified proposal status, and recent finalized proposal outcomes
 - Bounded retention/expiry for finalized proposal outcomes instead of unbounded history growth
-- Benchmark-derived runtime weights for the current `record_winning_vote*`, proposal lifecycle, ballot-casting, and expiry-servicing kernel slice
+- Host-generated runtime weights for winning-vote ingress, proposal lifecycle, ballot casting, custody release, and every phased epoch-service family
 
 ## Key rule
 
@@ -61,7 +60,7 @@ The pallet should keep active governance participation memory sparse rather than
 
 ## Runtime-as-Config rule
 
-Lookback length, per-epoch cap, epoch source, vote-weight surface, voting period, approval threshold, minimum turnout, and the eventual proposal-resolution wiring belong in runtime configuration or higher-level governance integration rather than hardcoded pallet policy.
+Lookback length, per-epoch and per-block caps, epoch source, vote-power and custody surfaces, voting periods, thresholds, payload authority, and proposal execution belong in runtime configuration rather than hardcoded pallet policy.
 
 ## Current launch-policy rule
 
@@ -79,9 +78,9 @@ For the current launch line, the bounded runtime policy is intentionally frozen 
 
 The current kernel does not yet include:
 
-- A richer class-aware domain-policy surface beyond the current bounded public/query contract, including future class families and execution-authority wiring
+- A richer class-aware domain-policy surface beyond the current bounded public/query contract, including future class families
 - Richer multi-track policy beyond the current protocol `$NTVE + $VETO` and `$BLDR + $NTVE` launch hierarchy
 - Permanent proposal-history archival inside the kernel pallet
 - Richer GovXP / identity policy beyond the current counters-first slice, including delegation, any later bounded multiplier policy, and broader SBT / reputation layers
 
-See [`docs/specification.en.md`](./docs/specification.en.md) for the intended governance contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map, plus [`../staking/docs/specification.en.md`](../staking/docs/specification.en.md) and [`BACKLOG.md`](../../../BACKLOG.md) for the broader two-pallet reward trajectory.
+See [`docs/specification.en.md`](./docs/specification.en.md) for the intended governance contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map, and [`docs/embedding.md`](./docs/embedding.md) for host-runtime obligations.

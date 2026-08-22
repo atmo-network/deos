@@ -40,7 +40,9 @@ impl<T: Config> Pallet<T> {
       capacity_lane,
       capacity_limit: match capacity_lane {
         ProposalCapacityLane::Strategic => maximum,
-        ProposalCapacityLane::General => maximum.saturating_sub(T::StrategicProposalReserve::get()),
+        ProposalCapacityLane::General => maximum
+          .checked_sub(T::StrategicProposalReserve::get())
+          .unwrap_or(0),
       },
       author_limit: T::MaxActiveProposalsPerAuthor::get(),
       signed_preimage_required: authority != ProposalSubmissionAuthority::AdminOnly,
@@ -58,7 +60,9 @@ impl<T: Config> Pallet<T> {
       .try_fold(0u32, |count, item_id| {
         let author = ProposalAuthorsByItem::<T>::get(domain, item_id)
           .ok_or(Error::<T>::ActiveProposalAuthorMissing)?;
-        Ok(count.saturating_add(u32::from(author == *proposer)))
+        count
+          .checked_add(u32::from(author == *proposer))
+          .ok_or(Error::<T>::ActiveProposalCapReached.into())
       })
   }
 
@@ -93,7 +97,9 @@ impl<T: Config> Pallet<T> {
       !ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalAlreadyActive
     );
-    let active_count = ActiveProposalIdsByDomain::<T>::decode_len(domain).unwrap_or(0) as u32;
+    let active_count =
+      u32::try_from(ActiveProposalIdsByDomain::<T>::decode_len(domain).unwrap_or(0))
+        .map_err(|_| Error::<T>::ActiveProposalCapReached)?;
     ensure!(
       active_count < policy.capacity_limit,
       Error::<T>::ActiveProposalCapReached
@@ -106,7 +112,9 @@ impl<T: Config> Pallet<T> {
     let maturity_epoch = Self::proposal_maturity_epoch(T::EpochProvider::current_epoch())?;
     Self::ensure_proposal_maturity_capacity(maturity_epoch, domain, item_id)?;
     Ok(ProposalAdmission {
-      active_count_after: active_count.saturating_add(1),
+      active_count_after: active_count
+        .checked_add(1)
+        .ok_or(Error::<T>::ActiveProposalCapReached)?,
       maturity_epoch,
       opening_fee: signed.then_some(policy.opening_fee).flatten(),
     })
@@ -132,7 +140,7 @@ impl<T: Config> Pallet<T> {
     );
     ProposalAuthorsByItem::<T>::insert(domain, item_id, proposer.clone());
     ProposalMetadataByItem::<T>::insert(domain, item_id, metadata.clone());
-    Self::note_authored_proposal(domain, &proposer);
+    Self::note_authored_proposal(domain, &proposer)?;
     Self::insert_active_proposal_id(domain, item_id)?;
     Self::schedule_proposal_maturity_at(maturity_epoch, domain, item_id)?;
     Self::deposit_event(Event::ProposalSubmitted {
@@ -148,21 +156,36 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
+  pub(crate) fn epoch_to_u32(epoch: T::Epoch) -> Result<u32, DispatchError> {
+    let narrowed = epoch.saturated_into::<u32>();
+    let roundtrip: T::Epoch = narrowed.saturated_into();
+    ensure!(roundtrip == epoch, Error::<T>::EpochArithmeticOverflow);
+    Ok(narrowed)
+  }
+
+  pub(crate) fn epoch_from_u32(epoch: u32) -> Result<T::Epoch, DispatchError> {
+    let widened: T::Epoch = epoch.saturated_into();
+    ensure!(
+      widened.saturated_into::<u32>() == epoch,
+      Error::<T>::EpochArithmeticOverflow
+    );
+    Ok(widened)
+  }
+
   pub(crate) fn add_epochs(
     base_epoch: T::Epoch,
     delta: T::Epoch,
   ) -> Result<T::Epoch, DispatchError> {
-    let result_epoch_u32 = base_epoch
-      .saturated_into::<u32>()
-      .checked_add(delta.saturated_into::<u32>())
+    let result_epoch_u32 = Self::epoch_to_u32(base_epoch)?
+      .checked_add(Self::epoch_to_u32(delta)?)
       .ok_or(Error::<T>::EpochArithmeticOverflow)?;
-    Ok(result_epoch_u32.saturated_into())
+    Self::epoch_from_u32(result_epoch_u32)
   }
 
   pub(crate) fn proposal_maturity_epoch(
     submitted_epoch: T::Epoch,
   ) -> Result<T::Epoch, DispatchError> {
-    let voting_period = T::ProposalVotingPeriod::get().saturated_into::<u32>();
+    let voting_period = Self::epoch_to_u32(T::ProposalVotingPeriod::get())?;
     ensure!(voting_period > 0, Error::<T>::ZeroProposalVotingPeriod);
     Self::proposal_ordinary_primary_close_epoch(submitted_epoch)
   }
@@ -313,7 +336,7 @@ impl<T: Config> Pallet<T> {
         .position(|existing| *existing == item_id)
         .ok_or(Error::<T>::ActiveProposalCountUnderflow)?;
       item_ids.remove(position);
-      Ok(item_ids.len() as u32)
+      u32::try_from(item_ids.len()).map_err(|_| Error::<T>::ActiveProposalCountUnderflow.into())
     })
   }
 
@@ -325,11 +348,11 @@ impl<T: Config> Pallet<T> {
       ActiveProposals::<T>::get(domain, item_id).ok_or(Error::<T>::ProposalNotActive)?;
     let current_epoch = T::EpochProvider::current_epoch();
     let natural_maturity_epoch = Self::proposal_maturity_epoch(proposal.submitted_epoch)?;
-    let target_epoch_u32 = current_epoch
-      .saturated_into::<u32>()
-      .saturating_add(1)
-      .max(natural_maturity_epoch.saturated_into::<u32>());
-    let maturity_epoch: T::Epoch = target_epoch_u32.saturated_into();
+    let target_epoch_u32 = Self::epoch_to_u32(current_epoch)?
+      .checked_add(1)
+      .ok_or(Error::<T>::EpochArithmeticOverflow)?
+      .max(Self::epoch_to_u32(natural_maturity_epoch)?);
+    let maturity_epoch = Self::epoch_from_u32(target_epoch_u32)?;
     Self::schedule_proposal_maturity_at(maturity_epoch, domain, item_id)?;
     Self::deposit_event(Event::ProposalAutoFinalizationRequeued {
       domain,
@@ -348,11 +371,10 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     let lookback = T::WinningVoteLookbackEpochs::get();
     ensure!(lookback > 0, Error::<T>::ZeroLookbackWindow);
-    let expiry_epoch_u32 = current_epoch
-      .saturated_into::<u32>()
+    let expiry_epoch_u32 = Self::epoch_to_u32(current_epoch)?
       .checked_add(lookback)
       .ok_or(Error::<T>::EpochArithmeticOverflow)?;
-    let expiry_epoch: T::Epoch = expiry_epoch_u32.saturated_into();
+    let expiry_epoch = Self::epoch_from_u32(expiry_epoch_u32)?;
     ExpiryBuckets::<T>::try_mutate(expiry_epoch, |bucket| -> DispatchResult {
       let exists = bucket
         .iter() // deos-bypass: bounded-iter — MaxExpiriesPerEpoch bucket
@@ -370,35 +392,160 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn service_current_epoch(current_epoch: T::Epoch) -> Weight {
-    let last_processed_epoch = LastProcessedEpoch::<T>::get().saturated_into::<u32>();
-    let current_epoch_u32 = current_epoch.saturated_into::<u32>();
+    let Ok(last_processed_epoch) = Self::epoch_to_u32(LastProcessedEpoch::<T>::get()) else {
+      return Weight::zero();
+    };
+    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+      return Weight::zero();
+    };
     if current_epoch_u32 <= last_processed_epoch {
       return Weight::zero();
     }
-    let maturing_weight = Self::service_maturing_proposals(last_processed_epoch, current_epoch);
-    let pending_enactment_weight =
-      Self::service_pending_enactments(last_processed_epoch, current_epoch);
-    let finalized_weight =
-      Self::service_finalized_proposal_outcomes(last_processed_epoch, current_epoch);
-    let expiring_weight = Self::service_expiring_accounts(last_processed_epoch, current_epoch);
-    LastProcessedEpoch::<T>::put(current_epoch);
-    maturing_weight
-      .saturating_add(pending_enactment_weight)
-      .saturating_add(finalized_weight)
-      .saturating_add(expiring_weight)
+    let scan_limit = T::MaxEpochCatchUpPerBlock::get();
+    let scan_through_u32 = last_processed_epoch
+      .checked_add(scan_limit)
+      .unwrap_or(u32::MAX)
+      .min(current_epoch_u32);
+    let Some(first_unprocessed_epoch) = last_processed_epoch.checked_add(1) else {
+      return Weight::zero();
+    };
+    let initial_phase = CurrentEpochServicePhase::<T>::get();
+    let mut service_epoch_u32 =
+      (initial_phase != EpochServicePhase::Maturing).then_some(first_unprocessed_epoch);
+    if service_epoch_u32.is_none() {
+      for candidate_u32 in first_unprocessed_epoch..=scan_through_u32 {
+        let Ok(candidate) = Self::epoch_from_u32(candidate_u32) else {
+          return Weight::zero();
+        };
+        if !ProposalMaturityBuckets::<T>::get(candidate).is_empty()
+          || !PendingEnactmentBuckets::<T>::get(candidate).is_empty()
+          || !FinalizedProposalOutcomeExpiryBuckets::<T>::get(candidate).is_empty()
+          || !ExpiryBuckets::<T>::get(candidate).is_empty()
+        {
+          service_epoch_u32 = Some(candidate_u32);
+          break;
+        }
+      }
+    }
+    let base_weight = T::WeightInfo::service_epoch_catch_up();
+    let Some(service_epoch_u32) = service_epoch_u32 else {
+      let Ok(scan_through) = Self::epoch_from_u32(scan_through_u32) else {
+        return Weight::zero();
+      };
+      LastProcessedEpoch::<T>::put(scan_through);
+      return base_weight;
+    };
+    let service_base_epoch = service_epoch_u32.saturating_sub(1);
+    if service_base_epoch > last_processed_epoch {
+      let Ok(service_base) = Self::epoch_from_u32(service_base_epoch) else {
+        return Weight::zero();
+      };
+      LastProcessedEpoch::<T>::put(service_base);
+    }
+    let Ok(service_epoch) = Self::epoch_from_u32(service_epoch_u32) else {
+      return Weight::zero();
+    };
+    let mut phase = initial_phase;
+    for _ in 0..4 {
+      let phase_had_work = match phase {
+        EpochServicePhase::Maturing => !ProposalMaturityBuckets::<T>::get(service_epoch).is_empty(),
+        EpochServicePhase::PendingEnactment => {
+          !PendingEnactmentBuckets::<T>::get(service_epoch).is_empty()
+        }
+        EpochServicePhase::FinalizedOutcome => {
+          !FinalizedProposalOutcomeExpiryBuckets::<T>::get(service_epoch).is_empty()
+        }
+        EpochServicePhase::RewardExpiry => !ExpiryBuckets::<T>::get(service_epoch).is_empty(),
+      };
+      if phase_had_work {
+        let phase_weight = match phase {
+          EpochServicePhase::Maturing => {
+            Self::service_maturing_proposals(service_base_epoch, service_epoch)
+          }
+          EpochServicePhase::PendingEnactment => {
+            Self::service_pending_enactments(service_base_epoch, service_epoch)
+          }
+          EpochServicePhase::FinalizedOutcome => {
+            Self::service_finalized_proposal_outcomes(service_base_epoch, service_epoch)
+          }
+          EpochServicePhase::RewardExpiry => {
+            Self::service_expiring_accounts(service_base_epoch, service_epoch)
+          }
+        };
+        let phase_drained = match phase {
+          EpochServicePhase::Maturing => {
+            ProposalMaturityBuckets::<T>::get(service_epoch).is_empty()
+          }
+          EpochServicePhase::PendingEnactment => {
+            PendingEnactmentBuckets::<T>::get(service_epoch).is_empty()
+          }
+          EpochServicePhase::FinalizedOutcome => {
+            FinalizedProposalOutcomeExpiryBuckets::<T>::get(service_epoch).is_empty()
+          }
+          EpochServicePhase::RewardExpiry => ExpiryBuckets::<T>::get(service_epoch).is_empty(),
+        };
+        if phase_drained {
+          let next_phase = match phase {
+            EpochServicePhase::Maturing => EpochServicePhase::PendingEnactment,
+            EpochServicePhase::PendingEnactment => EpochServicePhase::FinalizedOutcome,
+            EpochServicePhase::FinalizedOutcome => EpochServicePhase::RewardExpiry,
+            EpochServicePhase::RewardExpiry => EpochServicePhase::Maturing,
+          };
+          CurrentEpochServicePhase::<T>::put(next_phase);
+          if phase == EpochServicePhase::RewardExpiry {
+            LastProcessedEpoch::<T>::put(service_epoch);
+          }
+        }
+        return base_weight.saturating_add(phase_weight);
+      }
+      phase = match phase {
+        EpochServicePhase::Maturing => EpochServicePhase::PendingEnactment,
+        EpochServicePhase::PendingEnactment => EpochServicePhase::FinalizedOutcome,
+        EpochServicePhase::FinalizedOutcome => EpochServicePhase::RewardExpiry,
+        EpochServicePhase::RewardExpiry => {
+          LastProcessedEpoch::<T>::put(service_epoch);
+          EpochServicePhase::Maturing
+        }
+      };
+      CurrentEpochServicePhase::<T>::put(phase);
+      if phase == EpochServicePhase::Maturing {
+        return base_weight;
+      }
+    }
+    base_weight
   }
 
   pub(crate) fn service_maturing_proposals(
     last_processed_epoch: u32,
     current_epoch: T::Epoch,
   ) -> Weight {
-    let current_epoch_u32 = current_epoch.saturated_into::<u32>();
-    let confirm_period = T::ProposalConfirmPeriod::get().saturated_into::<u32>();
+    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+      return Weight::zero();
+    };
+    let Ok(confirm_period) = Self::epoch_to_u32(T::ProposalConfirmPeriod::get()) else {
+      return Weight::zero();
+    };
+    let Some(first_epoch_u32) = last_processed_epoch.checked_add(1) else {
+      return Weight::zero();
+    };
     let mut processed_entries = 0u32;
-    for epoch_u32 in last_processed_epoch.saturating_add(1)..=current_epoch_u32 {
-      let epoch: T::Epoch = epoch_u32.saturated_into();
-      let bucket = ProposalMaturityBuckets::<T>::take(epoch);
-      processed_entries = processed_entries.saturating_add(bucket.len() as u32);
+    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
+      let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
+        return Weight::zero();
+      };
+      let stored_bucket = ProposalMaturityBuckets::<T>::take(epoch);
+      let service_limit = T::MaxMaturingProposalsPerBlock::get() as usize;
+      let mut entries = stored_bucket.into_inner();
+      let remainder = (entries.len() > service_limit).then(|| entries.split_off(service_limit));
+      let bucket: BoundedVec<_, T::MaxMaturingProposalsPerEpoch> =
+        BoundedVec::truncate_from(entries);
+      if let Some(remainder) = remainder {
+        ProposalMaturityBuckets::<T>::insert(epoch, BoundedVec::truncate_from(remainder));
+      }
+      let Some(next_processed_entries) = processed_entries.checked_add(bucket.len() as u32) else {
+        return Weight::MAX;
+      };
+      processed_entries = next_processed_entries;
       for touch in bucket {
         if !ActiveProposals::<T>::contains_key(touch.domain, touch.item_id) {
           ProposalConfirmStartedAt::<T>::remove(touch.domain, touch.item_id);
@@ -422,23 +569,26 @@ impl<T: Config> Pallet<T> {
             | Some(ProposalResolutionState::PassingApprove)
             | Some(ProposalResolutionState::PassingReduce)
             | Some(ProposalResolutionState::PassingNay) => {
-              let confirm_end_epoch_u32 = epoch_u32.saturating_add(confirm_period);
-              ProposalConfirmStartedAt::<T>::insert(touch.domain, touch.item_id, epoch);
-              let rescheduled = Self::schedule_proposal_maturity_at(
-                confirm_end_epoch_u32.saturated_into(),
-                touch.domain,
-                touch.item_id,
-              )
-              .is_ok();
-              if rescheduled {
+              let confirm_end_epoch = epoch_u32
+                .checked_add(confirm_period)
+                .and_then(|confirm_end| Self::epoch_from_u32(confirm_end).ok());
+              if let Some(confirm_end_epoch) = confirm_end_epoch
+                && Self::schedule_proposal_maturity_at(
+                  confirm_end_epoch,
+                  touch.domain,
+                  touch.item_id,
+                )
+                .is_ok()
+              {
+                ProposalConfirmStartedAt::<T>::insert(touch.domain, touch.item_id, epoch);
                 Self::deposit_event(Event::ProposalConfirmStarted {
                   domain: touch.domain,
                   item_id: touch.item_id,
                   confirm_started_epoch: epoch,
-                  confirm_end_epoch: confirm_end_epoch_u32.saturated_into(),
+                  confirm_end_epoch,
                 });
+                continue;
               }
-              continue;
             }
             Some(ProposalResolutionState::VetoPassing { .. }) => {
               if Self::resolve_active_proposal_from_votes(touch.domain, touch.item_id).is_ok() {
@@ -452,13 +602,12 @@ impl<T: Config> Pallet<T> {
             }
           }
         }
-        let next_epoch_u32 = epoch_u32.saturating_add(1);
-        let rescheduled = Self::schedule_proposal_maturity_at(
-          next_epoch_u32.saturated_into(),
-          touch.domain,
-          touch.item_id,
-        )
-        .is_ok();
+        let rescheduled = epoch_u32
+          .checked_add(1)
+          .and_then(|next_epoch| Self::epoch_from_u32(next_epoch).ok())
+          .is_some_and(|next_epoch| {
+            Self::schedule_proposal_maturity_at(next_epoch, touch.domain, touch.item_id).is_ok()
+          });
         Self::deposit_event(Event::ProposalAutoFinalizationDeferred {
           domain: touch.domain,
           item_id: touch.item_id,
@@ -474,12 +623,30 @@ impl<T: Config> Pallet<T> {
     last_processed_epoch: u32,
     current_epoch: T::Epoch,
   ) -> Weight {
-    let current_epoch_u32 = current_epoch.saturated_into::<u32>();
+    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+      return Weight::zero();
+    };
+    let Some(first_epoch_u32) = last_processed_epoch.checked_add(1) else {
+      return Weight::zero();
+    };
     let mut processed_entries = 0u32;
-    for epoch_u32 in last_processed_epoch.saturating_add(1)..=current_epoch_u32 {
-      let epoch: T::Epoch = epoch_u32.saturated_into();
-      let bucket = PendingEnactmentBuckets::<T>::take(epoch);
-      processed_entries = processed_entries.saturating_add(bucket.len() as u32);
+    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
+      let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
+        return Weight::zero();
+      };
+      let stored_bucket = PendingEnactmentBuckets::<T>::take(epoch);
+      let service_limit = T::MaxPendingEnactmentsPerBlock::get() as usize;
+      let mut entries = stored_bucket.into_inner();
+      let remainder = (entries.len() > service_limit).then(|| entries.split_off(service_limit));
+      let bucket: BoundedVec<_, T::MaxPendingEnactmentsPerEpoch> =
+        BoundedVec::truncate_from(entries);
+      if let Some(remainder) = remainder {
+        PendingEnactmentBuckets::<T>::insert(epoch, BoundedVec::truncate_from(remainder));
+      }
+      let Some(next_processed_entries) = processed_entries.checked_add(bucket.len() as u32) else {
+        return Weight::MAX;
+      };
+      processed_entries = next_processed_entries;
       for touch in bucket {
         let Some(enactment_epoch) =
           ProposalPendingEnactmentAt::<T>::get(touch.domain, touch.item_id)
@@ -513,37 +680,63 @@ impl<T: Config> Pallet<T> {
         if execution_attempt.is_err()
           || ProposalPendingEnactmentAt::<T>::contains_key(touch.domain, touch.item_id)
         {
-          let next_epoch_u32 = epoch_u32.saturating_add(1);
-          let next_epoch: T::Epoch = next_epoch_u32.saturated_into();
-          let next_touch = FinalizedProposalTouch {
-            domain: touch.domain,
-            item_id: touch.item_id,
-          };
-          let _ =
-            PendingEnactmentBuckets::<T>::try_mutate(next_epoch, |next_bucket| -> DispatchResult {
-              if !next_bucket.contains(&next_touch) {
-                next_bucket
-                  .try_push(next_touch.clone())
-                  .map_err(|_| Error::<T>::PendingEnactmentBucketFull)?;
-              }
-              Ok(())
-            });
+          let next_epoch = epoch_u32
+            .checked_add(1)
+            .and_then(|next_epoch| Self::epoch_from_u32(next_epoch).ok());
+          if let Some(next_epoch) = next_epoch {
+            let next_touch = FinalizedProposalTouch {
+              domain: touch.domain,
+              item_id: touch.item_id,
+            };
+            let _ = PendingEnactmentBuckets::<T>::try_mutate(
+              next_epoch,
+              |next_bucket| -> DispatchResult {
+                if !next_bucket.contains(&next_touch) {
+                  next_bucket
+                    .try_push(next_touch.clone())
+                    .map_err(|_| Error::<T>::PendingEnactmentBucketFull)?;
+                }
+                Ok(())
+              },
+            );
+          }
         }
       }
     }
-    T::WeightInfo::service_finalized_proposal_outcomes(processed_entries)
+    T::WeightInfo::service_pending_enactments(processed_entries)
   }
 
   pub(crate) fn service_finalized_proposal_outcomes(
     last_processed_epoch: u32,
     current_epoch: T::Epoch,
   ) -> Weight {
-    let current_epoch_u32 = current_epoch.saturated_into::<u32>();
+    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+      return Weight::zero();
+    };
+    let Some(first_epoch_u32) = last_processed_epoch.checked_add(1) else {
+      return Weight::zero();
+    };
     let mut processed_entries = 0u32;
-    for epoch_u32 in last_processed_epoch.saturating_add(1)..=current_epoch_u32 {
-      let epoch: T::Epoch = epoch_u32.saturated_into();
-      let bucket = FinalizedProposalOutcomeExpiryBuckets::<T>::take(epoch);
-      processed_entries = processed_entries.saturating_add(bucket.len() as u32);
+    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
+      let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
+        return Weight::zero();
+      };
+      let stored_bucket = FinalizedProposalOutcomeExpiryBuckets::<T>::take(epoch);
+      let service_limit = T::MaxFinalizedProposalOutcomesPerBlock::get() as usize;
+      let mut entries = stored_bucket.into_inner();
+      let remainder = (entries.len() > service_limit).then(|| entries.split_off(service_limit));
+      let bucket: BoundedVec<_, T::MaxFinalizedProposalOutcomesPerEpoch> =
+        BoundedVec::truncate_from(entries);
+      if let Some(remainder) = remainder {
+        FinalizedProposalOutcomeExpiryBuckets::<T>::insert(
+          epoch,
+          BoundedVec::truncate_from(remainder),
+        );
+      }
+      let Some(next_processed_entries) = processed_entries.checked_add(bucket.len() as u32) else {
+        return Weight::MAX;
+      };
+      processed_entries = next_processed_entries;
       for touch in bucket {
         FinalizedProposals::<T>::remove(touch.domain, touch.item_id);
         ProposalMetadataByItem::<T>::remove(touch.domain, touch.item_id);
@@ -559,19 +752,39 @@ impl<T: Config> Pallet<T> {
     last_processed_epoch: u32,
     current_epoch: T::Epoch,
   ) -> Weight {
-    let current_epoch_u32 = current_epoch.saturated_into::<u32>();
+    let Ok(current_epoch_u32) = Self::epoch_to_u32(current_epoch) else {
+      return Weight::zero();
+    };
+    let Some(first_epoch_u32) = last_processed_epoch.checked_add(1) else {
+      return Weight::zero();
+    };
     let mut processed_entries = 0u32;
-    for epoch_u32 in last_processed_epoch.saturating_add(1)..=current_epoch_u32 {
-      let epoch: T::Epoch = epoch_u32.saturated_into();
-      let bucket = ExpiryBuckets::<T>::take(epoch);
-      processed_entries = processed_entries.saturating_add(bucket.len() as u32);
+    for epoch_u32 in first_epoch_u32..=current_epoch_u32 {
+      let Ok(epoch) = Self::epoch_from_u32(epoch_u32) else {
+        return Weight::zero();
+      };
+      let stored_bucket = ExpiryBuckets::<T>::take(epoch);
+      let service_limit = T::MaxExpiringAccountsPerBlock::get() as usize;
+      let mut entries = stored_bucket.into_inner();
+      let remainder = (entries.len() > service_limit).then(|| entries.split_off(service_limit));
+      let bucket: BoundedVec<_, T::MaxExpiringAccountsPerEpoch> =
+        BoundedVec::truncate_from(entries);
+      if let Some(remainder) = remainder {
+        ExpiryBuckets::<T>::insert(epoch, BoundedVec::truncate_from(remainder));
+      }
+      let Some(next_processed_entries) = processed_entries.checked_add(bucket.len() as u32) else {
+        return Weight::MAX;
+      };
+      processed_entries = next_processed_entries;
       for touch in bucket {
         let evicted =
           WinningVoteWindows::<T>::mutate_exists(touch.domain, &touch.account, |maybe_window| {
             let Some(window) = maybe_window.as_mut() else {
               return false;
             };
-            Self::rotate_window_to(window, current_epoch);
+            if Self::rotate_window_to(window, current_epoch).is_err() {
+              return false;
+            }
             if window.rolling_sum == 0 {
               *maybe_window = None;
               return true;

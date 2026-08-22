@@ -7,11 +7,12 @@
 //! - Liquidity: Asset Conversion
 
 use super::*;
+use codec::Encode;
 use primitives::{AssetKind, ecosystem};
 
 use polkadot_sdk::frame_support::traits::{
   Currency, Get,
-  fungible::Inspect as NativeInspect,
+  fungible::{Inspect as NativeInspect, Mutate as NativeMutate},
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
 };
@@ -48,8 +49,9 @@ parameter_types! {
   // --- Trigger and schedule bounds ---
 
   pub const ActorTargetBlockTime: u64 = 6;
-pub const ActorMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
-    pub const ActorMinWindowLength: BlockNumber = 100;
+  pub const ActorMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
+  pub const ActorMaxCadenceDelayTicks: u64 = 631_152_000;
+  pub const ActorMinWindowLength: BlockNumber = 100;
   pub const ActorMaxWhitelistSize: u32 = 16;
 
   // --- Scheduler controls ---
@@ -197,25 +199,15 @@ impl TmctolAssetOps {
     })
   }
 
-  /// Private ledger-only native transfer used by the certified `FeeCollector`
-  /// producer. It performs one read-only ingress preflight and one fee-native
-  /// ledger movement, but deliberately NO generic `AssetOps` ingress, NO
-  /// transaction-extension ingress, and NO native-staking bridge side effect.
-  /// The caller (FeeCollector) submits exactly one post-movement notification,
-  /// so one charge yields exactly one preflight/one movement/one notification.
+  /// Private ledger-only native transfer used by `FeeCollector`. It performs one fee-native
+  /// ledger movement with no Actors ingress preflight, notification, funding accumulation,
+  /// transaction-extension ingress, trigger consequence, or native-staking bridge side effect.
   pub(crate) fn transfer_native_ledger_only(
     from: &AccountId,
     to: &AccountId,
     amount: Balance,
   ) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(failure) =
-        RuntimeAddressEventIngress::preflight_internal_inbound(to, AssetKind::Native, amount, from)
-      {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          failure.into(),
-        ));
-      }
       let result = (|| -> Result<(), DispatchError> {
         <Balances as Currency<AccountId>>::transfer(
           from,
@@ -332,10 +324,18 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
 
   fn mint(to: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(failure) =
+        RuntimeAddressEventIngress::preflight_inbound_without_source(to, asset, amount)
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          failure.into(),
+        ));
+      }
       let result = (|| -> Result<(), TaskFailure> {
         match asset {
           AssetKind::Native => {
-            let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
+            <Balances as NativeMutate<AccountId>>::mint_into(to, amount)
+              .map_err(TaskFailure::permanent)?;
           }
           AssetKind::Local(id) | AssetKind::Foreign(id) => {
             <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
@@ -777,19 +777,18 @@ impl TmctolDexOps {
           }
           _ => None,
         });
-    let reserve_reference = AssetConversion::get_reserves(asset_in, asset_out)
-      .ok()
-      .and_then(|(reserve_in, reserve_out)| {
-        (!reserve_in.is_zero()).then(|| {
-          reserve_out
-            .saturating_mul(ecosystem::params::PRECISION)
-            .saturating_div(reserve_in)
-        })
+    let reference = ema_reference
+      .or_else(|| {
+        AssetConversion::get_reserves(asset_in, asset_out)
+          .ok()
+          .and_then(|(reserve_in, reserve_out)| {
+            primitives::checked_scaled_ratio(reserve_out, reserve_in, ecosystem::params::PRECISION)
+          })
+          .filter(|price| *price > 0)
       })
-      .filter(|price| *price > 0);
-    let reference = ema_reference.or(reserve_reference).ok_or_else(|| {
-      TaskFailure::temporary(DispatchError::Other("SystemReferencePriceUnavailable"))
-    })?;
+      .ok_or_else(|| {
+        TaskFailure::temporary(DispatchError::Other("SystemReferencePriceUnavailable"))
+      })?;
     // Checked cross-multiplication deviation guard (spec 5.3): the scaled reference
     // price is ref_out/ref_in * PRECISION; comparing without division requires
     //   abs(exec_out * ref_in - ref_out * exec_in) * ACCURACY
@@ -988,6 +987,152 @@ impl
     .into_iter()
     .map(|actor_id| (actor_id, governance.clone()))
     .collect()
+  }
+
+  fn integrity_test() {
+    use pallet_deos_actors::{
+      AmountResolution, CompletionPolicy, FundingSourcePolicy, Mutability, Task, Trigger,
+    };
+
+    use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
+    let system_control_account: AccountId = ActorsPalletId::get().into_account_truncating();
+    for (_, owner, _, _) in Self::system_actors() {
+      assert_eq!(
+        owner, system_control_account,
+        "executable System Actor owner must be the non-signable Actors pallet account",
+      );
+    }
+    for (_, owner) in Self::dormant_system_actors() {
+      assert_eq!(
+        owner, system_control_account,
+        "dormant System Actor owner must be the non-signable Actors pallet account",
+      );
+    }
+
+    let fee_sink_id = ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let fee_sink = Self::system_actors()
+      .into_iter()
+      .find(|(actor_id, _, _, _)| *actor_id == fee_sink_id);
+    assert!(fee_sink.is_some(), "Fee Sink System Actor must exist");
+    let Some((_, _, mutability, contract)) = fee_sink else {
+      return;
+    };
+    assert_eq!(mutability, Mutability::Mutable, "Fee Sink must be Mutable");
+    assert_eq!(
+      contract.trigger,
+      Trigger::cadenced(ecosystem::params::FEE_SINK_CADENCE_TICKS),
+      "Fee Sink must use the canonical timestamp cadence",
+    );
+    assert_eq!(
+      contract.funding,
+      FundingSourcePolicy::RuntimePolicy,
+      "Fee Sink must accept runtime-certified fee ingress",
+    );
+    assert_eq!(
+      contract.completion,
+      CompletionPolicy::Persistent,
+      "Fee Sink must remain persistent",
+    );
+    assert_eq!(
+      contract.steps.len(),
+      1,
+      "Fee Sink must own one allocation step"
+    );
+
+    assert!(
+      Self::dormant_system_actors()
+        .iter()
+        .any(|(actor_id, _)| *actor_id == ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID),
+      "Fee Sink liquidity ingress must retain its System sovereign locator",
+    );
+    let staking_pool = crate::Staking::pool_account_for(0);
+    let reward_account = crate::Staking::native_security_reward_account();
+    let liquidity_actor = crate::Actors::sovereign_account_id_system(
+      ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+    );
+    let expected_legs = if crate::Staking::native_security_mode()
+      == pallet_staking::NativeSecurityMode::LpBackedSelection
+    {
+      alloc::vec![
+        (reward_account.clone(), Perbill::from_percent(34)),
+        (staking_pool.clone(), Perbill::from_percent(33)),
+        (liquidity_actor.clone(), Perbill::from_percent(33)),
+      ]
+    } else {
+      alloc::vec![
+        (staking_pool.clone(), Perbill::from_percent(50)),
+        (liquidity_actor.clone(), Perbill::from_percent(50)),
+      ]
+    };
+    assert!(
+      matches!(contract.steps[0].task, Task::SplitTransfer { .. }),
+      "Fee Sink must own one split transfer",
+    );
+    let Task::SplitTransfer {
+      asset,
+      amount,
+      legs,
+    } = &contract.steps[0].task
+    else {
+      return;
+    };
+    assert_eq!(
+      *asset,
+      AssetKind::Native,
+      "Fee Sink must allocate native fees"
+    );
+    assert_eq!(
+      *amount,
+      AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT),
+      "Fee Sink must process the canonical buffer share",
+    );
+    let actual_legs = legs
+      .iter()
+      .map(|leg| (leg.to.clone(), leg.share))
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(
+      actual_legs, expected_legs,
+      "Fee Sink mode/leg topology drifted"
+    );
+    assert_eq!(
+      legs.iter().map(|leg| leg.share.deconstruct()).sum::<u32>(),
+      Perbill::one().deconstruct(),
+      "Fee Sink allocation shares must conserve the processed amount",
+    );
+
+    let fee_sink_account = crate::Actors::sovereign_account_id_system(fee_sink_id);
+    assert_eq!(
+      <Runtime as pallet_deos_actors::Config>::FeeSink::get(),
+      fee_sink_account,
+      "fee collection and the Fee Sink actor must share one custody account",
+    );
+    let distinct_accounts = [
+      fee_sink_account.clone(),
+      staking_pool.clone(),
+      reward_account.clone(),
+      liquidity_actor.clone(),
+      crate::Staking::native_lp_lock_account(),
+      crate::configs::governance_config::governance_vote_power_custody_account(),
+    ]
+    .into_iter()
+    .collect::<alloc::collections::BTreeSet<_>>();
+    assert_eq!(
+      distinct_accounts.len(),
+      6,
+      "fee, staking, security, liquidity, LP lock, and governance custody accounts must not alias",
+    );
+    let anchor_accounts = Self::native_flow_anchor_accounts();
+    for account in [
+      fee_sink_account,
+      staking_pool,
+      reward_account,
+      liquidity_actor,
+    ] {
+      assert!(
+        anchor_accounts.contains(&account),
+        "every arbitrarily small native-flow endpoint must own a genesis ED anchor",
+      );
+    }
   }
 }
 
@@ -1274,14 +1419,14 @@ impl TmctolGenesisSystemActors {
   pub fn build_treasury_lp_unwind_contract_steps(
     lp_asset: AssetKind,
     dust_threshold: Balance,
-  ) -> pallet_deos_actors::ContractSteps<Runtime> {
+  ) -> Result<pallet_deos_actors::ContractSteps<Runtime>, DispatchError> {
     use pallet_deos_actors::{AmountResolution, Predicate, Step, StepErrorPolicy, Task};
-    let lp_id = match lp_asset {
-      AssetKind::Local(id) => id,
-      _ => panic!("Treasury LP unwind requires a Local LP asset"),
+    let AssetKind::Local(lp_id) = lp_asset else {
+      return Err(DispatchError::Other("TreasuryLpUnwindRequiresLocalLpAsset"));
     };
-    let (asset_a, asset_b) = crate::DeosRouter::lp_pair_by_token_id(lp_id)
-      .expect("Treasury LP unwind requires a registered LP pair");
+    let (asset_a, asset_b) = crate::DeosRouter::lp_pair_by_token_id(lp_id).ok_or(
+      DispatchError::Other("TreasuryLpUnwindRequiresRegisteredLpPair"),
+    )?;
     alloc::vec![Step {
       precondition: Self::all_conditions(alloc::vec![Predicate::BalanceAbove {
         asset: lp_asset,
@@ -1298,7 +1443,7 @@ impl TmctolGenesisSystemActors {
       on_error: StepErrorPolicy::AbortCycle,
     }]
     .try_into()
-    .expect("single-step Treasury LP unwind fits")
+    .map_err(|_| DispatchError::Other("TreasuryLpUnwindContractStepsOverflow"))
   }
 
   /// Builds the BLDR Splitter contract_steps.
@@ -1600,6 +1745,22 @@ impl FundingAuthority<AccountId> for DeosFundingAuthority {
   }
 }
 
+pub struct DeosSovereignAccountDeriver;
+
+impl pallet_deos_actors::SovereignAccountDeriver<AccountId> for DeosSovereignAccountDeriver {
+  fn user(pallet_id: PalletId, owner: &AccountId, owner_slot: u8) -> AccountId {
+    AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+      &(pallet_id, b"user", owner, owner_slot).encode(),
+    ))
+  }
+
+  fn system(pallet_id: PalletId, actor_id: pallet_deos_actors::ActorId) -> AccountId {
+    AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+      &(pallet_id, b"system", actor_id).encode(),
+    ))
+  }
+}
+
 /// Derived sovereign accounts must never collide with host-reserved identities.
 ///
 /// The reference runtime marks the Fee Sink and the reserved deterministic System Actors custody
@@ -1661,6 +1822,7 @@ impl pallet_deos_actors::Config for Runtime {
   type ObservationFeedId = primitives::OracleFeedId;
   type ObservationProvider = TmctolObservationProvider;
   type FundingAuthority = DeosFundingAuthority;
+  type SovereignAccountDeriver = DeosSovereignAccountDeriver;
   type SovereignAccountPolicy = DeosSovereignAccountPolicy;
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
@@ -1684,6 +1846,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxAutoCloseNonceHorizon = ActorMaxAutoCloseNonceHorizon;
   type TargetBlockTime = ActorTargetBlockTime;
   type MaxExecutionDelayBlocks = ActorMaxExecutionDelayBlocks;
+  type MaxCadenceDelayTicks = ActorMaxCadenceDelayTicks;
   type MaxExecutionsPerBlock = ActorMaxExecutionsPerBlock;
   type MaxQueueLength = ActorMaxQueueLength;
   type QueuePageSize = ActorQueuePageSize;

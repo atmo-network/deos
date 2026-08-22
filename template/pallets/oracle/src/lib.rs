@@ -255,8 +255,10 @@ pub mod pallet {
         !Feeds::<T>::contains_key(feed),
         Error::<T>::FeedAlreadyExists
       );
+      let feed_count = u32::try_from(FeedIds::<T>::decode_len().unwrap_or(0))
+        .map_err(|_| Error::<T>::FeedCapacityReached)?;
       ensure!(
-        (FeedIds::<T>::decode_len().unwrap_or(0) as u32) < T::MaxFeeds::get(),
+        feed_count < T::MaxFeeds::get(),
         Error::<T>::FeedCapacityReached
       );
       ensure!(scale <= T::MaxScale::get(), Error::<T>::InvalidScale);
@@ -265,8 +267,10 @@ pub mod pallet {
       }
       let first_for_producer = !ProducerFeeds::<T>::contains_key(&producer);
       if first_for_producer {
+        let producer_count = u32::try_from(ProducerIds::<T>::decode_len().unwrap_or(0))
+          .map_err(|_| Error::<T>::FeedCapacityReached)?;
         ensure!(
-          (ProducerIds::<T>::decode_len().unwrap_or(0) as u32) < T::MaxFeeds::get(),
+          producer_count < T::MaxFeeds::get(),
           Error::<T>::FeedCapacityReached
         );
       }
@@ -478,41 +482,69 @@ pub mod pallet {
       use alloc::collections::BTreeSet;
       use polkadot_sdk::sp_runtime::TryRuntimeError;
 
+      let producer_ids = ProducerIds::<T>::get();
+      let mut seen_producers = BTreeSet::new();
+      for producer in producer_ids {
+        if !seen_producers.insert(producer) {
+          return Err(TryRuntimeError::Other("ProducerIds contains a duplicate"));
+        }
+      }
+
       let feed_ids = FeedIds::<T>::get();
-      let feed_count = feed_ids.len() as u32;
+      let feed_count = u32::try_from(feed_ids.len())
+        .map_err(|_| TryRuntimeError::Other("FeedIds cardinality exceeds u32"))?;
       let mut seen_feeds = BTreeSet::new();
-      for feed in feed_ids.into_iter() {
+      for feed in feed_ids {
         if !seen_feeds.insert(feed) {
           return Err(TryRuntimeError::Other("FeedIds contains a duplicate"));
         }
         let config = Feeds::<T>::get(feed)
           .ok_or(TryRuntimeError::Other("FeedIds references an absent feed"))?;
-        if !ProducerFeeds::<T>::get(&config.producer).contains(&feed) {
+        if !seen_producers.contains(&config.producer) {
           return Err(TryRuntimeError::Other(
-            "Feed is absent from its producer reverse index",
+            "Feed producer is absent from ProducerIds",
           ));
-        }
-        if let Some(observation) = Observations::<T>::get(feed) {
-          if observation.revision == 0 {
-            return Err(TryRuntimeError::Other(
-              "Initialized observation has revision zero",
-            ));
-          }
         }
       }
 
-      let mut seen_producers = BTreeSet::new();
-      let mut indexed_feeds = 0u32;
-      for producer in ProducerIds::<T>::get().into_iter() {
-        if !seen_producers.insert(producer.clone()) {
-          return Err(TryRuntimeError::Other("ProducerIds contains a duplicate"));
+      let mut stored_feed_count = 0u32;
+      for (feed, config) in Feeds::<T>::iter() {
+        stored_feed_count = stored_feed_count
+          .checked_add(1)
+          .ok_or(TryRuntimeError::Other("Feeds cardinality exceeds u32"))?;
+        if !seen_feeds.contains(&feed) {
+          return Err(TryRuntimeError::Other(
+            "Feeds contains an identity absent from FeedIds",
+          ));
         }
-        let feeds = ProducerFeeds::<T>::get(&producer);
+        if !seen_producers.contains(&config.producer) {
+          return Err(TryRuntimeError::Other(
+            "Feed references a producer absent from ProducerIds",
+          ));
+        }
+      }
+      if stored_feed_count != feed_count {
+        return Err(TryRuntimeError::Other(
+          "Feeds cardinality does not match FeedIds",
+        ));
+      }
+
+      let mut indexed_feeds = BTreeSet::new();
+      for (producer, feeds) in ProducerFeeds::<T>::iter() {
+        if !seen_producers.contains(&producer) {
+          return Err(TryRuntimeError::Other(
+            "ProducerFeeds contains an identity absent from ProducerIds",
+          ));
+        }
         if feeds.is_empty() {
           return Err(TryRuntimeError::Other("Producer index is empty"));
         }
-        indexed_feeds = indexed_feeds.saturating_add(feeds.len() as u32);
-        for feed in feeds.into_iter() {
+        for feed in feeds {
+          if !indexed_feeds.insert(feed) {
+            return Err(TryRuntimeError::Other(
+              "Producer reverse indexes contain a duplicate feed",
+            ));
+          }
           let config = Feeds::<T>::get(feed).ok_or(TryRuntimeError::Other(
             "Producer index references an absent feed",
           ))?;
@@ -521,10 +553,36 @@ pub mod pallet {
           }
         }
       }
-      if indexed_feeds != feed_count {
+      for producer in &seen_producers {
+        if !ProducerFeeds::<T>::contains_key(producer) {
+          return Err(TryRuntimeError::Other(
+            "ProducerIds references an absent producer index",
+          ));
+        }
+      }
+      if indexed_feeds != seen_feeds {
         return Err(TryRuntimeError::Other(
-          "Producer reverse-index cardinality mismatch",
+          "Producer reverse indexes do not own the exact feed set",
         ));
+      }
+
+      let now = frame_system::Pallet::<T>::block_number();
+      for (feed, observation) in Observations::<T>::iter() {
+        if !seen_feeds.contains(&feed) {
+          return Err(TryRuntimeError::Other(
+            "Observation belongs to an unknown feed",
+          ));
+        }
+        if observation.revision == 0 {
+          return Err(TryRuntimeError::Other(
+            "Initialized observation has revision zero",
+          ));
+        }
+        if observation.updated_at > now {
+          return Err(TryRuntimeError::Other(
+            "Observation update block is in the future",
+          ));
+        }
       }
       Ok(())
     }

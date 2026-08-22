@@ -63,7 +63,7 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 `PreparedRoute` remains a public Rust package type solely for the deterministic conformance-vector example and independent consumer tooling. No call, event, storage item, or runtime API exposes it, so it does not form part of runtime metadata ABI; execution constructs it only inside the transaction.
 
-System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation.
+System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation. The guard first reads its independent Fresh Oracle observation and lazily reads direct reserves only when that observation is absent, stale, uninitialized, or zero; it never treats the selected execution quote as its own reference.
 
 `Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes and execution returning `ExactOutputExecution { amount_in, recipient_amount_out }` from measured caller and recipient deltas.
 
@@ -104,6 +104,8 @@ Price impact remains informational and TMC reports zero. Protection validates ev
 | `Routing` | One-hop: `User → Burn Actor` (no intermediate buffer) |
 | `Governance` | Updatable via `update_router_fee` within `MaxRouterFee` |
 | `Self-Taxation` | Router and System Actor accounts are fee-exempt via `is_fee_exempt()` |
+
+Exact-output gross-up uses checked `U256` ceiling division against the retained Perbill and narrows exactly; route fee additions, fee subtraction, LP cardinality narrowing, and leg indexing return typed invariant/arithmetic errors instead of saturation. Informational impact uses shared `checked_scaled_ratio`; an unrepresentable product reports maximum impact rather than false zero. Runtime integrity requires nonzero precision, nonzero LP capacity, and a maximum fee strictly below one.
 
 The `FeeRoutingAdapter` trait provides the transfer interface:
 
@@ -192,7 +194,7 @@ The Router no longer declares local EMA value or update-block storage. Oracle me
 
 Canonical local-pool indexing admits two initially uninitialized `pallet-oracle` identities: ordered forward and reverse feeds at scale `12`, `PreExecutionSpot`, EMA half-life `100`, and DEOS Router pallet-account provenance. Re-indexing requires an exact immutable match and adds no duplicate. The LP index plus both feed registrations share one transaction, and top-level pool calls declare two worst-case oracle registration Weight envelopes.
 
-`PriceOracleImpl<Runtime>` publishes pre-execution samples through the DEOS Router pallet account and reads current standalone EMA truth. The System Actors reference guard consumes Fresh observations and otherwise falls back to direct reserves.
+`PriceOracleImpl<Runtime>` publishes pre-execution samples through the DEOS Router pallet account and reads current standalone EMA truth. The System Actors reference guard consumes Fresh observations and only then falls back to direct reserves, avoiding the duplicate reserve lookup on the normal Fresh path while retaining an independently sourced safety reference.
 
 TVL is not oracle-smoothed — it is read directly from pool reserves via `get_pool_reserves()` during route selection, always reflecting the current on-chain state.
 
@@ -219,14 +221,19 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
       } else {
         (res_b, res_a)
       };
-      if let Some(spot_price) = Self::scaled_price(reserve_out, reserve_in) {
-        T::PriceOracle::update_ema_price(from, to, spot_price)?;
-      }
+      let spot_price = primitives::checked_scaled_ratio(
+        reserve_out,
+        reserve_in,
+        T::Precision::get(),
+      ).ok_or(Error::<T>::InvalidOracleData)?;
+      T::PriceOracle::update_ema_price(from, to, spot_price)?;
     }
   }
   Ok(())
 }
 ```
+
+Package fault tests keep mock pool reserves, Oracle publication state, and fee receipts inside externalities-backed storage rather than non-transactional thread-local maps. A second-leg execution fault or second-publication fault therefore proves exact storage-root restoration across both pools, both directional publication attempts, routed fees, balances, issuance, and events; call-trace switches remain outside consensus state only to prove the fault checkpoint was reached.
 
 ### Price Deviation Validation
 
@@ -242,11 +249,11 @@ The standalone Oracle provides bounded pair admission, typed status/provenance, 
 | Time | Oracle observation `updated_at`, same directional feed identity |
 | Cardinality | Canonical pool admission permits at most 500 complete bidirectional pairs under the 1,001-feed producer bound |
 | Initialization | First nonzero observation replaces zero EMA directly |
-| Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot and quoted ratios use `U256` intermediates and saturate only an unrepresentable final price |
+| Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot and quoted ratios use shared `checked_scaled_ratio` with `U256` intermediates, exact narrowing, and fail-closed zero-denominator or overflow handling |
 | Ordering | Direct route validates against the previous EMA, collects fee, snapshots pre-execution reserves into EMA, then executes; transaction rollback covers failure |
 | Direction | Every prepared XYK leg updates its ordered `asset_in -> asset_out` key in execution order; reverse state remains independent |
 | Router consumers | Per-leg XYK deviation and informational price impact; direct TMC mint has no XYK reference or publication |
-| Actors consumer | System reference guard accepts a Fresh nonzero standalone observation through age 100, otherwise direct-reserve fallback, then fails Temporary if neither exists |
+| Actors consumer | System reference guard accepts a Fresh nonzero standalone observation through age 100; only an unavailable Fresh value triggers direct-reserve fallback, and absence of both fails Temporary |
 | Governance | Canonical pool indexing admits exact immutable feed configurations; Router governance controls only the bounded fee rate |
 | History | Changed values emit bounded current-revision events; archive/history remains materialized-provider work |
 
@@ -259,7 +266,7 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
 | `LpPairByTokenId<T>` | `StorageValue<BoundedBTreeMap<..., MaxLpPairs>>` | Bounded reverse index from LP token ID to canonical pool pair |
 
-LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `preflight_register_lp_pair` exposes the same read-only admission contract so a host can reject before an independently dispatched pool mutation. Package `try_state` verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Runtime integration owns host-pool existence and exact registry agreement.
+LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `preflight_register_lp_pair` exposes the same read-only admission contract so a host can reject before an independently dispatched pool mutation. Package `try_state` verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Optional `LpPairIntegrity` host reconciliation additionally validates every binding against concrete pool/LP-asset truth and compares complete pool/index cardinality; `()` retains internal-only checks for independent hosts without that cross-pallet topology.
 
 ## Extrinsics
 
@@ -423,15 +430,15 @@ Production `50 × 20` generation measures every semantic route class independent
 
 | Class | RefTime / ProofSize | Reads / Writes |
 | --- | --- | --- |
-| Exact-input direct XYK | `302,068,000 / 13,998` | `25 / 12` |
-| Exact-input direct mint | `313,452,000 / 27,006` | `32 / 14` |
-| Exact-input Native-anchored XYK | `440,496,000 / 19,253` | `36 / 17` |
-| Exact-output direct XYK | `164,340,000 / 6,208` | `10 / 5` |
-| Exact-output Native-anchored XYK | `304,233,000 / 16,644` | `21 / 10` |
+| Exact-input direct XYK | `294,176,000 / 12,200` | `25 / 12` |
+| Exact-input direct mint | `315,129,000 / 23,410` | `33 / 14` |
+| Exact-input Native-anchored XYK | `435,468,000 / 19,253` | `36 / 17` |
+| Exact-output direct XYK | `164,898,000 / 6,208` | `10 / 5` |
+| Exact-output Native-anchored XYK | `302,348,000 / 16,644` | `21 / 10` |
 
-The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `8,591,000 / 1,489`, one read, and one write.
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. Direct mint's additional read obtains an independent safety reference rather than self-certifying from its execution quote; the cross-release delta belongs to the root Weight ledger. `update_router_fee` measures `8,591,000 / 1,489`, one read, and one write.
 
-The accepted full Actors production generation uses the maximum reachable Router topology plus the System reference guard. It measures exact-input at `510,687,000 / 19,253` with 38 reads and 17 writes and exact-output at `504,401,000 / 19,253` with 37 reads and 17 writes.
+The accepted full Actors production generation uses the maximum reachable Router topology plus the System reference guard. Lazily skipping reserve fallback when a Fresh observation exists reduced exact-input from `514,320,000` to `499,862,000` RefTime (`2.81%`) and exact-output from `510,269,000` to `491,760,000` (`3.63%`) under identical `50 x 20` production-Wasm generation. ProofSize remains `19,253`; exact-input remains 38 reads and 17 writes, and exact-output 37 reads and 17 writes, because the repeated pool key was already represented in the measured proof/database set.
 
 ## Conclusion
 

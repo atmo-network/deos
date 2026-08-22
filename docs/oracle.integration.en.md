@@ -84,24 +84,24 @@ Any change to Actors ingress storage, Oracle hook composition, runtime bounds, p
 
 ## Accepted Production Weight Evidence
 
-Production-Wasm `50 × 20` generation on 2026-07-28 produced the following runtime methods. RefTime below excludes runtime database charges while the reads and writes columns expose those charges explicitly.
+Production-Wasm `50 × 20` generation on 2026-08-21 produced the following runtime methods. RefTime below excludes runtime database charges while the reads and writes columns expose those charges explicitly.
 
 | Path | RefTime | ProofSize | Reads | Writes |
 | --- | ---: | ---: | ---: | ---: |
-| Register for existing producer at maximum occupancy | 142,060,000 | 20,532 | 4 | 4 |
-| Register new producer at maximum occupancy | 211,203,000 | 44,420 conservative bridge | 5 | 5 |
-| Pause | 18,788,000 | 3,551 | 1 | 1 |
-| Resume | 18,788,000 | 3,551 | 1 | 1 |
-| Deactivate | 18,718,000 | 3,551 | 1 | 1 |
-| Publish LastValue with no-subscriber hook branch | 35,829,000 | 3,559 | 4 | 1 |
-| Publish changed EMA with no-subscriber hook branch | 37,575,000 | 3,559 | 4 | 1 |
-| Publish equal EMA refresh | 26,750,000 | 3,551 | 2 | 1 |
+| Register for existing producer at maximum occupancy | 132,142,000 | 20,532 | 3 | 3 |
+| Register new producer at maximum occupancy | 194,720,000 | 44,394 conservative bridge | 4 | 4 |
+| Pause | 15,365,000 | 3,551 | 1 | 1 |
+| Resume | 15,365,000 | 3,551 | 1 | 1 |
+| Deactivate | 15,365,000 | 3,551 | 1 | 1 |
+| Publish LastValue with no-subscriber hook branch | 30,033,000 | 3,559 | 5 | 1 |
+| Publish changed EMA with no-subscriber hook branch | 33,385,000 | 3,559 | 5 | 1 |
+| Publish equal EMA refresh | 21,931,000 | 3,551 | 2 | 1 |
 
-The new-producer benchmark measured `44,420` ProofSize above its generated `34,255` estimate. The runtime file deliberately replaces that estimate with the measured value.
+The new-producer benchmark measured `44,394` ProofSize above its generated `34,255` estimate. The runtime file deliberately replaces that estimate with the measured value.
 
-Changed publication measurement includes the composed no-subscriber Actors hook branch. Dispatch then adds the independently declared worst-branch Actors ingress envelope, currently `430,032,000 / 6,128` with runtime RocksDB charges, so publication remains safe when a clean subscribed feed appends to the active-dirty list.
+Changed publication measurement includes the composed no-subscriber Actors hook branch. Dispatch then adds the independently declared worst-branch Actors ingress envelope, currently `558,385,000 / 6,128` with runtime RocksDB charges, so publication remains safe when a clean subscribed feed appends to the active-dirty list.
 
-The component-wise maximum DEOS Oracle publication method plus that hook declares `668,166,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
+The component-wise maximum DEOS Oracle publication method plus that hook declares `816,770,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
 
 These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
 

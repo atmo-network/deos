@@ -101,6 +101,20 @@ impl RuntimeAddressEventIngress {
     })
   }
 
+  pub fn preflight_inbound_without_source(
+    recipient: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+  ) -> Result<(), IngressFailure> {
+    crate::Actors::preflight_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: None,
+      asset,
+      amount,
+      provenance: None,
+    })
+  }
+
   pub fn on_inbound_without_source(
     recipient: &AccountId,
     asset: AssetKind,
@@ -116,15 +130,25 @@ impl RuntimeAddressEventIngress {
   }
 }
 
+/// Certified movement ordering at the owning atomicity boundary (spec 5.3).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
+pub enum CertifiedMovementProtocol {
+  PostMovementNotify,
+  BlockAtomicPostDispatch,
+  XcmTransactionalPrecommit,
+}
+
 /// One named certified AddressEvent movement path (spec 5.3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
 pub struct AddressEventProducer {
   pub id: &'static str,
+  pub protocol: CertifiedMovementProtocol,
   pub credited_surface: &'static str,
   pub source_provenance: &'static str,
   pub preflight_owner: &'static str,
-  pub notify_owner: &'static str,
+  pub consequence_owner: &'static str,
   pub rollback_owner: &'static str,
   pub weight_owner: &'static str,
 }
@@ -133,74 +157,92 @@ pub struct AddressEventProducer {
 pub const ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
   AddressEventProducer {
     id: "AddressEventIngressExtension::signed_transfer",
+    protocol: CertifiedMovementProtocol::BlockAtomicPostDispatch,
     credited_surface: "Recipient sovereign",
     source_provenance: "Signer / Signed",
     preflight_owner: "TransactionExtension::prepare",
-    notify_owner: "TransactionExtension::post_dispatch_details",
-    rollback_owner: "Balances/Assets ledger revert",
+    consequence_owner: "TransactionExtension::post_dispatch_details",
+    rollback_owner: "Block author/import state transaction",
     weight_owner: "transaction_extension_ingress_base/_notify",
   },
   AddressEventProducer {
     id: "AddressEventIngressExtension::transfer_all",
+    protocol: CertifiedMovementProtocol::BlockAtomicPostDispatch,
     credited_surface: "Recipient sovereign",
     source_provenance: "Signer / Signed, actual recipient delta",
     preflight_owner: "TransactionExtension::prepare",
-    notify_owner: "TransactionExtension::post_dispatch_details",
-    rollback_owner: "Balances ledger revert",
+    consequence_owner: "TransactionExtension::post_dispatch_details",
+    rollback_owner: "Block author/import state transaction",
+    weight_owner: "transaction_extension_ingress_base/_notify",
+  },
+  AddressEventProducer {
+    id: "AddressEventIngressExtension::privileged_or_delegated",
+    protocol: CertifiedMovementProtocol::BlockAtomicPostDispatch,
+    credited_surface: "Recipient sovereign",
+    source_provenance: "Source-less / none",
+    preflight_owner: "TransactionExtension::prepare_dynamic_producer",
+    consequence_owner: "TransactionExtension::post_dispatch_details",
+    rollback_owner: "Block author/import state transaction",
     weight_owner: "transaction_extension_ingress_base/_notify",
   },
   AddressEventProducer {
     id: "TmctolAssetOps::transfer",
+    protocol: CertifiedMovementProtocol::PostMovementNotify,
     credited_surface: "Task `to` sovereign",
     source_provenance: "Sender / InternalProtocol",
     preflight_owner: "TmctolAssetOps::transfer preflight",
-    notify_owner: "RuntimeAddressEventIngress::on_internal_inbound",
+    consequence_owner: "RuntimeAddressEventIngress::on_internal_inbound",
     rollback_owner: "Asset ops storage transaction",
     weight_owner: "task_transfer/task_split_transfer generated weights",
   },
   AddressEventProducer {
     id: "TmctolAssetOps::mint",
+    protocol: CertifiedMovementProtocol::PostMovementNotify,
     credited_surface: "Task `to` sovereign",
     source_provenance: "Source-less / none",
-    preflight_owner: "Source-less preflight inside notify",
-    notify_owner: "RuntimeAddressEventIngress::on_inbound_without_source",
+    preflight_owner: "TmctolAssetOps::mint preflight",
+    consequence_owner: "RuntimeAddressEventIngress::on_inbound_without_source",
     rollback_owner: "Asset ops storage transaction",
     weight_owner: "task_mint generated weight",
   },
   AddressEventProducer {
     id: "TmctolMintDistributionIngress",
+    protocol: CertifiedMovementProtocol::PostMovementNotify,
     credited_surface: "Collateral/minted recipients",
     source_provenance: "Mint source / InternalProtocol",
     preflight_owner: "before_collateral_transfer/before_sink_mint",
-    notify_owner: "after_distribution",
+    consequence_owner: "after_distribution",
     rollback_owner: "TMC distribution transaction",
     weight_owner: "TMC distribution generated weights",
   },
   AddressEventProducer {
     id: "DeosRouter::route_fee",
+    protocol: CertifiedMovementProtocol::PostMovementNotify,
     credited_surface: "Burn Actor sovereign",
     source_provenance: "Fee payer / InternalProtocol",
     preflight_owner: "FeeManagerImpl::route_fee preflight",
-    notify_owner: "FeeManagerImpl::route_fee notify",
+    consequence_owner: "FeeManagerImpl::route_fee notify",
     rollback_owner: "Router fee transaction",
     weight_owner: "Router fee routing generated weights",
   },
   AddressEventProducer {
     id: "XCM asset deposit",
+    protocol: CertifiedMovementProtocol::XcmTransactionalPrecommit,
     credited_surface: "Recipient sovereign",
     source_provenance: "XCM origin / Xcm",
     preflight_owner: "ActorAwareAssetTransactor::preflight_ingress",
-    notify_owner: "ActorAwareAssetTransactor::notify_ingress",
-    rollback_owner: "ActorAwareAssetTransactor deposit revert",
+    consequence_owner: "ActorAwareAssetTransactor::precommit_ingress",
+    rollback_owner: "ActorAwareAssetTransactor storage transaction",
     weight_owner: "One-asset deposit generated weight",
   },
   AddressEventProducer {
     id: "XCM deposit without origin",
+    protocol: CertifiedMovementProtocol::XcmTransactionalPrecommit,
     credited_surface: "Recipient sovereign",
     source_provenance: "Source-less / none",
-    preflight_owner: "Source-less preflight inside notify",
-    notify_owner: "ActorAwareAssetTransactor::on_inbound_without_source",
-    rollback_owner: "ActorAwareAssetTransactor deposit revert",
+    preflight_owner: "ActorAwareAssetTransactor::preflight_ingress",
+    consequence_owner: "ActorAwareAssetTransactor::precommit_ingress",
+    rollback_owner: "ActorAwareAssetTransactor storage transaction",
     weight_owner: "One-asset deposit generated weight",
   },
 ];

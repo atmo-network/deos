@@ -83,6 +83,7 @@ graph TD
 - Preflight Actors ingress for both protocol destinations before value movement, then notify collateral and minted-output recipients directly after distribution; dormant/custody destinations remain balance-only
 - If either mint leg or ingress notification fails, the collateral transfer and both mint legs roll back together
 - Emit `ZapAllocationDistributed` event only after the whole distribution and direct ingress notification succeed
+- A deterministic runtime fault after the first of two direct ingress consequences proves exact storage-root restoration across collateral, issuance, both recipients, TMC counters, events, Actors funding, and scheduler state
 
 `6. Post-Mint Integration`
 
@@ -131,6 +132,8 @@ Spot-price and mint-integral intermediates use checked `U256` arithmetic:
 - `(K×P)² + 2×m×K²×Cost` fails closed if any product or sum exceeds `U256`
 - `sqrt(...)` and subtraction remain checked against the widened discriminant
 - A final value above `Balance` (`u128`) fails with `ArithmeticOverflow`; configured precision is integrity-checked as nonzero
+- Native mint admission precomputes checked cumulative mint and `initial_issuance + cumulative_mint` values before collateral or issuance moves; distribution uses checked remainder and publishes the prevalidated accumulator only after both mint legs succeed
+- `total_native_burned` uses checked baseline addition and issuance subtraction, returning zero on malformed accounting; try-state rejects accumulator overflow, issuance above the genesis-plus-mint baseline, and a nonzero accumulator without its Native curve owner
 
 ## Core Components
 
@@ -295,11 +298,9 @@ While TMC provides the ceiling, TOL provides floor support:
 | --- | --- | --- |
 | `CurveAlreadyExists` | `create_curve` called for existing curve | Reuse the existing immutable launch curve |
 | `NoCurveExists` | Minting attempted without curve | Governance must call `create_curve` |
-| `InsufficientBalance` | User payment < calculated cost | Increase payment amount |
 | `ZeroAmount` | Mint requested with zero cost | Provide non-zero payment |
 | `ArithmeticOverflow` | A widened price, discriminant intermediate, or mint result is unrepresentable | Use a smaller payment or an economically bounded curve configuration |
 | `InvalidParameters` | Both price and slope are zero, assets share one physical ledger identity, or runtime precision is zero | Supply a valid curve with distinct assets and nonzero host precision |
-| `ExceedsMaxSupply` | Mint would exceed Balance::MAX | Theoretical limit, unlikely in practice |
 
 ## Implementation Status
 

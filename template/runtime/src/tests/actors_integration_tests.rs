@@ -709,7 +709,7 @@ fn starvation_observation_weight() -> Weight {
   <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_on_idle_base()
 }
 
-/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/contract probes, and
+/// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, loaded-state probe, and
 /// the head consume, but not the actor's full cycle admission. Materializes the only spec 8.6.3
 /// starvation trigger: a live FIFO head blocked by weight with no admitted attempt.
 fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
@@ -717,8 +717,7 @@ fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
   let cursor = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_future();
   let scan =
     <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
-  let hot = Actors::scheduler_actor_hot_probe_weight_upper();
-  let contract = Actors::scheduler_actor_contract_probe_weight_upper();
+  let state_probe = Actors::scheduler_actor_state_probe_weight_upper();
   let consume = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page());
   let instance = Actors::active_actor_state(actor_id).expect("actor exists");
@@ -729,8 +728,7 @@ fn starvation_blocked_budget(actor_id: ActorId) -> Weight {
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
-    .saturating_add(hot)
-    .saturating_add(contract)
+    .saturating_add(state_probe)
     .saturating_add(consume)
     .saturating_add(cycle);
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
@@ -938,6 +936,49 @@ fn pool_creation_owns_an_exact_lp_reverse_index() {
 }
 
 #[test]
+fn pool_index_post_dispatch_failure_rejects_and_restores_exact_root() {
+  seeded_test_ext().execute_with(|| {
+    const INDEXED_ASSET: u32 = 901_003;
+    System::set_block_number(1);
+    let signer_pair = sr25519::Pair::from_seed(&[54u8; 32]);
+    let signer = crate::AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &signer,
+      1_000_000_000_000_000_000,
+    );
+    assert_ok!(create_test_asset(INDEXED_ASSET, &signer));
+    let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
+    let call =
+      RuntimeCall::AssetConversion(polkadot_sdk::pallet_asset_conversion::Call::create_pool {
+        asset1: Box::new(pair.0),
+        asset2: Box::new(pair.1),
+      });
+    crate::configs::pool_index::set_fail_pool_index_post_dispatch(true);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let rejected = polkadot_sdk::frame_support::storage::with_transaction(
+      || -> polkadot_sdk::frame_support::storage::TransactionOutcome<Result<bool, DispatchError>> {
+        let result = Executive::apply_extrinsic(signed_extrinsic(&signer_pair, 0, call));
+        let rejected = result.is_err() || matches!(result, Ok(Err(_)));
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(rejected))
+      },
+    )
+    .expect("pool-index rejection check");
+    crate::configs::pool_index::set_fail_pool_index_post_dispatch(false);
+    assert!(
+      rejected,
+      "post-dispatch index fault must reject the block candidate"
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "rejection restores pool, LP asset/index, Oracle feeds, balances, events, and nonce"
+    );
+    assert!(crate::AssetConversion::get_reserves(pair.0, pair.1).is_err());
+  });
+}
+
+#[test]
 fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
   seeded_test_ext().execute_with(|| {
     const INDEXED_ASSET: u32 = 901_002;
@@ -965,6 +1006,8 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
       .expect("created pool must exist");
     let lp_before_add_bound = Assets::balance(pool.lp_token, &ALICE);
+    let root_before_add_failure =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(
       <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::add_liquidity(
         &ALICE,
@@ -978,8 +1021,32 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
         DispatchError::Other("MinimumLpOutputNotMet")
       ))
     );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before_add_failure,
+      "late LP-output rejection restores ledgers, pool, LP index, events, and issuance"
+    );
     assert_eq!(Assets::balance(pool.lp_token, &ALICE), lp_before_add_bound);
     let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
+    let root_before_remove_failure =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert!(
+      <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::remove_liquidity(
+        &ALICE,
+        AssetKind::Local(pool.lp_token),
+        pair.0,
+        pair.1,
+        lp_amount,
+        Balance::MAX,
+        Balance::MAX,
+      )
+      .is_err()
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before_remove_failure,
+      "late minimum-output rejection restores ledgers, pool, LP index, events, and issuance"
+    );
     pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
       pairs.remove(&pool.lp_token);
     });
@@ -1275,6 +1342,79 @@ fn actor_fee_collector_routes_the_full_amount_to_fee_sink() {
 }
 
 #[test]
+fn actor_fee_collector_ignores_malformed_actor_and_scheduler_state() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let payer = BOB;
+    let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
+    let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    let amount = crate::EXISTENTIAL_DEPOSIT;
+    let payer_before = native_balance(&payer);
+    let sink_before = native_balance(&fee_sink);
+    let hot_before = Actors::actor_hot(fee_sink_id).expect("Fee Sink hot state");
+    pallet_deos_actors::ActorFunding::<Runtime>::remove(fee_sink_id);
+    pallet_deos_actors::QueueTail::<Runtime>::put(1);
+    pallet_deos_actors::QueueOccupancy::<Runtime>::put(0);
+    let wakeup_len = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    pallet_deos_actors::WakeupCursorLen::<Runtime>::insert(
+      pallet_deos_actors::WakeupClock::Block,
+      wakeup_len,
+    );
+    System::reset_events();
+
+    assert_ok!(TmctolFeeCollector::collect_fee(
+      &payer,
+      &fee_sink,
+      AssetKind::Native,
+      amount,
+    ));
+
+    assert_eq!(native_balance(&payer), payer_before - amount);
+    assert_eq!(native_balance(&fee_sink), sink_before + amount);
+    assert_eq!(Actors::actor_funding(fee_sink_id), None);
+    assert_eq!(Actors::actor_hot(fee_sink_id), Some(hot_before));
+    assert_eq!(pallet_deos_actors::QueueTail::<Runtime>::get(), 1);
+    assert_eq!(pallet_deos_actors::QueueOccupancy::<Runtime>::get(), 0);
+    assert_eq!(
+      pallet_deos_actors::WakeupCursorLen::<Runtime>::get(pallet_deos_actors::WakeupClock::Block),
+      wakeup_len
+    );
+    assert!(
+      System::events()
+        .iter()
+        .all(|record| !matches!(record.event, RuntimeEvent::Actors(..)))
+    );
+  });
+}
+
+#[test]
+fn actor_fee_collector_rolls_back_completely_on_ledger_failure() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let payer = BOB;
+    let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
+    System::reset_events();
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert!(
+      TmctolFeeCollector::collect_fee(
+        &payer,
+        &fee_sink,
+        AssetKind::Native,
+        native_balance(&payer).saturating_add(1),
+      )
+      .is_err()
+    );
+
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+  });
+}
+
+#[test]
 fn fee_sink_processes_ten_percent_and_splits_it_fifty_fifty() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -1499,12 +1639,12 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.ref_time() / unit.ref_time())
     .min(available.proof_size() / unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(31_146_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(11_967_713_000, 166_430));
+  assert_eq!(base, Weight::from_parts(31_076_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(17_373_176_000, 718_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
-    units_per_block, 5,
-    "conservative ProofSize is the active fanout limit"
+    units_per_block, 1,
+    "complete actor-state ProofSize is the active fanout limit"
   );
 
   let max_actors = u64::from(<Runtime as pallet_deos_actors::Config>::MaxActiveActors::get());
@@ -1518,10 +1658,10 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
 
   assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 1));
   assert_eq!(subscription_pages, 157);
-  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 32);
+  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 157);
   assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
-  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 32);
-  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 63);
+  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 157);
+  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 314);
 }
 
 #[test]
@@ -2615,7 +2755,8 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
     );
     let (reserve_in, reserve_out) =
       crate::AssetConversion::get_reserves(asset_in, pooled_out).expect("pool reserves exist");
-    let reserve_reference = reserve_out.saturating_mul(PRECISION) / reserve_in;
+    let reserve_reference = primitives::checked_scaled_ratio(reserve_out, reserve_in, PRECISION)
+      .expect("reference pool ratio is representable");
     assert_ok!(TmctolDexOps::ensure_system_reference_price(
       &ExecutionContext::new(&ALICE, ActorType::System),
       asset_in,
@@ -3622,15 +3763,22 @@ fn whitelist_size_is_bounded_by_runtime_type_limit() {
 }
 
 #[test]
-fn ten_julian_year_horizon_matches_six_second_runtime_binding() {
+fn typed_ten_julian_year_horizons_match_runtime_clocks() {
   const JULIAN_YEAR_MILLIS: u64 = 36525 * 24 * 60 * 60 * 10;
   const TEN_JULIAN_YEARS_MILLIS: u64 = JULIAN_YEAR_MILLIS * 10;
-  let derived = TEN_JULIAN_YEARS_MILLIS.div_ceil(crate::SLOT_DURATION);
+  let block_horizon = TEN_JULIAN_YEARS_MILLIS.div_ceil(crate::SLOT_DURATION);
+  let cadence_horizon =
+    TEN_JULIAN_YEARS_MILLIS.div_ceil(crate::configs::actor_config::ActorCadenceTickMillis::get());
   assert_eq!(crate::SLOT_DURATION, 6_000);
-  assert_eq!(derived, 52_596_000);
+  assert_eq!(block_horizon, 52_596_000);
+  assert_eq!(cadence_horizon, 631_152_000);
   assert_eq!(
     u64::from(crate::configs::actor_config::ActorMaxExecutionDelayBlocks::get()),
-    derived
+    block_horizon
+  );
+  assert_eq!(
+    crate::configs::actor_config::ActorMaxCadenceDelayTicks::get(),
+    cadence_horizon
   );
 }
 
@@ -3638,8 +3786,12 @@ fn ten_julian_year_horizon_matches_six_second_runtime_binding() {
 fn timer_horizon_validation_accepts_exact_runtime_bound() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let max_delay: u32 = <Runtime as pallet_deos_actors::Config>::MaxExecutionDelayBlocks::get();
-    let largest_valid_cadence = u64::from(max_delay);
+    let largest_valid_cadence =
+      <Runtime as pallet_deos_actors::Config>::MaxCadenceDelayTicks::get();
+    assert!(
+      largest_valid_cadence
+        > u64::from(<Runtime as pallet_deos_actors::Config>::MaxExecutionDelayBlocks::get())
+    );
     let schedule = |every_ticks| Schedule {
       trigger: Trigger::cadenced(every_ticks),
       cooldown_blocks: 0,
@@ -4554,6 +4706,95 @@ fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
 }
 
 #[test]
+fn xcm_source_less_preflight_failure_preserves_exact_holding_and_state_on_both_deposit_paths() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let sovereign = actor_account(actor_id);
+    let recipient = account_location(sovereign);
+    pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let asset = native_xcm_asset(5_000);
+    let result = <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
+      asset_to_holding(asset.clone()),
+      &recipient,
+      None,
+    );
+    let Err((returned, xcm::latest::Error::FailedToTransactAsset(_))) = result else {
+      panic!("source-less preflight must reject with the original holding");
+    };
+    assert_eq!(
+      returned.assets_iter().collect::<Vec<_>>(),
+      vec![asset.clone()]
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "read-only XCM preflight failure changes no ledger, event, or Actors state"
+    );
+
+    let surplus_result =
+      <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset_with_surplus(
+        asset_to_holding(asset.clone()),
+        &recipient,
+        None,
+      );
+    let Err((returned, xcm::latest::Error::FailedToTransactAsset(_))) = surplus_result else {
+      panic!("surplus-deposit preflight must reject with the original holding");
+    };
+    assert_eq!(returned.assets_iter().collect::<Vec<_>>(), vec![asset]);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "surplus-deposit preflight failure changes no ledger, event, or Actors state"
+    );
+  });
+}
+
+#[test]
+fn xcm_deposit_failure_rolls_back_precommit_events_and_exact_holding() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let sovereign = actor_account(actor_id);
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      polkadot_sdk::sp_runtime::MultiAddress::Id(sovereign.clone()),
+      u128::MAX,
+    ));
+    let recipient = account_location(sovereign);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let asset = native_xcm_asset(1);
+    let result = <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
+      asset_to_holding(asset.clone()),
+      &recipient,
+      None,
+    );
+    let Err((returned, _)) = result else {
+      panic!("ledger overflow must reject after the Actors precommit");
+    };
+    assert_eq!(returned.assets_iter().collect::<Vec<_>>(), vec![asset]);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "deposit failure restores the precommit, events, ledger, and holding"
+    );
+  });
+}
+
+#[test]
 fn xcm_ingress_without_source_is_ignored_for_owner_only() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -5013,16 +5254,10 @@ fn wakeup_registration_admission_uses_generated_runtime_weights() {
 #[test]
 fn scheduler_actor_probe_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
-    let hot =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
-    let contract =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_contract_probe();
-    assert_eq!(Actors::scheduler_actor_hot_probe_weight_upper(), hot);
-    assert_eq!(Actors::scheduler_actor_contract_probe_weight_upper(), contract);
-    assert_eq!(
-      Actors::scheduler_actor_probe_weight_upper(),
-      hot.saturating_add(contract)
-    );
+    let state =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_state_probe();
+    assert_eq!(Actors::scheduler_actor_state_probe_weight_upper(), state);
+    assert_eq!(Actors::scheduler_actor_probe_weight_upper(), state);
   });
 }
 
@@ -5031,26 +5266,27 @@ fn scheduler_paged_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
     let scan = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
     let consume = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page();
-    let hot = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
-    let contract =
-      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_contract_probe();
+    let state = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_actor_state_probe();
     assert!(scan.ref_time() > 0 && scan.proof_size() > 0);
     assert!(consume.ref_time() > 0 && consume.proof_size() > 0);
-    assert_eq!(Actors::scheduler_actor_hot_probe_weight_upper(), hot);
-    assert_eq!(Actors::scheduler_actor_contract_probe_weight_upper(), contract);
+    assert_eq!(Actors::scheduler_actor_state_probe_weight_upper(), state);
   });
 }
 
 #[test]
 fn wakeup_drain_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
+    let close =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::close_actor();
     assert_eq!(
       Actors::wakeup_cursor_drain_unit_weight_upper(false),
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_partial()
+        .saturating_add(close)
     );
     assert_eq!(
       Actors::wakeup_cursor_drain_unit_weight_upper(true),
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_remove()
+        .saturating_add(close)
     );
   });
 }
@@ -5094,8 +5330,14 @@ fn certified_ingress_inventory_is_closed_and_typed() {
       assert!(!producer.credited_surface.is_empty());
       assert!(!producer.source_provenance.is_empty());
       assert!(!producer.preflight_owner.is_empty());
-      assert!(!producer.notify_owner.is_empty());
+      assert!(!producer.consequence_owner.is_empty());
       assert!(!producer.rollback_owner.is_empty());
+      assert!(matches!(
+        producer.protocol,
+        crate::configs::address_event_ingress::CertifiedMovementProtocol::PostMovementNotify
+          | crate::configs::address_event_ingress::CertifiedMovementProtocol::BlockAtomicPostDispatch
+          | crate::configs::address_event_ingress::CertifiedMovementProtocol::XcmTransactionalPrecommit
+      ));
       assert!(!producer.weight_owner.is_empty());
       ids.push(producer.id);
     }
@@ -5210,6 +5452,8 @@ fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
     // path, and the movement rolls back with the failed notify (spec 6.1).
     pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
     let actor_before = native_balance(&sovereign);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     let failure = TmctolAssetOps::transfer(&ALICE, &sovereign, AssetKind::Native, 5_000)
       .expect_err("ticket exhaustion must reject the certified transfer");
     assert_eq!(
@@ -5222,6 +5466,11 @@ fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
       actor_before,
       "certified transfer rolls back movement and Actors effects together"
     );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late ingress rejection restores ledgers, events, funding, and scheduler state"
+    );
     // An absent sovereign destination is balance-only: the same transfer succeeds
     // and performs no Actors work.
     let bob_before = native_balance(&BOB);
@@ -5232,6 +5481,60 @@ fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
       3_000,
     ));
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(3_000));
+  });
+}
+
+#[test]
+fn asset_ops_source_less_mint_preflight_is_read_only_on_rejection() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    let sovereign = actor_account(actor_id);
+    pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let failure = TmctolAssetOps::mint(&sovereign, AssetKind::Native, 5_000)
+      .expect_err("ticket exhaustion must reject before source-less mint movement");
+    assert_eq!(failure.retry, RetryClass::Permanent);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "source-less preflight rejection changes no ledger, event, or Actors state"
+    );
+  });
+}
+
+#[test]
+fn asset_ops_native_mint_ledger_failure_precedes_notification() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    let sovereign = actor_account(actor_id);
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      polkadot_sdk::sp_runtime::MultiAddress::Id(sovereign.clone()),
+      u128::MAX,
+    ));
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let failure = TmctolAssetOps::mint(&sovereign, AssetKind::Native, 1)
+      .expect_err("exact native mint must reject ledger overflow");
+    assert_eq!(failure.retry, RetryClass::Permanent);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "failed value movement cannot leave a certified notification"
+    );
   });
 }
 
@@ -6182,6 +6485,23 @@ fn inert_timer_contract() -> Option<pallet_deos_actors::ActorContractOf<Runtime>
   )
 }
 
+fn inert_manual_window_contract(
+  start: u32,
+  end: u32,
+) -> Option<pallet_deos_actors::ActorContractOf<Runtime>> {
+  system_active_contract(
+    manual_schedule(),
+    Some(ScheduleWindow { start, end }),
+    alloc::vec![pallet_deos_actors::Step {
+      precondition: None,
+      task: inert_task(),
+      on_error: StepErrorPolicy::AbortCycle,
+    }]
+    .try_into()
+    .expect("fits"),
+  )
+}
+
 fn setup_inert_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
   let mut actor_ids: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
   for _ in 0..n {
@@ -6846,10 +7166,6 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
       u64::from(<Runtime as pallet_deos_actors::Config>::MaxSweepBatch::get()),
       10_000u128,
     );
-    for &actor_id in &retry_ids {
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 102));
-    }
-
     let expired_count = <Runtime as pallet_deos_actors::Config>::MaxSweepBatch::get();
     let mut expired_ids = alloc::vec::Vec::new();
     for _ in 0..expired_count {
@@ -6876,6 +7192,7 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
       <<Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve as Get<Weight>>::get();
     for block in 102..=150 {
       System::set_block_number(block);
+      set_consensus_timestamp(u64::from(block).saturating_mul(6_000));
       Actors::on_initialize(block);
       run_idle(budget);
       let retries_done = retry_ids.iter().all(|id| {
@@ -7069,6 +7386,121 @@ fn checkpoint_a_s6_dense_10k_wakeups_converge_without_drops() {
       let hot = Actors::actor_hot(*actor_id).expect("active actor");
       hot.wakeup_pointer.is_none() && hot.queue_ticket.is_some()
     }));
+  });
+}
+
+#[test]
+fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let tick_millis = primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS;
+    set_consensus_timestamp(tick_millis);
+
+    let tick_ids = setup_inert_actors(256, 10_000u128);
+    let mut block_ids = alloc::vec::Vec::new();
+    for _ in 0..256 {
+      let actor_id = Actors::next_actor_id();
+      assert_ok!(Actors::create_system_actor(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        inert_manual_window_contract(10, 1_000),
+      ));
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id,
+      ));
+      let hot = Actors::actor_hot(actor_id).expect("manual actor is active");
+      assert_eq!(
+        hot.wakeup_pointer.map(|pointer| pointer.block),
+        Some(WakeupKey::Block(10)),
+      );
+      block_ids.push(actor_id);
+    }
+    assert!(tick_ids.iter().all(|actor_id| {
+      Actors::actor_hot(*actor_id).is_some_and(|hot| {
+        hot
+          .wakeup_pointer
+          .is_some_and(|pointer| matches!(pointer.block, WakeupKey::Tick(2)))
+      })
+    }));
+
+    System::set_block_number(10);
+    set_consensus_timestamp(tick_millis.saturating_mul(100));
+    let mut counts = tick_ids
+      .iter()
+      .chain(block_ids.iter())
+      .map(|actor_id| (*actor_id, 0u32))
+      .collect::<alloc::collections::BTreeMap<_, _>>();
+    let mut tick_first = None;
+    let mut tick_last = None;
+    let mut block_first = None;
+    let mut block_last = None;
+    let mut previous_tick_actor = None;
+    let mut previous_block_actor = None;
+
+    for block in 10..=80 {
+      System::set_block_number(block);
+      System::reset_events();
+      Actors::on_initialize(block);
+      run_idle(Weight::MAX);
+      let mut served_this_block = alloc::collections::BTreeSet::new();
+      for record in System::events() {
+        let RuntimeEvent::Actors(Event::CycleSummary { actor_id, .. }) = record.event else {
+          continue;
+        };
+        let Some(count) = counts.get_mut(&actor_id) else {
+          continue;
+        };
+        assert!(
+          served_this_block.insert(actor_id),
+          "actor {actor_id} executed twice in block {block}",
+        );
+        *count = count.saturating_add(1);
+        assert_eq!(*count, 1, "delayed cadence must not catch up in a burst");
+        if tick_ids.contains(&actor_id) {
+          assert!(
+            previous_tick_actor.is_none_or(|previous| actor_id > previous),
+            "tick-clock FIFO order regressed at actor {actor_id}",
+          );
+          previous_tick_actor = Some(actor_id);
+          tick_first.get_or_insert(block);
+          tick_last = Some(block);
+        } else {
+          assert!(
+            previous_block_actor.is_none_or(|previous| actor_id > previous),
+            "block-clock FIFO order regressed at actor {actor_id}",
+          );
+          previous_block_actor = Some(actor_id);
+          block_first.get_or_insert(block);
+          block_last = Some(block);
+        }
+      }
+      if counts.values().all(|count| *count == 1) {
+        break;
+      }
+    }
+
+    assert!(counts.values().all(|count| *count == 1));
+    let tick_first = tick_first.expect("tick clock makes progress");
+    let block_first = block_first.expect("block clock makes progress");
+    let tick_last = tick_last.expect("tick clock completes");
+    let block_last = block_last.expect("block clock completes");
+    assert!(
+      tick_first.abs_diff(block_first) <= 1,
+      "mixed clocks must begin service within one block: tick={tick_first}, block={block_first}",
+    );
+    assert!(
+      tick_last.abs_diff(block_last) <= 1,
+      "mixed clocks must finish service within one block: tick={tick_last}, block={block_last}",
+    );
+    for actor_id in tick_ids.iter().chain(block_ids.iter()) {
+      let hot = Actors::actor_hot(*actor_id).expect("stress actor remains active");
+      assert!(hot.queue_ticket.is_none());
+      assert!(hot.wakeup_pointer.is_some());
+    }
   });
 }
 

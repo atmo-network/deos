@@ -372,6 +372,62 @@ fn try_state_reconciles_bounded_forward_and_reverse_indexes() {
   });
 }
 
+#[cfg(feature = "try-runtime")]
+#[test]
+fn try_state_rejects_orphaned_feed_producer_and_observation_identity() {
+  for corruption in 0u8..8 {
+    new_test_ext().execute_with(|| {
+      register(1, 1, Aggregation::LastValue);
+      let config = crate::Feeds::<Test>::get(1).expect("feed fixture");
+      match corruption {
+        0 => crate::Feeds::<Test>::insert(2, config),
+        1 => crate::FeedIds::<Test>::mutate(|feed_ids| feed_ids.clear()),
+        2 => crate::ProducerIds::<Test>::mutate(|producer_ids| {
+          producer_ids.try_push(2).expect("producer fixture fits")
+        }),
+        3 => crate::ProducerFeeds::<Test>::insert(
+          2,
+          polkadot_sdk::frame_support::BoundedVec::try_from(vec![1]).expect("index fixture fits"),
+        ),
+        4 => crate::ProducerFeeds::<Test>::insert(
+          1,
+          polkadot_sdk::frame_support::BoundedVec::try_from(vec![1, 1])
+            .expect("index fixture fits"),
+        ),
+        5 => crate::Observations::<Test>::insert(
+          2,
+          Observation {
+            value: 1,
+            updated_at: 1,
+            revision: 1,
+          },
+        ),
+        6 => crate::Observations::<Test>::insert(
+          1,
+          Observation {
+            value: 1,
+            updated_at: 2,
+            revision: 1,
+          },
+        ),
+        7 => crate::Observations::<Test>::insert(
+          1,
+          Observation {
+            value: 1,
+            updated_at: 1,
+            revision: 0,
+          },
+        ),
+        _ => unreachable!(),
+      }
+      assert!(
+        Oracle::do_try_state().is_err(),
+        "Oracle identity corruption case {corruption} must fail",
+      );
+    });
+  }
+}
+
 #[test]
 fn ema_matches_router_elapsed_and_rounding_vectors() {
   new_test_ext().execute_with(|| {
@@ -416,6 +472,57 @@ fn ema_matches_router_elapsed_and_rounding_vectors() {
       (equal.value, equal.revision, equal.updated_at),
       (1_000_000_000, 9, 1)
     );
+  });
+}
+
+#[test]
+fn ema_is_monotone_in_sample_and_elapsed_with_bounded_rounding() {
+  new_test_ext().execute_with(|| {
+    register(
+      1,
+      1,
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+    );
+    let old = 1_000_000_000u128;
+    let mut previous = 0;
+    for sample in [1, old / 2, old, 2_000_000_000, u128::MAX] {
+      crate::Observations::<Test>::insert(
+        1,
+        Observation {
+          value: old,
+          updated_at: 1,
+          revision: 7,
+        },
+      );
+      System::set_block_number(2);
+      assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, sample));
+      let value = Oracle::observations(1).expect("EMA sample publishes").value;
+      assert!(value >= old.min(sample) && value <= old.max(sample));
+      assert!(value >= previous, "EMA must be monotone in the sample");
+      previous = value;
+    }
+
+    let sample = 2_000_000_000u128;
+    let mut previous = old;
+    for elapsed in [1u64, 2, 10, 100, 1_000, u32::MAX.into()] {
+      crate::Observations::<Test>::insert(
+        1,
+        Observation {
+          value: old,
+          updated_at: 1,
+          revision: 7,
+        },
+      );
+      System::set_block_number(1 + elapsed);
+      assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, sample));
+      let value = Oracle::observations(1)
+        .expect("EMA elapsed case publishes")
+        .value;
+      assert!(value >= previous && value <= sample);
+      previous = value;
+    }
   });
 }
 

@@ -311,13 +311,14 @@ plan() {
 
 inventory_patterns() {
     local rule_id="$1"
+    local inventory_file="${2:-$PROJECT_ROOT/.agents/skills/alignment/rules/actors-identity-rules.json}"
     node -e '
 const fs = require("node:fs");
 const inventory = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 const rule = inventory.rules.find((candidate) => candidate.id === process.argv[2]);
 if (!rule || !Array.isArray(rule.patterns)) process.exit(1);
 process.stdout.write(rule.patterns.join("|"));
-' "$PROJECT_ROOT/.agents/skills/alignment/rules/actors-identity-rules.json" "$rule_id"
+' "$inventory_file" "$rule_id"
 }
 
 run_audit() {
@@ -326,13 +327,33 @@ run_audit() {
     fi
     phase_banner "Step 2: Architecture rules"
     local bounded_iteration_allowlist
+    local actors_execution_panic_allowlist
+    local actors_pallet_panic_allowlist
+    local runtime_panic_allowlist
     bounded_iteration_allowlist="$(inventory_patterns actors-bounded-iteration-allowlist)"
+    actors_execution_panic_allowlist="$(inventory_patterns actors-execution-panic-owner-allowlist)"
+    actors_pallet_panic_allowlist="$(inventory_patterns actors-pallet-panic-owner-allowlist)"
+    runtime_panic_allowlist="$(inventory_patterns runtime-panic-owner-allowlist "$PROJECT_ROOT/.agents/skills/alignment/rules/runtime-panic-rules.json")"
     check_rule "\\.iter\\(\\)|for .* in .*::iter\\(\\)" "Potential unbounded state iteration detected. DEOS prefers bounded/O(1) mechanics." "tests.rs|benchmarking.rs|mock.rs|deos-bypass: bounded-iter|legs\\.iter\\(|normalized_transfers\\.iter\\(|tracked\\.iter\\(|${bounded_iteration_allowlist}" "O(N) Iteration Anti-Pattern" "template/pallets/staking/docs/architecture.en.md" "FATAL" "hallucination" "The violation is a concrete false move against the O(1) contract"
     check_rule "StorageValue<.*, Vec<|StorageMap<.*, Vec<" "Unbounded Vec found in storage. Use BoundedVec for consensus state." "tests.rs|mock.rs|deos-bypass: vec" "Unbounded Vector Anti-Pattern" "docs/read-model.contract.en.md" "WARNING" "hallucination" "Consensus-state unboundedness is a direct architecture falsehood"
     check_rule "sudo_|ensure_root" "Admin/root policy detected. DEOS prefers mechanism over policy for core flows." "tests.rs|mock.rs|pallet-governance|deos-bypass: admin" "Sudo Root Policy Anti-Pattern" "docs/manifesto.en.md" "FATAL" "boundary-drift" "This usually signals a mechanism-to-policy drift across a constitutional boundary"
     check_rule "pub fn claim.*\\(origin" "Traditional claim extrinsic detected. Prefer token-driven balance ingress where possible." "tests.rs|mock.rs|staking|deos-bypass: claim" "Empty Extrinsic Anti-Pattern" "docs/core.architecture.en.md" "WARNING" "boundary-drift" "This usually means token-driven ingress is drifting back into user-pulled extrinsic control"
     check_rule "remove_liquidity|burn_native|withdraw_reserve" "TMC reserve extraction pattern detected. The minting curve must remain unidirectional." "tests.rs|mock.rs" "TMC Reserve Extraction Anti-Pattern" "template/pallets/tmc/docs/architecture.en.md" "FATAL" "boundary-drift" "This breaches the mint-only physics boundary by reintroducing extraction semantics" "/template/pallets/tmc/"
     check_rule "\\* [A-Za-z_0-9]+ *: *u128" "Direct u128 multiplication detected. Check intermediate overflow and prefer U256 where needed." "tests.rs|mock.rs|weights.rs|deos-bypass: math" "u128 Math Overflow Risk" "template/pallets/tmc/docs/architecture.en.md" "WARNING" "hallucination" "Arithmetic safety claims are false until overflow boundaries are proven"
+    check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "Unowned Actors execution panic surface detected. Return a typed failure or register an exact mechanically precluded owner." "$actors_execution_panic_allowlist" "Unowned Actors Execution Panic Surface" "template/pallets/actors/docs/architecture.en.md" "FATAL" "hallucination" "Actors execution assertions require canonical-loader, admission, type, integrity, or transactional-finalization ownership" "/template/pallets/actors/src/execution\\.rs"
+    check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "Unowned Actors pallet panic surface detected. Return a typed failure or register an exact genesis, integrity, or admission owner." "$actors_pallet_panic_allowlist" "Unowned Actors Pallet Panic Surface" "template/pallets/actors/docs/architecture.en.md" "FATAL" "hallucination" "Actors pallet assertions require explicit genesis, integrity, or admitted-helper ownership" "/template/pallets/actors/src/lib\\.rs"
+    if [[ "$MODE" == "all" ]]; then
+        local original_targets=("${AUDIT_TARGETS[@]}")
+        AUDIT_TARGETS=("$TEMPLATE_DIR/runtime/src")
+        check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "Unowned reference-runtime panic surface detected. Return a typed failure or register an exact construction, test, benchmark, TryRuntime, or bounded-catalog owner." "$runtime_panic_allowlist|/tests/" "Unowned Reference Runtime Panic Surface" "BACKLOG.md" "FATAL" "hallucination" "Runtime assertions require explicit construction, test, benchmark, TryRuntime, or bounded-catalog ownership" "/template/runtime/src/"
+        AUDIT_TARGETS=("${original_targets[@]}")
+    else
+        check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "Unowned reference-runtime panic surface detected. Return a typed failure or register an exact construction, test, benchmark, TryRuntime, or bounded-catalog owner." "$runtime_panic_allowlist|/tests/" "Unowned Reference Runtime Panic Surface" "BACKLOG.md" "FATAL" "hallucination" "Runtime assertions require explicit construction, test, benchmark, TryRuntime, or bounded-catalog ownership" "/template/runtime/src/"
+    fi
+    check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "Unowned production pallet panic surface detected. Return a typed failure or mark a mechanically precluded same-line owner." "tests.rs|mock.rs|benchmarking.rs|deos-bypass: panic-owner" "Unowned Production Pallet Panic Surface" "BACKLOG.md" "FATAL" "hallucination" "Production pallet panic assumptions require an explicit owner and falsifiable preclusion evidence" "/template/pallets/(asset-registry|governance|oracle|router|staking|tmc)/src/"
+    if [[ "$MODE" == "changed" ]]; then
+        check_rule "panic!|unreachable!|\\.expect\\(|\\.unwrap\\(" "New unowned Rust panic surface detected. Return a typed failure, prove the site mechanically precluded, or mark the same line with 'deos-bypass: panic-owner' and its owner." "tests.rs|/tests/|mock.rs|benchmarking.rs|/examples/|genesis_config_presets.rs|embedding-runtime|deos-bypass: panic-owner" "Unowned Runtime Panic Surface" "BACKLOG.md" "FATAL" "hallucination" "Reachable panic assumptions require an explicit owner and falsifiable preclusion evidence"
+    fi
 }
 
 print_summary() {

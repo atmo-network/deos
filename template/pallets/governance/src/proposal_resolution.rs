@@ -3,10 +3,7 @@ use crate::*;
 use alloc::{collections::BTreeSet, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_support::transactional;
-use polkadot_sdk::sp_runtime::{
-  Perbill,
-  traits::{SaturatedConversion, Saturating},
-};
+use polkadot_sdk::sp_runtime::Perbill;
 
 /// Core policy outcome for a proposal given its vote weights.
 /// This is the single source of truth for turnout, tie, approval, and winner selection.
@@ -34,14 +31,14 @@ impl<T: Config> Pallet<T> {
   /// Projects a winner bounded vec from an iterator of ballots.
   fn project_winners(
     ballots: impl Iterator<Item = ProposalBallot<T::AccountId, T::Epoch>>,
-  ) -> BoundedVec<T::AccountId, T::MaxWinningVoteAccountsPerCall> {
-    ballots.fold(BoundedVec::default(), |mut winners, ballot| {
-      let push_result = winners.try_push(ballot.account);
-      if push_result.is_err() {
-        panic!("winner projection must preserve the bounded vote set")
-      }
+  ) -> Result<BoundedVec<T::AccountId, T::MaxWinningVoteAccountsPerCall>, DispatchError> {
+    let mut winners = BoundedVec::default();
+    for ballot in ballots {
       winners
-    })
+        .try_push(ballot.account)
+        .map_err(|_| Error::<T>::ProposalVoteSetFull)?;
+    }
+    Ok(winners)
   }
 
   /// Checks whether the given account has already cast an ordinary-track vote.
@@ -168,13 +165,12 @@ impl<T: Config> Pallet<T> {
               Error::<T>::ProposalVoteKindNotAllowedForPrimaryTrackFamily
             );
             ensure!(
-              current_epoch.saturated_into::<u32>()
+              current_epoch
                 >= Self::proposal_effective_primary_open_epoch(
                   domain,
                   item_id,
                   proposal.submitted_epoch,
-                )?
-                .saturated_into::<u32>(),
+                )?,
               Error::<T>::ProposalPrimaryTrackNotOpen
             );
             ensure!(
@@ -190,13 +186,12 @@ impl<T: Config> Pallet<T> {
           }
           ProposalVoteKind::Nay => {
             ensure!(
-              current_epoch.saturated_into::<u32>()
+              current_epoch
                 >= Self::proposal_effective_primary_open_epoch(
                   domain,
                   item_id,
                   proposal.submitted_epoch,
-                )?
-                .saturated_into::<u32>(),
+                )?,
               Error::<T>::ProposalPrimaryTrackNotOpen
             );
             ensure!(
@@ -216,13 +211,12 @@ impl<T: Config> Pallet<T> {
               Error::<T>::ProposalVoteKindNotAllowedForPrimaryTrackFamily
             );
             ensure!(
-              current_epoch.saturated_into::<u32>()
+              current_epoch
                 >= Self::proposal_effective_primary_open_epoch(
                   domain,
                   item_id,
                   proposal.submitted_epoch,
-                )?
-                .saturated_into::<u32>(),
+                )?,
               Error::<T>::ProposalPrimaryTrackNotOpen
             );
             ensure!(
@@ -242,13 +236,12 @@ impl<T: Config> Pallet<T> {
               Error::<T>::ProposalVoteKindNotAllowedForPrimaryTrackFamily
             );
             ensure!(
-              current_epoch.saturated_into::<u32>()
+              current_epoch
                 >= Self::proposal_effective_primary_open_epoch(
                   domain,
                   item_id,
                   proposal.submitted_epoch,
-                )?
-                .saturated_into::<u32>(),
+                )?,
               Error::<T>::ProposalPrimaryTrackNotOpen
             );
             ensure!(
@@ -268,13 +261,12 @@ impl<T: Config> Pallet<T> {
               Error::<T>::ProposalVoteKindNotAllowedForPrimaryTrackFamily
             );
             ensure!(
-              current_epoch.saturated_into::<u32>()
+              current_epoch
                 >= Self::proposal_effective_primary_open_epoch(
                   domain,
                   item_id,
                   proposal.submitted_epoch,
-                )?
-                .saturated_into::<u32>(),
+                )?,
               Error::<T>::ProposalPrimaryTrackNotOpen
             );
             ensure!(
@@ -362,14 +354,14 @@ impl<T: Config> Pallet<T> {
         let veto_count = votes.vetoes.len() as u32;
         let pass_count = votes.passes.len() as u32;
         let immediate_cancellation =
-          Self::current_veto_cancellation(domain, item_id, &votes, false);
+          Self::current_veto_cancellation(domain, item_id, &votes, false)?;
         let urgent_authorization = if immediate_cancellation.is_none() {
-          Self::current_urgent_authorization(domain, item_id, &votes)
+          Self::current_urgent_authorization(domain, item_id, &votes)?
         } else {
           None
         };
         let urgent_executes_immediately = if urgent_authorization.is_some() {
-          Self::urgent_fast_track_executes_immediately(domain, item_id, &votes)
+          Self::urgent_fast_track_executes_immediately(domain, item_id, &votes)?
         } else {
           false
         };
@@ -395,7 +387,7 @@ impl<T: Config> Pallet<T> {
     Self::update_vote_power_custody(domain, track, &account, vote_lock_until)?;
     Self::extend_governance_lock(account.clone(), vote_lock_until);
     if is_first_participation {
-      Self::note_total_participation(domain, &account);
+      Self::note_total_participation(domain, &account)?;
     }
     Self::deposit_event(Event::ProposalVoteCast {
       domain,
@@ -419,7 +411,7 @@ impl<T: Config> Pallet<T> {
       }
     }
     // Reset confirm timer if a new vote changes the passing state during confirm
-    if T::ProposalConfirmPeriod::get().saturated_into::<u32>() > 0
+    if !T::ProposalConfirmPeriod::get().is_zero()
       && ProposalConfirmStartedAt::<T>::contains_key(domain, item_id)
     {
       match Self::proposal_resolution_state(domain, item_id) {
@@ -430,9 +422,8 @@ impl<T: Config> Pallet<T> {
           // No longer passing — reset confirm, re-schedule maturity
           let reset_epoch = T::EpochProvider::current_epoch();
           ProposalConfirmStartedAt::<T>::remove(domain, item_id);
-          let next_epoch_u32 = reset_epoch.saturated_into::<u32>().saturating_add(1);
-          let _ =
-            Self::schedule_proposal_maturity_at(next_epoch_u32.saturated_into(), domain, item_id);
+          let next_epoch = Self::add_epochs(reset_epoch, 1u32.into())?;
+          Self::schedule_proposal_maturity_at(next_epoch, domain, item_id)?;
           Self::deposit_event(Event::ProposalConfirmReset {
             domain,
             item_id,
@@ -460,7 +451,7 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn proposal_governance_lock_until(
+  pub(crate) fn proposal_governance_lock_until(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     submitted_epoch: T::Epoch,
@@ -484,12 +475,14 @@ impl<T: Config> Pallet<T> {
       .as_ref()
       .map(|position| position.amount)
       .unwrap_or_default();
-    let target = T::VotePowerCustody::target_amount(domain, track, account, previous_amount);
+    let target = T::VotePowerCustody::target_amount(domain, track, account, previous_amount)?;
     ensure!(
       target >= previous_amount,
       Error::<T>::VotePowerCustodyTargetDecreased
     );
-    let additional = target.saturating_sub(previous_amount);
+    let additional = target
+      .checked_sub(&previous_amount)
+      .ok_or(Error::<T>::VotePowerCustodyTargetDecreased)?;
     if !additional.is_zero() {
       T::VotePowerCustody::lock(account, lock_id, additional)?;
     }
@@ -620,7 +613,7 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> u64 {
+  ) -> Result<u64, DispatchError> {
     let _ = (
       domain,
       item_id,
@@ -628,11 +621,11 @@ impl<T: Config> Pallet<T> {
       submitted_epoch,
       maturity_epoch,
     );
-    let mut total = 0u64;
-    for ballot in ballots {
-      total = total.saturating_add(ballot.weight);
-    }
-    total
+    ballots.iter().try_fold(0u64, |total, ballot| {
+      total
+        .checked_add(ballot.weight)
+        .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
+    })
   }
 
   pub(crate) fn proposal_veto_weight_sum(
@@ -642,7 +635,7 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> u64 {
+  ) -> Result<u64, DispatchError> {
     let _ = (
       domain,
       item_id,
@@ -650,29 +643,29 @@ impl<T: Config> Pallet<T> {
       submitted_epoch,
       maturity_epoch,
     );
-    let mut total = 0u64;
-    for ballot in ballots {
-      total = total.saturating_add(ballot.weight);
-    }
-    total
+    ballots.iter().try_fold(0u64, |total, ballot| {
+      total
+        .checked_add(ballot.weight)
+        .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
+    })
   }
 
   pub(crate) fn proposal_raw_protection_weight_sum(
     domain: T::DomainId,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> u64 {
+  ) -> Result<u64, DispatchError> {
     let _ = domain;
-    let mut total = 0u64;
-    for ballot in ballots {
-      total = total.saturating_add(ballot.raw_power);
-    }
-    total
+    ballots.iter().try_fold(0u64, |total, ballot| {
+      total
+        .checked_add(ballot.raw_power)
+        .ok_or(Error::<T>::ProposalVoteTallyOverflow.into())
+    })
   }
 
   pub(crate) fn proposal_raw_veto_weight_sum(
     domain: T::DomainId,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
-  ) -> u64 {
+  ) -> Result<u64, DispatchError> {
     Self::proposal_raw_protection_weight_sum(domain, ballots)
   }
 
@@ -683,8 +676,8 @@ impl<T: Config> Pallet<T> {
     submitted_epoch: T::Epoch,
     maturity_epoch: T::Epoch,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-  ) -> (u64, u64) {
-    (
+  ) -> Result<(u64, u64), DispatchError> {
+    Ok((
       Self::proposal_veto_weight_sum(
         domain,
         item_id,
@@ -692,7 +685,7 @@ impl<T: Config> Pallet<T> {
         submitted_epoch,
         maturity_epoch,
         &votes.vetoes,
-      ),
+      )?,
       Self::proposal_veto_weight_sum(
         domain,
         item_id,
@@ -700,15 +693,15 @@ impl<T: Config> Pallet<T> {
         submitted_epoch,
         maturity_epoch,
         &votes.passes,
-      ),
-    )
+      )?,
+    ))
   }
 
   pub(crate) fn proposal_protection_track_is_closed(
     current_epoch: T::Epoch,
     protection_close_epoch: T::Epoch,
   ) -> bool {
-    current_epoch.saturated_into::<u32>() >= protection_close_epoch.saturated_into::<u32>()
+    current_epoch >= protection_close_epoch
   }
 
   pub(crate) fn veto_weight_strictly_exceeds_threshold(
@@ -719,8 +712,8 @@ impl<T: Config> Pallet<T> {
       return false;
     }
     let threshold_parts = u128::from(T::ProposalVetoThreshold::get().deconstruct());
-    let veto_parts = u128::from(veto_weight).saturating_mul(1_000_000_000u128);
-    let threshold_weight = u128::from(total_veto_issuance).saturating_mul(threshold_parts);
+    let veto_parts = u128::from(veto_weight) * 1_000_000_000u128;
+    let threshold_weight = u128::from(total_veto_issuance) * threshold_parts;
     veto_parts > threshold_weight
   }
 
@@ -735,8 +728,8 @@ impl<T: Config> Pallet<T> {
     if threshold_parts == 0 {
       return true;
     }
-    let veto_parts = u128::from(veto_weight).saturating_mul(1_000_000_000u128);
-    let threshold_weight = u128::from(total_veto_issuance).saturating_mul(threshold_parts);
+    let veto_parts = u128::from(veto_weight) * 1_000_000_000u128;
+    let threshold_weight = u128::from(total_veto_issuance) * threshold_parts;
     veto_parts >= threshold_weight
   }
 
@@ -752,8 +745,8 @@ impl<T: Config> Pallet<T> {
       return pass_weight == total_protection_supply;
     }
     let threshold_parts = u128::from(threshold.deconstruct());
-    let pass_parts = u128::from(pass_weight).saturating_mul(1_000_000_000u128);
-    let threshold_weight = u128::from(total_protection_supply).saturating_mul(threshold_parts);
+    let pass_parts = u128::from(pass_weight) * 1_000_000_000u128;
+    let threshold_weight = u128::from(total_protection_supply) * threshold_parts;
     pass_parts > threshold_weight
   }
 
@@ -762,11 +755,14 @@ impl<T: Config> Pallet<T> {
     item_id: T::WinningVoteItemId,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
     allow_track_outcome: bool,
-  ) -> Option<VetoCancellation> {
-    let raw_veto_weight = Self::proposal_raw_veto_weight_sum(domain, &votes.vetoes);
+  ) -> Result<Option<VetoCancellation>, DispatchError> {
+    let raw_veto_weight = Self::proposal_raw_veto_weight_sum(domain, &votes.vetoes)?;
     let total_veto_issuance = T::VetoVotePowerProvider::total_issuance(domain);
-    let (current_epoch, protection_open_epoch, protection_close_epoch) =
-      Self::proposal_protection_weighting_window(domain, item_id)?;
+    let Some((current_epoch, protection_open_epoch, protection_close_epoch)) =
+      Self::proposal_protection_weighting_window(domain, item_id)
+    else {
+      return Ok(None);
+    };
     let (veto_weight, pass_weight) = Self::proposal_veto_track_weights(
       domain,
       item_id,
@@ -774,25 +770,25 @@ impl<T: Config> Pallet<T> {
       protection_open_epoch,
       protection_close_epoch,
       votes,
-    );
+    )?;
     if Self::veto_weight_strictly_exceeds_threshold(raw_veto_weight, total_veto_issuance) {
-      return Some(VetoCancellation {
+      return Ok(Some(VetoCancellation {
         veto_weight,
         pass_weight,
         mode: VetoCancellationMode::ImmediateThreshold,
-      });
+      }));
     }
     if allow_track_outcome
       && Self::veto_weight_meets_minimum_turnout(raw_veto_weight, total_veto_issuance)
       && veto_weight >= pass_weight
     {
-      return Some(VetoCancellation {
+      return Ok(Some(VetoCancellation {
         veto_weight,
         pass_weight,
         mode: VetoCancellationMode::TrackOutcome,
-      });
+      }));
     }
-    None
+    Ok(None)
   }
 
   pub(crate) fn proposal_is_urgent_authorized(
@@ -806,42 +802,44 @@ impl<T: Config> Pallet<T> {
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-  ) -> Option<UrgentAuthorization> {
+  ) -> Result<Option<UrgentAuthorization>, DispatchError> {
     if Self::proposal_is_urgent_authorized(domain, item_id) {
-      return None;
+      return Ok(None);
     }
-    let metadata = ProposalMetadataByItem::<T>::get(domain, item_id)?;
+    let Some(metadata) = ProposalMetadataByItem::<T>::get(domain, item_id) else {
+      return Ok(None);
+    };
     if !T::ProposalUrgentPolicyProvider::is_expeditable(domain, metadata.payload_kind) {
-      return None;
+      return Ok(None);
     }
-    let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes);
+    let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes)?;
     let total_protection_supply = T::VetoVotePowerProvider::total_issuance(domain);
     if !Self::pass_weight_meets_fast_track_threshold(pass_weight, total_protection_supply) {
-      return None;
+      return Ok(None);
     }
-    Some(UrgentAuthorization {
+    Ok(Some(UrgentAuthorization {
       pass_weight,
       total_protection_supply,
-    })
+    }))
   }
 
   pub(crate) fn urgent_fast_track_executes_immediately(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-  ) -> bool {
+  ) -> Result<bool, DispatchError> {
     let Some(metadata) = ProposalMetadataByItem::<T>::get(domain, item_id) else {
-      return false;
+      return Ok(false);
     };
     if !T::ProposalUrgentPolicyProvider::executes_immediately_on_unanimous_pass(
       domain,
       metadata.payload_kind,
     ) {
-      return false;
+      return Ok(false);
     }
-    let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes);
+    let pass_weight = Self::proposal_raw_protection_weight_sum(domain, &votes.passes)?;
     let total_protection_supply = T::VetoVotePowerProvider::total_issuance(domain);
-    total_protection_supply > 0 && pass_weight == total_protection_supply
+    Ok(total_protection_supply > 0 && pass_weight == total_protection_supply)
   }
 
   pub(crate) fn authorize_urgent_fast_track(
@@ -901,19 +899,21 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn note_winning_participation_batch(
     domain: T::DomainId,
     accounts: impl IntoIterator<Item = T::AccountId>,
-  ) {
+  ) -> DispatchResult {
     for account in Self::collect_unique_accounts(accounts) {
-      Self::note_winning_participation(domain, &account);
+      Self::note_winning_participation(domain, &account)?;
     }
+    Ok(())
   }
 
   pub(crate) fn note_pass_winning_participation(
     domain: T::DomainId,
     votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-  ) {
+  ) -> DispatchResult {
     for ballot in &votes.passes {
-      Self::note_winning_participation(domain, &ballot.account);
+      Self::note_winning_participation(domain, &ballot.account)?;
     }
+    Ok(())
   }
 
   pub(crate) fn infer_winning_primary_option_from_winners(
@@ -980,17 +980,17 @@ impl<T: Config> Pallet<T> {
         }
       }
       crate::ProposalPrimaryTrackFamily::Invoice => {
-        let positive_weight = tally
-          .amplify_weight
-          .saturating_add(tally.approve_weight)
-          .saturating_add(tally.reduce_weight);
-        if positive_weight == tally.nay_weight {
+        let positive_weight = u128::from(tally.amplify_weight)
+          + u128::from(tally.approve_weight)
+          + u128::from(tally.reduce_weight);
+        if positive_weight == u128::from(tally.nay_weight) {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie);
         }
-        if positive_weight < tally.nay_weight {
+        if positive_weight < u128::from(tally.nay_weight) {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
         }
-        let positive_approval = Perbill::from_rational(positive_weight, tally.turnout_weight);
+        let positive_approval =
+          Perbill::from_rational(positive_weight, u128::from(tally.turnout_weight));
         if positive_approval < approval_threshold {
           return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
         }
@@ -1014,7 +1014,7 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
     if let Some(cancellation) =
-      Self::current_veto_cancellation(domain, item_id, &votes, !urgent_authorized)
+      Self::current_veto_cancellation(domain, item_id, &votes, !urgent_authorized)?
     {
       return Self::veto_cancel_active_proposal(domain, item_id, cancellation);
     }
@@ -1036,7 +1036,7 @@ impl<T: Config> Pallet<T> {
         protection_open_epoch,
         protection_close_epoch,
       ),
-    );
+    )?;
     match Self::evaluate_core_resolution_policy(
       family,
       &tally,
@@ -1048,7 +1048,7 @@ impl<T: Config> Pallet<T> {
       }
       CoreResolutionOutcome::Passing(option) => {
         if tally.pass_weight > tally.veto_weight {
-          Self::note_pass_winning_participation(domain, &votes);
+          Self::note_pass_winning_participation(domain, &votes)?;
         }
         let winners = match option {
           ProposalPrimaryTrackOption::Aye => Self::project_winners(votes.ayes.into_iter()),
@@ -1056,7 +1056,7 @@ impl<T: Config> Pallet<T> {
           ProposalPrimaryTrackOption::Amplify => Self::project_winners(votes.amplifies.into_iter()),
           ProposalPrimaryTrackOption::Approve => Self::project_winners(votes.approves.into_iter()),
           ProposalPrimaryTrackOption::Reduce => Self::project_winners(votes.reduces.into_iter()),
-        };
+        }?;
         Self::resolve_active_proposal(domain, item_id, winners, Some(option))
       }
     }
@@ -1077,7 +1077,7 @@ impl<T: Config> Pallet<T> {
       Self::remove_active_proposal_storage(domain, item_id, false, true)?;
     let current_epoch = T::EpochProvider::current_epoch();
     if let Some(ref proposer) = proposer {
-      Self::note_successful_authored_proposal(domain, proposer);
+      Self::note_successful_authored_proposal(domain, proposer)?;
     }
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1143,7 +1143,7 @@ impl<T: Config> Pallet<T> {
     }
     let current_epoch = T::EpochProvider::current_epoch();
     if let Some(ref proposer) = proposer {
-      Self::note_successful_authored_proposal(domain, proposer);
+      Self::note_successful_authored_proposal(domain, proposer)?;
     }
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1274,7 +1274,7 @@ impl<T: Config> Pallet<T> {
           .vetoes
           .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
           .map(|ballot| ballot.account.clone()),
-      );
+      )?;
     }
     let (_, active_count) = Self::remove_active_proposal_storage(domain, item_id, true, true)?;
     let current_epoch = T::EpochProvider::current_epoch();
@@ -1383,8 +1383,8 @@ impl<T: Config> Pallet<T> {
       crate::ProposalPrimaryTrackFamily::Invoice => {
         let positive_weight = tally
           .amplify_weight
-          .saturating_add(tally.approve_weight)
-          .saturating_add(tally.reduce_weight);
+          .checked_add(tally.approve_weight)?
+          .checked_add(tally.reduce_weight)?;
         let (leading_positive_option, leading_positive_weight) =
           Self::invoice_leading_positive_option(&tally);
         Some(ProposalPrimaryTrackTally::Invoice {
@@ -1417,7 +1417,7 @@ impl<T: Config> Pallet<T> {
       T::Epoch,
       T::Epoch,
     ),
-  ) -> ProposalVoteTally {
+  ) -> Result<ProposalVoteTally, DispatchError> {
     let aye_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1425,7 +1425,7 @@ impl<T: Config> Pallet<T> {
       primary_open_epoch,
       primary_close_epoch,
       &votes.ayes,
-    );
+    )?;
     let nay_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1433,7 +1433,7 @@ impl<T: Config> Pallet<T> {
       primary_open_epoch,
       primary_close_epoch,
       &votes.nays,
-    );
+    )?;
     let amplify_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1441,7 +1441,7 @@ impl<T: Config> Pallet<T> {
       primary_open_epoch,
       primary_close_epoch,
       &votes.amplifies,
-    );
+    )?;
     let approve_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1449,7 +1449,7 @@ impl<T: Config> Pallet<T> {
       primary_open_epoch,
       primary_close_epoch,
       &votes.approves,
-    );
+    )?;
     let reduce_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1457,7 +1457,7 @@ impl<T: Config> Pallet<T> {
       primary_open_epoch,
       primary_close_epoch,
       &votes.reduces,
-    );
+    )?;
     let veto_weight = Self::proposal_veto_weight_sum(
       domain,
       item_id,
@@ -1465,7 +1465,7 @@ impl<T: Config> Pallet<T> {
       protection_open_epoch,
       protection_close_epoch,
       &votes.vetoes,
-    );
+    )?;
     let pass_weight = Self::proposal_veto_weight_sum(
       domain,
       item_id,
@@ -1473,14 +1473,17 @@ impl<T: Config> Pallet<T> {
       protection_open_epoch,
       protection_close_epoch,
       &votes.passes,
-    );
+    )?;
     let turnout_weight = aye_weight
-      .saturating_add(nay_weight)
-      .saturating_add(amplify_weight)
-      .saturating_add(approve_weight)
-      .saturating_add(reduce_weight);
-    let veto_turnout_weight = veto_weight.saturating_add(pass_weight);
-    ProposalVoteTally {
+      .checked_add(nay_weight)
+      .and_then(|total| total.checked_add(amplify_weight))
+      .and_then(|total| total.checked_add(approve_weight))
+      .and_then(|total| total.checked_add(reduce_weight))
+      .ok_or(Error::<T>::ProposalVoteTallyOverflow)?;
+    let veto_turnout_weight = veto_weight
+      .checked_add(pass_weight)
+      .ok_or(Error::<T>::ProposalVoteTallyOverflow)?;
+    Ok(ProposalVoteTally {
       aye_voters: votes.ayes.len() as u32,
       nay_voters: votes.nays.len() as u32,
       amplify_voters: votes.amplifies.len() as u32,
@@ -1497,7 +1500,7 @@ impl<T: Config> Pallet<T> {
       pass_weight,
       turnout_weight,
       veto_turnout_weight,
-    }
+    })
   }
 
   pub(crate) fn do_proposal_vote_tally(
@@ -1508,13 +1511,7 @@ impl<T: Config> Pallet<T> {
     let protection_window = Self::proposal_protection_weighting_window(domain, item_id)?;
     let votes =
       ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
-    Some(Self::build_vote_tally(
-      domain,
-      item_id,
-      &votes,
-      primary_window,
-      protection_window,
-    ))
+    Self::build_vote_tally(domain, item_id, &votes, primary_window, protection_window).ok()
   }
 
   fn account_frozen_ballot(
@@ -1626,15 +1623,18 @@ impl<T: Config> Pallet<T> {
       ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
     let primary_window = Self::proposal_ordinary_weighting_window(domain, item_id)?;
     let protection_window = Self::proposal_protection_weighting_window(domain, item_id)?;
-    let tally = Self::build_vote_tally(domain, item_id, &votes, primary_window, protection_window);
-    if let Some(cancellation) = Self::current_veto_cancellation(domain, item_id, &votes, false) {
+    let tally =
+      Self::build_vote_tally(domain, item_id, &votes, primary_window, protection_window).ok()?;
+    if let Some(cancellation) =
+      Self::current_veto_cancellation(domain, item_id, &votes, false).ok()?
+    {
       return Some(ProposalResolutionState::VetoPassing {
         veto_weight: cancellation.veto_weight,
         pass_weight: cancellation.pass_weight,
         mode: cancellation.mode,
       });
     }
-    if current_epoch.saturated_into::<u32>() < maturity_epoch.saturated_into::<u32>() {
+    if current_epoch < maturity_epoch {
       return Some(ProposalResolutionState::VotingWindowOpen {
         current_epoch,
         maturity_epoch,
@@ -1642,7 +1642,7 @@ impl<T: Config> Pallet<T> {
     }
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
     if let Some(cancellation) =
-      Self::current_veto_cancellation(domain, item_id, &votes, !urgent_authorized)
+      Self::current_veto_cancellation(domain, item_id, &votes, !urgent_authorized).ok()?
     {
       return Some(ProposalResolutionState::VetoPassing {
         veto_weight: cancellation.veto_weight,
@@ -1667,12 +1667,11 @@ impl<T: Config> Pallet<T> {
           ProposalPrimaryTrackOption::Reduce => ProposalResolutionState::PassingReduce,
         };
         if let Some(confirm_started) = ProposalConfirmStartedAt::<T>::get(domain, item_id) {
-          let confirm_end_u32 = confirm_started
-            .saturated_into::<u32>()
-            .saturating_add(T::ProposalConfirmPeriod::get().saturated_into::<u32>());
+          let confirm_end_epoch =
+            Self::add_epochs(confirm_started, T::ProposalConfirmPeriod::get()).ok()?;
           return Some(ProposalResolutionState::Confirming {
             confirm_started_epoch: confirm_started,
-            confirm_end_epoch: confirm_end_u32.saturated_into(),
+            confirm_end_epoch,
           });
         }
         Some(passing_state)
@@ -1689,9 +1688,7 @@ impl<T: Config> Pallet<T> {
     }
     let finalization = Self::finalized_proposal(domain, item_id)?;
     if let Some(enactment_epoch) = ProposalPendingEnactmentAt::<T>::get(domain, item_id) {
-      if T::EpochProvider::current_epoch().saturated_into::<u32>()
-        < enactment_epoch.saturated_into::<u32>()
-      {
+      if T::EpochProvider::current_epoch() < enactment_epoch {
         let FinalizedProposalOutcome::Approved {
           approval,
           enactment: ProposalEnactmentOutcome::NotAttempted,

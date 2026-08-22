@@ -374,6 +374,11 @@ impl pallet_governance::Config for Test {
   type WinningVoteItemId = u32;
   type Epoch = Epoch;
   type EpochProvider = MockEpochProvider;
+  type MaxEpochCatchUpPerBlock = ConstU32<1>;
+  type MaxMaturingProposalsPerBlock = ConstU32<3>;
+  type MaxPendingEnactmentsPerBlock = ConstU32<4>;
+  type MaxFinalizedProposalOutcomesPerBlock = ConstU32<1024>;
+  type MaxExpiringAccountsPerBlock = ConstU32<512>;
   type WinningVoteLookbackEpochs = ConstU32<3>;
   type MaxWinningVotesPerEpoch = ConstU16<2>;
   type MaxWinningVoteItemsPerEpoch = ConstU32<2>;

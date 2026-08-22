@@ -152,10 +152,18 @@ impl pallet_asset_registry::TokenDomainHook for AssetRegistryTokenDomainHook {
   }
 }
 
+pub struct ReservedForeignAssetLocations;
+impl Contains<polkadot_sdk::staging_xcm::latest::Location> for ReservedForeignAssetLocations {
+  fn contains(location: &polkadot_sdk::staging_xcm::latest::Location) -> bool {
+    location == &polkadot_sdk::staging_xcm::latest::Location::here()
+  }
+}
+
 impl pallet_asset_registry::Config for Runtime {
   type RegistryOrigin = AssetsForceOrigin;
   type AssetIdGenerator = crate::configs::xcm_config::LocationToAssetId;
   type AssetOwner = AssetRegistryAccount;
+  type ReservedLocations = ReservedForeignAssetLocations;
   type TokenDomainHook = AssetRegistryTokenDomainHook;
   type WeightInfo = crate::weights::pallet_asset_registry::SubstrateWeight<Runtime>;
 }

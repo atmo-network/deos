@@ -74,8 +74,7 @@ pub trait WeightInfo {
   fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
   fn scheduler_paged_execute_cheap(executions: u32) -> Weight;
   fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
-  fn scheduler_actor_hot_probe() -> Weight;
-  fn scheduler_actor_contract_probe() -> Weight;
+  fn scheduler_actor_state_probe() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn funding_snapshot_open(assets: u32) -> Weight;
@@ -369,14 +368,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
   }
 
-  fn scheduler_actor_hot_probe() -> Weight {
-    Weight::from_parts(10_756_000, 3_665)
-      .saturating_add(T::DbWeight::get().reads(1))
-  }
-
-  fn scheduler_actor_contract_probe() -> Weight {
-    Weight::from_parts(18_648_000, 9_928)
-      .saturating_add(T::DbWeight::get().reads(2))
+  fn scheduler_actor_state_probe() -> Weight {
+    Weight::from_parts(38_413_000, 12_200)
+      .saturating_add(T::DbWeight::get().reads(5))
   }
 
   fn transaction_extension_ingress_base() -> Weight {
@@ -533,8 +527,7 @@ impl WeightInfo for TestWeightInfo {
     Weight::from_parts(75_000_000, 16_000)
       .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
   }
-  fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
-  fn scheduler_actor_contract_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
+  fn scheduler_actor_state_probe() -> Weight { Weight::from_parts(38_413_000, 12_200) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_snapshot_open(assets: u32) -> Weight {

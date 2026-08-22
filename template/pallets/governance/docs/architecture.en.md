@@ -126,7 +126,7 @@ This gives UI/admin observability without turning the pallet into an unbounded a
 - `rolling_sum`
 
 Each epoch slot holds bounded `item_id`s.
-The implementation rotates the ring forward on access and clears expired slots as epochs move.
+The implementation constructs the exact configured slot width without fallible pushes, rotates the ring forward on access, and clears expired slots as epochs move. Stored windows must retain exactly `WinningVoteLookbackEpochs` slots: mutation returns `RewardWindowInvariant` on disagreement, read projections return zero reward power, and expiry service leaves malformed state untouched rather than panicking. Rolling, participation, winning, authored, and successful-authorship increments are checked and return `RewardCounterOverflow`; transactional proposal and resolution ingress restores prior windows, counters, custody, and proposal state on a late counter failure. Runtime integrity requires the configured maximum rolling count and retained finalized-outcome capacity to fit their stored widths.
 
 ### Participation counters, proposal tally, and status surfaces
 
@@ -256,6 +256,10 @@ Active proposer identity is also chain-native today through the bounded `Proposa
 - `ExpiryBuckets[epoch]`: winning-vote expiry schedule for accounts whose memory may decay
 - `LastProcessedEpoch`: `on_initialize` service cursor preventing repeated work
 
+Epoch values are admitted through exact `Epoch <-> u32` round trips; voting-window rotation rejects unrepresentable epochs and uses saturation only for the explicit pre-genesis expiry floor. Proposal, confirmation, enactment, retention, and reward-expiry deadlines use checked addition. Unrepresentable horizons return `EpochArithmeticOverflow`; terminal rescheduling does not clamp to `u32::MAX` or fabricate a later epoch.
+
+`MaxEpochCatchUpPerBlock = 1` advances through empty epochs chronologically, while `CurrentEpochServicePhase` serializes maturity, pending enactment, finalized-outcome expiry, and reward expiry for the first owned epoch. Each nonempty phase processes only its configured per-block item cap, retains the ordered suffix under the same epoch key, and prevents `LastProcessedEpoch` from advancing until all four families drain. Generated production Weight separately measures the phase/base path and each bounded item branch; runtime evidence proves every admitted branch fits the block in RefTime and ProofSize.
+
 `Migration state`:
 The current pre-fork storage baseline is `3` in this repository line. The active ballot schema stores vote-time epoch plus frozen computed weight and raw protection power directly in `ProposalVotesByItem`, and `GovernanceLocks` stores account-level lock horizons; downstream live forks must own explicit migrations if they carry an older deployed governance schema.
 
@@ -320,6 +324,7 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 - Applies rejection precedence as authority, required eligibility, preimage availability/size/typed compatibility, duplicate, domain capacity, author-index integrity, author capacity, and exact maturity-bucket capacity before fee transfer
 - Admission computes and retains the maturity epoch; insertion uses that admitted value and transactionally writes the same prechecked bucket after fee collection
 - Runtime validation decodes the exact bounded `L1RootAction`, Router parameter, tactical invoice, or advisory payload shape, rejects trailing bytes and the wrong domain/kind combination, and caps signed preimages at 256 bytes
+- Direct host-executor invocation with an advisory kind returns typed `UnsupportedCall`; missing tactical treasury configuration returns `DispatchFailed`; bounded winner projection returns `ProposalVoteSetFull` on disagreement rather than relying on panic-only assumptions
 - `PrimaryEligibleSigned` additionally calls the host eligibility provider before any fee or proposal mutation
 - The DEOS provider admits protocol / Native `L1RootAction` and `Intent` only when the signer has nonzero direct primary-track staking power; `$VETO` protection balance never enters that predicate
 - Derives proposer identity from the signer rather than an admin-supplied sponsor field
@@ -342,6 +347,9 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 - Rejects over-cap voter sets
 - If a newly updated raw `Veto` tally becomes **strictly greater** than the runtime threshold against the domain's total eligible protection supply, the extrinsic finalizes the proposal immediately as `VetoCancelled`
 - Ballot insertion, governance-lock extension, GovXP participation, urgent authorization, and immediate terminal resolution share one transaction; terminal failure restores exact pre-vote state
+- Ballot, primary-turnout, and protection-turnout sums use checked `u64` accumulation; `ProposalVoteTallyOverflow` rolls back vote ingress and makes tally/status projections unavailable rather than saturating a malformed result
+- Invoice positive-weight policy widens the three-option sum into `u128`, while its bounded read projection uses checked `u64` addition and becomes unavailable on malformed overflow; boundary tests distinguish the exact `u64::MAX + 1` majority from a saturated tie
+- Veto and fast-track threshold cross-products widen every `u64` weight by the exact Perbill denominator in `u128`, including `u64::MAX`, so boundary comparison cannot overflow or round through a narrowed ratio
 - The later maturity-time protection gate only becomes active once raw `Veto` turnout reaches the runtime dust floor against that same protection supply
 - Emits `ProposalVoteCast`
 
@@ -521,6 +529,7 @@ The related state distinction is also important:
 - `ActiveProposalCapReached`: domain-local active proposal budget exhausted
 - `ProposalMaturityBucketFull`: auto-finalization scheduling cap hit for one epoch
 - `DuplicateWinningVoteItem` / `DuplicateWinningVoteResolutionItem`: live memory uniqueness violation
+- `RewardWindowInvariant`: persisted reward-memory width disagrees with the configured lookback
 - `FinalizedProposalOutcomeExpiryBucketFull`: finalized-outcome retention expiry cap hit
 - `ExpiryBucketFull`: account-expiry scheduling hit its bounded service bucket cap
 
@@ -556,6 +565,11 @@ Current runtime policy values:
 - `ProposalVetoThreshold = 50%` of eligible protection supply, strict `>` for immediate cancellation
 - `ProposalVetoMinimumVetoTurnout = 1%` of eligible protection supply
 - `ProposalMinimumTurnout = 200` weighted units
+- `MaxEpochCatchUpPerBlock = 1`
+- `MaxMaturingProposalsPerBlock = 3`
+- `MaxPendingEnactmentsPerBlock = 4`
+- `MaxFinalizedProposalOutcomesPerBlock = 1024`
+- `MaxExpiringAccountsPerBlock = 512`
 - `FinalizedProposalOutcomeRetentionEpochs = 16`
 - `MaxFinalizedProposalOutcomesPerEpoch = 1024`
 - `MaxExpiringAccountsPerEpoch = 1024`
@@ -630,9 +644,9 @@ Admin control stays intentionally narrow. `reject_proposal(...)`, policy-aware `
 
 Bounded finalized-outcome retention is sufficient for the kernel pallet. Durable archival history belongs to events, indexers, or a future dedicated history surface rather than unbounded in-kernel storage growth.
 
-Transferable ballot source non-reuse is enforced through `VotePowerCustodyByAccount` and the runtime `VotePowerCustody` adapter. The reference runtime transfers all free `$VETO` or same-domain staking receipt balance into one framework-owned custody account after a ballot is accepted. Later ballots read free plus already-custodied balance, reuse that amount across concurrent proposals, and increase the position only from newly free units. The signed `unlock_vote_power` call releases the source after its maximum horizon.
+Transferable ballot source non-reuse is enforced through `VotePowerCustodyByAccount` and the runtime `VotePowerCustody` adapter. The reference runtime transfers all free `$VETO` or same-domain staking receipt balance into one framework-owned custody account after a ballot is accepted. Later ballots read free plus already-custodied balance with checked addition, reuse that amount across concurrent proposals and `Veto <-> Pass` replacement, and increase the position only from newly free units. Distinct receipt assets retain distinct lock IDs, while domains backed by `$VETO` deliberately share its one aggregate source. The signed `unlock_vote_power` call releases the source after its monotonic maximum horizon.
 
-Runtime regressions independently prove transfer rejection, concurrent reuse, later-position growth, and matured release for both `$VETO` and same-domain staking receipts.
+Runtime regressions independently prove transfer rejection, concurrent reuse, repeated-vote rejection, `Veto <-> Pass` replacement, later-position growth, multiple domain receipt lock IDs, maximum-horizon extension, proportional `U256` normalization through `u128::MAX` supply, and matured release for both `$VETO` and same-domain staking receipts. Deterministic faults immediately after custody lock and unlock transfers prove exact storage-root restoration across voter/custody ledgers, ballots, aggregate positions, governance locks, participation, proposal state, and events. Try-state reconciles every aggregate position with its governance horizon, every live transferable ballot with a covering position and maximum proposal horizon, and each represented lock ID's summed positions with the host custody ledger.
 
 ## Query and Computation Semantics
 
@@ -725,7 +739,7 @@ Those belong to events plus external indexing/materialization rather than perman
 The live pallet now exposes both bounded active-proposal discovery and bounded recent-finalized discovery for one domain:
 
 - `active_proposal_ids(domain)` returns the current live proposal id set
-- `recent_finalized_proposals(domain)` returns newest-first bounded recent-finalized summaries for retained outcomes through one canonical runtime view instead of asking clients to sort raw retained-outcome storage themselves
+- `recent_finalized_proposals(domain)` returns newest-first bounded recent-finalized summaries for retained outcomes through one canonical runtime view instead of asking clients to sort raw retained-outcome storage themselves; defensive overbound storage is truncated to the newest configured projection rather than panicking
 - `ActiveProposals` and `FinalizedProposals` remain keyed by `(domain, item_id)` underneath those surfaces; recent records also expose that full identity explicitly
 
 That means live proposal discovery and bounded recent-finalized discovery are chain-native today, while full archive/search/filter UX across expired history still belongs to explicit indexed/materialized views. Consumers SHOULD NOT treat ad-hoc iteration over current raw storage topology as the stable product contract.
@@ -779,10 +793,11 @@ The implementation is covered by:
 - Runtime integration tests in `template/runtime/src/tests/staking_integration_tests.rs`
 - FRAME v2 benchmarks in `template/pallets/governance/src/benchmarking.rs`
 - Runtime weight bridge in `template/runtime/src/weights/pallet_governance.rs`
+- Try-state reconciliation of reward-window width, rolling sums, epoch vote caps, resolution-window width, and per-domain finalized-projection cardinality
 
 The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` steps, and `20` repeats.
 
-`submit_signed_proposal` measures primary eligibility, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `638,290,000 / 4,197,809` plus 138 reads and seven writes. `cast_vote` measures the saturated immediate-veto terminal branch with 256 winning participants, production `$VETO` power reads, and custody writes; it charges `1,124,323,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `68,166,000 / 6,208` plus five reads and five writes.
+`submit_signed_proposal` measures primary eligibility, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `630,049,000 / 4,197,809` plus 138 reads and seven writes. `cast_vote` measures the saturated immediate-veto terminal branch with 256 winning participants, production `$VETO` power reads, checked aggregate custody growth, and custody writes; it charges `1,249,760,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `67,817,000 / 6,208` plus five reads and five writes.
 
 The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
 

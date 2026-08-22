@@ -2,7 +2,6 @@ use crate::{
   StakedAssetIdResolver as _, StakedAssetLifecycle as _,
   pallet::{Config, Error, Event, LiveStakedAssetBaseAssets, Pallet, PoolState, Pools},
 };
-use codec::{Decode, Encode};
 use frame::prelude::Get;
 use polkadot_sdk::frame_support::{
   ensure,
@@ -43,6 +42,7 @@ impl<T: Config> Pallet<T> {
       amount
     } else {
       Self::mul_div_floor(amount, pool.total_shares, pool.accounted_balance)
+        .ok_or(ArithmeticError::Overflow)?
     };
     ensure!(!minted_shares.is_zero(), Error::<T>::ZeroSharesMinted);
     let staked_asset_id_for_mint =
@@ -88,16 +88,11 @@ impl<T: Config> Pallet<T> {
   }
 
   pub fn native_lp_lock_account() -> T::AccountId {
-    let seed = frame::hashing::blake2_256(&(T::PalletId::get(), b"native-lp-lock").encode());
-    T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
-      .expect("hashed native LP lock seed always decodes into AccountId")
+    T::NativeLpLockAccount::get()
   }
 
   pub fn native_security_reward_account() -> T::AccountId {
-    let seed =
-      frame::hashing::blake2_256(&(T::PalletId::get(), b"native-security-reward").encode());
-    T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
-      .expect("hashed native security reward seed always decodes into AccountId")
+    T::NativeSecurityRewardAccount::get()
   }
 
   pub fn staked_asset_id(asset_id: T::AssetId) -> Option<T::AssetId> {
@@ -162,11 +157,11 @@ impl<T: Config> Pallet<T> {
       return None;
     }
     let staked_receipt_balance = Self::staked_receipt_balance(asset_id, account)?;
-    Some(Self::mul_div_floor(
+    Self::mul_div_floor(
       staked_receipt_balance,
       pool.accounted_balance,
       pool.total_shares,
-    ))
+    )
   }
 
   pub fn live_native_staked_receipt_value(account: &T::AccountId) -> Option<T::Balance> {
@@ -202,11 +197,7 @@ impl<T: Config> Pallet<T> {
     if pool.total_shares.is_zero() {
       return None;
     }
-    Some(Self::mul_div_floor(
-      shares,
-      pool.accounted_balance,
-      pool.total_shares,
-    ))
+    Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares)
   }
 
   pub(crate) fn sync_pool_state(
@@ -233,11 +224,24 @@ impl<T: Config> Pallet<T> {
     Ok(pool)
   }
 
-  pub(crate) fn mul_div_floor(a: T::Balance, b: T::Balance, c: T::Balance) -> T::Balance {
-    let a_u128: u128 = a.saturated_into();
-    let b_u128: u128 = b.saturated_into();
-    let c_u128: u128 = c.saturated_into();
-    let result = (U256::from(a_u128) * U256::from(b_u128)) / U256::from(c_u128);
-    result.low_u128().saturated_into()
+  pub(crate) fn mul_div_floor(a: T::Balance, b: T::Balance, c: T::Balance) -> Option<T::Balance> {
+    let exact_u128 = |value: T::Balance| {
+      let narrowed: u128 = value.saturated_into();
+      let roundtrip: T::Balance = narrowed.saturated_into();
+      (roundtrip == value).then_some(narrowed)
+    };
+    let a_u128 = exact_u128(a)?;
+    let b_u128 = exact_u128(b)?;
+    let c_u128 = exact_u128(c)?;
+    if c_u128 == 0 {
+      return None;
+    }
+    let result = U256::from(a_u128)
+      .checked_mul(U256::from(b_u128))?
+      .checked_div(U256::from(c_u128))?;
+    let result_u128: u128 = result.try_into().ok()?;
+    let narrowed: T::Balance = result_u128.saturated_into();
+    let roundtrip: u128 = narrowed.saturated_into();
+    (roundtrip == result_u128).then_some(narrowed)
   }
 }

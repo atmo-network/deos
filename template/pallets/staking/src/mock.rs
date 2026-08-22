@@ -139,6 +139,20 @@ impl Get<PalletId> for StakingPalletId {
   }
 }
 
+pub struct NativeLpLockAccount;
+impl Get<AccountId> for NativeLpLockAccount {
+  fn get() -> AccountId {
+    9_998
+  }
+}
+
+pub struct NativeSecurityRewardAccount;
+impl Get<AccountId> for NativeSecurityRewardAccount {
+  fn get() -> AccountId {
+    9_999
+  }
+}
+
 pub struct MockNativeOperatorValidator;
 impl pallet_staking::NativeOperatorValidator<AccountId> for MockNativeOperatorValidator {
   fn is_valid_operator(account: &AccountId) -> bool {
@@ -381,6 +395,8 @@ impl pallet_staking::Config for Test {
   type Balance = Balance;
   type Assets = Assets;
   type PalletId = StakingPalletId;
+  type NativeLpLockAccount = NativeLpLockAccount;
+  type NativeSecurityRewardAccount = NativeSecurityRewardAccount;
   type WeightInfo = ();
 }
 

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.7.20"
+version = "0.7.21"
 license = "MIT-0"
 authors = ["DEOS Contributors"]
 homepage = "https://github.com/atmo-network/deos"

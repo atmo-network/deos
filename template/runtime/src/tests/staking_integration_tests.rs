@@ -1,9 +1,10 @@
 use super::common::*;
 use crate::{Assets, Governance, RuntimeEvent, RuntimeOrigin, Staking, System};
+use codec::Encode;
 #[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
 use polkadot_sdk::frame_support::{
-  assert_noop, assert_ok,
+  PalletId, assert_noop, assert_ok,
   traits::{
     Hooks,
     fungibles::{Inspect, metadata::Inspect as MetadataInspect},
@@ -56,6 +57,21 @@ fn advance_to_block(target: crate::BlockNumber) {
     let _ = Staking::on_initialize(next);
     let _ = Governance::on_initialize(next);
   }
+}
+
+#[test]
+fn native_staking_custody_accounts_preserve_tagged_hash_identities() {
+  let pallet_id = PalletId(*primitives::ecosystem::pallet_ids::STAKING_PALLET_ID);
+  let lock_account = crate::AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+    &(pallet_id, b"native-lp-lock").encode(),
+  ));
+  let reward_account = crate::AccountId::new(polkadot_sdk::sp_io::hashing::blake2_256(
+    &(pallet_id, b"native-security-reward").encode(),
+  ));
+
+  assert_eq!(Staking::native_lp_lock_account(), lock_account);
+  assert_eq!(Staking::native_security_reward_account(), reward_account);
+  assert_ne!(lock_account, reward_account);
 }
 
 #[cfg(feature = "runtime-benchmarks")]

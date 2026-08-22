@@ -14,6 +14,21 @@ export type ActorEligibilityFailure =
   | 'ContinuationInvariant'
   | 'ComputationOverflow';
 
+export const ACTOR_CLOSE_REASONS = [
+  'OwnerInitiated',
+  'BalanceExhausted',
+  'ConsecutiveFailures',
+  'WindowExpired',
+  'CycleNonceExhausted',
+  'FeeBudgetExhausted',
+  'AutoCloseNonceReached',
+  'RetryAttemptsExhausted',
+  'ProductiveCycleCompleted',
+  'SchedulerIndexExhausted',
+] as const;
+
+export type ActorCloseReason = (typeof ACTOR_CLOSE_REASONS)[number];
+
 export type ActorExecutionPhase =
   | { type: 'Ready' }
   | { type: 'Paused' }
@@ -28,7 +43,7 @@ export type ActorEligibilityView =
   | { type: 'Dormant' }
   | {
       type: 'Active';
-      terminalReason: string | null;
+      terminalReason: ActorCloseReason | null;
       executionPhase: ActorExecutionPhase;
     };
 
@@ -37,6 +52,8 @@ const ELIGIBILITY_FAILURES: ReadonlySet<string> = new Set([
   'ContinuationInvariant',
   'ComputationOverflow',
 ]);
+
+const CLOSE_REASONS: ReadonlySet<string> = new Set(ACTOR_CLOSE_REASONS);
 
 const SCALAR_EXECUTION_PHASES: ReadonlySet<string> = new Set([
   'Ready',
@@ -76,6 +93,14 @@ function asTick(value: unknown): number {
     if (value >= 0n && Number.isSafeInteger(tick)) return tick;
   }
   return asBlock(value, 'WaitingCadenceTick tick');
+}
+
+function projectCloseReason(value: unknown): ActorCloseReason {
+  const reason = asVariant(value, 'ActorClassification.terminal_reason').type;
+  if (!CLOSE_REASONS.has(reason)) {
+    throw new Error(`Unsupported runtime close reason ${reason}`);
+  }
+  return reason as ActorCloseReason;
 }
 
 function projectExecutionPhase(value: unknown): ActorExecutionPhase {
@@ -128,10 +153,7 @@ export function projectActorEligibility(value: unknown): ActorEligibilityView {
     terminalReason:
       classification.terminal_reason === undefined
         ? null
-        : asVariant(
-            classification.terminal_reason,
-            'ActorClassification.terminal_reason',
-          ).type,
+        : projectCloseReason(classification.terminal_reason),
     executionPhase: projectExecutionPhase(classification.execution_phase),
   };
 }

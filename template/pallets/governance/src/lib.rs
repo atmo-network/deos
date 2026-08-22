@@ -62,8 +62,8 @@ pub trait VotePowerCustody<AccountId, DomainId, LockId, Balance> {
     _track: ProposalTrackFamily,
     _account: &AccountId,
     current_locked: Balance,
-  ) -> Balance {
-    current_locked
+  ) -> Result<Balance, polkadot_sdk::sp_runtime::DispatchError> {
+    Ok(current_locked)
   }
 
   fn lock(
@@ -80,6 +80,10 @@ pub trait VotePowerCustody<AccountId, DomainId, LockId, Balance> {
     _amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult {
     Ok(())
+  }
+
+  fn custodied_amount(_lock_id: LockId) -> Option<Balance> {
+    None
   }
 }
 
@@ -159,6 +163,27 @@ pub enum ProposalSubmissionAuthority {
 pub enum ProposalCapacityLane {
   General,
   Strategic,
+}
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Default,
+  PartialEq,
+  Eq,
+  Encode,
+  Decode,
+  DecodeWithMemTracking,
+  MaxEncodedLen,
+  TypeInfo,
+)]
+pub enum EpochServicePhase {
+  #[default]
+  Maturing,
+  PendingEnactment,
+  FinalizedOutcome,
+  RewardExpiry,
 }
 
 #[derive(
@@ -469,6 +494,8 @@ impl<AccountId, DomainId, ItemId, Hash> ProposalPayloadExecutor<AccountId, Domai
 {
 }
 
+pub const MAX_EPOCH_CATCH_UP_HARD_LIMIT: u32 = 1;
+
 pub trait WeightInfo {
   fn record_winning_vote() -> Weight;
   fn record_winning_vote_batch(accounts: u32) -> Weight;
@@ -481,7 +508,9 @@ pub trait WeightInfo {
   fn force_resolve_proposal_from_votes(accounts: u32) -> Weight;
   fn reject_proposal() -> Weight;
   fn requeue_proposal_for_auto_finalization() -> Weight;
+  fn service_epoch_catch_up() -> Weight;
   fn service_maturing_proposals(entries: u32) -> Weight;
+  fn service_pending_enactments(entries: u32) -> Weight;
   fn service_finalized_proposal_outcomes(entries: u32) -> Weight;
   fn service_expiring_accounts(entries: u32) -> Weight;
 }
@@ -531,7 +560,15 @@ impl WeightInfo for () {
     Weight::zero()
   }
 
+  fn service_epoch_catch_up() -> Weight {
+    Weight::zero()
+  }
+
   fn service_maturing_proposals(_entries: u32) -> Weight {
+    Weight::zero()
+  }
+
+  fn service_pending_enactments(_entries: u32) -> Weight {
     Weight::zero()
   }
 
@@ -562,7 +599,7 @@ const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 #[frame::pallet]
 pub mod pallet {
   use crate::{
-    EpochProvider as _, GovernanceDomainPolicyProvider as _,
+    EpochProvider as _, EpochServicePhase, GovernanceDomainPolicyProvider as _,
     ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
     ProposalRuntimeUpgradeAuthorizationProvider as _, VotePowerCustody as _, WeightInfo as _,
   };
@@ -605,6 +642,17 @@ pub mod pallet {
       + AtLeast32BitUnsigned
       + Default;
     type EpochProvider: crate::EpochProvider<Self::Epoch>;
+    /// Maximum chronological epoch buckets serviced by one `on_initialize` call.
+    #[pallet::constant]
+    type MaxEpochCatchUpPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxMaturingProposalsPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxPendingEnactmentsPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxFinalizedProposalOutcomesPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxExpiringAccountsPerBlock: Get<u32>;
     #[pallet::constant]
     type WinningVoteLookbackEpochs: Get<u32>;
     #[pallet::constant]
@@ -1441,6 +1489,10 @@ pub mod pallet {
   #[pallet::getter(fn last_processed_epoch)]
   pub type LastProcessedEpoch<T: Config> = StorageValue<_, T::Epoch, ValueQuery>;
 
+  #[pallet::storage]
+  #[pallet::getter(fn epoch_service_phase)]
+  pub type CurrentEpochServicePhase<T: Config> = StorageValue<_, EpochServicePhase, ValueQuery>;
+
   #[pallet::event]
   #[pallet::generate_deposit(pub(super) fn deposit_event)]
   pub enum Event<T: Config> {
@@ -1632,6 +1684,7 @@ pub mod pallet {
     ProposalPreimageIncompatible,
     InsufficientProposalOpeningFeeBalance,
     ProposalVoteSetFull,
+    ProposalVoteTallyOverflow,
     ProposalProtectionTrackClosed,
     VotePowerCustodyTargetDecreased,
     VotePowerCustodyNotFound,
@@ -1650,6 +1703,8 @@ pub mod pallet {
     DuplicateWinningVoteAccount,
     WinningVoteItemSetFull,
     WinningVoteResolutionItemSetFull,
+    RewardCounterOverflow,
+    RewardWindowInvariant,
     ExpiryBucketFull,
     EpochArithmeticOverflow,
     ProposalMetadataMissing,
@@ -1662,11 +1717,58 @@ pub mod pallet {
       Self::service_current_epoch(T::EpochProvider::current_epoch())
     }
 
+    #[cfg(feature = "try-runtime")]
+    fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
+      Self::do_try_state()
+    }
+
     fn integrity_test() {
-      let required_recent_finalized_capacity = T::FinalizedProposalOutcomeRetentionEpochs::get()
-        .saturating_mul(T::MaxFinalizedProposalOutcomesPerEpoch::get());
       assert!(
-        T::MaxRecentFinalizedProposalsPerDomain::get() >= required_recent_finalized_capacity,
+        T::WinningVoteLookbackEpochs::get() > 0,
+        "WinningVoteLookbackEpochs must be nonzero"
+      );
+      assert!(
+        T::MaxEpochCatchUpPerBlock::get() == crate::MAX_EPOCH_CATCH_UP_HARD_LIMIT,
+        "MaxEpochCatchUpPerBlock must equal the one-epoch measured service bound"
+      );
+      assert!(
+        T::MaxMaturingProposalsPerBlock::get() > 0
+          && T::MaxMaturingProposalsPerBlock::get() <= T::MaxMaturingProposalsPerEpoch::get()
+          && T::MaxPendingEnactmentsPerBlock::get() > 0
+          && T::MaxPendingEnactmentsPerBlock::get() <= T::MaxPendingEnactmentsPerEpoch::get()
+          && T::MaxFinalizedProposalOutcomesPerBlock::get() > 0
+          && T::MaxFinalizedProposalOutcomesPerBlock::get()
+            <= T::MaxFinalizedProposalOutcomesPerEpoch::get()
+          && T::MaxExpiringAccountsPerBlock::get() > 0
+          && T::MaxExpiringAccountsPerBlock::get() <= T::MaxExpiringAccountsPerEpoch::get(),
+        "epoch service per-block bounds must be nonzero and fit their bucket capacities"
+      );
+      for per_epoch_bound in [
+        T::MaxMaturingProposalsPerEpoch::get(),
+        T::MaxPendingEnactmentsPerEpoch::get(),
+        T::MaxFinalizedProposalOutcomesPerEpoch::get(),
+        T::MaxExpiringAccountsPerEpoch::get(),
+      ] {
+        assert!(
+          T::MaxEpochCatchUpPerBlock::get()
+            .checked_mul(per_epoch_bound)
+            .is_some(),
+          "epoch catch-up entry component must fit u32"
+        );
+      }
+      assert!(
+        T::MaxWinningVoteAccountsPerCall::get() > 0,
+        "MaxWinningVoteAccountsPerCall must admit one account"
+      );
+      let required_recent_finalized_capacity = T::FinalizedProposalOutcomeRetentionEpochs::get()
+        .checked_mul(T::MaxFinalizedProposalOutcomesPerEpoch::get());
+      assert!(
+        required_recent_finalized_capacity.is_some(),
+        "finalized proposal retention capacity must fit u32"
+      );
+      assert!(
+        T::MaxRecentFinalizedProposalsPerDomain::get()
+          >= required_recent_finalized_capacity.unwrap_or(u32::MAX),
         "MaxRecentFinalizedProposalsPerDomain must cover the full retained finalized-outcome horizon"
       );
       assert!(
@@ -1674,12 +1776,19 @@ pub mod pallet {
           && T::StrategicProposalReserve::get() < T::MaxActiveProposalsPerDomain::get(),
         "StrategicProposalReserve must reserve a nonzero strict subset of domain capacity"
       );
+      let general_proposal_capacity = T::MaxActiveProposalsPerDomain::get()
+        .checked_sub(T::StrategicProposalReserve::get())
+        .unwrap_or(0);
       assert!(
         T::MaxActiveProposalsPerAuthor::get() > 0
-          && T::MaxActiveProposalsPerAuthor::get()
-            < T::MaxActiveProposalsPerDomain::get()
-              .saturating_sub(T::StrategicProposalReserve::get()),
+          && T::MaxActiveProposalsPerAuthor::get() < general_proposal_capacity,
         "MaxActiveProposalsPerAuthor must be a nonzero strict subset of general domain capacity"
+      );
+      assert!(
+        T::WinningVoteLookbackEpochs::get()
+          .checked_mul(u32::from(T::MaxWinningVotesPerEpoch::get()))
+          .is_some(),
+        "maximum rolling winning-participation count must fit u32"
       );
     }
   }
