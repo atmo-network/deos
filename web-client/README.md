@@ -117,7 +117,13 @@ npm install
 npm run dev
 ```
 
-`npm install` runs `papi generate` from the committed `.papi/metadata/deos.scale` snapshot. When runtime query/view surfaces change, refresh metadata with:
+`npm run validate` generates PAPI descriptors once from the committed `.papi/metadata/deos.scale` snapshot before checking client types. Run the same generation explicitly before development after a clean dependency install:
+
+```sh
+npm run papi:generate
+```
+
+When runtime query/view surfaces change, refresh metadata with:
 
 ```sh
 ../scripts/export-papi-metadata.sh
