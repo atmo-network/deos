@@ -19,8 +19,14 @@ struct QueueTopology {
 }
 
 enum AdmissionDecision {
-  Admit(Weight),
-  Close { reason: CloseReason, weight: Weight },
+  Admit {
+    weight: Weight,
+    terminal_cleanup_reserved: bool,
+  },
+  Close {
+    reason: CloseReason,
+    weight: Weight,
+  },
   Defer,
   Skip,
   Invariant,
@@ -151,20 +157,12 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  /// True when the physical FIFO head is a live actor ticket below the pass cutoff. The worker uses
-  /// this at the probe boundary to distinguish an empty/post-cutoff or tombstone-only queue (not
-  /// starvation) from live work blocked by weight (spec 8.6.3).
+  /// Conservatively reports physical pre-cutoff work when the complete loaded-state probe cannot
+  /// be admitted. This path performs no unmetered actor-partition reads; the next funded pass
+  /// decides whether the entry is live, stale, or corrupt.
   fn head_blocked_by_weight(cutoff: QueueTicket) -> bool {
-    if QueueHead::<T>::get() >= QueueTail::<T>::get() {
-      return false;
-    }
-    match Self::paged_head_entry() {
-      Some((_, entry)) if entry.ticket < cutoff => {
-        ActorHot::<T>::get(entry.actor_id).is_some_and(|hot| hot.queue_ticket == Some(entry.ticket))
-          && ActorIdentities::<T>::contains_key(entry.actor_id)
-      }
-      _ => false,
-    }
+    QueueHead::<T>::get() < QueueTail::<T>::get()
+      && Self::paged_head_entry().is_some_and(|(_, entry)| entry.ticket < cutoff)
   }
 
   fn live_queue_head(
@@ -233,35 +231,45 @@ impl<T: Config> Pallet<T> {
   ) -> FifoStepResult {
     let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
       .max(T::WeightInfo::scheduler_paged_consume_delete_page());
-    let hot_probe_weight = Self::scheduler_actor_hot_probe_weight_upper();
-    let program_probe_weight = Self::scheduler_actor_contract_probe_weight_upper();
-    if !cycle_meter.can_consume(hot_probe_weight.saturating_add(consume_weight)) {
+    let state_probe_weight = Self::scheduler_actor_state_probe_weight_upper();
+    if !cycle_meter.can_consume(state_probe_weight.saturating_add(consume_weight)) {
       return FifoStepResult::Blocked(BlockKind::Weight);
     }
-    let Some(hot) = ActorHot::<T>::get(entry.actor_id) else {
-      cycle_meter.consume(hot_probe_weight);
-      return FifoStepResult::NoWork;
+    let LoadedActorStateOf::Active(state) = Self::load_actor_state(entry.actor_id) else {
+      cycle_meter.consume(state_probe_weight);
+      return FifoStepResult::Blocked(BlockKind::NonWeight);
     };
-    let Some(identity) = ActorIdentities::<T>::get(entry.actor_id) else {
-      cycle_meter.consume(hot_probe_weight);
-      return FifoStepResult::NoWork;
-    };
-    cycle_meter.consume(hot_probe_weight);
-    if hot.queue_ticket != Some(entry.ticket) {
+    cycle_meter.consume(state_probe_weight);
+    if state.hot.queue_ticket != Some(entry.ticket) {
       return FifoStepResult::NoWork;
     }
-    if hot.cycle_state == CycleState::Suspended {
-      if ContinuationStateStore::<T>::get(entry.actor_id)
+    if state.hot.cycle_state == CycleState::Suspended {
+      if state
+        .continuation
+        .as_ref()
         .is_some_and(|continuation| continuation.last_attempt_block == now)
       {
         return FifoStepResult::Blocked(BlockKind::NonWeight);
       }
-    } else if identity.cycle_nonce > 0 && hot.last_cycle_block == Some(now) {
+    } else if state.identity.cycle_nonce > 0 && state.hot.last_cycle_block == Some(now) {
       return FifoStepResult::Blocked(BlockKind::NonWeight);
     }
-    if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
+    let queue_owner_hot = state.hot.clone();
+    if state.hot.lifecycle.is_paused()
+      && state
+        .hot
+        .terminal_at
+        .is_none_or(|terminal_at| terminal_at > now)
+    {
       let outcome: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
-        if Self::paged_consume_head_at(position).is_err() {
+        if Self::paged_consume_loaded_head_at(
+          position,
+          entry.actor_id,
+          entry.ticket,
+          queue_owner_hot,
+        )
+        .is_err()
+        {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             polkadot_sdk::sp_runtime::DispatchError::Other("paused queue consume failed"),
           ));
@@ -279,27 +287,31 @@ impl<T: Config> Pallet<T> {
       cycle_meter.consume(consume_weight);
       return FifoStepResult::Progress { executed: false };
     }
-    if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
-      return FifoStepResult::Blocked(BlockKind::Weight);
-    }
-    let Some(contract) = ActorContracts::<T>::get(entry.actor_id) else {
-      cycle_meter.consume(program_probe_weight);
-      if Self::paged_consume_head_at(position).is_err() {
-        return FifoStepResult::Blocked(BlockKind::NonWeight);
-      }
-      cycle_meter.consume(consume_weight);
-      return FifoStepResult::Progress { executed: false };
-    };
-    cycle_meter.consume(program_probe_weight);
     let actor_id = entry.actor_id;
-    let instance = Self::derive_active_actor_view(identity, hot, contract);
+    let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     match Self::apply_admission(actor_id, &instance, cycle_meter) {
-      AdmissionDecision::Admit(weight) => {
-        if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
+      AdmissionDecision::Admit {
+        weight,
+        terminal_cleanup_reserved,
+      } => {
+        let attempt_weight = consume_weight.saturating_add(weight);
+        let exhaustion_close_weight = if terminal_cleanup_reserved {
+          Weight::zero()
+        } else {
+          Self::close_cleanup_weight_upper()
+        };
+        if !cycle_meter.can_consume(attempt_weight.saturating_add(exhaustion_close_weight)) {
           return FifoStepResult::Blocked(BlockKind::Weight);
         }
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
-          if Self::paged_consume_head_at(position).is_err() {
+          if Self::paged_consume_loaded_head_at(
+            position,
+            entry.actor_id,
+            entry.ticket,
+            queue_owner_hot,
+          )
+          .is_err()
+          {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
               AttemptTransactionError::Invariant,
             ));
@@ -311,18 +323,36 @@ impl<T: Config> Pallet<T> {
               AttemptTransactionError::FeeCollection,
             ));
           }
-          if let Some(updated) = Self::active_actor_view(actor_id) {
-            if Self::schedule_next_work(actor_id, &updated, now, true).is_err() {
+          match Self::loaded_active_view_for_placement(actor_id) {
+            Ok(Some(updated)) => {
+              if let Err(error) = Self::schedule_next_work(actor_id, &updated, now, true) {
+                if !Self::scheduler_index_is_exhausted(error)
+                  || Self::close_for_scheduler_index_exhaustion(actor_id).is_err()
+                {
+                  return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                    AttemptTransactionError::Invariant,
+                  ));
+                }
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true));
+              }
+            }
+            Ok(None) => {}
+            Err(_) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 AttemptTransactionError::Invariant,
               ));
             }
           }
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(false))
         });
-        cycle_meter.consume(consume_weight.saturating_add(weight));
+        cycle_meter.consume(attempt_weight);
         match outcome {
-          Ok(()) => FifoStepResult::Progress { executed: true },
+          Ok(closed_for_exhaustion) => {
+            if closed_for_exhaustion {
+              cycle_meter.consume(exhaustion_close_weight);
+            }
+            FifoStepResult::Progress { executed: true }
+          }
           Err(AttemptTransactionError::FeeCollection) => {
             FifoStepResult::Blocked(BlockKind::FeeCollection)
           }
@@ -339,7 +369,7 @@ impl<T: Config> Pallet<T> {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
           Self::apply_test_close_queue_corruption();
-          if Self::paged_consume_head_at(position).is_err() {
+          if Self::paged_consume_closed_head_at(position).is_err() {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
               polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue head changed"),
             ));
@@ -355,24 +385,46 @@ impl<T: Config> Pallet<T> {
       AdmissionDecision::Defer => FifoStepResult::Blocked(BlockKind::Weight),
       AdmissionDecision::Invariant => FifoStepResult::Blocked(BlockKind::NonWeight),
       AdmissionDecision::Skip => {
+        let exhaustion_close_weight = Self::close_cleanup_weight_upper();
+        if !cycle_meter.can_consume(consume_weight.saturating_add(exhaustion_close_weight)) {
+          return FifoStepResult::Blocked(BlockKind::Weight);
+        }
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
           if Self::paged_consume_head_at(position).is_err() {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
               polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue topology changed"),
             ));
           }
-          if let Some(updated) = Self::active_actor_view(actor_id) {
-            if Self::schedule_next_work(actor_id, &updated, now, true).is_err() {
+          match Self::loaded_active_view_for_placement(actor_id) {
+            Ok(Some(updated)) => {
+              if let Err(error) = Self::schedule_next_work(actor_id, &updated, now, true) {
+                if !Self::scheduler_index_is_exhausted(error)
+                  || Self::close_for_scheduler_index_exhaustion(actor_id).is_err()
+                {
+                  return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                    polkadot_sdk::sp_runtime::DispatchError::Other("post-skip placement failed"),
+                  ));
+                }
+                return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true));
+              }
+            }
+            Ok(None) => {}
+            Err(_) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                polkadot_sdk::sp_runtime::DispatchError::Other("post-skip placement failed"),
+                polkadot_sdk::sp_runtime::DispatchError::Other("post-skip actor state corrupt"),
               ));
             }
           }
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(false))
         });
         cycle_meter.consume(consume_weight);
         match outcome {
-          Ok(()) => FifoStepResult::Progress { executed: false },
+          Ok(closed_for_exhaustion) => {
+            if closed_for_exhaustion {
+              cycle_meter.consume(exhaustion_close_weight);
+            }
+            FifoStepResult::Progress { executed: false }
+          }
           Err(_) => FifoStepResult::Blocked(BlockKind::NonWeight),
         }
       }
@@ -499,15 +551,15 @@ impl<T: Config> Pallet<T> {
   pub fn try_paged_enqueue(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let transition = || -> Result<(), EnqueueOutcome> {
-        let Some(mut hot) = ActorHot::<T>::get(actor_id) else {
-          return Err(EnqueueOutcome::CapacityUnavailable);
+        let mut hot = match Self::load_actor_state(actor_id) {
+          LoadedActorStateOf::Active(state) => state.hot,
+          LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+            return Err(EnqueueOutcome::CapacityUnavailable);
+          }
+          LoadedActorStateOf::Corrupt => return Err(EnqueueOutcome::CorruptedTopology),
         };
-        if hot.queue_ticket.is_some() || !ActorIdentities::<T>::contains_key(actor_id) {
-          return if hot.queue_ticket.is_some() {
-            Err(EnqueueOutcome::AlreadyLive)
-          } else {
-            Err(EnqueueOutcome::CapacityUnavailable)
-          };
+        if hot.queue_ticket.is_some() {
+          return Err(EnqueueOutcome::AlreadyLive);
         }
         let topology = Self::queue_topology_preflight(QueueMutation::Enqueue)?;
         if topology.occupancy >= T::MaxQueueLength::get() {
@@ -548,6 +600,20 @@ impl<T: Config> Pallet<T> {
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
   }
 
+  fn scheduler_index_is_exhausted(outcome: EnqueueOutcome) -> bool {
+    matches!(
+      outcome,
+      EnqueueOutcome::TicketExhausted
+        | EnqueueOutcome::SchedulerIndexExhausted
+        | EnqueueOutcome::WakeupIndexExhausted
+    )
+  }
+
+  fn close_for_scheduler_index_exhaustion(actor_id: ActorId) -> DispatchResult {
+    let instance = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+    Self::finalize_actor(actor_id, &instance, CloseReason::SchedulerIndexExhausted)
+  }
+
   /// Maps a placement result to the public error surface for extrinsic boundaries.
   pub fn enqueue_outcome_error(outcome: Result<(), EnqueueOutcome>) -> Result<(), DispatchError> {
     match outcome {
@@ -569,7 +635,9 @@ impl<T: Config> Pallet<T> {
   /// Extracts the public error from a failed placement outcome for `map_err` sites.
   pub fn placement_error(outcome: EnqueueOutcome) -> DispatchError {
     match Self::enqueue_outcome_error(Err(outcome)) {
-      Ok(()) => unreachable!("placement error cannot map to Ok"),
+      // Placement owners normally normalize AlreadyLive to success before `map_err`.
+      // A missed normalization fails closed instead of panicking in consensus execution.
+      Ok(()) => Error::<T>::QueueCapacityUnavailable.into(),
       Err(error) => error,
     }
   }
@@ -585,9 +653,21 @@ impl<T: Config> Pallet<T> {
   }
 
   pub fn paged_invalidate(actor_id: ActorId) -> Option<QueueTicket> {
-    ActorHot::<T>::mutate(actor_id, |maybe| {
-      maybe.as_mut().and_then(|hot| hot.queue_ticket.take())
-    })
+    Self::try_paged_invalidate(actor_id).ok().flatten()
+  }
+
+  pub(crate) fn try_paged_invalidate(
+    actor_id: ActorId,
+  ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
+    match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::Active(mut state) => {
+        let ticket = state.hot.queue_ticket.take();
+        ActorHot::<T>::insert(actor_id, state.hot);
+        Ok(ticket)
+      }
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => Ok(None),
+      LoadedActorStateOf::Corrupt => Err(EnqueueOutcome::CorruptedTopology),
+    }
   }
 
   pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry)> {
@@ -602,6 +682,27 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn paged_consume_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
+    Self::paged_consume_head_at_inner(position, false, None)
+  }
+
+  fn paged_consume_loaded_head_at(
+    position: QueueTicket,
+    actor_id: ActorId,
+    ticket: QueueTicket,
+    hot: ActorHotStateOf<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::paged_consume_head_at_inner(position, false, Some((actor_id, ticket, hot)))
+  }
+
+  fn paged_consume_closed_head_at(position: QueueTicket) -> Result<(), EnqueueOutcome> {
+    Self::paged_consume_head_at_inner(position, true, None)
+  }
+
+  fn paged_consume_head_at_inner(
+    position: QueueTicket,
+    owner_was_closed: bool,
+    loaded_owner: Option<(ActorId, QueueTicket, ActorHotStateOf<T>)>,
+  ) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let transition = || -> Result<(), EnqueueOutcome> {
         let topology = Self::queue_topology_preflight(QueueMutation::Head)?;
@@ -614,13 +715,27 @@ impl<T: Config> Pallet<T> {
           .get(slot)
           .copied()
           .ok_or(EnqueueOutcome::CorruptedTopology)?;
-        let mut actor_hot = ActorHot::<T>::get(entry.actor_id);
-        if actor_hot
-          .as_ref()
-          .is_some_and(|hot| hot.queue_ticket != Some(entry.ticket))
-        {
-          return Err(EnqueueOutcome::CorruptedTopology);
-        }
+        let actor_hot = if let Some((actor_id, ticket, hot)) = loaded_owner {
+          if owner_was_closed
+            || entry.actor_id != actor_id
+            || entry.ticket != ticket
+            || hot.queue_ticket != Some(ticket)
+          {
+            return Err(EnqueueOutcome::CorruptedTopology);
+          }
+          Some(hot)
+        } else {
+          match Self::load_actor_state(entry.actor_id) {
+            LoadedActorStateOf::Active(state) if !owner_was_closed => {
+              if state.hot.queue_ticket != Some(entry.ticket) {
+                return Err(EnqueueOutcome::CorruptedTopology);
+              }
+              Some(state.hot)
+            }
+            LoadedActorStateOf::NotRegistered if owner_was_closed => None,
+            _ => return Err(EnqueueOutcome::CorruptedTopology),
+          }
+        };
         let next_head = topology
           .head
           .checked_add(1)
@@ -652,7 +767,7 @@ impl<T: Config> Pallet<T> {
           }
         }
         QueueOccupancy::<T>::put(next_occupancy);
-        if let Some(hot) = actor_hot.as_mut() {
+        if let Some(mut hot) = actor_hot {
           hot.queue_ticket = None;
           ActorHot::<T>::insert(entry.actor_id, hot);
         }
@@ -729,11 +844,14 @@ impl<T: Config> Pallet<T> {
             return corrupt();
           };
           stats.entries_scanned = entries_scanned;
-          let is_live = ActorHot::<T>::get(entry.actor_id)
-            .is_some_and(|hot| hot.queue_ticket == Some(entry.ticket))
-            && ActorIdentities::<T>::contains_key(entry.actor_id);
-          if is_live {
-            break 'pages;
+          match Self::load_actor_state(entry.actor_id) {
+            LoadedActorStateOf::Active(state) if state.hot.queue_ticket == Some(entry.ticket) => {
+              break 'pages;
+            }
+            LoadedActorStateOf::Active(_)
+            | LoadedActorStateOf::NotRegistered
+            | LoadedActorStateOf::Dormant(_) => {}
+            LoadedActorStateOf::Corrupt => return corrupt(),
           }
           let Some(tombstones_skipped) = stats.tombstones_skipped.checked_add(1) else {
             return corrupt();
@@ -803,13 +921,13 @@ impl<T: Config> Pallet<T> {
       .is_some_and(|entry| entry.actor_id == actor_id)
   }
 
-  fn wakeup_substrate_invalidate_inner(
+  pub(crate) fn wakeup_substrate_invalidate_inner(
     actor_id: ActorId,
   ) -> Result<Option<WakeupPointer<BlockNumberFor<T>>>, EnqueueOutcome> {
-    let Some(mut hot) = ActorHot::<T>::get(actor_id) else {
+    let LoadedActorStateOf::Active(mut state) = Self::load_actor_state(actor_id) else {
       return Err(EnqueueOutcome::CorruptedTopology);
     };
-    let Some(pointer) = hot.wakeup_pointer else {
+    let Some(pointer) = state.hot.wakeup_pointer else {
       return Ok(None);
     };
     let key = (pointer.block, pointer.page_id);
@@ -875,8 +993,8 @@ impl<T: Config> Pallet<T> {
     page.entries[pointer.slot as usize] = None;
     page.live_entries = next_page_live;
     bucket.live_entries = next_bucket_live;
-    hot.wakeup_pointer = None;
-    ActorHot::<T>::insert(actor_id, hot);
+    state.hot.wakeup_pointer = None;
+    ActorHot::<T>::insert(actor_id, state.hot);
     if page.live_entries > 0 {
       WakeupPages::<T>::insert(key, page);
       WakeupBuckets::<T>::insert(pointer.block, bucket);
@@ -964,10 +1082,10 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     wakeup_block: WakeupKey<BlockNumberFor<T>>,
   ) -> Result<(), EnqueueOutcome> {
-    let Some(hot) = ActorHot::<T>::get(actor_id) else {
+    let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
       return Err(EnqueueOutcome::CorruptedTopology);
     };
-    if let Some(pointer) = hot.wakeup_pointer {
+    if let Some(pointer) = state.hot.wakeup_pointer {
       if pointer.block == wakeup_block && Self::wakeup_page_entry_matches(pointer, actor_id) {
         return Err(EnqueueOutcome::AlreadyLive);
       }
@@ -1095,16 +1213,15 @@ impl<T: Config> Pallet<T> {
       page_id,
       slot,
     };
-    ActorHot::<T>::try_mutate(actor_id, |maybe_hot| {
-      let hot = maybe_hot
-        .as_mut()
-        .ok_or(EnqueueOutcome::CorruptedTopology)?;
-      if hot.wakeup_pointer.is_some() {
-        return Err(EnqueueOutcome::CorruptedTopology);
-      }
-      hot.wakeup_pointer = Some(pointer);
-      Ok(())
-    })
+    let LoadedActorStateOf::Active(mut state) = Self::load_actor_state(actor_id) else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    if state.hot.wakeup_pointer.is_some() {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    state.hot.wakeup_pointer = Some(pointer);
+    ActorHot::<T>::insert(actor_id, state.hot);
+    Ok(())
   }
 
   pub fn wakeup_substrate_schedule(actor_id: ActorId, wakeup_block: BlockNumberFor<T>) -> bool {
@@ -1173,12 +1290,20 @@ impl<T: Config> Pallet<T> {
           page_id,
           slot: pointer_slot as WakeupSlot,
         };
-        let is_live =
-          ActorHot::<T>::get(entry.actor_id).and_then(|hot| hot.wakeup_pointer) == Some(pointer);
-        if !is_live {
-          stats.stale_entries = stats.stale_entries.saturating_add(1);
-          continue;
-        }
+        let mut actor_hot = match Self::load_actor_state(entry.actor_id) {
+          LoadedActorStateOf::Active(state) if state.hot.wakeup_pointer == Some(pointer) => {
+            state.hot
+          }
+          LoadedActorStateOf::Active(state) if state.hot.wakeup_pointer.is_none() => {
+            stats.stale_entries = stats.stale_entries.saturating_add(1);
+            continue;
+          }
+          LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+            stats.stale_entries = stats.stale_entries.saturating_add(1);
+            continue;
+          }
+          LoadedActorStateOf::Active(_) | LoadedActorStateOf::Corrupt => return None,
+        };
         if ready.try_push(entry.actor_id).is_err() {
           page.entries[pointer_slot] = Some(entry);
           page.live_entries = page.live_entries.checked_add(1)?;
@@ -1189,13 +1314,8 @@ impl<T: Config> Pallet<T> {
           WakeupBuckets::<T>::insert(wakeup_block, bucket);
           return Some((ready, stats));
         }
-        ActorHot::<T>::mutate(entry.actor_id, |maybe_hot| {
-          if let Some(hot) = maybe_hot
-            && hot.wakeup_pointer == Some(pointer)
-          {
-            hot.wakeup_pointer = None;
-          }
-        });
+        actor_hot.wakeup_pointer = None;
+        ActorHot::<T>::insert(entry.actor_id, actor_hot);
         stats.ready_entries = stats.ready_entries.saturating_add(1);
       }
 
@@ -1545,8 +1665,22 @@ impl<T: Config> Pallet<T> {
     result.ok()
   }
 
+  fn loaded_active_view_for_placement(
+    actor_id: ActorId,
+  ) -> Result<Option<ActiveActorViewOf<T>>, EnqueueOutcome> {
+    match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => Ok(None),
+      LoadedActorStateOf::Active(state) => Ok(Some(Self::derive_active_actor_view(
+        state.identity,
+        state.hot,
+        state.contract,
+      ))),
+      LoadedActorStateOf::Corrupt => Err(EnqueueOutcome::CorruptedTopology),
+    }
+  }
+
   pub(crate) fn prime_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let Some(instance) = Self::active_actor_view(actor_id) else {
+    let Some(instance) = Self::loaded_active_view_for_placement(actor_id)? else {
       return Ok(());
     };
     let now = frame_system::Pallet::<T>::block_number();
@@ -1605,7 +1739,7 @@ impl<T: Config> Pallet<T> {
     if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
       return Err(EnqueueOutcome::WakeupCapacityExhausted);
     }
-    let target = Self::active_actor_view(actor_id)
+    let target = Self::loaded_active_view_for_placement(actor_id)?
       .and_then(|instance| Self::window_expiry_wakeup(&instance))
       .map(|expiry| wakeup_block.min(expiry))
       .unwrap_or(wakeup_block);
@@ -1631,8 +1765,7 @@ impl<T: Config> Pallet<T> {
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future().saturating_mul(2))
-      .saturating_add(Self::scheduler_actor_hot_probe_weight_upper().saturating_mul(2))
-      .saturating_add(Self::scheduler_actor_probe_weight_upper())
+      .saturating_add(Self::scheduler_actor_state_probe_weight_upper())
   }
 
   /// Conservatively prices pure actor-local terminal deletion from the measured User close path.
@@ -1647,24 +1780,12 @@ impl<T: Config> Pallet<T> {
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact())
   }
 
-  pub fn scheduler_actor_hot_probe_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_actor_hot_probe()
-  }
-
-  pub fn scheduler_actor_contract_probe_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_actor_contract_probe()
-  }
-
   pub fn scheduler_actor_probe_weight_upper() -> Weight {
-    Self::scheduler_actor_hot_probe_weight_upper()
-      .saturating_add(Self::scheduler_actor_contract_probe_weight_upper())
+    Self::scheduler_actor_state_probe_weight_upper()
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_scheduler_actor_hot_probe(actor_id: ActorId) {
-    let hot = ActorHot::<T>::get(actor_id).expect("benchmark actor hot state must exist");
-    assert!(hot.lifecycle.is_paused());
-    core::hint::black_box(hot);
+  pub fn scheduler_actor_state_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_actor_state_probe()
   }
 
   #[cfg(feature = "runtime-benchmarks")]
@@ -1675,19 +1796,7 @@ impl<T: Config> Pallet<T> {
     Self::defer_tick_wakeup(actor_id, wakeup_tick)
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_scheduler_actor_contract_probe(
-    actor_id: ActorId,
-    hot: ActorHotStateOf<T>,
-  ) {
-    let identity =
-      ActorIdentities::<T>::get(actor_id).expect("benchmark actor identity must exist");
-    let contract =
-      ActorContracts::<T>::get(actor_id).expect("benchmark actor contract state must exist");
-    core::hint::black_box(Self::derive_active_actor_view(identity, hot, contract));
-  }
-
-  pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
+  fn wakeup_cursor_drain_branch_weight(removes_bucket: bool) -> Weight {
     if removes_bucket {
       T::WeightInfo::scheduler_wakeup_cursor_worker_remove()
     } else {
@@ -1695,13 +1804,16 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
+    Self::wakeup_cursor_drain_branch_weight(removes_bucket)
+      .saturating_add(Self::close_cleanup_weight_upper())
+  }
+
   pub fn drain_overdue_wakeups_cursor(
     now: BlockNumberFor<T>,
     meter: &mut WeightMeter,
   ) -> WakeupDrainStats {
     let mut total = WakeupDrainStats::default();
-    let mut current_key = None;
-    let mut next_clock_after_success = None;
     let max_scans = T::MaxWakeupsPerBlock::get();
     let now_tick = match Self::current_scheduler_tick() {
       Ok(tick) => tick,
@@ -1709,45 +1821,41 @@ impl<T: Config> Pallet<T> {
     };
     let mut worker_meter = WeightMeter::with_limit(T::WakeupWeightLimit::get());
     while total.entries_scanned < max_scans {
-      let wakeup_key = if let Some(key) = current_key {
-        key
-      } else {
-        let first_clock = NextWakeupClock::<T>::get();
-        let clocks = match first_clock {
-          WakeupClock::Block => [WakeupClock::Block, WakeupClock::Tick],
-          WakeupClock::Tick => [WakeupClock::Tick, WakeupClock::Block],
+      let first_clock = NextWakeupClock::<T>::get();
+      let clocks = match first_clock {
+        WakeupClock::Block => [WakeupClock::Block, WakeupClock::Tick],
+        WakeupClock::Tick => [WakeupClock::Tick, WakeupClock::Block],
+      };
+      let mut selected = None;
+      for clock in clocks {
+        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
+        if !worker_meter.can_consume(cursor_weight) || !meter.can_consume(cursor_weight) {
+          break;
+        }
+        worker_meter.consume(cursor_weight);
+        meter.consume(cursor_weight);
+        let Some(key) = Self::wakeup_cursor_peek_key(clock) else {
+          continue;
         };
-        let mut selected = None;
-        for clock in clocks {
-          let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
-          if !worker_meter.can_consume(cursor_weight) || !meter.can_consume(cursor_weight) {
-            break;
-          }
-          worker_meter.consume(cursor_weight);
-          meter.consume(cursor_weight);
-          let Some(key) = Self::wakeup_cursor_peek_key(clock) else {
-            continue;
-          };
-          let due = match key {
-            WakeupKey::Block(block) => block <= now,
-            WakeupKey::Tick(tick) => tick <= now_tick,
-          };
-          if due {
-            selected = Some(key);
-            next_clock_after_success = Some(match clock {
+        let due = match key {
+          WakeupKey::Block(block) => block <= now,
+          WakeupKey::Tick(tick) => tick <= now_tick,
+        };
+        if due {
+          selected = Some((
+            key,
+            match clock {
               WakeupClock::Block => WakeupClock::Tick,
               WakeupClock::Tick => WakeupClock::Block,
-            });
-            break;
-          }
-        }
-        let Some(key) = selected else {
+            },
+          ));
           break;
-        };
-        current_key = Some(key);
-        key
+        }
+      }
+      let Some((wakeup_key, next_clock_after_success)) = selected else {
+        break;
       };
-      let base_weight = Self::wakeup_cursor_drain_unit_weight_upper(false);
+      let base_weight = Self::wakeup_cursor_drain_branch_weight(false);
       if Self::combined_queue_occupancy() >= u64::from(T::MaxActiveActors::get())
         || !worker_meter.can_consume(base_weight)
         || !meter.can_consume(base_weight)
@@ -1759,8 +1867,10 @@ impl<T: Config> Pallet<T> {
         meter.consume(base_weight);
         break;
       };
-      let unit_weight = Self::wakeup_cursor_drain_unit_weight_upper(bucket.live_entries <= 1);
-      if !worker_meter.can_consume(unit_weight) || !meter.can_consume(unit_weight) {
+      let removes_bucket = bucket.live_entries <= 1;
+      let unit_weight = Self::wakeup_cursor_drain_branch_weight(removes_bucket);
+      let admission_weight = Self::wakeup_cursor_drain_unit_weight_upper(removes_bucket);
+      if !worker_meter.can_consume(admission_weight) || !meter.can_consume(admission_weight) {
         worker_meter.consume(base_weight);
         meter.consume(base_weight);
         break;
@@ -1770,76 +1880,84 @@ impl<T: Config> Pallet<T> {
       let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
         let (ready, stats) = Self::wakeup_substrate_drain_key(wakeup_key, 1);
         if stats.entries_scanned == 0 {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(stats));
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
+            stats, false,
+          )));
         }
+        let mut closed_for_exhaustion = false;
         for actor_id in ready {
           if matches!(wakeup_key, WakeupKey::Tick(_)) {
-            let Some(contract) = ActorContracts::<T>::get(actor_id) else {
+            let LoadedActorStateOf::Active(mut state) = Self::load_actor_state(actor_id) else {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner has no contract"),
+                polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner is corrupt"),
               ));
             };
-            let Trigger::Cadenced { every_ticks } = contract.trigger else {
+            let Trigger::Cadenced { every_ticks } = &state.contract.trigger else {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner is not cadenced"),
               ));
             };
-            let anchor_uninitialized =
-              ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.cadence_anchor_tick.is_none());
-            if anchor_uninitialized {
-              let Ok(Some(anchor_tick)) = Self::cadence_anchor_tick(&contract.trigger) else {
+            if state.hot.cadence_anchor_tick.is_none() {
+              let Ok(Some(anchor_tick)) = Self::cadence_anchor_tick(&state.contract.trigger) else {
                 return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                   polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence anchor failed"),
                 ));
               };
-              let Some(due_tick) = next_cadence_due_tick(anchor_tick, every_ticks, now_tick) else {
+              let Some(due_tick) = next_cadence_due_tick(anchor_tick, *every_ticks, now_tick)
+              else {
                 return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                   polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence deadline failed"),
                 ));
               };
-              ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-                if let Some(hot) = maybe_hot {
-                  hot.cadence_anchor_tick = Some(anchor_tick);
+              state.hot.cadence_anchor_tick = Some(anchor_tick);
+              ActorHot::<T>::insert(actor_id, state.hot);
+              if let Err(error) = Self::defer_tick_wakeup(actor_id, due_tick) {
+                if !Self::scheduler_index_is_exhausted(error)
+                  || Self::close_for_scheduler_index_exhaustion(actor_id).is_err()
+                {
+                  return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                    polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence rearm failed"),
+                  ));
                 }
-              });
-              if Self::defer_tick_wakeup(actor_id, due_tick).is_err() {
-                return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                  polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence rearm failed"),
-                ));
+                closed_for_exhaustion = true;
               }
               continue;
             }
-            ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-              if let Some(hot) = maybe_hot {
-                hot.pending_signal = true;
-              }
-            });
+            state.hot.pending_signal = true;
+            ActorHot::<T>::insert(actor_id, state.hot);
           }
-          if Self::enqueue(actor_id).is_err() {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              polkadot_sdk::sp_runtime::DispatchError::Other("wakeup materialization failed"),
-            ));
+          if let Err(error) = Self::enqueue(actor_id) {
+            if !Self::scheduler_index_is_exhausted(error)
+              || Self::close_for_scheduler_index_exhaustion(actor_id).is_err()
+            {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                polkadot_sdk::sp_runtime::DispatchError::Other("wakeup materialization failed"),
+              ));
+            }
+            closed_for_exhaustion = true;
           }
         }
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(stats))
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
+          stats,
+          closed_for_exhaustion,
+        )))
       });
-      let Ok(stats) = outcome else {
+      let Ok((stats, closed_for_exhaustion)) = outcome else {
         break;
       };
+      if closed_for_exhaustion {
+        worker_meter.consume(Self::close_cleanup_weight_upper());
+        meter.consume(Self::close_cleanup_weight_upper());
+      }
       if stats.entries_scanned == 0 {
         break;
       }
-      if let Some(next_clock) = next_clock_after_success.take() {
-        NextWakeupClock::<T>::put(next_clock);
-      }
+      NextWakeupClock::<T>::put(next_clock_after_success);
       total.entries_scanned = total.entries_scanned.saturating_add(stats.entries_scanned);
       total.ready_entries = total.ready_entries.saturating_add(stats.ready_entries);
       total.stale_entries = total.stale_entries.saturating_add(stats.stale_entries);
       total.pages_touched = total.pages_touched.saturating_add(stats.pages_touched);
       total.pages_deleted = total.pages_deleted.saturating_add(stats.pages_deleted);
-      if !WakeupBuckets::<T>::contains_key(wakeup_key) {
-        current_key = None;
-      }
     }
     total
   }
@@ -1879,34 +1997,9 @@ impl<T: Config> Pallet<T> {
       .unwrap_or(now)
   }
 
-  pub(crate) fn cadence_at_or_after(
-    schedule_anchor: BlockNumberFor<T>,
-    every_ticks: u64,
-    lower: BlockNumberFor<T>,
-  ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
-    let origin = schedule_anchor;
-    if lower <= origin {
-      return Ok(origin);
-    }
-    let delta: u64 = lower.saturating_sub(origin).saturated_into();
-    let period = every_ticks;
-    let periods = delta.div_ceil(period);
-    let offset = periods
-      .checked_mul(period)
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    let offset_block: BlockNumberFor<T> = offset.saturated_into();
-    if offset_block.saturated_into::<u64>() != offset {
-      return Err(EnqueueOutcome::SchedulerIndexExhausted);
-    }
-    origin
-      .checked_add(&offset_block)
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)
-  }
-
   fn next_eligible_at(
     instance: &ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
-    include_timer: bool,
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let cooldown_anchor = instance
       .last_cycle_block
@@ -1922,21 +2015,7 @@ impl<T: Config> Pallet<T> {
       .window
       .map(|window| window.start)
       .unwrap_or_else(Zero::zero);
-    let mut lower = now.max(cooldown_eligible_at).max(window_floor);
-    if !include_timer {
-      return Ok(lower);
-    }
-    let Trigger::Cadenced { every_ticks } = instance.trigger else {
-      return Ok(lower);
-    };
-    if let Some(last_cycle_block) = instance.last_cycle_block {
-      lower = lower.max(
-        last_cycle_block
-          .checked_add(&One::one())
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?,
-      );
-    }
-    Self::cadence_at_or_after(instance.schedule_anchor, every_ticks, lower)
+    Ok(now.max(cooldown_eligible_at).max(window_floor))
   }
 
   pub(crate) fn retry_backoff_blocks(cursor_local_attempt: u32) -> u32 {
@@ -1992,7 +2071,7 @@ impl<T: Config> Pallet<T> {
     let eligible_at = if instance.cycle_state == CycleState::Suspended {
       Self::retry_eligible_at(actor_id, instance)?
     } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now, false)?
+      Self::next_eligible_at(instance, now)?
     } else {
       return Self::schedule_window_expiry(actor_id, instance);
     };
@@ -2088,19 +2167,14 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn active_actor_for_classification(
     actor_id: ActorId,
   ) -> Result<Option<ActiveActorViewOf<T>>, ActorClassificationError> {
-    let Some(identity) = ActorIdentities::<T>::get(actor_id) else {
-      return Ok(None);
-    };
-    match (
-      ActorHot::<T>::get(actor_id),
-      ActorContracts::<T>::get(actor_id),
-      ActorFunding::<T>::contains_key(actor_id),
-    ) {
-      (None, None, false) => Ok(None),
-      (Some(hot), Some(contract), true) => Ok(Some(Self::derive_active_actor_view(
-        identity, hot, contract,
+    match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => Ok(None),
+      LoadedActorStateOf::Active(state) => Ok(Some(Self::derive_active_actor_view(
+        state.identity,
+        state.hot,
+        state.contract,
       ))),
-      _ => Err(ActorClassificationError::ActorInvariant),
+      LoadedActorStateOf::Corrupt => Err(ActorClassificationError::ActorInvariant),
     }
   }
 
@@ -2170,31 +2244,25 @@ impl<T: Config> Pallet<T> {
       } else {
         ActorExecutionPhase::Ready
       }
-    } else if let Trigger::Cadenced { every_ticks } = instance.trigger {
+    } else if matches!(instance.trigger, Trigger::Cadenced { .. }) {
       if instance.pending_signal {
         ActorExecutionPhase::Ready
-      } else if instance.cadence_anchor_tick.is_none() {
+      } else {
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+          return Err(ActorClassificationError::ActorInvariant);
+        };
         let Some(WakeupPointer {
-          block: WakeupKey::Tick(initialization_tick),
+          block: WakeupKey::Tick(due_tick),
           ..
-        }) = ActorHot::<T>::get(actor_id).and_then(|hot| hot.wakeup_pointer)
+        }) = state.hot.wakeup_pointer
         else {
           return Err(ActorClassificationError::ActorInvariant);
         };
-        ActorExecutionPhase::WaitingCadenceTick(initialization_tick)
-      } else {
-        let anchor_tick = instance
-          .cadence_anchor_tick
-          .ok_or(ActorClassificationError::ActorInvariant)?;
-        let now_tick = Self::current_scheduler_tick()
-          .map_err(|_| ActorClassificationError::ComputationOverflow)?;
-        let due_tick = next_cadence_due_tick(anchor_tick, every_ticks, now_tick)
-          .ok_or(ActorClassificationError::ComputationOverflow)?;
         ActorExecutionPhase::WaitingCadenceTick(due_tick)
       }
     } else {
       let now = frame_system::Pallet::<T>::block_number();
-      let eligible_at = Self::next_eligible_at(instance, now, false)
+      let eligible_at = Self::next_eligible_at(instance, now)
         .map_err(|_| ActorClassificationError::ComputationOverflow)?;
       if eligible_at > now {
         ActorExecutionPhase::WaitingBlock(eligible_at)
@@ -2311,33 +2379,39 @@ impl<T: Config> Pallet<T> {
     let start_cursor = continuation
       .as_ref()
       .map_or(0, |state| state.cursor as usize);
+    let prior_unsuccessful_attempts_at_cursor = continuation
+      .as_ref()
+      .map(|state| state.unsuccessful_attempts_at_cursor);
+    let terminal_cleanup_reserved = Self::cycle_requires_terminal_cleanup_budget(
+      instance,
+      start_cursor,
+      prior_unsuccessful_attempts_at_cursor,
+    );
     let cycle_weight_upper = Self::cycle_admission_weight_upper(
       instance,
       start_cursor,
-      continuation
-        .as_ref()
-        .map(|state| state.unsuccessful_attempts_at_cursor),
+      prior_unsuccessful_attempts_at_cursor,
     );
     if !meter.can_consume(cycle_weight_upper) {
       return AdmissionDecision::Defer;
     }
-    AdmissionDecision::Admit(cycle_weight_upper)
+    AdmissionDecision::Admit {
+      weight: cycle_weight_upper,
+      terminal_cleanup_reserved,
+    }
   }
 
   /// Projects the canonical actor classifier without stripping temporal payloads.
   pub fn actor_eligibility(
     actor_id: ActorId,
   ) -> Result<ActorEligibility<BlockNumberFor<T>>, ActorClassificationError> {
-    let Some(identity) = ActorIdentities::<T>::get(actor_id) else {
-      return Ok(ActorEligibility::NotRegistered);
-    };
-    let hot = ActorHot::<T>::get(actor_id);
-    let contract = ActorContracts::<T>::get(actor_id);
-    let funding = ActorFunding::<T>::contains_key(actor_id);
-    let instance = match (hot, contract, funding) {
-      (None, None, false) => return Ok(ActorEligibility::Dormant),
-      (Some(hot), Some(contract), true) => Self::derive_active_actor_view(identity, hot, contract),
-      _ => return Err(ActorClassificationError::ActorInvariant),
+    let instance = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered => return Ok(ActorEligibility::NotRegistered),
+      LoadedActorStateOf::Dormant(_) => return Ok(ActorEligibility::Dormant),
+      LoadedActorStateOf::Active(state) => {
+        Self::derive_active_actor_view(state.identity, state.hot, state.contract)
+      }
+      LoadedActorStateOf::Corrupt => return Err(ActorClassificationError::ActorInvariant),
     };
     Ok(ActorEligibility::Active(Self::classify_actor(
       actor_id, &instance,
@@ -2423,24 +2497,21 @@ impl<T: Config> Pallet<T> {
 
   fn funding_event_authorized(
     actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-    _funding: &ActorFundingStateOf<T>,
+    owner: &T::AccountId,
+    policy: &FundingSourcePolicyOf<T>,
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> bool {
-    let Some(contract) = ActorContracts::<T>::get(actor_id) else {
-      return false;
-    };
-    match &contract.funding {
+    match policy {
       FundingSourcePolicy::OwnerOnly => {
-        provenance == Some(&FundingProvenance::Signed) && source == Some(&instance.owner)
+        provenance == Some(&FundingProvenance::Signed) && source == Some(owner)
       }
       FundingSourcePolicy::SignedAllowlist(allowed) => {
         provenance == Some(&FundingProvenance::Signed)
           && source.is_some_and(|source| allowed.contains(source))
       }
       FundingSourcePolicy::RuntimePolicy => {
-        T::FundingAuthority::permits(actor_id, &instance.owner, source, provenance)
+        T::FundingAuthority::permits(actor_id, owner, source, provenance)
       }
       FundingSourcePolicy::AnyVerifiedIngress => source.is_some() || provenance.is_some(),
     }
@@ -2453,20 +2524,26 @@ impl<T: Config> Pallet<T> {
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
-    let Some(instance) = Self::active_actor_for_classification(actor_id)
-      .map_err(Self::classification_dispatch_error)?
-    else {
-      return Ok(());
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => return Ok(()),
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
+    let authorized = Self::funding_event_authorized(
+      actor_id,
+      &state.identity.owner,
+      &state.contract.funding,
+      source,
+      provenance,
+    );
+    let funding = state.funding;
+    let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification =
       Self::classify_actor(actor_id, &instance).map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) || amount.is_zero() {
       return Ok(());
     }
-    let funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-    if !Self::funding_event_authorized(actor_id, &instance, &funding, source, provenance)
-      || !funding.funding_tracked_assets.contains(&asset)
-    {
+    if !authorized || !funding.funding_tracked_assets.contains(&asset) {
       return Ok(());
     }
     if let Some(accumulated) = funding.funding_accumulated.get(&asset) {
@@ -2497,9 +2574,10 @@ impl<T: Config> Pallet<T> {
     .map_err(IngressFailure::permanent)
   }
 
-  /// Typed certified-ingress notify (spec 5.3, 6.2). Executes exactly once after
-  /// the value movement and preserves the placement classification: recoverable
-  /// queue/wakeup capacity or placement unavailability is Temporary; monotonic
+  /// Typed certified-ingress consequence (spec 5.3, 6.2). Executes exactly once at
+  /// the host protocol's declared notify or transactional-precommit phase and preserves
+  /// the placement classification: recoverable queue/wakeup capacity or placement
+  /// unavailability is Temporary; monotonic
   /// ticket/index exhaustion, topology corruption, and invariant failure are
   /// Permanent.
   pub fn notify_ingress(
@@ -2558,11 +2636,20 @@ impl<T: Config> Pallet<T> {
     apply_trigger: bool,
     apply_funding: bool,
   ) -> DispatchResult {
-    let Some(instance) = Self::active_actor_for_classification(actor_id)
-      .map_err(Self::classification_dispatch_error)?
-    else {
-      return Ok(());
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => return Ok(()),
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
+    let funding_authorized = Self::funding_event_authorized(
+      actor_id,
+      &state.identity.owner,
+      &state.contract.funding,
+      source,
+      provenance,
+    );
+    let mut funding = state.funding;
+    let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification =
       Self::classify_actor(actor_id, &instance).map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) {
@@ -2587,10 +2674,7 @@ impl<T: Config> Pallet<T> {
       });
     }
     if apply_funding && amount > Zero::zero() {
-      let mut funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      if Self::funding_event_authorized(actor_id, &instance, &funding, source, provenance)
-        && funding.funding_tracked_assets.contains(&asset)
-      {
+      if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
         let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
           *accumulated = accumulated
             .checked_add(&amount)

@@ -759,10 +759,87 @@ mod tests {
       let current_issuance = Balances::total_issuance();
       let expected_burned = native_curve
         .initial_issuance
-        .saturating_add(crate::TotalNativeMinted::<Test>::get())
-        .saturating_sub(current_issuance);
+        .checked_add(crate::TotalNativeMinted::<Test>::get())
+        .and_then(|expected| expected.checked_sub(current_issuance))
+        .expect("coherent native accounting remains representable");
       assert_eq!(expected_burned, burn_amount);
       assert_eq!(TokenMintingCurve::total_native_burned(), expected_burned);
+    });
+  }
+
+  #[test]
+  fn native_cumulative_mint_overflow_fails_before_value_movement() {
+    use crate::mock::{Assets, Balances, RuntimeOrigin, Test, TokenMintingCurve, new_test_ext};
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{
+      assert_noop, assert_ok,
+      traits::{
+        fungible::{Inspect as FungibleInspect, Mutate as FungibleMutate},
+        fungibles::Mutate as FungiblesMutate,
+      },
+    };
+
+    new_test_ext().execute_with(|| {
+      let user = 10u64;
+      let collateral_asset = 1u32;
+      let foreign_in = primitives::ecosystem::params::PRECISION;
+      assert_ok!(Balances::mint_into(&user, 500_000_000_000));
+      assert_ok!(Assets::mint_into(collateral_asset, &user, foreign_in));
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Native,
+        AssetKind::Local(collateral_asset),
+        primitives::ecosystem::params::PRECISION,
+        primitives::ecosystem::params::TMC_SLOPE_PARAMETER,
+      ));
+      crate::TotalNativeMinted::<Test>::put(u128::MAX);
+      let user_native_before = Balances::balance(&user);
+      let user_collateral_before = Assets::balance(collateral_asset, user);
+      let native_issuance_before = Balances::total_issuance();
+      assert_noop!(
+        TokenMintingCurve::mint_with_distribution(
+          &user,
+          &user,
+          AssetKind::Native,
+          AssetKind::Local(collateral_asset),
+          foreign_in,
+        ),
+        crate::Error::<Test>::ArithmeticOverflow,
+      );
+      assert_eq!(Balances::balance(&user), user_native_before);
+      assert_eq!(
+        Assets::balance(collateral_asset, user),
+        user_collateral_before
+      );
+      assert_eq!(Balances::total_issuance(), native_issuance_before);
+      assert_eq!(crate::TotalNativeMinted::<Test>::get(), u128::MAX);
+      assert_eq!(TokenMintingCurve::total_native_burned(), 0);
+    });
+  }
+
+  #[cfg(feature = "try-runtime")]
+  #[test]
+  fn try_state_rejects_unrepresentable_or_ownerless_native_mint_accounting() {
+    use crate::mock::{Balances, RuntimeOrigin, Test, TokenMintingCurve, new_test_ext};
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{assert_ok, traits::fungible::Mutate};
+
+    new_test_ext().execute_with(|| {
+      assert_ok!(Balances::mint_into(&10, 1_000));
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Native,
+        AssetKind::Local(1),
+        primitives::ecosystem::params::PRECISION,
+        0,
+      ));
+      crate::TotalNativeMinted::<Test>::put(u128::MAX);
+      assert!(TokenMintingCurve::do_try_state().is_err());
+      assert_eq!(TokenMintingCurve::total_native_burned(), 0);
+
+      crate::TotalNativeMinted::<Test>::put(1);
+      crate::TokenCurves::<Test>::remove(AssetKind::Native);
+      assert!(TokenMintingCurve::do_try_state().is_err());
     });
   }
 

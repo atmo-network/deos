@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "owner": "alignment/runtime panic ownership",
+  "rules": [
+    {
+      "id": "runtime-panic-owner-allowlist",
+      "scope": "reference runtime configuration, genesis, test, benchmark, and TryRuntime panic ownership",
+      "kind": "regex-any",
+      "patterns": [
+        "deos-bypass: panic-owner",
+        "serialization to json is expected to work",
+        "native balances must be a JSON array",
+        "account id must serialize",
+        "asset accounts must be a JSON array",
+        "relay reserve asset registration must succeed",
+        "registered relay reserve must resolve",
+        "registered relay reserve deposit must succeed",
+        "parent origin should convert",
+        "sibling origin should convert",
+        "account id32 origin should convert",
+        "xcm passthrough origin should convert",
+        "well-known protocol asset metadata must exist",
+        "runtime predicate clause fits MaxPredicatesPerClause",
+        "runtime clause fits MaxPreconditionClauses",
+        "phase-aware fee-sink split legs fit",
+        "phase-aware fee-sink contract_steps fits",
+        "burn contract_steps fits within MaxContractSteps",
+        "4 bucket legs fit",
+        "Liquidity Actor contract_steps fits within MaxContractSteps",
+        "single-step Bucket LP transfer fits",
+        "2 legs fit",
+        "BLDR splitter contract_steps fits within MaxContractSteps",
+        "BLDR Liquidity Actor contract_steps fits within MaxContractSteps",
+        "native staking liquidity activation checks staked asset first",
+        "native staking liquidity execution plan fits within MaxContractSteps",
+        "Treasury B buyback contract_steps fits within MaxContractSteps",
+        "benchmark native account funding must succeed"
+      ],
+      "rationale": "TryRuntime deliberately traps failed checks; ChainSpec/genesis builders fail before launch; XCM conversion and reserve assertions are file-local tests; benchmark setup fails measurement rather than consensus; runtime Actor catalog plans are fixed-size constructions covered by pallet integrity bounds. Any differently worded runtime site is unowned and fails the full-tree audit.",
+      "expiry": "Replace an entry when the site becomes typed failure or when its TryRuntime, construction, test, benchmark, or bounded-catalog owner changes."
+    }
+  ]
+}

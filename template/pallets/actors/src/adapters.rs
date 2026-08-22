@@ -1,9 +1,18 @@
 //! Runtime adapter traits for Actors task execution.
 
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::{DispatchResult, Perbill};
+use polkadot_sdk::{
+  frame_support::PalletId,
+  sp_runtime::{DispatchResult, Perbill},
+};
 
 use crate::types::AddressEvent;
+
+/// Deterministic host-owned derivation of canonical Actor custody accounts.
+pub trait SovereignAccountDeriver<AccountId> {
+  fn user(pallet_id: PalletId, owner: &AccountId, owner_slot: u8) -> AccountId;
+  fn system(pallet_id: PalletId, actor_id: crate::ActorId) -> AccountId;
+}
 
 /// Certified bounded ingress for one externally owned observation revision.
 pub trait ObservationChangeIngress<FeedId> {
@@ -112,9 +121,10 @@ impl From<IngressFailure> for TaskFailure {
 /// Certified typed ingress boundary for Actors AddressEvent semantics (spec 5.3, 6.2).
 ///
 /// `preflight` is read-only and covers lifecycle, funding, trigger, and required
-/// placement. `notify` executes exactly once after the value movement. Host
-/// producers route every movement that claims Actors ingress through this boundary;
-/// movement outside the certified-producer inventory is balance-only.
+/// placement. `notify` executes exactly once at the host protocol's declared
+/// post-movement or transactional-precommit consequence point. Host producers route
+/// every movement that claims Actors ingress through this boundary; movement outside
+/// the certified-producer inventory is balance-only.
 pub trait AddressEventIngress<AccountId, AssetId, Balance> {
   fn preflight(event: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure>;
   fn notify(event: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure>;

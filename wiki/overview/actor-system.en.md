@@ -81,7 +81,7 @@ A Mutable actor may mark a step `RetryLater { max_attempts }` with a nonzero `u3
 
 Retries reuse the same logical-cycle nonce and FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix. Reaching the local limit closes the actor with `RetryAttemptsExhausted`; a simultaneous actor-wide failure cutoff does not replace that more precise reason.
 
-Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use bounded `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Incoming signals during suspension remain latched for the next logical cycle.
+Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use bounded `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Before a retained actor re-primes an incoming signal for the next logical cycle, cancellation exactly removes its old wakeup slot so two live pointer claims cannot stall the due head.
 
 `CycleStarted` appears once. `CycleContinued` and `CycleSuspended` identify the cycle and unresolved cursor, while one cumulative `CycleSummary` terminates the logical cycle. Current Continuation is canonical chain state. Long attempt timelines require a materialized event index.
 
@@ -95,7 +95,7 @@ Every DEOS System swap also applies a local reference-deviation guard. A nonzero
 
 Finalized reactive inspection follows the selected dirty feed's exact active-list position and occupied subscriber-page links. Numerical delivery estimates appear only when runtime code, V16 metadata, constants, production weights, descriptors, and topology share one finalized evidence identity. `EvidenceMismatch` withholds those estimates while preserving factual Oracle, Actors, queue, wakeup, and snapshot state.
 
-The read-only `ActorEligibilityApi::actor_eligibility` projection reports current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, reusing the same pure cadence/cooldown/window/backoff/breaker/latch owners as admission. Clients never reimplement that arithmetic; the projection never promises service, because queue position and available Weight decide actual admission.
+The read-only `ActorEligibilityApi::actor_eligibility` projection reports current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, reusing the same pure cadence/cooldown/window/backoff/breaker/latch owners as admission. Generated metadata binds the complete terminal-reason set; unknown eligibility, reason, phase, or typed-failure variants never enter display state. Clients never reimplement that arithmetic; the projection never promises service, because queue position and available Weight decide actual admission.
 
 Off-chain feedback analysis separates observation-caused recurrence from shared account, pool, reserve, or TMC resources. Only evidence-addressable reactive edges can form reactive-cycle findings; resource coupling remains a separate unscored advisory signal with unknown causal and economic significance. This analysis cannot reject plans, alter scheduling, or claim execution.
 

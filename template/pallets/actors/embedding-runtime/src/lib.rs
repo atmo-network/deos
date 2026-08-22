@@ -419,6 +419,24 @@ impl Get<PalletId> for ActorsPalletId {
   }
 }
 
+pub struct RuntimeSovereignAccountDeriver;
+impl pallet_deos_actors::SovereignAccountDeriver<AccountId> for RuntimeSovereignAccountDeriver {
+  fn user(pallet_id: PalletId, owner: &AccountId, owner_slot: u8) -> AccountId {
+    let seed =
+      polkadot_sdk::sp_io::hashing::blake2_256(&(pallet_id, b"user", owner, owner_slot).encode());
+    u64::from_le_bytes([
+      seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+    ])
+  }
+
+  fn system(pallet_id: PalletId, actor_id: pallet_deos_actors::ActorId) -> AccountId {
+    let seed = polkadot_sdk::sp_io::hashing::blake2_256(&(pallet_id, b"system", actor_id).encode());
+    u64::from_le_bytes([
+      seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+    ])
+  }
+}
+
 /// Fixture worker and reserve budgets mirror the reference runtime ratios over
 /// the default maximum block weight: 20% per worker and a 50% guaranteed
 /// on_idle reserve so the derived ActorServiceReserve stays strictly positive
@@ -573,6 +591,7 @@ impl pallet_deos_actors::Config for Runtime {
   type ObservationFeedId = u32;
   type ObservationProvider = ();
   type FundingAuthority = ();
+  type SovereignAccountDeriver = RuntimeSovereignAccountDeriver;
   type SovereignAccountPolicy = ();
   type DexOps = RuntimeDexOps;
   type StakingOps = ();
@@ -606,6 +625,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxSplitTransferLegs = ConstU32<4>;
   type TargetBlockTime = ConstU64<315_576>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
+  type MaxCadenceDelayTicks = ConstU64<631_152_000>;
   type MaxIdleStarvationBlocks = ConstU32<3>;
   type ActorOnIdleReserve = ActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
@@ -1645,6 +1665,9 @@ mod tests {
       ));
       assert!(Actors::continuation_state(actor_id).is_none());
       assert!(Actors::pending_signal(actor_id));
+      let reprime_hot =
+        pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
+      assert_eq!(reprime_hot.wakeup_pointer, before_hot.wakeup_pointer);
 
       System::set_block_number(3);
       let _ = Actors::on_idle(3, Weight::MAX);

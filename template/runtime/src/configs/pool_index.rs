@@ -13,6 +13,16 @@ use scale_info::TypeInfo;
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct PoolIndexExtension;
 
+#[cfg(test)]
+std::thread_local! {
+  static FAIL_POOL_INDEX_POST_DISPATCH: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_fail_pool_index_post_dispatch(value: bool) {
+  FAIL_POOL_INDEX_POST_DISPATCH.with(|flag| flag.set(value));
+}
+
 impl PoolIndexExtension {
   fn index_weight() -> Weight {
     let feed_registration =
@@ -95,6 +105,10 @@ impl TransactionExtension<RuntimeCall> for PoolIndexExtension {
     };
     if result.is_err() {
       return Ok(Self::index_weight());
+    }
+    #[cfg(test)]
+    if FAIL_POOL_INDEX_POST_DISPATCH.with(|flag| flag.get()) {
+      return Err(InvalidTransaction::Custom(41).into());
     }
     crate::configs::assets_config::register_pool_lp_pair(asset1, asset2)
       .map_err(|_| InvalidTransaction::Custom(41))?;

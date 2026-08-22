@@ -1,7 +1,7 @@
 use crate as pallet_asset_registry;
 use polkadot_sdk::frame_support::{
   construct_runtime,
-  traits::{ConstU32, ConstU64, ConstU128},
+  traits::{ConstU32, ConstU64, ConstU128, Contains},
 };
 use polkadot_sdk::frame_system::{EnsureRoot, EnsureSigned};
 use polkadot_sdk::sp_runtime::{
@@ -147,10 +147,18 @@ impl polkadot_sdk::frame_support::traits::Get<AccountId> for MockAssetOwner {
   }
 }
 
+pub struct ReservedLocations;
+impl Contains<polkadot_sdk::staging_xcm::latest::Location> for ReservedLocations {
+  fn contains(location: &polkadot_sdk::staging_xcm::latest::Location) -> bool {
+    location == &polkadot_sdk::staging_xcm::latest::Location::here()
+  }
+}
+
 impl pallet_asset_registry::Config for Test {
   type RegistryOrigin = EnsureRoot<AccountId>; // Only root can register in tests
   type AssetIdGenerator = MockLocationToAssetId;
   type AssetOwner = MockAssetOwner;
+  type ReservedLocations = ReservedLocations;
   type TokenDomainHook = MockTokenDomainHook;
   type WeightInfo = ();
 }

@@ -1283,6 +1283,26 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
 }
 
 #[test]
+fn treasury_lp_unwind_builder_rejects_invalid_or_unregistered_lp_identity() {
+  seeded_test_ext().execute_with(|| {
+    assert!(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_lp_unwind_contract_steps(
+        AssetKind::Native,
+        100,
+      )
+      .is_err()
+    );
+    assert!(
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_lp_unwind_contract_steps(
+        AssetKind::Local(u32::MAX),
+        100,
+      )
+      .is_err()
+    );
+  });
+}
+
+#[test]
 fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
@@ -1329,7 +1349,8 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     let treasury_plan =
       crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_lp_unwind_contract_steps(
         lp_asset, 100,
-      );
+      )
+      .expect("registered local LP unwind plan builds");
     assert_ok!(activate_dormant_system(bucket_id, bucket_plan));
     assert_ok!(activate_dormant_system(treasury_id, treasury_plan));
     System::set_block_number(System::block_number().saturating_add(1));
@@ -1451,6 +1472,54 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
     assert!(
       hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some(),
       "direct TMC ingress must retain exact scheduler readiness"
+    );
+  });
+}
+
+#[test]
+fn native_tmc_late_distribution_ingress_failure_restores_exact_root() {
+  seeded_test_ext().execute_with(|| {
+    let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let liquidity_actor_id = actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
+    let steps = ContractSteps::<Runtime>::try_from(vec![pallet_deos_actors::StepOf::<Runtime> {
+      precondition: None,
+      task: Task::Transfer {
+        to: ALICE,
+        asset: AssetKind::Native,
+        amount: AmountResolution::Fixed(1),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("liquidity actor test plan fits");
+    assert_ok!(activate_dormant_system(liquidity_actor_id, steps));
+    assert_ok!(TokenMintingCurve::create_curve(
+      RuntimeOrigin::root(),
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      primitives::ecosystem::params::PRECISION,
+      0,
+    ));
+    System::reset_events();
+    crate::configs::tmc_config::set_fail_after_first_distribution_ingress(true);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      TokenMintingCurve::mint_with_distribution(
+        &ALICE,
+        &ALICE,
+        AssetKind::Native,
+        AssetKind::Local(ASSET_A),
+        foreign_amount,
+      ),
+      polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced failure after first distribution ingress"
+      )
+    );
+    crate::configs::tmc_config::set_fail_after_first_distribution_ingress(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late hook failure restores collateral, issuance, recipients, counters, events, funding, and scheduler state"
     );
   });
 }

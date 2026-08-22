@@ -1434,39 +1434,33 @@ mod benches {
   }
 
   #[benchmark]
-  fn scheduler_actor_hot_probe() {
+  fn scheduler_actor_state_probe() {
     let actor_id = bench_create_system_manual::<T>(3_000);
-    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    let assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    ActorFunding::<T>::mutate(actor_id, |maybe_funding| {
+      let funding = maybe_funding
         .as_mut()
-        .expect("benchmark actor hot state must exist")
-        .lifecycle = ActiveLifecycle::Paused;
+        .expect("benchmark actor funding state must exist");
+      for asset in assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("benchmark tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("benchmark funding entry fits");
+      }
     });
     #[block]
     {
-      Pallet::<T>::benchmark_scheduler_actor_hot_probe(actor_id);
+      core::hint::black_box(Pallet::<T>::load_actor_state(actor_id));
     }
-  }
-
-  #[benchmark]
-  fn scheduler_actor_contract_probe() {
-    let actor_id = bench_create_system_manual::<T>(3_001);
-    assert!(
-      ContinuationStateStore::<T>::get(actor_id).is_none(),
-      "ordinary readiness benchmark must retain the absent-Continuation envelope"
-    );
-    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("benchmark actor hot state must exist")
-        .pending_signal = true;
-    });
-    let hot = ActorHot::<T>::get(actor_id).expect("benchmark actor hot state must exist");
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    #[block]
-    {
-      Pallet::<T>::benchmark_scheduler_actor_contract_probe(actor_id, hot);
-    }
+    assert!(matches!(
+      Pallet::<T>::load_actor_state(actor_id),
+      LoadedActorStateOf::Active(_)
+    ));
   }
   /// One complete minimal cycle execution over one inert StopCycle step (fixed cycle
   /// orchestration plus finalization), measured on the execution path only; queue probes and
@@ -1911,6 +1905,7 @@ mod benches {
 
   #[benchmark(pov_mode = Measured)]
   fn scheduler_wakeup_cursor_worker_remove() {
+    clear_host_genesis_wakeup_placements::<T>();
     let cursor_len = T::MaxActiveActors::get();
     let wakeup_block = prepare_wakeup_cursor_repair::<T>(0);
     let actor_id = bench_create_system_manual::<T>(34_200_000);
@@ -2055,6 +2050,9 @@ mod benches {
     let page_size = T::QueuePageSize::get();
     let template_id = bench_create_system_manual::<T>(38_000_000);
     let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let contract_template =
+      ActorContracts::<T>::get(template_id).expect("benchmark contract template");
+    let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
     let mut identity_template =
       ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
     identity_template.actor_class = ActorClass::User { owner_slot: 0 };
@@ -2072,6 +2070,8 @@ mod benches {
             hot.queue_ticket = Some(logical_ticket);
             ActorIdentities::<T>::insert(actor_id, identity_template.clone());
             ActorHot::<T>::insert(actor_id, hot);
+            ActorContracts::<T>::insert(actor_id, contract_template.clone());
+            ActorFunding::<T>::insert(actor_id, funding_template.clone());
           }
           QueueEntry {
             ticket: logical_ticket,
@@ -2088,6 +2088,8 @@ mod benches {
     }
     ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
+    ActorContracts::<T>::remove(template_id);
+    ActorFunding::<T>::remove(template_id);
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(u64::from(bounded));
     QueueOccupancy::<T>::put(bounded);
@@ -2315,8 +2317,32 @@ mod benches {
 
   #[benchmark]
   fn continuation_cancel() {
-    let actor_id = bench_create_system_manual::<T>(50_000_003);
+    let page_size = T::WakeupPageSize::get();
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size {
+      let filler = bench_create_system_manual::<T>(50_000_003u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(filler, wakeup_block));
+    }
+    let mut middle_fillers = alloc::vec::Vec::with_capacity(page_size.saturating_sub(1) as usize);
+    for i in 0..page_size.saturating_sub(1) {
+      let filler = bench_create_system_manual::<T>(51_000_003u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(filler, wakeup_block));
+      middle_fillers.push(filler);
+    }
+    let actor_id = bench_create_system_manual::<T>(52_000_003);
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    assert!(Pallet::<T>::wakeup_substrate_schedule(
+      actor_id,
+      wakeup_block
+    ));
+    let tail_filler = bench_create_system_manual::<T>(53_000_003);
+    assert!(Pallet::<T>::wakeup_substrate_schedule(
+      tail_filler,
+      wakeup_block
+    ));
+    for filler in middle_fillers {
+      assert!(Pallet::<T>::wakeup_substrate_invalidate(filler).is_some());
+    }
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -2329,6 +2355,10 @@ mod benches {
     assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
       hot.cycle_state == CycleState::Idle && hot.pending_signal && hot.queue_ticket.is_some()
     }));
+    assert!(!WakeupPages::<T>::contains_key((
+      WakeupKey::Block(wakeup_block),
+      1,
+    )));
   }
 
   #[benchmark]

@@ -1,7 +1,7 @@
 ---
 type: usage
 title: Scripts Layer
-description: Operator and developer automation workflows using the local scripts layer, including local bootstrap, runtime metadata export, authorized-upgrade checks, and native staking bootstrap readiness/call-preparation helpers.
+description: Operator and developer automation for pinned bootstrap, validation, metadata export, authorized upgrades, and local network operation.
 locale: en
 canonical_page_id: scripts-layer
 translation_status: source
@@ -50,7 +50,7 @@ Numbered scripts perform specific leaf operations and do not orchestrate each ot
 Named workflow scripts compose atomic steps into larger developer flows:
 
 - `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
-- `validate-local.sh`: Run the selected local audit, build, and E2E validation plan
+- `validate-local.sh`: Run the selected `fast`, `heavy`, or `full` validation profile; full prepares checksum-verified binaries and regenerates production runtime and client artifacts, while GitHub Actions applies the profiles to pull requests, verified `main` pushes, and version tags respectively
 - `actors-assurance.sh`: Run heavy stress and capacity proofs for the Actors scheduler
 - `network-assurance-local.sh`: Compose topology, finality, failover, restart, and signed-transfer evidence; `SESSION_TRANSITION=1` adds the multi-hour session proof and `COMPOSED_PATH=1` adds finalized Router, Oracle, and Burn Actor evidence
 - `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows

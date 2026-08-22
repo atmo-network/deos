@@ -287,7 +287,7 @@ impl_runtime_apis! {
         fn on_runtime_upgrade(checks: frame_try_runtime::UpgradeCheckSelect) -> (Weight, Weight) {
             use super::configs::RuntimeBlockWeights;
 
-            let weight = Executive::try_runtime_upgrade(checks).unwrap();
+            let weight = Executive::try_runtime_upgrade(checks).unwrap(); // deos-bypass: panic-owner — TryRuntime traps failed checks.
             (weight, RuntimeBlockWeights::get().max_block)
         }
 
@@ -299,7 +299,7 @@ impl_runtime_apis! {
         ) -> Weight {
             // NOTE: intentional unwrap: we don't want to propagate the error backwards, and want to
             // have a backtrace here.
-            Executive::try_execute_block(block, state_root_check, signature_check, select).unwrap()
+            Executive::try_execute_block(block, state_root_check, signature_check, select).unwrap() // deos-bypass: panic-owner — TryRuntime traps failed checks.
         }
     }
 

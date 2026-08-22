@@ -24,7 +24,7 @@ pub mod adapters;
 pub use adapters::{
   AddressEventIngress, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FundingAuthority,
   IngressFailure, LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass,
-  ScalarObservationState, StakingOps, TaskFailure,
+  ScalarObservationState, SovereignAccountDeriver, StakingOps, TaskFailure,
 };
 pub use types::{AddressEvent, InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
 
@@ -265,7 +265,9 @@ pub mod pallet {
     FundingAuthority, LiquidityOps, ObservationProvider, WeightInfo, compose_attempt_fee_envelope,
     contract_steps_bound_is_valid,
   };
-  use crate::adapters::{RetryClass, SovereignAccountPolicy, StakingOps as _};
+  use crate::adapters::{
+    RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
+  };
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{
@@ -298,6 +300,7 @@ pub mod pallet {
     type ObservationFeedId: Parameter + Member + Copy + MaxEncodedLen + Ord;
     type ObservationProvider: ObservationProvider<Self::ObservationFeedId, BlockNumberFor<Self>>;
     type FundingAuthority: FundingAuthority<Self::AccountId>;
+    type SovereignAccountDeriver: crate::adapters::SovereignAccountDeriver<Self::AccountId>;
     type SovereignAccountPolicy: crate::adapters::SovereignAccountPolicy<Self::AccountId>;
     type DexOps: DexOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type StakingOps: crate::adapters::StakingOps<Self::AccountId, Self::AssetId, Self::Balance>;
@@ -368,6 +371,8 @@ pub mod pallet {
     type TargetBlockTime: Get<u64>;
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
+    #[pallet::constant]
+    type MaxCadenceDelayTicks: Get<SchedulerTick>;
     #[pallet::constant]
     type MaxIdleStarvationBlocks: Get<u32>;
     /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
@@ -538,6 +543,13 @@ pub mod pallet {
     ContinuationStateOf<T>,
   >;
 
+  pub(crate) enum LoadedActorStateOf<T: Config> {
+    NotRegistered,
+    Dormant(ActorIdentityOf<T>),
+    Active(ActiveActorStateOf<T>),
+    Corrupt,
+  }
+
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
   pub struct Pallet<T>(_);
@@ -600,26 +612,69 @@ pub mod pallet {
       }
     }
 
+    pub(crate) fn load_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
+      let identity = ActorIdentities::<T>::get(actor_id);
+      let hot = ActorHot::<T>::get(actor_id);
+      let contract = ActorContracts::<T>::get(actor_id);
+      let funding = ActorFunding::<T>::get(actor_id);
+      let continuation = ContinuationStateStore::<T>::get(actor_id);
+      match (identity, hot, contract, funding, continuation) {
+        (None, None, None, None, None) => LoadedActorStateOf::NotRegistered,
+        (Some(identity), None, None, None, None) => LoadedActorStateOf::Dormant(identity),
+        (Some(identity), Some(hot), Some(contract), Some(funding), continuation)
+          if (hot.cycle_state == CycleState::Suspended) == continuation.is_some() =>
+        {
+          LoadedActorStateOf::Active(ActiveActorState {
+            identity,
+            hot,
+            contract,
+            funding,
+            continuation,
+          })
+        }
+        _ => LoadedActorStateOf::Corrupt,
+      }
+    }
+
     pub(crate) fn active_actor_view(actor_id: ActorId) -> Option<ActiveActorViewOf<T>> {
+      let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+        return None;
+      };
       Some(Self::derive_active_actor_view(
-        ActorIdentities::<T>::get(actor_id)?,
-        ActorHot::<T>::get(actor_id)?,
-        ActorContracts::<T>::get(actor_id)?,
+        state.identity,
+        state.hot,
+        state.contract,
       ))
     }
 
+    pub(crate) fn active_actor_for_control(
+      actor_id: ActorId,
+    ) -> Result<ActiveActorViewOf<T>, Error<T>> {
+      match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => Ok(Self::derive_active_actor_view(
+          state.identity,
+          state.hot,
+          state.contract,
+        )),
+        LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+          Err(Error::<T>::ActorNotFound)
+        }
+        LoadedActorStateOf::Corrupt => Err(Error::<T>::ActorInvariant),
+      }
+    }
+
     pub fn active_actor_state(actor_id: ActorId) -> Option<ActiveActorStateOf<T>> {
-      Some(ActiveActorState {
-        identity: ActorIdentities::<T>::get(actor_id)?,
-        hot: ActorHot::<T>::get(actor_id)?,
-        contract: ActorContracts::<T>::get(actor_id)?,
-        funding: ActorFunding::<T>::get(actor_id)?,
-        continuation: ContinuationStateStore::<T>::get(actor_id),
-      })
+      match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => Some(state),
+        _ => None,
+      }
     }
 
     pub fn pending_signal(actor_id: ActorId) -> bool {
-      ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.pending_signal)
+      match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => state.hot.pending_signal,
+        _ => false,
+      }
     }
 
     pub fn wakeup_pages(key: (BlockNumberFor<T>, WakeupPageId)) -> Option<WakeupPageOf<T>> {
@@ -639,9 +694,10 @@ pub mod pallet {
     }
 
     pub(crate) fn active_actor_exists(actor_id: ActorId) -> bool {
-      ActorIdentities::<T>::contains_key(actor_id)
-        && ActorHot::<T>::contains_key(actor_id)
-        && ActorContracts::<T>::contains_key(actor_id)
+      matches!(
+        Self::load_actor_state(actor_id),
+        LoadedActorStateOf::Active(_)
+      )
     }
 
     pub(crate) fn insert_active_actor(
@@ -871,6 +927,9 @@ pub mod pallet {
     fn system_custody_accounts() -> alloc::vec::Vec<ActorId> {
       alloc::vec::Vec::new()
     }
+
+    /// Host-composition assertions that must remain true across runtime upgrades.
+    fn integrity_test() {}
   }
 
   /// Default no-op implementation: no System Actors created at genesis.
@@ -1136,6 +1195,17 @@ pub mod pallet {
       );
       let target_block_time = T::TargetBlockTime::get();
       assert!(target_block_time > 0, "TargetBlockTime must be non-zero");
+      assert!(
+        T::CadenceTickMillis::get() > 0,
+        "CadenceTickMillis must be non-zero"
+      );
+      let cadence_tick_millis = T::CadenceTickMillis::get();
+      let expected_cadence_horizon = 315_576_000_000u64.div_ceil(cadence_tick_millis);
+      assert_eq!(
+        T::MaxCadenceDelayTicks::get(),
+        expected_cadence_horizon,
+        "MaxCadenceDelayTicks must cover exactly ten Julian years"
+      );
       let expected_horizon = 315_576_000u64.div_ceil(target_block_time);
       let configured_horizon: u64 = T::MaxExecutionDelayBlocks::get().saturated_into();
       assert_eq!(
@@ -1199,6 +1269,7 @@ pub mod pallet {
         Self::close_cleanup_weight_upper().all_lte(actor_service),
         "one maximum automatic cleanup must fit GuaranteedActorServiceWeight"
       );
+      T::GenesisSystemActors::integrity_test();
     }
 
     #[cfg(feature = "try-runtime")]
@@ -1599,7 +1670,7 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let snapshot = Self::active_actor_for_control(actor_id)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due(actor_id, &snapshot)? {
@@ -1619,7 +1690,7 @@ pub mod pallet {
           );
           inst.lifecycle = ActiveLifecycle::Paused;
           inst.queue_ticket = None;
-          Self::record_control_mutation(actor_id, now);
+          Self::record_control_mutation(actor_id, now)?;
           Self::deposit_event(Event::ActorPaused { actor_id });
           Ok(())
         })?;
@@ -1630,7 +1701,7 @@ pub mod pallet {
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let snapshot = Self::active_actor_for_control(actor_id)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due(actor_id, &snapshot)? {
@@ -1649,7 +1720,7 @@ pub mod pallet {
             Error::<T>::ImmutableActor
           );
           inst.lifecycle = ActiveLifecycle::Active;
-          Self::record_control_mutation(actor_id, now);
+          Self::record_control_mutation(actor_id, now)?;
           Self::deposit_event(Event::ActorResumed { actor_id });
           Ok(())
         })?;
@@ -1660,7 +1731,7 @@ pub mod pallet {
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let snapshot = Self::active_actor_for_control(actor_id)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due(actor_id, &snapshot)? {
@@ -1687,14 +1758,20 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      if let Some(instance) = Self::active_actor_view(actor_id) {
-        Self::ensure_control_origin(origin, &instance)?;
-        Self::ensure_not_system_immutable(&instance)?;
-        return Self::finalize_actor(actor_id, &instance, CloseReason::OwnerInitiated);
+      match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => {
+          let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+          Self::ensure_control_origin(origin, &instance)?;
+          Self::ensure_not_system_immutable(&instance)?;
+          Self::finalize_actor(actor_id, &instance, CloseReason::OwnerInitiated)
+        }
+        LoadedActorStateOf::Dormant(identity) => {
+          Self::ensure_identity_control_origin(origin, &identity)?;
+          Self::close_inactive_actor(actor_id, &identity, CloseReason::OwnerInitiated)
+        }
+        LoadedActorStateOf::NotRegistered => Err(Error::<T>::ActorNotFound.into()),
+        LoadedActorStateOf::Corrupt => Err(Error::<T>::ActorInvariant.into()),
       }
-      let identity = ActorIdentities::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      Self::ensure_identity_control_origin(origin, &identity)?;
-      Self::close_inactive_actor(actor_id, &identity, CloseReason::OwnerInitiated)
     }
 
     #[pallet::call_index(9)]
@@ -1711,9 +1788,10 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_future_schedule_targets(&contract)?;
-      let snapshot = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let snapshot = Self::active_actor_for_control(actor_id)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      let current_contract = ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let current_contract =
+        ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
       if current_contract == contract {
         return Ok(());
       }
@@ -1774,10 +1852,8 @@ pub mod pallet {
           Self::replace_observation_subscriptions(actor_id, &contract.trigger)?;
         }
         ActorContracts::<T>::insert(actor_id, contract.clone());
-        ActorHot::<T>::mutate(actor_id, |maybe| {
-          let hot = maybe
-            .as_mut()
-            .expect("active actor hot-state existence was prevalidated");
+        ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
+          let hot = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
           if schedule_changed {
             hot.schedule_anchor = schedule_anchor;
             hot.cadence_anchor_tick = cadence_anchor_tick;
@@ -1790,10 +1866,11 @@ pub mod pallet {
               hot.unsuccessful_attempt_streak,
               crate::execution::FailureStreakTransition::Reset,
             )
-            .expect("failure-streak reset is infallible");
+            .ok_or(Error::<T>::ActorInvariant)?;
           }
-          Self::record_control_mutation(actor_id, now);
-        });
+          Self::record_control_mutation(actor_id, now)?;
+          Ok(())
+        })?;
         ActorFunding::<T>::insert(actor_id, funding_state);
         Self::deposit_event(Event::ContractUpdated { actor_id });
         if schedule_changed || continuation_cancelled {
@@ -1898,13 +1975,12 @@ pub mod pallet {
       actor_id: ActorId,
       contract: ActorContractOf<T>,
     ) -> DispatchResult {
-      let identity = ActorIdentities::<T>::get(actor_id).ok_or_else(|| {
-        if Self::active_actor_exists(actor_id) {
-          Error::<T>::ActorAlreadyActive
-        } else {
-          Error::<T>::ActorNotFound
-        }
-      })?;
+      let identity = match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Dormant(identity) => identity,
+        LoadedActorStateOf::Active(_) => return Err(Error::<T>::ActorAlreadyActive.into()),
+        LoadedActorStateOf::NotRegistered => return Err(Error::<T>::ActorNotFound.into()),
+        LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
+      };
       Self::ensure_identity_control_origin(origin, &identity)?;
       Self::do_activate_actor(actor_id, identity, contract)
     }
@@ -1912,13 +1988,14 @@ pub mod pallet {
     #[pallet::call_index(18)]
     #[pallet::weight(T::WeightInfo::deactivate_actor())]
     pub fn deactivate_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let instance = Self::active_actor_view(actor_id).ok_or_else(|| {
-        if ActorIdentities::<T>::contains_key(actor_id) {
-          Error::<T>::ActorDormant
-        } else {
-          Error::<T>::ActorNotFound
+      let instance = match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => {
+          Self::derive_active_actor_view(state.identity, state.hot, state.contract)
         }
-      })?;
+        LoadedActorStateOf::Dormant(_) => return Err(Error::<T>::ActorDormant.into()),
+        LoadedActorStateOf::NotRegistered => return Err(Error::<T>::ActorNotFound.into()),
+        LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
+      };
       Self::ensure_control_origin(origin, &instance)?;
       ensure!(
         instance.mutability == Mutability::Mutable,
@@ -1931,7 +2008,7 @@ pub mod pallet {
     #[pallet::call_index(19)]
     #[pallet::weight(T::WeightInfo::continuation_cancel())]
     pub fn cancel_continuation(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let instance = Self::active_actor_view(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let instance = Self::active_actor_for_control(actor_id)?;
       Self::ensure_control_origin(origin, &instance)?;
       ensure!(
         instance.mutability == Mutability::Mutable,
@@ -1951,7 +2028,7 @@ pub mod pallet {
           Self::cancel_continuation_internal(actor_id, CancellationReason::Explicit, None)?,
           Error::<T>::ContinuationNotFound
         );
-        Self::record_control_mutation(actor_id, now);
+        Self::record_control_mutation(actor_id, now)?;
         Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
       })
     }
@@ -2246,16 +2323,11 @@ pub mod pallet {
     }
 
     pub fn sovereign_account_id(owner: &T::AccountId, owner_slot: u8) -> T::AccountId {
-      let seed =
-        frame::hashing::blake2_256(&(T::PalletId::get(), b"user", owner, owner_slot).encode());
-      T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
-        .expect("hashed seed always decodes into AccountId")
+      T::SovereignAccountDeriver::user(T::PalletId::get(), owner, owner_slot)
     }
 
     pub fn sovereign_account_id_system(actor_id: ActorId) -> T::AccountId {
-      let seed = frame::hashing::blake2_256(&(T::PalletId::get(), b"system", actor_id).encode());
-      T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
-        .expect("hashed seed always decodes into AccountId")
+      T::SovereignAccountDeriver::system(T::PalletId::get(), actor_id)
     }
 
     pub(crate) fn available_owner_slot(
@@ -2387,9 +2459,9 @@ pub mod pallet {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
         }
-        let (owner_slot, sovereign_account) = match actor_type {
+        let (actor_class, sovereign_account) = match actor_type {
           ActorType::User => match Self::allocate_owner_slot(&owner, preferred_user_slot) {
-            Ok((slot, account)) => (Some(slot), account),
+            Ok((slot, account)) => (ActorClass::User { owner_slot: slot }, account),
             Err(error) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 error.into(),
@@ -2397,7 +2469,12 @@ pub mod pallet {
             }
           },
           ActorType::System => match Self::allocate_system_sovereign(system_sovereign_id) {
-            Ok(account) => (None, account),
+            Ok(account) => (
+              ActorClass::System {
+                sovereign_id: system_sovereign_id,
+              },
+              account,
+            ),
             Err(error) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 error.into(),
@@ -2408,14 +2485,7 @@ pub mod pallet {
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
-          actor_class: match actor_type {
-            ActorType::User => ActorClass::User {
-              owner_slot: owner_slot.expect("User allocation always returns a slot"),
-            },
-            ActorType::System => ActorClass::System {
-              sovereign_id: system_sovereign_id,
-            },
-          },
+          actor_class,
           mutability: Mutability::Mutable,
           cycle_nonce: 0,
           last_control_mutation_block: frame_system::Pallet::<T>::block_number(),
@@ -2602,9 +2672,9 @@ pub mod pallet {
       let next_id = actor_id.checked_add(1).ok_or(Error::<T>::ActorIdOverflow)?;
       let now = frame_system::Pallet::<T>::block_number();
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let (owner_slot, sovereign_account) = match actor_type {
+        let (actor_class, sovereign_account) = match actor_type {
           ActorType::User => match Self::allocate_owner_slot(&owner, preferred_user_slot) {
-            Ok((slot, account)) => (Some(slot), account),
+            Ok((slot, account)) => (ActorClass::User { owner_slot: slot }, account),
             Err(error) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 error.into(),
@@ -2612,7 +2682,12 @@ pub mod pallet {
             }
           },
           ActorType::System => match Self::allocate_system_sovereign(system_sovereign_id) {
-            Ok(account) => (None, account),
+            Ok(account) => (
+              ActorClass::System {
+                sovereign_id: system_sovereign_id,
+              },
+              account,
+            ),
             Err(error) => {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 error.into(),
@@ -2641,14 +2716,6 @@ pub mod pallet {
               Self::placement_error(error),
             ));
           }
-        };
-        let actor_class = match actor_type {
-          ActorType::User => ActorClass::User {
-            owner_slot: owner_slot.expect("User allocation always returns a slot"),
-          },
-          ActorType::System => ActorClass::System {
-            sovereign_id: system_sovereign_id,
-          },
         };
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
@@ -2715,14 +2782,7 @@ pub mod pallet {
         Self::deposit_event(Event::ActorCreated {
           actor_id,
           owner,
-          actor_class: match actor_type {
-            ActorType::User => ActorClass::User {
-              owner_slot: owner_slot.expect("User allocation always returns a slot"),
-            },
-            ActorType::System => ActorClass::System {
-              sovereign_id: system_sovereign_id,
-            },
-          },
+          actor_class,
           mutability,
           sovereign_account,
           initial_lifecycle: InitialLifecycle::Active,
@@ -2850,14 +2910,23 @@ pub mod pallet {
     fn do_deactivate_actor(actor_id: ActorId, _instance: ActiveActorViewOf<T>) -> DispatchResult {
       let now = frame_system::Pallet::<T>::block_number();
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        Self::record_control_mutation(actor_id, now);
+        if let Err(error) = Self::record_control_mutation(actor_id, now) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         if let Err(error) =
           Self::cancel_continuation_internal(actor_id, CancellationReason::Deactivated, None)
         {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        Self::remove_actor_from_queues(actor_id);
-        if ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
+        if let Err(error) = Self::remove_actor_from_queues(actor_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
+        };
+        if state.hot.wakeup_pointer.is_some()
           && Self::wakeup_substrate_invalidate(actor_id).is_none()
         {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
@@ -2899,11 +2968,11 @@ pub mod pallet {
         trigger.has_canonical_filters(),
         Error::<T>::InvalidTriggerConfiguration
       );
-      let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
+      let max_block_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
       if let Trigger::Cadenced { every_ticks } = trigger {
         ensure!(*every_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
         ensure!(
-          *every_ticks <= u64::from(max_delay),
+          *every_ticks <= T::MaxCadenceDelayTicks::get(),
           Error::<T>::ExecutionDelayTooLong
         );
         ensure!(
@@ -2912,7 +2981,7 @@ pub mod pallet {
         );
       }
       ensure!(
-        cooldown_blocks <= max_delay,
+        cooldown_blocks <= max_block_delay,
         Error::<T>::ExecutionDelayTooLong
       );
       Ok(())
@@ -3384,13 +3453,14 @@ pub mod pallet {
       Self::with_reused_transaction(operation)
     }
 
-    fn record_control_mutation(actor_id: ActorId, now: BlockNumberFor<T>) {
-      ActorIdentities::<T>::mutate(actor_id, |maybe| {
+    fn record_control_mutation(actor_id: ActorId, now: BlockNumberFor<T>) -> DispatchResult {
+      ActorIdentities::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
         maybe
           .as_mut()
-          .expect("active actor identity existence was prevalidated")
+          .ok_or(Error::<T>::ActorNotFound)?
           .last_control_mutation_block = now;
-      });
+        Ok(())
+      })
     }
 
     fn ensure_control_mutation_allowed(
@@ -3539,11 +3609,16 @@ pub mod pallet {
         SovereignIndex::<T>::get(&identity.sovereign_account) == Some(actor_id),
         Error::<T>::ActorNotFound
       );
-      if let ActorClass::User { owner_slot } = identity.actor_class {
-        ensure!(
+      match identity.actor_class {
+        ActorClass::User { owner_slot } => ensure!(
           Self::owner_slot_is_set(&OwnerSlotBitmaps::<T>::get(&identity.owner), owner_slot),
           Error::<T>::InvalidOwnerSlot
-        );
+        ),
+        ActorClass::System { sovereign_id } => ensure!(
+          SystemSovereigns::<T>::get(sovereign_id)
+            == Some(SystemSovereignState::Occupied(actor_id)),
+          Error::<T>::SystemSovereignInvariant
+        ),
       }
 
       Self::with_control_transaction(|| {
@@ -3613,12 +3688,10 @@ pub mod pallet {
       ActiveActorCount::<T>::get()
     }
 
-    pub(crate) fn remove_actor_from_queues(actor_id: ActorId) {
-      ActorHot::<T>::mutate(actor_id, |maybe| {
-        if let Some(hot) = maybe.as_mut() {
-          hot.queue_ticket = None;
-        }
-      });
+    pub(crate) fn remove_actor_from_queues(actor_id: ActorId) -> DispatchResult {
+      Self::try_paged_invalidate(actor_id)
+        .map(|_| ())
+        .map_err(Self::placement_error)
     }
 
     #[cfg(feature = "try-runtime")]
@@ -3662,36 +3735,27 @@ pub mod pallet {
           "ActorIdentityCount exceeds MaxActorIdentities",
         ));
       }
-      for actor_id in ActorHot::<T>::iter_keys() {
-        if !ActorContracts::<T>::contains_key(actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorHot entry has no matching ActorContract entry",
-          ));
-        }
-      }
       for actor_id in ActorContracts::<T>::iter_keys() {
-        if !ActorHot::<T>::contains_key(actor_id) {
+        if !matches!(
+          Self::load_actor_state(actor_id),
+          LoadedActorStateOf::Active(_)
+        ) {
           return Err(TryRuntimeError::Other(
-            "ActorContract entry has no matching ActorHot entry",
+            "ActorContract entry belongs to a corrupt actor partition set",
           ));
         }
       }
       let mut max_id: Option<ActorId> = None;
       for actor_id in ActorHot::<T>::iter_keys() {
-        let hot = ActorHot::<T>::get(actor_id)
-          .ok_or(TryRuntimeError::Other("active hot key has no value"))?;
-        let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ActorHot entry has no matching ActorIdentity entry",
-        ))?;
-        let contract = ActorContracts::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ActorHot entry has no matching ActorContract entry",
-        ))?;
-        let has_continuation = ContinuationStateStore::<T>::contains_key(actor_id);
-        if (hot.cycle_state == CycleState::Suspended) != has_continuation {
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
           return Err(TryRuntimeError::Other(
-            "ActorHot cycle_state disagrees with ContinuationState",
+            "ActorHot entry belongs to a corrupt actor partition set",
           ));
-        }
+        };
+        let identity = state.identity;
+        let hot = state.hot;
+        let contract = state.contract;
+        let funding = state.funding;
         // Terminal membership is derived from the schedule window: `terminal_at` is the sole
         // terminal-membership authority and must equal the window's exact terminal block, or be
         // absent without a window (spec 5.1).
@@ -3717,11 +3781,6 @@ pub mod pallet {
           ));
         }
         max_id = Some(max_id.map_or(actor_id, |prev| prev.max(actor_id)));
-        let Some(funding) = ActorFunding::<T>::get(actor_id) else {
-          return Err(TryRuntimeError::Other(
-            "ActorHot entry has no matching ActorFunding entry",
-          ));
-        };
         for (asset, amount) in &funding.funding_accumulated {
           if !funding.funding_tracked_assets.contains(asset) || amount.is_zero() {
             return Err(TryRuntimeError::Other(
@@ -3737,41 +3796,55 @@ pub mod pallet {
             ));
           }
         }
-        if let ActorClass::User { owner_slot } = instance.actor_class {
-          if owner_slot >= T::MaxOwnerSlots::get() {
-            return Err(TryRuntimeError::Other(
-              "User Actors owner_slot exceeds MaxOwnerSlots",
-            ));
+        match instance.actor_class {
+          ActorClass::User { owner_slot } => {
+            if owner_slot >= T::MaxOwnerSlots::get() {
+              return Err(TryRuntimeError::Other(
+                "User Actors owner_slot exceeds MaxOwnerSlots",
+              ));
+            }
+            let bitmap = OwnerSlotBitmaps::<T>::get(&instance.owner);
+            if !Self::owner_slot_bitmap_is_valid(&bitmap)
+              || !Self::owner_slot_is_set(&bitmap, owner_slot)
+            {
+              return Err(TryRuntimeError::Other(
+                "User Actors owner_slot is missing from OwnerSlotBitmaps",
+              ));
+            }
           }
-          let bitmap = OwnerSlotBitmaps::<T>::get(&instance.owner);
-          if !Self::owner_slot_bitmap_is_valid(&bitmap)
-            || !Self::owner_slot_is_set(&bitmap, owner_slot)
+          ActorClass::System { sovereign_id }
+            if SystemSovereigns::<T>::get(sovereign_id)
+              != Some(SystemSovereignState::Occupied(actor_id)) =>
           {
             return Err(TryRuntimeError::Other(
-              "User Actors owner_slot is missing from OwnerSlotBitmaps",
+              "active System Actor disagrees with its sovereign locator",
             ));
           }
+          ActorClass::System { .. } => {}
         }
       }
       for actor_id in ActorFunding::<T>::iter_keys() {
-        if !Self::active_actor_exists(actor_id) {
+        if !matches!(
+          Self::load_actor_state(actor_id),
+          LoadedActorStateOf::Active(_)
+        ) {
           return Err(TryRuntimeError::Other(
-            "ActorFunding entry has no matching split active actor",
+            "ActorFunding entry belongs to a corrupt actor partition set",
           ));
         }
       }
       for actor_id in ContinuationStateStore::<T>::iter_keys() {
-        let continuation = ContinuationStateStore::<T>::get(actor_id)
-          .ok_or(TryRuntimeError::Other("Continuation key has no value"))?;
-        let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ContinuationState entry has no matching ActorHot entry",
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+          return Err(TryRuntimeError::Other(
+            "ContinuationState entry belongs to a corrupt actor partition set",
+          ));
+        };
+        let continuation = state.continuation.ok_or(TryRuntimeError::Other(
+          "ContinuationState key is absent from loaded Active state",
         ))?;
-        let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ContinuationState entry has no matching ActorIdentity entry",
-        ))?;
-        let contract = ActorContracts::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "ContinuationState entry has no matching ActorContract entry",
-        ))?;
+        let hot = state.hot;
+        let identity = state.identity;
+        let contract = state.contract;
         if hot.cycle_state != CycleState::Suspended
           || identity.mutability != Mutability::Mutable
           || identity.cycle_nonce == 0
@@ -3866,12 +3939,20 @@ pub mod pallet {
               ));
             }
           }
-          ActorClass::System { .. } if identity.mutability != Mutability::Mutable => {
-            return Err(TryRuntimeError::Other(
-              "Dormant System Actors must be Mutable",
-            ));
+          ActorClass::System { sovereign_id } => {
+            if identity.mutability != Mutability::Mutable {
+              return Err(TryRuntimeError::Other(
+                "Dormant System Actors must be Mutable",
+              ));
+            }
+            if SystemSovereigns::<T>::get(sovereign_id)
+              != Some(SystemSovereignState::Occupied(actor_id))
+            {
+              return Err(TryRuntimeError::Other(
+                "dormant System Actor disagrees with its sovereign locator",
+              ));
+            }
           }
-          ActorClass::System { .. } => {}
         }
       }
       for owner in OwnerSlotBitmaps::<T>::iter_keys() {
@@ -3906,6 +3987,95 @@ pub mod pallet {
           }
         }
       }
+      let actual_system_sovereign_count = u32::try_from(SystemSovereigns::<T>::iter_keys().count())
+        .map_err(|_| TryRuntimeError::Other("SystemSovereigns cardinality exceeds u32"))?;
+      if SystemSovereignCount::<T>::get() != actual_system_sovereign_count {
+        return Err(TryRuntimeError::Other(
+          "SystemSovereignCount does not match SystemSovereigns cardinality",
+        ));
+      }
+      if actual_system_sovereign_count > T::MaxSystemSovereigns::get() {
+        return Err(TryRuntimeError::Other(
+          "SystemSovereigns cardinality exceeds MaxSystemSovereigns",
+        ));
+      }
+      let mut system_identity_owners = alloc::collections::BTreeMap::new();
+      for (actor_id, identity) in ActorIdentities::<T>::iter() {
+        if let ActorClass::System { sovereign_id } = identity.actor_class
+          && system_identity_owners
+            .insert(sovereign_id, actor_id)
+            .is_some()
+        {
+          return Err(TryRuntimeError::Other(
+            "multiple System Actor identities own one sovereign locator",
+          ));
+        }
+      }
+      let mut derived_system_accounts = alloc::collections::BTreeSet::new();
+      for (sovereign_id, locator_state) in SystemSovereigns::<T>::iter() {
+        let sovereign_account = Self::sovereign_account_id_system(sovereign_id);
+        if !derived_system_accounts.insert(sovereign_account.clone()) {
+          return Err(TryRuntimeError::Other(
+            "System sovereign locators derive a duplicate custody account",
+          ));
+        }
+        match locator_state {
+          SystemSovereignState::Vacant => {
+            if system_identity_owners.contains_key(&sovereign_id)
+              || SovereignIndex::<T>::contains_key(&sovereign_account)
+            {
+              return Err(TryRuntimeError::Other(
+                "vacant System sovereign locator retains identity ownership",
+              ));
+            }
+          }
+          SystemSovereignState::Occupied(actor_id) => {
+            if system_identity_owners.get(&sovereign_id) != Some(&actor_id) {
+              return Err(TryRuntimeError::Other(
+                "occupied System sovereign locator disagrees with identity ownership",
+              ));
+            }
+            let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+              "occupied System sovereign locator has no ActorIdentity",
+            ))?;
+            if identity.sovereign_account != sovereign_account
+              || SovereignIndex::<T>::get(&sovereign_account) != Some(actor_id)
+            {
+              return Err(TryRuntimeError::Other(
+                "occupied System sovereign locator disagrees with derived custody ownership",
+              ));
+            }
+          }
+        }
+      }
+      if system_identity_owners.len() > actual_system_sovereign_count as usize {
+        return Err(TryRuntimeError::Other(
+          "System Actor identity has no sovereign locator",
+        ));
+      }
+      let mut sovereign_index_count = 0u32;
+      for (sovereign_account, actor_id) in SovereignIndex::<T>::iter() {
+        sovereign_index_count =
+          sovereign_index_count
+            .checked_add(1)
+            .ok_or(TryRuntimeError::Other(
+              "SovereignIndex cardinality exceeds u32",
+            ))?;
+        let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+          "SovereignIndex owner has no ActorIdentity",
+        ))?;
+        if identity.sovereign_account != sovereign_account {
+          return Err(TryRuntimeError::Other(
+            "SovereignIndex key disagrees with ActorIdentity custody account",
+          ));
+        }
+      }
+      if sovereign_index_count != identity_count {
+        return Err(TryRuntimeError::Other(
+          "SovereignIndex cardinality does not match ActorIdentities",
+        ));
+      }
+
       let queue_capacity = T::MaxQueueLength::get();
       if queue_capacity < limit {
         return Err(TryRuntimeError::Other(
@@ -3925,7 +4095,10 @@ pub mod pallet {
       if head > tail {
         return Err(TryRuntimeError::Other("canonical queue head exceeds tail"));
       }
-      if head < tail && tail.saturating_sub(head) != u64::from(queue_occupancy) {
+      let queue_span = tail.checked_sub(head).ok_or(TryRuntimeError::Other(
+        "canonical queue physical span underflows",
+      ))?;
+      if head < tail && queue_span != u64::from(queue_occupancy) {
         return Err(TryRuntimeError::Other(
           "canonical queue occupancy disagrees with its nonempty physical span",
         ));
@@ -3956,7 +4129,9 @@ pub mod pallet {
           ));
         }
         for (slot, entry) in page.into_iter().enumerate() {
-          let position = page_start.saturating_add(slot as u64);
+          let position = page_start
+            .checked_add(slot as u64)
+            .ok_or(TryRuntimeError::Other("canonical queue position overflows"))?;
           if position < head {
             continue;
           }
@@ -3965,7 +4140,11 @@ pub mod pallet {
               "canonical queue entry lies beyond its physical or global ticket range",
             ));
           }
-          physical_occupancy = physical_occupancy.saturating_add(1);
+          physical_occupancy = physical_occupancy
+            .checked_add(1)
+            .ok_or(TryRuntimeError::Other(
+              "canonical queue occupancy overflows",
+            ))?;
           if physical_tickets
             .insert(entry.ticket, entry.actor_id)
             .is_some()
@@ -4025,7 +4204,9 @@ pub mod pallet {
         let mut live_entries = 0u32;
         for entry in page.entries.as_slice() {
           if entry.is_some() {
-            live_entries = live_entries.saturating_add(1);
+            live_entries = live_entries
+              .checked_add(1)
+              .ok_or(TryRuntimeError::Other("wakeup page live count overflows"))?;
           }
         }
         if live_entries == 0 || page.live_entries != live_entries {
@@ -4065,7 +4246,9 @@ pub mod pallet {
           ));
         }
         let key_live = wakeup_live_by_key.entry(block).or_insert(0u32);
-        *key_live = key_live.saturating_add(live_entries);
+        *key_live = key_live
+          .checked_add(live_entries)
+          .ok_or(TryRuntimeError::Other("wakeup bucket live count overflows"))?;
         // `wakeup_pointer` is the sole ordinary temporal-membership authority (spec 5.1): a
         // physical page slot is a live member only when the actor's pointer addresses exactly
         // this slot. A slot whose actor owns a different pointer is corruption; a slot whose
@@ -4082,7 +4265,12 @@ pub mod pallet {
           };
           match ActorHot::<T>::get(entry.actor_id).and_then(|hot| hot.wakeup_pointer) {
             Some(pointer) if pointer == expected => {
-              live_wakeup_memberships = live_wakeup_memberships.saturating_add(1);
+              live_wakeup_memberships =
+                live_wakeup_memberships
+                  .checked_add(1)
+                  .ok_or(TryRuntimeError::Other(
+                    "live wakeup membership count overflows",
+                  ))?;
             }
             Some(_) => {
               return Err(TryRuntimeError::Other(
@@ -4133,9 +4321,12 @@ pub mod pallet {
           ));
         }
         let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
-        let actual_cursor_pages = WakeupCursorPages::<T>::iter_keys()
-          .filter(|(stored_clock, _)| *stored_clock == clock)
-          .count() as u32;
+        let actual_cursor_pages = u32::try_from(
+          WakeupCursorPages::<T>::iter_keys()
+            .filter(|(stored_clock, _)| *stored_clock == clock)
+            .count(),
+        )
+        .map_err(|_| TryRuntimeError::Other("wakeup cursor page count overflows"))?;
         if actual_cursor_pages != expected_cursor_pages {
           return Err(TryRuntimeError::Other(
             "WakeupCursorPages count disagrees with cursor length",
@@ -4147,8 +4338,17 @@ pub mod pallet {
               "WakeupCursorPages has a gap in logical page order",
             ));
           };
-          let consumed = page_id.saturating_mul(cursor_page_size);
-          let expected_len = cursor_len.saturating_sub(consumed).min(cursor_page_size) as usize;
+          let consumed = page_id
+            .checked_mul(cursor_page_size)
+            .ok_or(TryRuntimeError::Other(
+              "wakeup cursor page offset overflows",
+            ))?;
+          let remaining = cursor_len
+            .checked_sub(consumed)
+            .ok_or(TryRuntimeError::Other(
+              "wakeup cursor page offset exceeds length",
+            ))?;
+          let expected_len = remaining.min(cursor_page_size) as usize;
           if page.len() != expected_len {
             return Err(TryRuntimeError::Other(
               "WakeupCursorPage length disagrees with logical position",
@@ -4173,7 +4373,10 @@ pub mod pallet {
             ));
           }
           if index > 0 {
-            let parent = index.saturating_sub(1) / 2;
+            let parent = index
+              .checked_sub(1)
+              .ok_or(TryRuntimeError::Other("wakeup cursor parent underflows"))?
+              / 2;
             if Self::wakeup_cursor_get(clock, parent).is_none_or(|parent_key| parent_key > key) {
               return Err(TryRuntimeError::Other(
                 "WakeupCursor violates min-heap ordering",

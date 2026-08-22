@@ -101,12 +101,22 @@ function certifiedProducers(source) {
     }
     return match[1];
   };
+  const protocol = (entry) => {
+    const match = entry[1].match(
+      /protocol:\s*CertifiedMovementProtocol::([A-Za-z0-9_]+)/,
+    );
+    if (match == null) {
+      fail('Actors producer entry missing typed protocol');
+    }
+    return match[1];
+  };
   const producers = entries.map((entry) => ({
     id: field(entry, 'id'),
+    protocol: protocol(entry),
     creditedSurface: field(entry, 'credited_surface'),
     sourceProvenance: field(entry, 'source_provenance'),
     preflightOwner: field(entry, 'preflight_owner'),
-    notifyOwner: field(entry, 'notify_owner'),
+    consequenceOwner: field(entry, 'consequence_owner'),
     rollbackOwner: field(entry, 'rollback_owner'),
     weightOwner: field(entry, 'weight_owner'),
   }));

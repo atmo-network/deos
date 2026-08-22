@@ -19,6 +19,7 @@ workspace = true
 codec = { workspace = true, features = ["max-encoded-len"] }
 scale-info = { workspace = true }
 serde = { workspace = true, features = ["derive", "alloc"] }
+polkadot-sdk = { workspace = true, features = ["sp-core"] }
 sp-api = { workspace = true }
 sp-arithmetic = { workspace = true }
 
@@ -29,6 +30,7 @@ std = [
 	"codec/std",
 	"scale-info/std",
 	"serde/std",
+	"polkadot-sdk/std",
 	"sp-api/std",
 	"sp-arithmetic/std",
 ]

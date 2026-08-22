@@ -111,6 +111,7 @@ pub enum CloseReason {
   AutoCloseNonceReached,
   RetryAttemptsExhausted,
   ProductiveCycleCompleted,
+  SchedulerIndexExhausted,
 }
 
 #[derive(

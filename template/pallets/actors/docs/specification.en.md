@@ -115,7 +115,7 @@ struct OutcomeTotals {
 enum CloseReason {
   OwnerInitiated, BalanceExhausted, FeeBudgetExhausted, WindowExpired,
   CycleNonceExhausted, RetryAttemptsExhausted, ConsecutiveFailures,
-  ProductiveCycleCompleted, AutoCloseNonceReached,
+  ProductiveCycleCompleted, AutoCloseNonceReached, SchedulerIndexExhausted,
 }
 enum CycleResult { Completed, Failed, Cancelled }
 enum SuspensionReason { FundingUnavailable, Temporary }
@@ -184,7 +184,7 @@ System Immutable:
 ```text
 User seed   = Blake2_256(SCALE(ActorsPalletId, b"user", owner, owner_slot))
 System seed = Blake2_256(SCALE(ActorsPalletId, b"system", system_sovereign_id))
-account     = AccountId::decode(TrailingZeroInput(seed))
+account     = HostSovereignAccountDeriver(seed)
 ```
 
 The decoder MUST be total and deterministic for every 32-byte seed.
@@ -196,6 +196,7 @@ The decoder MUST be total and deterministic for every 32-byte seed.
 - `create_system_actor_at_sovereign_id` requires an existing `Vacant` locator, assigns a fresh `actor_id`, and records `Occupied(fresh_actor_id)`; unknown and occupied locator cases are distinct errors.
 - Close marks a System locator `Vacant`; deactivation leaves it occupied; reuse never reuses an actor id.
 - `SystemSovereignCount` includes vacant locators; reuse does not change it.
+- The host deriver MUST map the tagged seed deterministically without a runtime panic, preserve owner/slot and System-locator separation, and keep every previously admitted custody identity stable.
 - `SovereignIndex` covers current Active or Dormant ownership only. Nonzero balance or host provider state at an otherwise unindexed derived account is custody, not a live Actors collision, and MUST NOT block creation or reattachment.
 - Fresh User-slot and fresh System-locator derivation reject reserved accounts. Exact User-slot reattachment remains a fresh derivation and applies the same reserved-account check.
 - Reattachment to an already registered vacant System locator is permitted for that exact locator even if host policy later classifies its derived account as reserved. This exception applies only to that registered locator.
@@ -224,6 +225,7 @@ Terminal predicates are evaluated in this precedence when their owning transitio
 | `unsuccessful_attempt_streak` reaches `MaxConsecutiveFailures` | `ConsecutiveFailures` |
 | completed productive cycle under `CloseAfterProductiveCycle` | `ProductiveCycleCompleted` |
 | non-suspended cycle reaches auto-close target | `AutoCloseNonceReached` |
+| due materialization or post-attempt placement exhausts a monotonic scheduler index | `SchedulerIndexExhausted` |
 
 For User economic viability:
 
@@ -249,7 +251,7 @@ Terminal ownership:
 - `WindowExpired` is checked by actor-targeting control, address-event notification, scheduler classification, and sweep.
 - `BalanceExhausted` and `FeeBudgetExhausted` are checked by scheduler classification and sweep.
 - `CycleNonceExhausted` is checked before Dormant activation, fresh-cycle opening, scheduler classification, or sweep. Activation substitutes close of the Dormant identity.
-- Attempt finalization applies retry-, failure-, productive-, and post-cycle auto-close reasons. Scheduler classification and sweep also close an actor when its stored retry count, failure count, Idle cycle nonce, or Idle auto-close target already satisfies a terminal predicate; neither infers `ProductiveCycleCompleted` from stored state. `AutoCloseNonceReached` is not due while Suspended.
+- Attempt finalization applies retry-, failure-, productive-, post-cycle auto-close, and permanent scheduler-index reasons. Due materialization also closes on permanent queue-index exhaustion before any attempt. Scheduler classification and sweep close an actor when its stored retry count, failure count, Idle cycle nonce, or Idle auto-close target already satisfies a terminal predicate; neither infers `ProductiveCycleCompleted` or `SchedulerIndexExhausted` from stored state. `AutoCloseNonceReached` is not due while Suspended.
 - Under the global breaker, due temporal membership MAY materialize, but scheduler-owned automatic close does not execute. Explicit Mutable close, actor-targeting expiry substitution, ingress-triggered expiry close, and permissionless sweep remain available.
 
 Address-event notification performs inline terminal close only for `WindowExpired`. User resource predicates are evaluated after any credited value only when scheduler classification or sweep later runs.
@@ -341,7 +343,7 @@ Explicit Continuation cancellation requires Mutable control and `cycle_state == 
 
 Semantic Actor Contract replacement; deactivation; close; expiry; or incompatible upgrade cancels before changed meaning applies. Exact no-op and auto-close-target changes do not cancel. Pause/resume and breaker preserve Continuation.
 
-Cancellation performs no compensation, funding restoration, prefix rollback, or balance movement and emits `CycleCancelled`, then `CycleSummary(Cancelled)`.
+Cancellation performs no compensation, funding restoration, prefix rollback, or balance movement and emits `CycleCancelled`, then `CycleSummary(Cancelled)`. Before a retained Active actor is re-primed, cancellation exactly invalidates its current wakeup slot and reverse pointer in the same transaction; a latched next-run signal cannot create a new pointer behind an old physical slot.
 
 If close encounters a Continuation, cancellation uses `Closing(reason)` and precedes `ActorClosed(reason)`. A pure close means no Continuation exists and emits only `ActorClosed`.
 
@@ -500,13 +502,13 @@ ensure!(
 
 if let Trigger::Cadenced { every_ticks } = contract.trigger {
   ensure!(every_ticks > 0, Error::InvalidTriggerConfiguration);
-  ensure!(every_ticks <= MaxExecutionDelayTicks, Error::ExecutionDelayTooLong);
+  ensure!(every_ticks <= MaxCadenceDelayTicks, Error::ExecutionDelayTooLong);
   ensure!(contract.cooldown_blocks == 0, Error::InvalidTriggerConfiguration);
   ensure!(contract.window.is_none(), Error::InvalidScheduleWindow);
 }
 ```
 
-A zero cadence returns `InvalidTriggerConfiguration`. A delay above its protocol horizon returns `ExecutionDelayTooLong`. Overflow of otherwise valid cadence arithmetic returns `SchedulerIndexExhausted`.
+A zero cadence returns `InvalidTriggerConfiguration`. A delay above its typed protocol horizon returns `ExecutionDelayTooLong`. `MaxCadenceDelayTicks` is measured in cadence ticks and never reused as a consensus-block bound; `MaxExecutionDelayBlocks` is measured in consensus blocks and never reused as a cadence bound. The reference values are independently derived ten-Julian-year horizons: 631,152,000 ticks at 500 milliseconds and 52,596,000 blocks at 6 seconds. Overflow of otherwise valid cadence arithmetic returns `SchedulerIndexExhausted`.
 
 ```text
 cooldown_anchor =
@@ -819,10 +821,11 @@ Classification rules:
   2. `Paused` when the actor is paused;
   3. `Ready` when `terminal_reason` exists and neither preceding gate applies; no retry, temporal, or signal arithmetic is then evaluated;
   4. For Suspended, `WaitingRetry(next_block)` when retry eligibility is later than the current block, otherwise `Ready`;
-  5. For Idle, `WaitingTemporal(next_block)` when temporal eligibility is later than the current block;
-  6. For signal-driven Idle, `WaitingSignal` when temporal eligibility has opened and `pending_signal == false`;
-  7. `Ready` otherwise.
-6. Checked arithmetic required to classify the existing actor, including current fee-envelope rederivation and retry/temporal target computation, returns `ComputationOverflow` on failure. A classification error MUST NOT be converted into a phase, `NotReady`, absence, or `Ready`.
+  5. For Idle Cadenced, `Ready` when `pending_signal == true`; otherwise `WaitingCadenceTick(due_tick)` carrying the exact actor-owned tick pointer, even when that tick is already due but the wakeup worker has not materialized it;
+  6. For other Idle triggers, `WaitingBlock(next_block)` when block eligibility is later than the current block;
+  7. For signal-driven Idle, `WaitingSignal` when block eligibility has opened and `pending_signal == false`;
+  8. `Ready` otherwise.
+6. Checked arithmetic required to classify the existing actor, including current fee-envelope rederivation and retry/block-temporal target computation, returns `ComputationOverflow` on failure. Cadence classification reads its exact live tick pointer and never computes a later period. A classification error MUST NOT be converted into a phase, `NotReady`, absence, or `Ready`.
 
 `WaitingSignal` carries no block because the next matching signal may arrive in any future block or never arrive.
 
@@ -959,7 +962,7 @@ Skip and pre-task resolution failure charge evaluation only. A task attempt char
 
 Successful User attempt admission proves that the payer holds `MinUserBalance` plus the complete current suffix fee envelope before attempt mutation. The reservation model prevents every ordinary task debit from consuming any fee amount still required by the current attempt. A conforming `FeeCollector::collect_fee` therefore MUST NOT fail solely because the payer lacks the reserved fee amount.
 
-Failure of `FeeCollector::collect_fee` is not a step outcome or `TaskFailure`. It denotes failure of fee-asset movement, FeeSink deposit, an optional host-defined collection consequence, fee-path configuration, or an invariant. Actors assigns no trigger semantics to fee collection; the host may keep it ledger-only or pair it transactionally with certified ingress.
+Failure of `FeeCollector::collect_fee` is not a step outcome or `TaskFailure`. It denotes failure of the fee-asset ledger movement, FeeSink deposit capability, fee-path configuration, or an invariant. Fee collection MUST remain ledger-only and MUST NOT invoke Actors ingress preflight or notification, accumulate funding, latch readiness, or create scheduler placement.
 
 Failure MUST roll back the complete scheduler-attempt transaction and MUST NOT invoke `StepErrorPolicy`. It persists no head consumption, fee, event, counter, nonce, cursor, snapshot, or task effect. It MUST NOT map to `InsufficientFee`, `BalanceExhausted`, or `FeeBudgetExhausted`, be represented as `TaskFailure`, or be processed by `StepErrorPolicy`.
 
@@ -1057,25 +1060,25 @@ Fanout runs before cutoff. One admitted unit reserves complete Weight, visits on
 
 ### 5.3 Address-Event Ingress
 
-Only a certified producer creates Actors AddressEvent semantics. The generated certified-producer inventory is the sole producer authority: it names every runtime movement path that claims Actors ingress and records provenance, source availability, atomic rollback owner, preflight/notify integration, retry mapping, and Weight bound.
+Only a certified producer creates Actors AddressEvent semantics. The generated certified-producer inventory is the sole producer authority: it names every runtime movement path that claims Actors ingress and records one typed protocol, provenance, source availability, read-only preflight owner, consequence owner, atomic rollback owner, retry mapping, and Weight bound.
 
 Actors Transfer, every SplitTransfer leg, and Mint are certified producers whenever their destination resolves to an Actors sovereign account.
 
-A certified movement uses one outer transaction:
+| Protocol | Ordering | Atomicity owner |
+| --- | --- | --- |
+| `PostMovementNotify` | Read-only preflight, value movement, exactly one notify | Producer storage transaction |
+| `BlockAtomicPostDispatch` | Read-only preflight, successful dispatch, exactly one post-dispatch notify | Block author/import state transaction; a notify rejection invalidates the candidate block |
+| `XcmTransactionalPrecommit` | Read-only preflight, exactly one Actors precommit, consume and deposit the non-cloneable holding | Asset-transactor storage transaction |
 
-```text
-AddressEventIngress::preflight(event)
--> value movement
--> AddressEventIngress::notify(event)
-```
+`XcmTransactionalPrecommit` is the sole allowed pre-movement Actors mutation. It exists because `AssetsInHolding` is non-cloneable: successful deposit commits the precommit, while precommit or deposit failure restores every Actors effect, event, ledger entry, and the exact original holding. It is observationally equivalent at the transaction boundary to one successful movement plus one Actors consequence and MUST NOT be described as post-movement notification.
 
-Preflight is read-only and covers lifecycle, funding, trigger, and required placement. Notify executes exactly once after movement. Any failure restores movement and every Actors effect. Certification is atomic, not advisory: after preflight, a certified movement MUST NOT fall back to balance-only when its complete Actors consequence cannot commit.
+Every protocol begins with literal read-only preflight covering lifecycle, funding, trigger, and required placement. Any later failure restores movement and every Actors effect at the named atomicity boundary. Certification is atomic, not advisory: after preflight, a certified movement MUST NOT fall back to balance-only when its complete Actors consequence cannot commit.
 
 A certified third-party movement to an Active actor MAY fail when its complete Actors consequence cannot commit. Recoverable queue/wakeup capacity or placement unavailability is Temporary. Monotonic ticket/index exhaustion, topology corruption, invalid provenance, and invariant failure are Permanent. Actors tasks preserve the classification through `TaskFailure`; non-Actors producers map it to their outer dispatch error.
 
 A movement not named in the certified inventory is **balance-only**: it cannot latch readiness, update `funding_accumulated`, or emit `FundingAccumulated`, even when destination is an Actors sovereign account. It is not rejected by Actors scheduler pressure. No event scan, balance-diff scan, inbox, or implicit producer discovery is permitted.
 
-A new balance-movement surface remains balance-only until the certified-producer inventory defines its preflight, notify, rollback owner, failure classification, and Weight.
+A new balance-movement surface remains balance-only until the certified-producer inventory defines its typed protocol, preflight, consequence, rollback owner, failure classification, and Weight.
 
 Additional rules:
 
@@ -1085,11 +1088,7 @@ Additional rules:
 - Funding acceptance follows Section 2.5. Untracked or policy-rejected credit is balance-only for funding but MAY independently match an AddressEvent trigger.
 - Concrete source and typed provenance remain independent.
 - Equal certified movements count separately for funding while readiness coalesces.
-- Fee movement belongs only to one certified `FeeCollector` path and notifies exactly once. If `FeeSink` resolves to an Active Actors sovereign account, trigger matching and funding acceptance are evaluated independently under that actor's authored schedule/funding policy and the inventory-defined source/provenance.
-- A funding-rejected fee credit remains balance-only for funding but MAY still latch readiness when its trigger matches. Repeated matching fees coalesce into one latch and one placement; they do not require one Fee Sink cycle or ticket per payment.
-- Fee collection commits only the balance credit and bounded ingress consequence. It never executes the Fee Sink actor synchronously; downstream allocation follows ordinary FIFO, cooldown, and Weight admission.
-- A scheduler User attempt consumes its live head inside the enclosing transaction before fee collection. This frees one FIFO position before a first due Fee Sink placement. A future Fee Sink target uses the actor-local wakeup substrate, whose canonical live ownership is bounded by `MaxActiveActors`.
-- A conforming host with an Active Fee Sink MUST prove that the first matching fee can establish one canonical placement at maximum valid scheduler occupancy. Failure of the complete FeeSink consequence rolls back the fee movement and enclosing payer attempt under Section 4.3. No second ordinary AddressEvent notification is permitted.
+- Fee movement is outside the certified AddressEvent producer inventory. It commits only the ledger debit and FeeSink credit, never invokes Actors ingress, and remains independent from destination actor state and scheduler capacity. Downstream Fee Sink allocation follows its independently configured cadence.
 
 ### 5.4 Hooks, Breaker, and Reserved Actor Service
 
@@ -1120,7 +1119,7 @@ ActorServiceReserve =
   - ObservationFanoutWeightLimit
 ```
 
-Subtraction is checked component-wise. One maximum actor attempt or terminal cleanup MUST fit. `MaxExecutionsPerBlock` is only a count ceiling.
+Subtraction is checked component-wise. One maximum actor attempt including any reachable terminal cleanup, or one standalone terminal cleanup, MUST fit. `MaxExecutionsPerBlock` is only a count ceiling.
 
 While the global breaker is active:
 
@@ -1521,7 +1520,7 @@ Exact boundary ordering is:
 - `FundingUnavailable` selected for `RetryLater` emits no `StepSkipped`; it emits `CycleSuspended(FundingUnavailable)`, or `CycleSummary(Failed)` then `ActorClosed(bound_reason)` when an unsuccessful bound is reached;
 - Temporary task failure selected for `RetryLater` emits `StepFailed`, then `CycleSuspended(Temporary)`, or `CycleSummary(Failed)` then `ActorClosed(bound_reason)` when an unsuccessful bound is reached;
 - Terminal task failure emits `StepFailed`, then `CycleSummary(Failed)`, then any failure-driven `ActorClosed`;
-- Successful completion emits `CycleSummary(Completed)`, then any productive or auto-close `ActorClosed`;
+- Successful completion emits `CycleSummary(Completed)`, then any productive, auto-close, or post-attempt scheduler-index `ActorClosed`;
 - A successful terminal custody drain emits `CycleStarted`, `TransferExecuted`, `CycleSummary(Completed)`, then `ActorClosed(ProductiveCycleCompleted)`;
 - A zero terminal custody drain emits `CycleStarted`, `StepSkipped(ResolutionSkipped)`, then `CycleSummary(Completed)` and no productive close;
 - Fee-collection failure rolls back the complete attempt and emits nothing.
@@ -1659,14 +1658,14 @@ Required bindings include `ActorsPalletId`, `FeeNativeAssetId`, `SystemOrigin`, 
 13. Every collection, scan, attempt, worker, and processing-unit bound is nonzero and has one owner.
 14. Each worker limit covers one complete worst-case unit.
 15. Runtime guarantees `remaining_weight_at_ACTORS_on_idle >= ActorOnIdleReserve` in both dimensions.
-16. Section 5.4 subtraction is representable and `ActorServiceReserve` covers one maximum actor attempt or terminal cleanup.
+16. Section 5.4 subtraction is representable and `ActorServiceReserve` covers one maximum actor attempt including reachable terminal cleanup, or one standalone terminal cleanup.
 17. Every admitted plan/suffix, producer consequence, control transition, and cleanup fits its owning envelope.
 18. `MinUserBalance >= AssetOps::minimum_balance(FeeNativeAssetId)`.
 19. `ActorCreationFee > 0`.
 20. `WeightToFee` maps every admitted User evaluation/task upper bound to a positive fee.
 21. `SystemSwapEmaMaxAgeBlocks > 0`; `SystemSwapMaxReferenceDeviation < Perbill::one()`.
 22. `TargetBlockTime > 0`.
-23. `MaxExecutionDelayBlocks = ceil(10 Julian years / TargetBlockTime)`; target arithmetic and `end + 1` are representable.
+23. `MaxExecutionDelayBlocks = ceil(10 Julian years / TargetBlockTime)` and `MaxCadenceDelayTicks = ceil(10 Julian years / CadenceTickMillis)`; each horizon is nonzero, typed in its own clock, and its arithmetic is representable.
 24. `MaxAutoCloseNonceHorizon > 0`.
 25. `MaxIdleStarvationBlocks > 0`.
 26. Simulation records are bounded by the same `MaxContractSteps`.
@@ -1684,7 +1683,7 @@ MaxContractSteps = 8                 MaxRetryAttempts = 10
 MaxFundingTrackedAssets = 10              MaxOpeningSnapshotEntries = 16
 MaxOpeningPredicateResults = 32            MaxPreconditionClauses = 4
 MaxPredicatesPerClause = 4                 MaxPredicatesPerStep = 4
-MaxExecutionDelayTicks = 631_152_000      MaxWhitelistSize = 16
+MaxCadenceDelayTicks = 631_152_000        MaxWhitelistSize = 16
 MaxSplitTransferLegs = 8                  MaxConsecutiveFailures = 10
 MaxQueueLength = 10_000                   MaxExecutionDelayBlocks = 52_596_000
 MinWindowLength = 100

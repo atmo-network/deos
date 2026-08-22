@@ -7,7 +7,7 @@ pub mod oracle_config;
 pub mod pool_index;
 pub mod preimage_config;
 pub mod staking_config;
-mod tmc_config;
+pub(crate) mod tmc_config;
 mod xcm_config;
 
 use cumulus_pallet_parachain_system::RelayNumberMonotonicallyIncreases;
@@ -399,7 +399,7 @@ impl DelegationWeightedCollatorSessionManager {
       .unwrap_or_default()
   }
 
-  pub(crate) fn conservative_native_lp_value(locked_lp: Balance) -> Balance {
+  pub(crate) fn conservative_native_lp_value_or_zero(locked_lp: Balance) -> Balance {
     Self::try_conservative_native_lp_value(locked_lp).unwrap_or_default()
   }
 
@@ -514,11 +514,11 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
       index,
       pallet_staking::NativeSecurityBoundaryOutcome::SnapshotOpened,
     );
-    let candidates_len_before: u32 =
+    let candidates_len_before = u32::try_from(
       polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::decode_len()
-        .unwrap_or_default()
-        .try_into()
-        .expect("length is bounded by MaxCandidates; qed");
+        .unwrap_or_default(),
+    )
+    .unwrap_or(u32::MAX);
     let active_candidates_count =
       polkadot_sdk::pallet_collator_selection::Pallet::<Runtime>::kick_stale_candidates(
         polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get()

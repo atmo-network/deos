@@ -1,0 +1,41 @@
+[graph]
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "wasm32v1-none",
+]
+all-features = true
+
+[advisories]
+# Advisory exceptions are not hidden here. The release-assurance dependency
+# review checks every material finding against its dated reachability ledger.
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "GPL-3.0",
+  "GPL-3.0-only",
+  "GPL-3.0-or-later WITH Classpath-exception-2.0",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+# Internal path/workspace dependencies have no registry version by design.
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

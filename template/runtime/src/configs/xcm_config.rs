@@ -164,19 +164,25 @@ impl ActorAwareAssetTransactor {
     let Some((asset, amount)) = Self::to_asset_kind_and_amount(what) else {
       return Ok(());
     };
-    let Some(source) = context
+    let source = context
       .and_then(|ctx| ctx.origin.as_ref())
       .and_then(|origin| {
         <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(origin)
-      })
-    else {
-      return Ok(());
-    };
-    RuntimeAddressEventIngress::preflight_xcm_inbound(&recipient, asset, amount, &source)
-      .map_err(|_| XcmError::FailedToTransactAsset("Actors funding accumulator preflight failed"))
+      });
+    match source {
+      Some(source) => {
+        RuntimeAddressEventIngress::preflight_xcm_inbound(&recipient, asset, amount, &source)
+      }
+      None => {
+        RuntimeAddressEventIngress::preflight_inbound_without_source(&recipient, asset, amount)
+      }
+    }
+    .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress preflight failed"))
   }
 
-  fn notify_ingress(
+  /// Commit the Actors consequence before consuming the non-cloneable XCM holding.
+  /// The enclosing storage transaction rolls this precommit back if the deposit fails.
+  fn precommit_ingress(
     what: &Asset,
     who: &Location,
     context: Option<&XcmContext>,
@@ -196,10 +202,10 @@ impl ActorAwareAssetTransactor {
       });
     if let Some(source) = source {
       return RuntimeAddressEventIngress::on_xcm_inbound(&recipient, asset, amount, &source)
-        .map_err(|_| XcmError::FailedToTransactAsset("Actors funding notification failed"));
+        .map_err(|_| XcmError::FailedToTransactAsset("Actors funding precommit failed"));
     }
     RuntimeAddressEventIngress::on_inbound_without_source(&recipient, asset, amount)
-      .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress notification failed"))
+      .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress precommit failed"))
   }
 }
 
@@ -316,10 +322,10 @@ impl TransactAsset for ActorAwareAssetTransactor {
         return Err((what, error));
       }
     }
-    // One non-recursive layer preserves the non-cloneable holding on notification failure.
+    // One non-recursive layer preserves the non-cloneable holding on precommit failure.
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       for asset in &notified_assets {
-        if let Err(error) = Self::notify_ingress(asset, who, context) {
+        if let Err(error) = Self::precommit_ingress(asset, who, context) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
             what, error,
           )));
@@ -347,7 +353,7 @@ impl TransactAsset for ActorAwareAssetTransactor {
     }
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       for asset in &notified_assets {
-        if let Err(error) = Self::notify_ingress(asset, who, context) {
+        if let Err(error) = Self::precommit_ingress(asset, who, context) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
             what, error,
           )));
@@ -574,6 +580,12 @@ mod tests {
   fn xcm_fixed_instruction_weight_binds_single_asset_actor_deposit_benchmark() {
     assert_eq!(MaxAssetsIntoHolding::get(), 1);
     assert_eq!(
+      <<XcmConfig as xcm_executor::Config>::MaxAssetsIntoHolding as frame_support::traits::Get<
+        u32,
+      >>::get(),
+      1
+    );
+    assert_eq!(
       UnitWeightCost::get(),
       <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::xcm_asset_deposit()
     );
@@ -591,6 +603,63 @@ mod tests {
         Vec<Asset>,
       )>>::contains(&(Location::parent(), vec![]))
     );
+    assert!(
+      !<<Runtime as pallet_xcm::Config>::XcmExecuteFilter as Contains<(
+        Location,
+        Xcm<RuntimeCall>,
+      )>>::contains(&(Location::here(), Xcm(vec![])))
+    );
+  }
+
+  #[test]
+  fn native_relay_and_sibling_locations_have_non_aliasing_ledger_identities() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      let metadata = primitives::assets::CurrencyMetadata {
+        name: b"Reserve".to_vec(),
+        symbol: b"RSV".to_vec(),
+        decimals: 12,
+      };
+      assert_noop!(
+        crate::AssetRegistry::register_foreign_asset(
+          RuntimeOrigin::root(),
+          Location::here(),
+          metadata.clone(),
+          1,
+          true,
+        ),
+        pallet_asset_registry::Error::<Runtime>::ReservedLocation
+      );
+      let locations = [
+        Location::parent(),
+        Location::new(1, [Parachain(1_000)]),
+        Location::new(1, [Parachain(2_000)]),
+      ];
+      let mut ids = Vec::new();
+      for location in locations {
+        crate::AssetRegistry::register_foreign_asset(
+          RuntimeOrigin::root(),
+          location.clone(),
+          metadata.clone(),
+          1,
+          true,
+        )
+        .expect("distinct reserve location registration succeeds"); // deos-bypass: panic-owner — test-only fixture assertion
+        let id = crate::AssetRegistry::location_to_asset(location)
+          .expect("registered reserve identity resolves"); // deos-bypass: panic-owner — test-only fixture assertion
+        assert_eq!(id & primitives::assets::MASK_TYPE, TYPE_FOREIGN);
+        ids.push(id);
+      }
+      ids.sort_unstable();
+      ids.dedup();
+      assert_eq!(ids.len(), 3);
+      assert_eq!(
+        ActorAwareAssetTransactor::to_asset_kind_and_amount(&Asset {
+          id: AssetId(Location::here()),
+          fun: Fungibility::Fungible(1),
+        }),
+        Some((AssetKind::Native, 1))
+      );
+    });
   }
 
   #[test]
@@ -646,6 +715,97 @@ mod tests {
         }),
         Some((AssetKind::Native, 100))
       );
+    });
+  }
+
+  #[test]
+  fn ordinary_and_surplus_deposits_preserve_unknown_mapping_and_destination_failures() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      let recipient = AccountId::new([78u8; 32]);
+      let recipient_location = Location::new(
+        0,
+        [AccountId32 {
+          network: None,
+          id: recipient.clone().into(),
+        }],
+      );
+      let root_before =
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+      let unknown_asset = Asset {
+        id: AssetId(Location::new(1, [Parachain(9_999)])),
+        fun: Fungibility::Fungible(100),
+      };
+      let mut unknown_holding = AssetsInHolding::new();
+      unknown_holding
+        .fungible
+        .insert(unknown_asset.id.clone(), Box::new(BenchmarkCredit(100)));
+      let Err((returned, _)) = <ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
+        unknown_holding,
+        &recipient_location,
+        None,
+      ) else {
+        panic!("unknown foreign mapping must fail with its holding"); // deos-bypass: panic-owner — test-only negative assertion
+      };
+      assert_eq!(
+        returned.assets_iter().collect::<Vec<_>>(),
+        vec![unknown_asset.clone()]
+      );
+
+      let invalid_destination = Location::new(0, [GeneralIndex(7)]);
+      let native_asset = Asset {
+        id: AssetId(Location::here()),
+        fun: Fungibility::Fungible(1_000_000_000_000),
+      };
+      let mut invalid_holding = AssetsInHolding::new();
+      invalid_holding.fungible.insert(
+        native_asset.id.clone(),
+        Box::new(BenchmarkCredit(1_000_000_000_000)),
+      );
+      let Err((returned, _)) =
+        <ActorAwareAssetTransactor as TransactAsset>::deposit_asset_with_surplus(
+          invalid_holding,
+          &invalid_destination,
+          None,
+        )
+      else {
+        panic!("unconvertible destination must fail with its holding"); // deos-bypass: panic-owner — test-only negative assertion
+      };
+      assert_eq!(
+        returned.assets_iter().collect::<Vec<_>>(),
+        vec![native_asset]
+      );
+      assert_eq!(crate::Balances::free_balance(&recipient), 0);
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+        root_before,
+        "unknown mappings and destinations preserve exact runtime state"
+      );
+    });
+  }
+
+  #[test]
+  fn surplus_deposit_credits_the_same_native_ledger_as_ordinary_deposit() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      let recipient = AccountId::new([79u8; 32]);
+      let recipient_location = Location::new(
+        0,
+        [AccountId32 {
+          network: None,
+          id: recipient.clone().into(),
+        }],
+      );
+      let amount = 2_000_000_000_000u128;
+      let mut holding = AssetsInHolding::new();
+      holding
+        .fungible
+        .insert(AssetId(Location::here()), Box::new(BenchmarkCredit(amount)));
+      <ActorAwareAssetTransactor as TransactAsset>::deposit_asset_with_surplus(
+        holding,
+        &recipient_location,
+        None,
+      )
+      .expect("native surplus deposit succeeds"); // deos-bypass: panic-owner — test-only fixture assertion
+      assert_eq!(crate::Balances::free_balance(&recipient), amount);
     });
   }
 

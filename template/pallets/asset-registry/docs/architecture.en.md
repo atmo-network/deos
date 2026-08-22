@@ -19,7 +19,8 @@ It implements a `Hybrid Registry Pattern`: deterministic ID generation via BLAKE
 2. `Bidirectional Identity`: the live contract persists both `Location -> AssetId` and `AssetId -> Location`
 3. `XCM Version Resilience`: storage persistence survives Location encoding changes (v4 → v5)
 4. `Namespace Safety`: bitmask classification prevents foreign/local/LP/native collisions
-5. `Governance Control`: all registration requires `RegistryOrigin` (Root/Governance)
+5. `Host Location Safety`: `ReservedLocations` prevents host-owned locations such as Native `Here` from entering the foreign bijection through registration, linking, or migration
+6. `Governance Control`: all registration requires `RegistryOrigin` (Root/Governance)
 
 ### Architectural Boundary
 
@@ -79,6 +80,7 @@ graph TD
 2. Check `!ForeignAssetMapping::contains_key(location)` → no duplicate Location
 3. Check generated and manual IDs both satisfy the `0xF...` namespace contract
 4. Reject collisions against both live `pallet-assets` identity and any retained reverse mapping, including a mapping whose ledger asset was later destroyed
+5. Reject every host-reserved location before creating or changing either mapping direction
 
 `Asset Creation (Delegation)`:
 
@@ -90,6 +92,8 @@ graph TD
 1. Store `ForeignAssetMapping[location] = asset_id`
 2. Store `ForeignAssetLocationByAssetId[asset_id] = location`
 3. Emit `ForeignAssetRegistered { asset_id, location, symbol }`
+
+Try-state proves the retained mapping is an exact live bijection: every Location owns one unique foreign-namespaced `AssetId`, no Location is host-reserved, every forward identity resolves to the same reverse Location, forward/reverse cardinalities match, and every mapped ID still exists in `pallet-assets`. Corruption tests separately falsify missing, mismatched, orphan, duplicate, non-foreign, reserved-location, and deleted-ledger identities.
 
 ### Why Hybrid (Not Pure Hashing)?
 
@@ -221,6 +225,7 @@ impl Convert<Location, AssetId> for LocationToAssetIdConverter {
 | `RegistryOrigin` | `EnsureOrigin` | Who can register assets (typically Root/Council) |
 | `AssetOwner` | `AccountId` | Account that owns created assets (typically Treasury) |
 | `AssetIdGenerator` | `Convert<Location, AssetId>` | Hashing strategy (BLAKE2 default) |
+| `ReservedLocations` | `Contains<Location>` | Host-owned locations excluded from every foreign mapping transition |
 
 ## Asset Registry Read-Model Contract
 

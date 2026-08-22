@@ -90,7 +90,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+Current audit families cover Rust architecture drift plus full-tree and changed-scope panic ownership, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, protocol-coherence semantic-owner regressions, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 

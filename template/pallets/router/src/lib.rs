@@ -23,7 +23,7 @@ pub mod weights;
 pub use weights::WeightInfo;
 
 use frame::prelude::*;
-use polkadot_sdk::{frame_support::traits::ConstU32, sp_core::U256, sp_runtime::Perbill};
+use polkadot_sdk::{frame_support::traits::ConstU32, sp_runtime::Perbill};
 use scale_info::prelude::vec::Vec;
 
 /// Maximum asset count for the accepted direct and Native-anchored route families.
@@ -389,6 +389,7 @@ pub mod pallet {
       },
       transactional,
     },
+    sp_core::U256,
     sp_runtime::traits::AccountIdConversion,
   };
   use scale_info::prelude::vec;
@@ -426,6 +427,9 @@ pub mod pallet {
     /// Maximum number of canonical LP reverse-index entries.
     #[pallet::constant]
     type MaxLpPairs: Get<u32>;
+
+    /// Optional host reconciliation between LP reverse identities and concrete pool storage.
+    type LpPairIntegrity: crate::types::LpPairIntegrity;
 
     /// Maximum router fee allowed for governance updates.
     #[pallet::constant]
@@ -477,6 +481,15 @@ pub mod pallet {
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+      assert!(T::Precision::get() > 0, "Router Precision must be nonzero");
+      assert!(
+        T::MaxRouterFee::get() < Perbill::one(),
+        "MaxRouterFee must leave a nonzero routed amount",
+      );
+      assert!(T::MaxLpPairs::get() > 0, "MaxLpPairs must be nonzero");
+    }
+
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
@@ -551,6 +564,8 @@ pub mod pallet {
     InvalidPoolPair,
     /// Prepared family and leg identity disagree
     PreparedRouteMismatch,
+    /// A fee, route-total, or informational price product is unrepresentable
+    ArithmeticOverflow,
   }
 
   impl<T: Config> Error<T> {
@@ -571,7 +586,8 @@ pub mod pallet {
         Self::LpTokenPairCollision
         | Self::LpPairCapacityExceeded
         | Self::InvalidPoolPair
-        | Self::PreparedRouteMismatch => RouterFailureClass::InvariantViolation,
+        | Self::PreparedRouteMismatch
+        | Self::ArithmeticOverflow => RouterFailureClass::InvariantViolation,
         Self::__Ignore(_, never) => match *never {},
       }
     }
@@ -593,7 +609,8 @@ pub mod pallet {
         | Self::LpTokenPairCollision
         | Self::LpPairCapacityExceeded
         | Self::InvalidPoolPair
-        | Self::PreparedRouteMismatch => RetryDisposition::Permanent,
+        | Self::PreparedRouteMismatch
+        | Self::ArithmeticOverflow => RetryDisposition::Permanent,
         Self::__Ignore(_, never) => match *never {},
       }
     }
@@ -668,8 +685,10 @@ pub mod pallet {
         !pairs.values().any(|existing| *existing == canonical_pair),
         Error::<T>::LpTokenPairCollision
       );
+      let pair_count =
+        u32::try_from(pairs.len()).map_err(|_| Error::<T>::LpPairCapacityExceeded)?;
       ensure!(
-        (pairs.len() as u32) < T::MaxLpPairs::get(),
+        pair_count < T::MaxLpPairs::get(),
         Error::<T>::LpPairCapacityExceeded
       );
       Ok(())
@@ -732,7 +751,9 @@ pub mod pallet {
       router_fee: Balance,
       min_amount_out: Balance,
     ) -> Result<PreparedRoute, ExecutionError<T>> {
-      let routed_amount_in = total_amount_in.saturating_sub(router_fee);
+      let routed_amount_in = total_amount_in
+        .checked_sub(router_fee)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       let prepared = Self::find_optimal_route(from, to, routed_amount_in)
         .ok_or(Error::<T>::NoRouteFound)?
         .with_ingress(total_amount_in, router_fee);
@@ -776,7 +797,11 @@ pub mod pallet {
 
       let mut amount_in = prepared.routed_amount_in;
       let mut amount_out = 0;
-      let last_leg = prepared.legs.len().saturating_sub(1);
+      let last_leg = prepared
+        .legs
+        .len()
+        .checked_sub(1)
+        .ok_or(Error::<T>::PreparedRouteMismatch)?;
       for (index, leg) in prepared.legs.iter().enumerate() {
         let PreparedLeg::Xyk {
           asset_in,
@@ -811,7 +836,10 @@ pub mod pallet {
       recipient: &T::AccountId,
       keep_alive: bool,
     ) -> Result<ExactOutputExecution, ExecutionError<T>> {
-      let last_leg = legs.len().saturating_sub(1);
+      let last_leg = legs
+        .len()
+        .checked_sub(1)
+        .ok_or(Error::<T>::PreparedRouteMismatch)?;
       let mut external_amount_in = None;
       let mut recipient_amount_out = 0;
       for (index, leg) in legs.iter().enumerate() {
@@ -938,17 +966,9 @@ pub mod pallet {
       Ok(())
     }
 
-    /// Computes `numerator * Precision / denominator` without corrupting ordinary ratios when the
-    /// intermediate exceeds `Balance`. A representable quotient stays exact; only a quotient wider
-    /// than the public price type saturates at that type's explicit ceiling.
+    /// Computes the scaled same-unit ratio through the shared checked widened owner.
     pub(crate) fn scaled_price(numerator: Balance, denominator: Balance) -> Option<Balance> {
-      if denominator.is_zero() {
-        return None;
-      }
-      let price = U256::from(numerator)
-        .checked_mul(U256::from(T::Precision::get()))?
-        .checked_div(U256::from(denominator))?;
-      Some(price.try_into().unwrap_or(Balance::MAX))
+      primitives::checked_scaled_ratio(numerator, denominator, T::Precision::get())
     }
 
     /// Update the local EMA from pre-execution pool reserves
@@ -963,9 +983,9 @@ pub mod pallet {
           } else {
             (res_b, res_a)
           };
-          if let Some(spot_price) = Self::scaled_price(reserve_out, reserve_in) {
-            T::PriceOracle::update_ema_price(from, to, spot_price)?;
-          }
+          let spot_price =
+            Self::scaled_price(reserve_out, reserve_in).ok_or(Error::<T>::InvalidOracleData)?;
+          T::PriceOracle::update_ema_price(from, to, spot_price)?;
         }
       }
       Ok(())
@@ -1101,7 +1121,10 @@ pub mod pallet {
         execution.recipient_amount_out >= amount_out,
         Error::<T>::SlippageExceeded
       );
-      let amount_in = execution.amount_in.saturating_add(router_fee);
+      let amount_in = execution
+        .amount_in
+        .checked_add(router_fee)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       ensure!(amount_in <= max_amount_in, Error::<T>::SlippageExceeded);
       let family = prepared.family;
       let outcome = RouterOutcome {
@@ -1293,13 +1316,26 @@ pub mod pallet {
         .min_by(PreparedRoute::compare_exact_output)
     }
 
-    fn exact_output_router_fee(who: &T::AccountId, required_input: Balance) -> Balance {
+    pub(crate) fn exact_output_router_fee(
+      who: &T::AccountId,
+      required_input: Balance,
+    ) -> Result<Balance, Error<T>> {
       if Self::is_fee_exempt(who) {
-        return 0;
+        return Ok(0);
       }
-      let retained = Perbill::one() - RouterFee::<T>::get();
-      let gross_input = retained.saturating_reciprocal_mul_ceil(required_input);
-      Self::calculate_router_fee(gross_input)
+      let retained_parts = (Perbill::one() - RouterFee::<T>::get()).deconstruct();
+      ensure!(retained_parts > 0, Error::<T>::ArithmeticOverflow);
+      let accuracy = U256::from(Perbill::one().deconstruct());
+      let denominator = U256::from(retained_parts);
+      let numerator = U256::from(required_input)
+        .checked_mul(accuracy)
+        .and_then(|value| value.checked_add(denominator.checked_sub(U256::one())?))
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
+      let gross_input: Balance = numerator
+        .checked_div(denominator)
+        .and_then(|value| value.try_into().ok())
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
+      Ok(Self::calculate_router_fee(gross_input))
     }
 
     fn prepare_exact_output_route(
@@ -1313,8 +1349,11 @@ pub mod pallet {
       let route = Self::find_optimal_exact_output_route(from, to, amount_out)
         .ok_or(Error::<T>::NoRouteFound)?;
       Self::validate_prepared_identity(&route)?;
-      let router_fee = Self::exact_output_router_fee(who, route.routed_amount_in);
-      let total_amount_in = route.routed_amount_in.saturating_add(router_fee);
+      let router_fee = Self::exact_output_router_fee(who, route.routed_amount_in)?;
+      let total_amount_in = route
+        .routed_amount_in
+        .checked_add(router_fee)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       Ok((
         route.with_ingress(total_amount_in, router_fee),
         router_fee,
@@ -1393,7 +1432,7 @@ pub mod pallet {
     }
 
     /// Calculate price impact for direct route
-    fn calculate_price_impact(
+    pub(crate) fn calculate_price_impact(
       from: AssetKind,
       to: AssetKind,
       amount_in: Balance,
@@ -1403,7 +1442,11 @@ pub mod pallet {
       // In production, this would use pool reserves and more sophisticated math
       if let Some(ema_price) = T::PriceOracle::get_ema_price(from, to) {
         if ema_price > 0 {
-          let expected_out = amount_in.saturating_mul(ema_price) / T::Precision::get();
+          let Some(expected_out) =
+            primitives::checked_scaled_ratio(amount_in, T::Precision::get(), ema_price)
+          else {
+            return Perbill::one();
+          };
           if expected_out > amount_out {
             return Perbill::from_rational(expected_out - amount_out, expected_out);
           }
@@ -1436,18 +1479,30 @@ pub mod pallet {
           "RouterFee exceeds configured maximum",
         ));
       }
+      let lp_pairs = LpPairByTokenId::<T>::get();
       let mut indexed_pairs = BTreeSet::new();
-      for (_, pair) in LpPairByTokenId::<T>::get() {
-        if Self::canonical_lp_pair(pair) != Some(pair) {
+      for (lp_token, pair) in &lp_pairs {
+        if Self::canonical_lp_pair(*pair) != Some(*pair) {
           return Err(TryRuntimeError::Other(
             "LP reverse index contains a non-canonical pair",
           ));
         }
-        if !indexed_pairs.insert(pair) {
+        if !indexed_pairs.insert(*pair) {
           return Err(TryRuntimeError::Other(
             "LP reverse index maps one pair to multiple LP tokens",
           ));
         }
+        T::LpPairIntegrity::validate_binding(*lp_token, *pair).map_err(TryRuntimeError::Other)?;
+      }
+      let indexed_pool_count = u32::try_from(lp_pairs.len())
+        .map_err(|_| TryRuntimeError::Other("LP reverse-index cardinality exceeds u32"))?;
+      if let Some(expected_pool_count) =
+        T::LpPairIntegrity::expected_pool_count().map_err(TryRuntimeError::Other)?
+        && expected_pool_count != indexed_pool_count
+      {
+        return Err(TryRuntimeError::Other(
+          "LP reverse-index cardinality disagrees with host pool storage",
+        ));
       }
       Ok(())
     }
@@ -1473,7 +1528,9 @@ pub mod pallet {
       } else {
         Self::calculate_router_fee(amount_in)
       };
-      let amount_after_fee = amount_in.saturating_sub(router_fee);
+      let amount_after_fee = amount_in
+        .checked_sub(router_fee)
+        .ok_or(Error::<T>::ArithmeticOverflow)?;
       let route =
         Self::find_optimal_route(from, to, amount_after_fee).ok_or(Error::<T>::NoRouteFound)?;
       Self::validate_prepared_identity(&route)?;

@@ -2,10 +2,10 @@ use crate::{
   NativeSecurityRewardPotStatus, NativeSecurityView, NativeSecurityViewError,
   NativeStakingReadModelProvider as _, pallet::*,
 };
-use frame::prelude::{BlockNumberFor, Get, Saturating};
+use frame::prelude::{BlockNumberFor, Get};
 use polkadot_sdk::sp_runtime::{
   FixedU128,
-  traits::{SaturatedConversion, Zero},
+  traits::{CheckedSub, SaturatedConversion, Zero},
 };
 
 impl<T: Config> Pallet<T> {
@@ -14,13 +14,17 @@ impl<T: Config> Pallet<T> {
     let retention_bound = T::SecurityRewardClaimHorizon::get()
       .checked_add(2)
       .ok_or(NativeSecurityViewError::RetentionBoundExceeded)?;
+    let inspection_limit = retention_bound
+      .checked_add(1)
+      .and_then(|limit| usize::try_from(limit).ok())
+      .ok_or(NativeSecurityViewError::RetentionBoundExceeded)?;
     let mut retained = 0u32;
     let mut planned_epoch = None;
     let mut settlement_obligations_remain = !NativeSecurityRewardLiability::<T>::get().is_zero();
-    for (epoch, pot) in
-      NativeSecurityRewardPots::<T>::iter().take(retention_bound.saturating_add(1) as usize)
-    {
-      retained = retained.saturating_add(1);
+    for (epoch, pot) in NativeSecurityRewardPots::<T>::iter().take(inspection_limit) {
+      retained = retained
+        .checked_add(1)
+        .ok_or(NativeSecurityViewError::RetentionBoundExceeded)?;
       if retained > retention_bound {
         return Err(NativeSecurityViewError::RetentionBoundExceeded);
       }
@@ -82,14 +86,11 @@ impl<T: Config> Pallet<T> {
     account: T::AccountId,
   ) -> NativeLockedLpPosition<T::Balance> {
     let total_locked_lp = AccountNativeLpLocked::<T>::get(&account);
-    let collator_locked_lp = NativeNominationOperators::<T>::get(&account)
-      .iter() // deos-bypass: bounded-iter — MaxNominationsPerAccount
-      .filter_map(|operator| NativeLpLocks::<T>::get(&account, operator))
-      .fold(T::Balance::zero(), |total, lock| {
-        total.saturating_add(lock.amount)
-      });
     let governance_locked_lp = NativeGovernanceLpLocks::<T>::get(&account)
       .map(|lock| lock.amount)
+      .unwrap_or_else(Zero::zero);
+    let collator_locked_lp = total_locked_lp
+      .checked_sub(&governance_locked_lp)
       .unwrap_or_else(Zero::zero);
     let conservative_native_value =
       T::NativeStakingReadModelProvider::native_lp_value(total_locked_lp);

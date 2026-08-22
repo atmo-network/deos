@@ -19,11 +19,18 @@ import test from 'node:test';
 import {
   ACTORS_ELIGIBILITY_RUNTIME_API,
   ACTORS_ELIGIBILITY_RUNTIME_API_VERSION,
+  ACTOR_CLOSE_REASONS,
   projectActorEligibility,
 } from '../src/lib/automation/eligibility.ts';
 
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
+);
+const actorsManifest = JSON.parse(
+  await readFile(
+    new URL('../src/lib/automation/actors-abi-manifest.json', import.meta.url),
+    'utf8',
+  ),
 );
 
 function eligibilityMethod() {
@@ -66,6 +73,19 @@ function encodeProjection(value) {
 
 test('runtime metadata binds the canonical eligibility API signature', () => {
   eligibilityMethod();
+});
+
+test('terminal reasons exactly match generated runtime metadata', () => {
+  const closeReason = actorsManifest.types.find(
+    (node) =>
+      node.path.join('::') ===
+      'pallet_deos_actors::types::lifecycle::CloseReason',
+  );
+  assert(closeReason, 'CloseReason must remain reachable from Actors metadata');
+  assert.deepEqual(
+    closeReason.def.value.map((variant) => variant.name),
+    ACTOR_CLOSE_REASONS,
+  );
 });
 
 test('projectActorEligibility projects canonical active classification', () => {
@@ -122,7 +142,7 @@ test('projectActorEligibility rejects a typed runtime failure honestly', () => {
   );
 });
 
-test('projectActorEligibility rejects unknown eligibility and malformed results', () => {
+test('projectActorEligibility rejects unknown runtime variants and malformed results', () => {
   assert.throws(
     () =>
       projectActorEligibility({
@@ -130,6 +150,34 @@ test('projectActorEligibility rejects unknown eligibility and malformed results'
         value: { type: 'Mystery' },
       }),
     /Unsupported runtime eligibility Mystery/,
+  );
+  assert.throws(
+    () =>
+      projectActorEligibility({
+        success: true,
+        value: {
+          type: 'Active',
+          value: {
+            terminal_reason: { type: 'Mystery' },
+            execution_phase: { type: 'Ready' },
+          },
+        },
+      }),
+    /Unsupported runtime close reason Mystery/,
+  );
+  assert.throws(
+    () =>
+      projectActorEligibility({
+        success: true,
+        value: {
+          type: 'Active',
+          value: {
+            terminal_reason: undefined,
+            execution_phase: { type: 'Mystery' },
+          },
+        },
+      }),
+    /Unsupported runtime execution phase Mystery/,
   );
   assert.throws(
     () => projectActorEligibility({ success: 'maybe' }),

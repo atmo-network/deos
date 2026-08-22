@@ -39,7 +39,7 @@ pub mod pallet {
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{
-      traits::{EnsureOrigin, Get, fungibles::Inspect},
+      traits::{Contains, EnsureOrigin, Get, fungibles::Inspect},
       transactional,
     },
     pallet_assets,
@@ -67,6 +67,9 @@ pub mod pallet {
 
     /// The account that will own the created assets (usually a governance or system account)
     type AssetOwner: Get<Self::AccountId>;
+
+    /// Locations reserved for host-owned ledgers, such as `Here` for Native currency.
+    type ReservedLocations: Contains<Location>;
 
     /// Hook for token-domain bootstrap logic in runtime glue
     type TokenDomainHook: crate::TokenDomainHook;
@@ -133,6 +136,8 @@ pub mod pallet {
     AssetNotFound,
     /// Asset name or symbol exceeds the allowed length limit.
     MetadataTooLong,
+    /// The location belongs to a host-owned non-foreign ledger.
+    ReservedLocation,
   }
 
   #[pallet::call]
@@ -163,8 +168,12 @@ pub mod pallet {
       is_sufficient: bool,
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
-      // 0. Validate metadata
+      // 0. Validate metadata and host location ownership.
       Self::validate_metadata(&metadata)?;
+      ensure!(
+        !T::ReservedLocations::contains(&location),
+        Error::<T>::ReservedLocation
+      );
       // 1. Check if already registered
       ensure!(
         !ForeignAssetMapping::<T>::contains_key(&location),
@@ -236,8 +245,12 @@ pub mod pallet {
       is_sufficient: bool,
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
-      // 0. Validate metadata
+      // 0. Validate metadata and host location ownership.
       Self::validate_metadata(&metadata)?;
+      ensure!(
+        !T::ReservedLocations::contains(&location),
+        Error::<T>::ReservedLocation
+      );
       // 1. Validate Mask
       let id_u32: u32 = asset_id.into();
       ensure!(
@@ -301,6 +314,10 @@ pub mod pallet {
       asset_id: T::AssetId,
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
+      ensure!(
+        !T::ReservedLocations::contains(&location),
+        Error::<T>::ReservedLocation
+      );
       // 1. Validate Mask
       let id_u32: u32 = asset_id.into();
       ensure!(
@@ -349,6 +366,10 @@ pub mod pallet {
       T::RegistryOrigin::ensure_origin(origin)?;
       let asset_id =
         ForeignAssetMapping::<T>::get(&old_location).ok_or(Error::<T>::AssetNotFound)?;
+      ensure!(
+        !T::ReservedLocations::contains(&new_location),
+        Error::<T>::ReservedLocation
+      );
       ensure!(
         !ForeignAssetMapping::<T>::contains_key(&new_location),
         Error::<T>::AssetAlreadyRegistered
@@ -407,7 +428,14 @@ pub mod pallet {
       let mut forward_count = 0u64;
       let mut mapping_iter = ForeignAssetMapping::<T>::iter();
       while let Some((location, asset_id)) = mapping_iter.next() {
-        forward_count = forward_count.saturating_add(1);
+        forward_count = forward_count.checked_add(1).ok_or(TryRuntimeError::Other(
+          "ForeignAssetMapping: entry count overflowed",
+        ))?;
+        if T::ReservedLocations::contains(&location) {
+          return Err(TryRuntimeError::Other(
+            "ForeignAssetMapping: location is reserved by the host ledger",
+          ));
+        }
         let id_u32: u32 = asset_id.into();
         if !seen_ids.insert(id_u32) {
           return Err(TryRuntimeError::Other(

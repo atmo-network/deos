@@ -760,23 +760,12 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     }
   }
 
-  pub fn cadence_ticks(&self) -> Option<u64> {
-    match self {
-      Self::Cadenced { every_ticks } => Some(*every_ticks),
-      _ => None,
-    }
-  }
-
   pub fn manual_source_enabled(&self) -> bool {
     matches!(self, Self::Manual)
   }
 
   pub fn address_event_source_enabled(&self) -> bool {
     matches!(self, Self::AddressEvent { .. })
-  }
-
-  pub fn observation_source_enabled(&self) -> bool {
-    matches!(self, Self::ObservationChange { .. })
   }
 }
 

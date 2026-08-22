@@ -399,6 +399,8 @@ pub mod pallet {
     type Assets: Inspect<Self::AccountId, AssetId = Self::AssetId, Balance = Self::Balance>
       + Mutate<Self::AccountId>;
     type PalletId: Get<PalletId>;
+    type NativeLpLockAccount: Get<Self::AccountId>;
+    type NativeSecurityRewardAccount: Get<Self::AccountId>;
     type WeightInfo: crate::WeightInfo;
   }
 
@@ -408,6 +410,20 @@ pub mod pallet {
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+      let lock_account = T::NativeLpLockAccount::get();
+      let reward_account = T::NativeSecurityRewardAccount::get();
+      let native_pool_account = Self::pool_account_for(T::NativeStakingAssetId::get());
+      assert!(
+        lock_account != reward_account,
+        "native LP lock and security reward accounts must be distinct"
+      );
+      assert!(
+        lock_account != native_pool_account && reward_account != native_pool_account,
+        "native custody accounts must not alias the native staking pool"
+      );
+    }
+
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
@@ -677,7 +693,7 @@ pub mod pallet {
           },
         );
         Pallet::<T>::create_staked_asset_for_pool(*asset_id)
-          .expect("genesis staked asset creation must succeed");
+          .expect("genesis staked asset creation must succeed"); // deos-bypass: panic-owner — genesis fails closed before launch.
       }
     }
   }
@@ -915,7 +931,8 @@ pub mod pallet {
       let available_shares = T::Assets::balance(staked_asset_id, &account);
       ensure!(!available_shares.is_zero(), Error::<T>::InsufficientShares);
       ensure!(available_shares >= shares, Error::<T>::InsufficientShares);
-      let amount_out = Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares);
+      let amount_out = Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares)
+        .ok_or(ArithmeticError::Overflow)?;
       ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmountOut);
       let _ = T::Assets::burn_from(
         staked_asset_id,
@@ -1232,8 +1249,9 @@ pub mod pallet {
       Self::decrease_operator_native_lp_locked(&operator, amount)?;
       Self::decrease_account_native_lp_locked(&account, amount)?;
       Self::decrease_total_native_lp_locked(amount)?;
-      let unlock_block =
-        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let unlock_block = frame_system::Pallet::<T>::block_number()
+        .checked_add(&T::NativeLpUnlockDelay::get())
+        .ok_or(ArithmeticError::Overflow)?;
       let pending = PendingNativeLpUnlocks::<T>::get(&account, &operator);
       let pending_amount = pending
         .as_ref()
@@ -1494,8 +1512,9 @@ pub mod pallet {
       }
       Self::decrease_account_native_lp_locked(&account, amount)?;
       Self::decrease_total_native_lp_locked(amount)?;
-      let unlock_block =
-        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let unlock_block = frame_system::Pallet::<T>::block_number()
+        .checked_add(&T::NativeLpUnlockDelay::get())
+        .ok_or(ArithmeticError::Overflow)?;
       let pending = PendingNativeGovernanceLpUnlocks::<T>::get(&account);
       let pending_amount = pending
         .as_ref()
@@ -1623,8 +1642,9 @@ pub mod pallet {
         NativeGovernanceAssetLocked::<T>::insert(&account, asset_id, updated);
       }
       Self::decrease_total_native_governance_asset_locked(asset_id, amount)?;
-      let unlock_block =
-        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let unlock_block = frame_system::Pallet::<T>::block_number()
+        .checked_add(&T::NativeLpUnlockDelay::get())
+        .ok_or(ArithmeticError::Overflow)?;
       let pending = PendingNativeGovernanceAssetUnlocks::<T>::get(&account, asset_id);
       let pending_amount = pending
         .as_ref()
@@ -2076,7 +2096,7 @@ pub mod pallet {
             &account,
           );
         let reward_weight =
-          Self::reward_weight_from_snapshot(conservative_native_value, governance_coefficient);
+          Self::reward_weight_from_snapshot(conservative_native_value, governance_coefficient)?;
         total_reward_weight = total_reward_weight
           .checked_add(&reward_weight)
           .ok_or(ArithmeticError::Overflow)?;
@@ -2247,8 +2267,11 @@ pub mod pallet {
           pot.status == NativeSecurityRewardPotStatus::Finalized,
           Error::<T>::NativeSecurityRewardPotNotFinalized
         );
+        let reward_age = current_epoch
+          .checked_sub(*epoch)
+          .ok_or(Error::<T>::NativeSecurityEpochNotOpen)?;
         ensure!(
-          current_epoch.saturating_sub(*epoch) <= T::SecurityRewardClaimHorizon::get(),
+          reward_age <= T::SecurityRewardClaimHorizon::get(),
           Error::<T>::NativeSecurityRewardEpochExpired
         );
         ensure!(
@@ -2270,7 +2293,8 @@ pub mod pallet {
           .map(|participant| participant.reward_weight)
           .filter(|weight| !weight.is_zero())
           .ok_or(Error::<T>::NativeSecurityRewardAccountIneligible)?;
-        let amount = Self::mul_div_floor(account_weight, pot.credited, pot.total_reward_weight);
+        let amount = Self::mul_div_floor(account_weight, pot.credited, pot.total_reward_weight)
+          .ok_or(Error::<T>::NativeSecurityRewardAccountingOverflow)?;
         total = total
           .checked_add(&amount)
           .ok_or(Error::<T>::NativeSecurityRewardAccountingOverflow)?;
@@ -2320,8 +2344,11 @@ pub mod pallet {
 
     fn do_expire_native_security_reward(epoch: SecurityEpoch) -> DispatchResult {
       let current_epoch = T::SecurityEpochProvider::current_security_epoch();
+      let reward_age = current_epoch
+        .checked_sub(epoch)
+        .ok_or(Error::<T>::NativeSecurityRewardExpiryInvalid)?;
       ensure!(
-        current_epoch.saturating_sub(epoch) > T::SecurityRewardClaimHorizon::get(),
+        reward_age > T::SecurityRewardClaimHorizon::get(),
         Error::<T>::NativeSecurityRewardExpiryInvalid
       );
       let pot =

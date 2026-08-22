@@ -18,11 +18,11 @@ The host must select explicit finite values for participant, operator, nominatio
 
 ## Asset and custody obligations
 
-The configured fungibles implementation must support exact receipt mint/burn and base/LP transfer semantics. `StakedAssetIdResolver` and `StakedAssetLifecycle` must preserve a collision-free receipt identity and live reverse lookup.
+The configured fungibles implementation must support exact receipt mint/burn and base/LP transfer semantics. `StakedAssetIdResolver` and `StakedAssetLifecycle` must preserve a collision-free receipt identity and live reverse lookup. A genesis-declared registered asset owns launch-time receipt creation and fails host storage construction if that required setup cannot complete; this panic boundary is not reachable after launch.
 
 `NativeStakingLpAssetValidator` must accept only the host's canonical native/receipt LP asset. `NativeStakingReadModelProvider` must return bounded current truth and must not infer backing from transfer events or an indexer.
 
-The native LP lock and reward accounts are deterministic pallet-owned custody. The host must preserve their ledger consequences, existential-deposit requirements, and transactional rollback behavior.
+`NativeLpLockAccount` and `NativeSecurityRewardAccount` must provide deterministic, stable, distinct, host-reserved custody identities without fallible runtime decoding. The host must preserve their ledger consequences, existential-deposit requirements, and transactional rollback behavior.
 
 ## Security and reward obligations
 

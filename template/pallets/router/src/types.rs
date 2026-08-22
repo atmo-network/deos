@@ -107,6 +107,22 @@ pub trait AssetConversionApi<AccountId, Balance> {
   ) -> Result<crate::ExactOutputExecution, AdapterFailure>;
 }
 
+/// Optional host-owned reconciliation between Router LP identities and the concrete pool ledger.
+pub trait LpPairIntegrity {
+  /// Validate one persisted `LP token -> canonical pair` binding against host pool truth.
+  fn validate_binding(_lp_token: u32, _pair: (AssetKind, AssetKind)) -> Result<(), &'static str> {
+    Ok(())
+  }
+
+  /// Return the complete host pool count when the host owns a cross-pallet reconciliation.
+  /// `None` keeps independently embedded Router instances limited to internal index checks.
+  fn expected_pool_count() -> Result<Option<u32>, &'static str> {
+    Ok(None)
+  }
+}
+
+impl LpPairIntegrity for () {}
+
 /// Helper for benchmarking
 #[cfg(feature = "runtime-benchmarks")]
 pub trait BenchmarkHelper<AssetKind, AccountId, Balance> {

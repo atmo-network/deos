@@ -40,11 +40,11 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 Registration prevalidates duplicate identity, global capacity, scale, EMA half-life, and producer capacity. One transactional mutation updates forward and reverse registries, immutable configuration, and event. Deactivation retains identity and current truth; it never permits semantic ID reuse.
 
-Try-state walks only host-bounded registries. It reconciles cardinality, uniqueness, forward/reverse existence, producer equality, nonempty producer indexes, configured bounds, and nonzero initialized revisions.
+Try-state walks only host-bounded registries. It requires `FeedIds`, `Feeds`, `ProducerIds`, and `ProducerFeeds` to describe the exact same feed/producer ownership graph: no absent or orphan map keys, duplicate feed ownership, empty producer indexes, or producer mismatch. Every Observation must belong to that exact feed set, carry a nonzero revision, and not claim a future update block.
 
 ## Publication Flow
 
-Publication loads one feed, verifies the exact producer and Active lifecycle, applies the immutable zero policy, and computes LastValue or EMA. EMA uses `elapsed = max(current_block - updated_at, 1)` with `Perbill` floor arithmetic. Observation presence, not scalar value, distinguishes initialization.
+Publication loads one feed, verifies the exact producer and Active lifecycle, applies the immutable zero policy, and computes LastValue or EMA. EMA uses `elapsed = max(current_block - updated_at, 1)` with `Perbill` floor arithmetic; block-age subtraction is the explicit observational-age clamp, while denominator, weighted-sum, and revision growth fail on checked overflow. Registration narrows decoded cardinalities with checked conversion before comparing host bounds. Observation presence, not scalar value, distinguishes initialization.
 
 The first accepted sample stores revision `1`. A changed published scalar increments revision with checked arithmetic and invokes `OnObservationChanged`. Equal output refreshes `updated_at` without hook or revision increment.
 
@@ -68,7 +68,7 @@ Registration exposes distinct existing-producer and new-producer measurements be
 
 ## Falsification and Validation
 
-Package tests pin SCALE variant order, storage names, duplicate and capacity rejection, lifecycle transitions, producer authorization, zero behavior, freshness boundaries, revision overflow, hook rollback and cardinality, exact EMA elapsed vectors, extreme arithmetic, and try-state corruption detection. `public_error_algebra_is_exhaustive_and_semantic` constructs every Oracle error and uses an exhaustive match so transport or duplicate variants cannot enter silently.
+Package tests pin SCALE variant order, storage names, duplicate and capacity rejection, lifecycle transitions, producer authorization, zero behavior, freshness boundaries, revision overflow, hook rollback and cardinality, exact EMA elapsed vectors, sample/elapsed monotonicity, bounded floor rounding through `u128::MAX`, and try-state corruption detection. `public_error_algebra_is_exhaustive_and_semantic` constructs every Oracle error and uses an exhaustive match so transport or duplicate variants cannot enter silently.
 
 The embedding runtime passes default, no-std, runtime-benchmark, and try-runtime profiles without DEOS types. Its unrelated sensor identities and provenance prove that the package contract does not require assets, pools, prices, Router, or Actors.
 

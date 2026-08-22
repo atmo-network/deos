@@ -16,6 +16,7 @@ BINARY_NAMES=(
 ASSET_SUFFIX=""
 CHECKSUMS=()
 CHECKSUM_COMMAND=()
+CHECK_ONLY=0
 
 usage() {
     cat <<'EOF'
@@ -24,6 +25,7 @@ Usage: 01-download-binaries.sh [OPTIONS]
 Downloads the pinned Polkadot SDK executable bundle required by DEOS operations.
 
 Options:
+  --check           Verify the existing pinned bundle without downloading
   -h, --help        Show this help message
 
 Inputs:
@@ -52,6 +54,9 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --check)
+                CHECK_ONLY=1
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -150,6 +155,14 @@ download_bundle() {
 
 verify_bundle() {
     phase_banner "Step 3: Verify executables"
+    [[ -f "$BIN_DIR/.polkadot-sdk-release" ]] || {
+        log_error "Pinned bundle release marker is missing"
+        exit 1
+    }
+    [[ "$(<"$BIN_DIR/.polkadot-sdk-release")" == "$POLKADOT_SDK_RELEASE" ]] || {
+        log_error "Pinned bundle release marker does not match $POLKADOT_SDK_RELEASE"
+        exit 1
+    }
     local index name
     for index in "${!BINARY_NAMES[@]}"; do
         name="${BINARY_NAMES[$index]}"
@@ -169,7 +182,9 @@ main() {
     parse_args "$@"
     phase_banner "DEOS executable bundle download"
     check_prerequisites
-    download_bundle
+    if [[ "$CHECK_ONLY" == "0" ]]; then
+        download_bundle
+    fi
     verify_bundle
 }
 

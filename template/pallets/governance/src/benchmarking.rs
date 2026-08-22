@@ -3,7 +3,6 @@
 use crate::*;
 use frame::prelude::*;
 use polkadot_sdk::frame_benchmarking::{account, v2::*};
-use polkadot_sdk::frame_support::traits::Hooks;
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::sp_runtime::traits::SaturatedConversion;
 
@@ -637,7 +636,19 @@ mod benches {
   }
 
   #[benchmark]
-  fn service_maturing_proposals(n: Linear<1, 4>) {
+  fn service_epoch_catch_up() {
+    let current_epoch: T::Epoch = 1u32.into();
+    LastProcessedEpoch::<T>::put(T::Epoch::zero());
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    #[block]
+    {
+      let _ = Pallet::<T>::service_current_epoch(current_epoch);
+    }
+    assert_eq!(LastProcessedEpoch::<T>::get(), current_epoch);
+  }
+
+  #[benchmark]
+  fn service_maturing_proposals(n: Linear<1, 3>) {
     let domain = benchmark_domain_id::<T>();
     let current_epoch_u32 = T::ProposalLeadInPeriod::get()
       .saturated_into::<u32>()
@@ -650,7 +661,8 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
     #[block]
     {
-      let _ = <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_initialize(current_epoch_u32.into());
+      let _ =
+        Pallet::<T>::service_maturing_proposals(current_epoch_u32.saturating_sub(1), current_epoch);
     }
     for index in 0..n {
       assert!(!ActiveProposals::<T>::contains_key(
@@ -659,6 +671,42 @@ mod benches {
       ));
     }
   }
+  #[benchmark]
+  fn service_pending_enactments(n: Linear<1, 4>) {
+    let domain = benchmark_domain_id::<T>();
+    let current_epoch_u32 = 2u32;
+    let current_epoch: T::Epoch = current_epoch_u32.into();
+    let mut bucket = BoundedVec::default();
+    for index in 0..n {
+      let item_id = benchmark_item_id::<T>(3_000u32.saturating_add(index));
+      bucket
+        .try_push(FinalizedProposalTouch { domain, item_id })
+        .expect("benchmark pending enactment bucket must fit");
+      ProposalPendingEnactmentAt::<T>::insert(domain, item_id, current_epoch);
+      FinalizedProposals::<T>::insert(
+        domain,
+        item_id,
+        FinalizedProposalRecord {
+          outcome: FinalizedProposalOutcome::Approved {
+            approval: ProposalApproval {
+              approved_epoch: 1u32.into(),
+              winner_count: 1,
+            },
+            enactment: ProposalEnactmentOutcome::NotAttempted,
+          },
+          execution_detail: None,
+        },
+      );
+    }
+    PendingEnactmentBuckets::<T>::insert(current_epoch, bucket);
+    #[block]
+    {
+      let _ =
+        Pallet::<T>::service_pending_enactments(current_epoch_u32.saturating_sub(1), current_epoch);
+    }
+    assert!(PendingEnactmentBuckets::<T>::get(current_epoch).is_empty());
+  }
+
   #[benchmark]
   fn service_finalized_proposal_outcomes(n: Linear<1, 1024>) {
     let domain = benchmark_domain_id::<T>();
@@ -670,7 +718,10 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
     #[block]
     {
-      let _ = <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_initialize(current_epoch_u32.into());
+      let _ = Pallet::<T>::service_finalized_proposal_outcomes(
+        current_epoch_u32.saturating_sub(1),
+        current_epoch,
+      );
     }
     for index in 0..n {
       assert!(!FinalizedProposals::<T>::contains_key(
@@ -681,7 +732,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn service_expiring_accounts(n: Linear<1, 1024>) {
+  fn service_expiring_accounts(n: Linear<1, 512>) {
     let domain = benchmark_domain_id::<T>();
     let current_epoch_u32 = T::WinningVoteLookbackEpochs::get().saturating_add(1);
     let current_epoch: T::Epoch = current_epoch_u32.into();
@@ -704,9 +755,9 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
     #[block]
     {
-      let _ = <Pallet<T> as Hooks<BlockNumberFor<T>>>::on_initialize(current_epoch_u32.into());
+      let _ =
+        Pallet::<T>::service_expiring_accounts(current_epoch_u32.saturating_sub(1), current_epoch);
     }
-    assert_eq!(LastProcessedEpoch::<T>::get(), current_epoch);
     for index in 0..n {
       assert!(!WinningVoteWindows::<T>::contains_key(
         domain,

@@ -129,11 +129,111 @@ fn resolve_root_action_proposal(item_id: u32) {
 }
 
 #[test]
+fn governance_epoch_catch_up_services_one_chronological_epoch_per_runtime_block() {
+  new_test_ext().execute_with(|| {
+    type GovernanceWeights = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let one_empty_epoch =
+      <GovernanceWeights as pallet_governance::WeightInfo>::service_epoch_catch_up();
+    let maximum_block = crate::configs::RuntimeBlockWeights::get().max_block;
+    for branch in [
+      one_empty_epoch.saturating_add(
+        <GovernanceWeights as pallet_governance::WeightInfo>::service_maturing_proposals(3),
+      ),
+      one_empty_epoch.saturating_add(
+        <GovernanceWeights as pallet_governance::WeightInfo>::service_pending_enactments(4),
+      ),
+      one_empty_epoch.saturating_add(
+        <GovernanceWeights as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(
+          1024,
+        ),
+      ),
+      one_empty_epoch.saturating_add(
+        <GovernanceWeights as pallet_governance::WeightInfo>::service_expiring_accounts(512),
+      ),
+    ] {
+      assert!(
+        branch.all_lte(maximum_block),
+        "governance epoch service branch {branch:?} exceeds {maximum_block:?}"
+      );
+    }
+
+    System::set_block_number(20);
+    Governance::on_initialize(20);
+    assert_eq!(pallet_governance::LastProcessedEpoch::<Runtime>::get(), 1);
+    for expected in 2..=20 {
+      Governance::on_initialize(20);
+      assert_eq!(
+        pallet_governance::LastProcessedEpoch::<Runtime>::get(),
+        expected
+      );
+    }
+  });
+}
+
+#[test]
+fn governance_payload_execution_authority_inventory_is_closed() {
+  new_test_ext().execute_with(|| {
+    let cases = [
+      (
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        90,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+        pallet_governance::ProposalExecutionAuthority::Root,
+      ),
+      (
+        TACTICAL_GOVERNANCE_DOMAIN,
+        91,
+        pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+        pallet_governance::ProposalExecutionAuthority::DomainTreasury,
+      ),
+      (
+        TACTICAL_GOVERNANCE_DOMAIN,
+        92,
+        pallet_governance::ProposalPayloadKind::L2ParameterChange,
+        pallet_governance::ProposalExecutionAuthority::DomainParameters,
+      ),
+      (
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        93,
+        pallet_governance::ProposalPayloadKind::Intent,
+        pallet_governance::ProposalExecutionAuthority::NonExecutable,
+      ),
+      (
+        TACTICAL_GOVERNANCE_DOMAIN,
+        94,
+        pallet_governance::ProposalPayloadKind::L2SignalToL1,
+        pallet_governance::ProposalExecutionAuthority::NonExecutable,
+      ),
+    ];
+    for (domain, item_id, payload_kind, authority) in cases {
+      System::set_block_number(item_id - 89);
+      assert_ok!(Governance::submit_proposal(
+        RuntimeOrigin::root(),
+        domain,
+        item_id,
+        ALICE,
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        payload_kind,
+        crate::Hash::repeat_byte(item_id as u8),
+      ));
+      assert_eq!(
+        Governance::proposal_execution_authority(domain, item_id),
+        Some(authority),
+      );
+    }
+  });
+}
+
+#[test]
 fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
   new_test_ext().execute_with(|| {
     let approved_epoch = 1;
     let executed_epoch = ordinary_enactment_epoch(approved_epoch);
     let code_hash = crate::Hash::repeat_byte(7);
+    assert_noop!(
+      crate::System::authorize_upgrade(RuntimeOrigin::signed(ALICE), code_hash),
+      polkadot_sdk::sp_runtime::DispatchError::BadOrigin
+    );
     let payload = StrategicRuntimeUpgradePayload { code_hash };
     let encoded_payload = payload.encode();
     let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_payload);
@@ -909,6 +1009,17 @@ fn runtime_executor_reaches_domain_and_call_failures_from_valid_preimages() {
       .err(),
       Some(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall)
     );
+    assert_eq!(
+      RuntimeProposalPayloadExecutor::execute(
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        202,
+        pallet_governance::ProposalPayloadKind::Intent,
+        call_hash,
+      )
+      .err(),
+      Some(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall),
+      "direct adapter invocation of an advisory payload fails closed without panic"
+    );
   });
 }
 
@@ -1213,6 +1324,94 @@ fn unanimous_veto_pass_executes_runtime_upgrade_immediately() {
 }
 
 #[test]
+fn governance_custody_late_lock_and_unlock_failures_restore_exact_root() {
+  new_test_ext().execute_with(|| {
+    use crate::configs::governance_config::RuntimeVotePowerCustody;
+    use crate::configs::governance_config::{
+      VotePowerCustodyFault, governance_vote_power_custody_account,
+      set_vote_power_custody_fault,
+    };
+
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 40,
+    ));
+    assert_eq!(
+      <RuntimeVotePowerCustody as pallet_governance::VotePowerCustody<
+        crate::AccountId,
+        u32,
+        u32,
+        crate::Balance,
+      >>::target_amount(
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        pallet_governance::ProposalTrackFamily::Veto,
+        &ALICE,
+        u128::MAX,
+      ),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Arithmetic(
+        polkadot_sdk::sp_runtime::ArithmeticError::Overflow,
+      ))
+    );
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &BOB, 60,
+    ));
+    submit_root_action_proposal(125, crate::Hash::repeat_byte(25));
+    System::reset_events();
+    set_vote_power_custody_fault(Some(VotePowerCustodyFault::LockAfterTransfer));
+    let root_before_lock =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      Governance::cast_vote(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        125,
+        pallet_governance::ProposalVoteKind::Veto,
+      ),
+      polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced custody lock failure after transfer"
+      )
+    );
+    set_vote_power_custody_fault(None);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before_lock,
+      "lock fault restores voter/custody ledgers, ballot sets, locks, participation, events, and proposal state"
+    );
+
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      125,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    let position = Governance::vote_power_custody(ALICE, veto_asset)
+      .expect("successful vote creates custody position");
+    System::set_block_number(position.lock_until);
+    System::reset_events();
+    set_vote_power_custody_fault(Some(VotePowerCustodyFault::UnlockAfterTransfer));
+    let root_before_unlock =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      Governance::unlock_vote_power(RuntimeOrigin::signed(ALICE), veto_asset),
+      polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced custody unlock failure after transfer"
+      )
+    );
+    set_vote_power_custody_fault(None);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before_unlock,
+      "unlock fault restores voter/custody ledgers, aggregate position, events, and locks"
+    );
+    assert_eq!(Assets::balance(veto_asset, &ALICE), 0);
+    assert_eq!(
+      Assets::balance(veto_asset, &governance_vote_power_custody_account()),
+      40
+    );
+  });
+}
+
+#[test]
 fn transferable_veto_power_is_custodied_reused_and_increased_without_revote_amplification() {
   new_test_ext().execute_with(|| {
     let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
@@ -1287,6 +1486,180 @@ fn transferable_veto_power_is_custodied_reused_and_increased_without_revote_ampl
     assert!(Governance::vote_power_custody(ALICE, veto_asset).is_none());
     assert_eq!(Assets::balance(veto_asset, &ALICE), 60);
     assert_eq!(Assets::balance(veto_asset, &custody), 0);
+  });
+}
+
+#[test]
+fn veto_pass_replacement_reuses_one_position_and_extends_only_to_the_maximum_horizon() {
+  new_test_ext().execute_with(|| {
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 40,
+    ));
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &BOB, 60,
+    ));
+    submit_root_action_proposal(126, crate::Hash::repeat_byte(26));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      126,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    let first_position = Governance::vote_power_custody(ALICE, veto_asset)
+      .expect("first protection ballot creates aggregate custody");
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      126,
+      pallet_governance::ProposalVoteKind::Pass,
+    ));
+    let votes = Governance::proposal_votes(PROTOCOL_GOVERNANCE_DOMAIN, 126)
+      .expect("replacement ballot remains stored");
+    assert!(votes.vetoes.is_empty());
+    assert_eq!(votes.passes.len(), 1);
+    assert_eq!(
+      Governance::vote_power_custody(ALICE, veto_asset),
+      Some(first_position.clone())
+    );
+    assert_noop!(
+      Governance::cast_vote(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        126,
+        pallet_governance::ProposalVoteKind::Pass,
+      ),
+      pallet_governance::Error::<Runtime>::ProposalVoteAlreadyCast
+    );
+
+    System::set_block_number(2);
+    submit_root_action_proposal(127, crate::Hash::repeat_byte(27));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      127,
+      pallet_governance::ProposalVoteKind::Pass,
+    ));
+    let extended_position = Governance::vote_power_custody(ALICE, veto_asset)
+      .expect("second proposal reuses aggregate custody");
+    assert_eq!(extended_position.amount, 40);
+    assert!(extended_position.lock_until > first_position.lock_until);
+    assert_eq!(
+      Assets::balance(
+        veto_asset,
+        &crate::configs::governance_config::governance_vote_power_custody_account(),
+      ),
+      40
+    );
+  });
+}
+
+#[test]
+fn ordinary_custody_keeps_multiple_domain_lock_ids_independent() {
+  new_test_ext().execute_with(|| {
+    for domain in [PROTOCOL_GOVERNANCE_DOMAIN, TACTICAL_GOVERNANCE_DOMAIN] {
+      if !<Assets as FungiblesInspect<_>>::asset_exists(domain) {
+        assert_ok!(create_test_asset(domain, &ALICE));
+      }
+      assert_ok!(mint_tokens(domain, &ALICE, &ALICE, 100));
+      assert_ok!(Staking::register_staking_asset(
+        RuntimeOrigin::root(),
+        domain
+      ));
+      assert_ok!(Staking::stake(RuntimeOrigin::signed(ALICE), domain, 60));
+    }
+    submit_root_action_proposal(128, crate::Hash::repeat_byte(28));
+    let tactical_hash = note_treasury_preimage(ALICE);
+    assert_ok!(Governance::submit_proposal(
+      RuntimeOrigin::root(),
+      TACTICAL_GOVERNANCE_DOMAIN,
+      129,
+      ALICE,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      tactical_hash,
+    ));
+    advance_to_primary_open();
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      128,
+      pallet_governance::ProposalVoteKind::Aye,
+    ));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      TACTICAL_GOVERNANCE_DOMAIN,
+      129,
+      pallet_governance::ProposalVoteKind::Approve,
+    ));
+    let protocol_receipt =
+      Staking::staked_asset_id(PROTOCOL_GOVERNANCE_DOMAIN).expect("protocol receipt exists");
+    let tactical_receipt =
+      Staking::staked_asset_id(TACTICAL_GOVERNANCE_DOMAIN).expect("tactical receipt exists");
+    assert_ne!(protocol_receipt, tactical_receipt);
+    assert_eq!(
+      Governance::vote_power_custody(ALICE, protocol_receipt)
+        .expect("protocol position exists")
+        .amount,
+      60
+    );
+    assert_eq!(
+      Governance::vote_power_custody(ALICE, tactical_receipt)
+        .expect("tactical position exists")
+        .amount,
+      60
+    );
+    let custody = crate::configs::governance_config::governance_vote_power_custody_account();
+    assert_eq!(Assets::balance(protocol_receipt, &custody), 60);
+    assert_eq!(Assets::balance(tactical_receipt, &custody), 60);
+  });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn governance_try_state_reconciles_live_ballot_horizons_and_host_custody() {
+  new_test_ext().execute_with(|| {
+    use polkadot_sdk::frame_support::traits::Hooks;
+
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 40,
+    ));
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &BOB, 60,
+    ));
+    submit_root_action_proposal(130, crate::Hash::repeat_byte(30));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      130,
+      pallet_governance::ProposalVoteKind::Veto,
+    ));
+    assert_ok!(<Governance as Hooks<crate::BlockNumber>>::try_state(1));
+    let original_position =
+      Governance::vote_power_custody(ALICE, veto_asset).expect("valid aggregate position exists");
+
+    pallet_governance::VotePowerCustodyByAccount::<Runtime>::mutate(
+      ALICE,
+      veto_asset,
+      |position| {
+        position.as_mut().expect("position exists").lock_until = 0;
+      },
+    );
+    assert!(<Governance as Hooks<crate::BlockNumber>>::try_state(1).is_err());
+
+    pallet_governance::VotePowerCustodyByAccount::<Runtime>::remove(ALICE, veto_asset);
+    assert!(<Governance as Hooks<crate::BlockNumber>>::try_state(1).is_err());
+
+    pallet_governance::VotePowerCustodyByAccount::<Runtime>::insert(
+      ALICE,
+      veto_asset,
+      pallet_governance::VotePowerCustodyPosition {
+        amount: original_position.amount + 1,
+        lock_until: original_position.lock_until,
+      },
+    );
+    assert!(<Governance as Hooks<crate::BlockNumber>>::try_state(1).is_err());
   });
 }
 

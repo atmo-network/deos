@@ -343,8 +343,8 @@ main() {
         "Governance read-only participation projection evidence is missing"
     require_anchor 'type StrategicProposalReserve: Get<u32>' "$governance_src/lib.rs" \
         "Governance strategic capacity reserve owner is missing"
-    require_anchor 'maximum\.saturating_sub\(T::StrategicProposalReserve::get\(\)\)' \
-        "$governance_src/epoch_service.rs" "General governance capacity no longer withholds the strategic reserve"
+    require_anchor '\.checked_sub\(T::StrategicProposalReserve::get\(\)\)' \
+        "$governance_src/epoch_service.rs" "General governance capacity no longer withholds the strategic reserve with checked arithmetic"
     require_anchor 'general_proposal_cap_preserves_the_strategic_reserve' "$governance_src/tests.rs" \
         "Governance strategic-reserve regression evidence is missing"
     require_anchor 'signed_preimage_required: authority != ProposalSubmissionAuthority::AdminOnly' \

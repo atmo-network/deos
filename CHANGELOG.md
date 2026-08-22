@@ -4,6 +4,17 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.21: Runtime Truth Closure
+
+- `Actors / Canonical State`: Added one five-partition loader for absence, dormancy, active state, Continuation ownership, and corruption; routed execution, simulation, reads, controls, scheduler placement, wakeups, fanout, and try-state through it; removed partial probes and closed malformed-state admission with typed failure and production-measured Weight.
+- `Actors / Scheduling and Ingress`: Preserved strict FIFO through mixed block/tick wakeups, live-head stalls, retries, and terminal index exhaustion; exactly invalidated a cancelled Continuation's wakeup before signal re-prime; separated ten-year clock horizons; made fee collection ledger-only; and certified each movement protocol with explicit preflight, consequence, rollback, provenance, and Weight ownership.
+- `Governance / Bounded Truth`: Replaced unbounded epoch catch-up with one chronological persisted four-phase service path and measured family caps; made reward, tally, deadline, projection, and epoch arithmetic checked; and reconciled concurrent transferable vote power through one aggregate source-custody position with exact rollback and maximum-horizon release.
+- `Runtime / Arithmetic and Atomicity`: Widened authoritative Router, TMC, Staking, Oracle, Actors, and Governance calculations; retained saturation only for explicit floors, conservative Weight caps, and telemetry; and added exact-root rollback evidence for task adapters, routing, pool indexing, mint distribution, staking, Governance terminal actions, and XCM deposits.
+- `Runtime / Identity and Authority`: Reserved host-owned XCM locations, enforced the single-asset holding bound, kept teleport and arbitrary execution closed, replaced truncating generic custody derivation with host mappings, proved custody non-aliasing, and closed every privileged origin against ordinary signers while retaining only typed Governance and feed-local Oracle exceptions.
+- `Security / Release Assurance`: Added panic-surface and full-iteration audits, exact bootstrap identity checks, production weights for all seven custom pallets, and an independent release-assurance Skill for dated dependency reachability, multidimensional Weight deltas, threat-boundary review, artifact identity, and attestation preparation.
+- `Client / Documentation`: Regenerated metadata, descriptors, Actors ABI/bounds, ingress/observation evidence, and fee vectors; made eligibility display reject unknown runtime variants; and synchronized package, embedding, integration, framework architecture, and bilingual Wiki truth with the shipped runtime boundaries.
+- `Validation / Release Evidence`: Added fast pull-request, heavy `main`, and full version-tag CI topology; made full artifact regeneration compare exact tracked and untracked worktree content; retained production-Wasm benchmark provenance; and prepared version-bound release artifacts for checksum and signed-attestation closure.
+
 ## 0.7.20: Execution Hardening
 
 - `Actors / Weight Truth`: Corrected lifecycle under-measurement by benchmarking worst-case scalar trigger filters, recycled subscription slots, and middle dirty-list unlinking; priced the full System-swap Oracle/reserve guard and competing route candidates. Final affected lifecycle charges rise 1.28x–3.00x in RefTime and up to 3.8x in ProofSize over 0.7.19, while both System swap envelopes include the omitted reference-path read.

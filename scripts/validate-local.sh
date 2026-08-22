@@ -27,14 +27,16 @@ Environment:
   DEOS_VERBOSE=0|1  Stream nested command output.
 
 Inputs:
-  Repository source, lockfiles, generated artifacts, and pinned toolchains.
+  Repository source, lockfiles, generated artifacts, tool and binary pins,
+  and recorded executable checksums.
 
 Outputs:
   One direct profile pass/fail result with compact retained failure logs.
 
 Side effects:
   Prepares pinned toolchains, replaces web-client/node_modules via npm ci, and
-  in full mode regenerates production runtime and client artifacts.
+  in full mode prepares the binary bundle and regenerates production
+  runtime and client artifacts.
 EOF
 }
 
@@ -60,19 +62,22 @@ parse_args() {
 check_prerequisites() {
     phase_banner "Step 1: Validation profile"
     activate_pinned_node
-    require_commands bash git node python3 rustup
+    require_commands bash git node python3 rustup sha256sum
     log_info "Profile: $PROFILE"
 }
 
 prepare_pinned_environment() {
     phase_banner "Step 2: Pinned validation environment"
     run_script_step "Pinned Rust and client environment" "setup-environment.sh" full
+    if [[ "$PROFILE" == "full" ]]; then
+        run_script_step "Checksum-verified binary bundle" "01-download-binaries.sh"
+    fi
 }
 
 run_fast_checks() {
     phase_banner "Step 3: Fast profile"
     run_shell_step "Simulator tests" "" "node '$PROJECT_ROOT/simulator/tests.js'"
-    run_script_step "Rust workspace CI" "ci-local.sh"
+    SKIP_WASM_BUILD=1 run_script_step "Rust workspace CI" "ci-local.sh"
 }
 
 run_heavy_checks() {
@@ -82,21 +87,32 @@ run_heavy_checks() {
     run_script_step "Benchmark compilation" "benchmarks.sh" --check
 }
 
+worktree_fingerprint() {
+    {
+        git -C "$PROJECT_ROOT" diff --binary --no-ext-diff HEAD --
+        local path
+        while IFS= read -r -d '' path; do
+            printf 'untracked %s\0' "$path"
+            sha256sum "$PROJECT_ROOT/$path"
+        done < <(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -z)
+    } | sha256sum | awk '{print $1}'
+}
+
 regenerate_full_artifacts() {
     phase_banner "Step 5: Full profile artifacts"
-    local status_before status_after
-    status_before="$(git -C "$PROJECT_ROOT" status --porcelain=v1)"
+    local fingerprint_before fingerprint_after
+    fingerprint_before="$(worktree_fingerprint)"
     run_script_step "Deterministic production runtime" "03-build-runtime.sh"
     run_script_step "Runtime metadata and descriptors" "export-papi-metadata.sh"
     run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence && npm run generate:observation-evidence"
     run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
-    status_after="$(git -C "$PROJECT_ROOT" status --porcelain=v1)"
-    if [[ "$status_after" != "$status_before" ]]; then
+    fingerprint_after="$(worktree_fingerprint)"
+    if [[ "$fingerprint_after" != "$fingerprint_before" ]]; then
         log_error "Full artifact regeneration changed the candidate worktree"
-        diff -u <(printf '%s\n' "$status_before") <(printf '%s\n' "$status_after") || true
+        git -C "$PROJECT_ROOT" status --short
         exit 1
     fi
-    log_success "Full artifact regeneration preserved the candidate worktree"
+    log_success "Full artifact regeneration preserved the exact candidate worktree"
 }
 
 main() {

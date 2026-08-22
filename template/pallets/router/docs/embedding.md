@@ -14,6 +14,7 @@ The Router does not require DEOS Actor accounts or concrete DEOS market policy. 
 - `FeeRoutingAdapter` participates in the Router transaction.
 - `PriceOracle` validates directional references and publishes pre-execution observations.
 - `MaxLpPairs` bounds the reverse LP index.
+- `LpPairIntegrity` optionally reconciles each Router LP binding and complete index cardinality against host pool/LP-asset storage during try-state; use `()` only when the host has no such cross-pallet topology.
 - `WeightInfo` covers the host's worst-case bounded execution. The packaged `SubstrateWeight` and `()` are hand-written placeholders that report zero ProofSize and no database access, while the DEOS reference runtime measures a direct XYK swap at 13998 ProofSize with 25 reads and 12 writes. Generate weights against your own runtime and bind those.
 
 ## Evidence

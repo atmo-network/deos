@@ -9,7 +9,7 @@ use polkadot_sdk::frame_support::{
   traits::{Currency, ExistenceRequirement},
 };
 use polkadot_sdk::sp_runtime::{
-  DispatchError, DispatchResult, FixedU128,
+  ArithmeticError, DispatchError, DispatchResult, FixedU128,
   traits::{CheckedAdd, SaturatedConversion, Zero},
 };
 
@@ -103,9 +103,17 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn reward_weight_from_snapshot(
     shares: T::Balance,
     coefficient: FixedU128,
-  ) -> T::Balance {
+  ) -> Result<T::Balance, DispatchError> {
     let shares_u128: u128 = shares.saturated_into();
-    coefficient.saturating_mul_int(shares_u128).saturated_into()
+    let shares_roundtrip: T::Balance = shares_u128.saturated_into();
+    ensure!(shares_roundtrip == shares, ArithmeticError::Overflow);
+    let weighted = coefficient
+      .checked_mul_int(shares_u128)
+      .ok_or(ArithmeticError::Overflow)?;
+    let narrowed: T::Balance = weighted.saturated_into();
+    let weighted_roundtrip: u128 = narrowed.saturated_into();
+    ensure!(weighted_roundtrip == weighted, ArithmeticError::Overflow);
+    Ok(narrowed)
   }
 
   pub(crate) fn native_security_retention_state(
@@ -114,8 +122,10 @@ impl<T: Config> Pallet<T> {
     let retention_bound = T::SecurityRewardClaimHorizon::get()
       .checked_add(2)
       .ok_or(Error::<T>::NativeSecurityRetentionBlocked)?;
-    let due_threshold =
-      current_epoch.checked_sub(T::SecurityRewardClaimHorizon::get().saturating_add(1));
+    let expiry_offset = T::SecurityRewardClaimHorizon::get()
+      .checked_add(1)
+      .ok_or(Error::<T>::NativeSecurityRetentionBlocked)?;
+    let due_threshold = current_epoch.checked_sub(expiry_offset);
     let mut retained = 0u32;
     let mut oldest_due = None;
     let mut has_planned = false;

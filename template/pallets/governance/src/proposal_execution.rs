@@ -1,7 +1,6 @@
 use crate::*;
 use alloc::vec::Vec;
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::traits::SaturatedConversion;
 impl<T: Config> Pallet<T> {
   pub(crate) fn proposal_execution_authority_for_payload_kind(
     payload_kind: ProposalPayloadKind,
@@ -65,11 +64,7 @@ impl<T: Config> Pallet<T> {
       },
     );
     let retention = T::FinalizedProposalOutcomeRetentionEpochs::get();
-    let expiry_epoch_u32 = current_epoch
-      .saturated_into::<u32>()
-      .checked_add(retention)
-      .ok_or(Error::<T>::EpochArithmeticOverflow)?;
-    let expiry_epoch: T::Epoch = expiry_epoch_u32.saturated_into();
+    let expiry_epoch = Self::add_epochs(current_epoch, retention.into())?;
     FinalizedProposalOutcomeExpiryBuckets::<T>::try_mutate(
       expiry_epoch,
       |bucket| -> DispatchResult {
@@ -91,7 +86,7 @@ impl<T: Config> Pallet<T> {
     finalized_epoch: T::Epoch,
   ) -> Result<bool, DispatchError> {
     let enactment_delay = T::ProposalEnactmentDelay::get();
-    if enactment_delay.saturated_into::<u32>() == 0 {
+    if enactment_delay.is_zero() {
       ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
       return Ok(false);
     }
@@ -358,14 +353,6 @@ impl<T: Config> Pallet<T> {
         .cmp(&Self::finalized_outcome_epoch(&left.finalization.outcome))
         .then_with(|| left.identity.item_id.cmp(&right.identity.item_id))
     });
-    proposals
-      .into_iter()
-      .fold(BoundedVec::default(), |mut bounded, proposal| {
-        let push_result = bounded.try_push(proposal);
-        if push_result.is_err() {
-          panic!("recent finalized proposal query bound must cover retained outcomes")
-        }
-        bounded
-      })
+    BoundedVec::truncate_from(proposals)
   }
 }

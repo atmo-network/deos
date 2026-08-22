@@ -21,7 +21,7 @@ The portable actor contract and crate implementation remain in [`template/pallet
 
 ## Temporal Binding
 
-The six-second DEOS slot binds block cooldown, retry, and window horizons through `ActorMaxExecutionDelayBlocks = 52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. Cadence instead uses consensus timestamp through `ActorCadenceTickMillis = 500`; the same numeric admission cap bounds `every_ticks` without converting ticks into blocks.
+The six-second DEOS slot binds block cooldown and window horizons through `ActorMaxExecutionDelayBlocks = 52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. Cadence uses consensus timestamp through `ActorCadenceTickMillis = 500` and its independent `ActorMaxCadenceDelayTicks = 631_152_000`, exactly `ceil(10 × 365.25 days / 500 milliseconds)`. These typed horizons are never converted or reused across clocks; retry backoff remains separately protocol-capped.
 
 ## Namespace and Sovereign Accounts
 
@@ -82,7 +82,7 @@ The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs
 | `build_fee_sink_contract_steps` | Fee Sink | Above the per-leg ED threshold, process 10% of spendable Native → phase-aware allocation |
 | `build_zap_contract_steps` | Liquidity Actor | Add LP → surplus swap → split LP to buckets |
 | `build_bucket_lp_transfer_contract_steps` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
-| `build_treasury_lp_unwind_contract_steps` | Treasuries B/C/D | Remove configured LP into Treasury custody |
+| `build_treasury_lp_unwind_contract_steps` | Treasuries B/C/D | Return typed failure unless the asset is a registered local LP; otherwise remove it into Treasury custody |
 | `build_bldr_splitter_contract_steps` | BLDR Splitter | Split minted BLDR share between liquidity and treasury lanes |
 | `build_bldr_liquidity_contract_steps` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
 | `build_treasury_b_buyback_contract_steps` | Treasury B | Optional NTVE buyback → burn acquired target |
@@ -110,7 +110,7 @@ Exact input derives `min_out` from the caller-aware quote and binds zero toleran
 
 DEOS Router evaluates the direct XYK candidate and at most one reverse-quoted Native-anchored path, selecting minimum required input. TMC remains exact-input only because it exposes no exact-recipient-output execution contract.
 
-System swaps read the exact directional Oracle feed with `MAX_SYSTEM_REFERENCE_AGE_BLOCKS = 100` and enforce `ActorMaxSystemPriceDeviation = 5%`. Fresh nonzero truth at the exact age boundary remains eligible. Unavailable, Uninitialized, Stale, or invalid truth falls back to direct reserves; unavailable fallback or excessive deviation fails Temporary before mutation.
+System swaps read the exact directional Oracle feed with `MAX_SYSTEM_REFERENCE_AGE_BLOCKS = 100` and enforce `ActorMaxSystemPriceDeviation = 5%`. Fresh nonzero truth at the exact age boundary remains eligible. Unavailable, Uninitialized, Stale, or invalid truth falls back to direct reserves. That fallback uses the same checked widened scaled-ratio primitive as DEOS Router publication; zero denominator, unrepresentable narrowing, unavailable fallback, or excessive deviation fails Temporary before mutation.
 
 User swaps retain Router's ordinary direct-pair guard and do not fail solely because the standalone Oracle feed is absent or uninitialized. Native-anchored System routes without a pair reference fail closed.
 
@@ -138,7 +138,7 @@ Runtime adapters use typed failure classification. Explicit route, liquidity, sl
 
 ## Address and Funding Ingress
 
-All successful supported producers call the fallible direct ingress boundary in their originating transaction. They preflight before value movement and propagate notification failure; no event scan, compatibility ring, or deferred correctness layer exists.
+All supported producers use one typed certified-movement protocol and literal read-only preflight; no event scan, compatibility ring, deferred correctness layer, or silent balance-only fallback exists. Ordinary runtime adapters notify after movement inside their storage transaction. Signed-extension producers notify after successful dispatch and reject the candidate block if that consequence fails. XCM alone precommits the Actors consequence before consuming its non-cloneable holding, then commits or rolls back the deposit, Actors state, events, and holding together.
 
 | Producer family | DEOS integration |
 | --- | --- |
@@ -148,7 +148,7 @@ All successful supported producers call the fallible direct ingress boundary in 
 | TMC distribution | Mint-output adapter submits once and preserves available source provenance |
 | Router fee routing | Fee adapter submits once with fee-payer provenance |
 | XCM asset deposit | `ActorAwareAssetTransactor` submits one converted or source-less candidate |
-| Privileged/delegated producers | Direct source-less candidate preserves signal delivery but remains balance-only |
+| Privileged/delegated producers | Transaction extension carries one source-less certified candidate |
 
 XCM binds generated one-asset deposit weight and `MaxAssetsIntoHolding = 1`, preventing one instruction from multiplying synchronous Actors ingress work without a corresponding instruction-specific weigher.
 
@@ -156,22 +156,23 @@ User actors default to `OwnerOnly`; accepted verified owner or allowlist transfe
 
 ### Crediting-Producer Inventory
 
-Every producer path that can credit an Actors sovereign account uses one paired preflight/notify transaction through `RuntimeAddressEventIngress`. The inventory below names each path, its credited surface, source/provenance semantics, preflight owner, notification owner, rollback witness, and Weight owner; all movement is reverted on preflight or notification failure in the same transaction.
+Every certified producer path that can credit an Actors sovereign account routes through `RuntimeAddressEventIngress`. The inventory names each path, typed protocol, credited surface, source/provenance semantics, preflight owner, consequence owner, rollback witness, and Weight owner. Paths outside this closed inventory are balance-only.
 
 `SourceFilter::Any` accepts every certified source that passes the authored asset filter. Any such source may set the actor's pending latch, and a resulting User attempt spends that actor's Weight-derived fee budget even when the sender acts only to force evaluation. DEOS adds no hidden sender trust list, reimbursement, or anti-grief pricing policy; authors who cannot accept that exposure use `OwnerOnly` or an explicit bounded whitelist.
 
 **Ingress producers (credit another actor's sovereign):**
 
-| Producer path | Credited surface | Source / provenance | Preflight owner | Notify owner | Rollback witness | Weight owner |
+| Producer path | Protocol | Source / provenance | Preflight owner | Consequence owner | Rollback witness | Weight owner |
 | --- | --- | --- | --- | --- | --- | --- |
-| Signed Balances/Assets transfer | Recipient sovereign | Signer / `Signed` | `TransactionExtension` candidate preflight | `post_dispatch_details` notify | Balances/Assets ledger revert | `transaction_extension_ingress_base` + `_notify` |
-| `transfer_all` | Recipient sovereign | Signer / `Signed`, actual recipient delta | Same candidate preflight | Same notify | Balances ledger revert | Same extension weights |
-| Actors Transfer/Mint task | Task `to` sovereign | Sender or source-less / typed | `TmctolAssetOps::transfer` preflight | Same adapter `on_internal_inbound` | Asset ops transaction | `task_dex_*`/`task_transfer` generated weights |
-| TMC collateral distribution | Collateral/minted recipients | Mint source / `InternalProtocol` | `before_collateral_transfer`/`before_sink_mint` | `after_distribution` | TMC distribution transaction | TMC distribution generated weights |
-| Router fee routing | Burn Actor sovereign | Fee payer / `InternalProtocol` | `route_fee` preflight | Same `on_internal_inbound` | Router fee transaction | Router fee routing weights |
-| XCM asset deposit | Recipient sovereign | XCM origin / `Xcm` | `preflight_xcm_inbound` | `on_xcm_inbound` | `ActorAwareAssetTransactor` deposit revert | One-asset deposit generated weight |
-| XCM without origin | Recipient sovereign | Source-less / none | Implicit source-less preflight | `on_inbound_without_source` | Same deposit revert | Same one-asset weight |
-| Privileged/delegated producers | Recipient sovereign | Source-less candidate / none | Direct source-less preflight | Same source-less notify | Producer transaction revert | Producer-supplied weights |
+| Signed Balances/Assets transfer | `BlockAtomicPostDispatch` | Signer / `Signed` | Extension `prepare` | `post_dispatch_details` | Block author/import transaction | Extension base + notify |
+| `transfer_all` | `BlockAtomicPostDispatch` | Signer / `Signed`, actual delta | Extension `prepare` | `post_dispatch_details` | Block author/import transaction | Extension base + notify |
+| Privileged/delegated movement | `BlockAtomicPostDispatch` | Source-less / none | `prepare_dynamic_producer` | `post_dispatch_details` | Block author/import transaction | Extension base + notify |
+| Actors Transfer | `PostMovementNotify` | Sender / `InternalProtocol` | `TmctolAssetOps::transfer` | `on_internal_inbound` | Asset ops transaction | Transfer/split generated weights |
+| Actors Mint | `PostMovementNotify` | Source-less / none | `TmctolAssetOps::mint` | `on_inbound_without_source` | Asset ops transaction | Mint generated weight |
+| TMC distribution | `PostMovementNotify` | Mint source / `InternalProtocol` | Distribution preflight hooks | `after_distribution` | TMC transaction | Distribution generated weights |
+| Router fee routing | `PostMovementNotify` | Fee payer / `InternalProtocol` | `route_fee` | `on_internal_inbound` | Router transaction | Router fee weights |
+| XCM asset deposit | `XcmTransactionalPrecommit` | XCM origin / `Xcm` | `preflight_xcm_inbound` | `precommit_ingress` | Asset transactor transaction | One-asset deposit weight |
+| XCM without origin | `XcmTransactionalPrecommit` | Source-less / none | `preflight_inbound_without_source` | `precommit_ingress` | Asset transactor transaction | One-asset deposit weight |
 
 **Same-actor task/adapter outputs (intentionally excluded from the ingress boundary):** each executes inside the actor's own cycle and resolves against the actor's own balances, so it does not signal the actor or update its funding. They are named explicitly rather than claiming "all producers are covered":
 
@@ -196,6 +197,8 @@ The package-owned `attempt_fee_envelope` derives each task and complete-plan res
 Package-generated `actors-fee-envelope-vectors.json` constrains browser forecast fee policy across User/System suffixes, reservation release, rollback pricing, and the direct User fee-native floor. One selected fee charges per executed or failed task attempt; skipped steps charge evaluation only.
 
 `TmctolFeeCollector` transfers the complete charge into Fee Sink System Actor `1` through a ledger-only movement, matching transaction-payment and XCM-trader collection without fabricating AddressEvent readiness. One 120-tick cadence under the 500 ms consensus clock owns a stable 60-second allocation period. Its plan processes 10% of the current spendable Native buffer only when each configured split leg receives at least one ED, allocates the processed amount under the current phase policy, and retains the unprocessed buffer plus indivisible remainder. Runtime regressions prove collection-only custody, threshold skips, timestamp readiness, and no early execution.
+
+The runtime-upgrade integrity gate re-derives the complete Fee Sink/native-security topology. It requires the exact Mutable persistent RuntimePolicy cadence contract and native 10% split; mode-shaped `50/50` staking/liquidity or `34/33/33` security/staking/liquidity legs with total share one; a retained liquidity System locator; one shared collector/actor custody account; distinct Fee Sink, staking ingress, security reward, liquidity, and LP-lock accounts; and ED anchors for every endpoint admitting arbitrarily small native flow.
 
 Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admission reserves transient Native fees without consuming the persistent sovereign ED anchor.
 
@@ -222,19 +225,19 @@ Creation, activation, fresh custody reattachment, and plan replacement reject an
 
 ## Reactive Delivery Evidence
 
-The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanoutWeightLimit = 400,000,000,000 / 1,000,000`, and `WakeupWeightLimit = 400,000,000,000 / 1,000,000` for the overdue-wakeup worker. Production ProofSize admits five worst-case fanout units after base admission.
+The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanoutWeightLimit = 400,000,000,000 / 1,000,000`, and `WakeupWeightLimit = 400,000,000,000 / 1,000,000` for the overdue-wakeup worker. The complete five-partition actor probe makes production ProofSize admit one worst-case fanout unit after base admission.
 
-| Production topology after publication | Fanout service units | Blocks at five units |
+| Production topology after publication | Fanout service units | Blocks at one unit |
 | --- | ---: | ---: |
-| One feed with 10,000 subscribers | 157 | 32 |
+| One feed with 10,000 subscribers | 157 | 157 |
 | One sparse subscriber at a historical high page id | 1 | 1 |
-| Four dirty feeds with 10,000 subscribers each | 628 | 126 |
-| One revision restart after quiescence | At most 314 | 63 |
+| Four dirty feeds with 10,000 subscribers each | 628 | 628 |
+| One revision restart after quiescence | At most 314 | 314 |
 | Persistently saturated queue | Unbounded | Unbounded |
 
 A fanout service unit is one occupied-page attempt or one cursorless restart/cleanup transition; final-page completion may clear or restart within its page unit. The finite rows require stable active topology, no newer selected-feed revision, available configured RefTime/ProofSize budget, eventual queue capacity, and same-finalized-block runtime/code/metadata/constants matching generated client evidence. Mismatch withholds the rows while retaining factual chain topology. Estimates end at fanout completion, not queue admission, Predicate evaluation, or actor attempt.
 
-Production fanout base is `31,565,000 / 1,543` (`6,565,000` benchmark RefTime plus one DbWeight read); the completing dense unit is `12,136,381,000 / 166,430` (`1,461,381,000` benchmark RefTime plus 139 reads and 72 writes). ProofSize therefore remains the active five-unit limit under the configured budget.
+Production fanout base is `31,076,000 / 1,543` (`6,076,000` benchmark RefTime plus one DbWeight read); the completing dense unit is `17,373,176,000 / 718,430` (`1,898,176,000` benchmark RefTime plus 331 reads and 72 writes). ProofSize therefore remains the active one-unit limit under the configured budget.
 
 The accepted Actors production run used `frame-omni-bencher 0.22.0`, production Wasm, 50 steps, and 20 repeats. `template/runtime/src/weights/pallet_deos_actors.rs` owns the complete current scheduler, wakeup, ingress, task, predicate, and orchestration coefficients. Those values price measured bounded topology only; they imply no throughput promise.
 
@@ -274,7 +277,27 @@ Unbounded history, archive search, forecasting records, governance preparation h
 
 Package tests own executable actor, scheduler, trigger, lifecycle, storage, and try-state behavior. Runtime tests own adapters, fees, ingress, genesis topology, Oracle/Router rollback, staking, XCM, generated-weight binding, block-budget partition, and full System/User composition.
 
-`scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and occupancy proof commands. Repository toolchain authorities and canonical release profiles own environment and profile selection; this integration document does not duplicate release results or version pins.
+Actors try-state reconciles all canonical partitions and their stored cardinalities, Continuation ownership, global FIFO pages/tickets/occupancy, both typed wakeup heaps and bucket reverse indexes, actor-local queue/wakeup pointers, owner slots, System sovereign locators, observation slot/page/feed ownership, occupied-page links, dirty-feed links/cursor/count, and revision baselines. Lazy queue and wakeup tombstones remain the only admitted physical records without live actor ownership.
+
+The reference Router binds `RuntimeLpPairIntegrity`, so try-state also requires every bounded LP reverse entry to resolve to the exact Asset Conversion pool and LP token, requires that LP asset to exist, and requires complete pool/index cardinality equality. Missing indexes, wrong LP identities, orphan pairs, and deleted LP assets fail before Actors liquidity or Treasury unwind can consume the binding.
+
+| Actors late-failure surface | Injected checkpoint | Restoration evidence |
+| --- | --- | --- |
+| Transfer / SplitTransfer | Certified placement rejection; second-leg adapter failure | Exact runtime root for direct transfer; all leg balances and no success event for split |
+| Mint | Native issuance overflow after read-only preflight | Exact runtime root, including ledger, events, and Actors state |
+| SwapIn / SwapOut | Adapter failure after input debit | Actor and pool custody restored; no swap event; only ordinary failed-step accounting may commit |
+| Add / Remove Liquidity | First asset debit/credit fault; post-call minimum-output rejection | Package custody rollback plus exact runtime root across ledgers, pool, LP index, issuance, and events |
+| Stake / Unstake | Adapter failure after asset/share burn | Custody and staking representations restored; no success event |
+| Donate Liquidity | Failure after first asset burn | Both custody legs and donation accounting restored; no success event |
+| FeeCollector | Ledger failure after admission | Exact runtime root; no fee receipt, sink movement, attempt mutation, or scheduler drift |
+
+Each task executes inside one task-owned storage transaction. A rejected task restores its adapter writes and task success event; the surrounding attempt may still commit its specified `StepFailed`, counters, policy transition, and later independent steps. Tests distinguish that expected failure envelope from leaked partial adapter state.
+
+`scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and occupancy proof commands. Optimized-profile regressions prove that the 10,000-actor fairness/occupancy matrix serves every actor with nonce spread at most four and that 10,000 wakeups due at one block drain completely without drops or duplicate ownership. A standard 512-actor mixed-clock regression advances timestamp by 99 ticks at once and proves per-unit clock round-robin, within-clock FIFO, one execution and one canonical placement per actor, bounded completion, and no cadence catch-up burst. Package matrices separately cover saturated placement, tombstone-heavy reclamation, stale wakeup pointers, queue-ticket exhaustion, and tick-index exhaustion with fail-closed state preservation.
+
+Production-Wasm before/after runs at 50 steps and 20 repeats measure validated-context carry through live-head consumption. The System cheap-cycle slope falls from `102,331,665` to `96,422,023` RefTime per actor (5.78%); the alternating System/User slope falls from `129,266,555` to `121,935,994` (5.67%). Estimated ProofSize remains exactly `2,733` and `2,798` per actor, and measured database slopes remain five and six reads respectively: the proof already deduplicated repeated keys, while the retained change removes redundant decode/control work without deleting a canonical partition read. Repository toolchain authorities and canonical validation profiles own environment and profile selection; this integration document does not duplicate run timestamps or version pins.
+
+The runtime Pool Index extension fault anchor admits a pool-creation call, injects failure only at post-dispatch LP/Oracle indexing, rejects the block candidate, and proves exact storage-root restoration across the pool, LP asset and reverse index, Oracle feeds, balances, events, and signer nonce. Package Router faults separately prove exact-root rollback when the second market leg or second directional Oracle publication fails after earlier pool, fee, and publication work.
 
 The runtime cross-pallet hook-rejection anchor fills Actors dirty capacity, attempts direct Oracle publication, and proves Oracle observation/revision, Actors feed/list state, and runtime events equal the captured pre-state. After capacity recovery, one producer retry commits Oracle revision `1` and Actors latest revision `1`; no replay state or Router publication path participates.
 

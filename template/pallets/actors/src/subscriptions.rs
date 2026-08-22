@@ -590,9 +590,20 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-    if free_slots.len() as u32 != free_len
-      || owned_slots.len() as u32 + free_len != next_slot
-      || ObservationFreeSlotPages::<T>::iter_keys().count() as u32 != free_page_count
+    let free_slot_count = u32::try_from(free_slots.len())
+      .map_err(|_| TryRuntimeError::Other("observation free-slot count overflows"))?;
+    let owned_slot_count = u32::try_from(owned_slots.len())
+      .map_err(|_| TryRuntimeError::Other("observation owned-slot count overflows"))?;
+    let accounted_slots = owned_slot_count
+      .checked_add(free_len)
+      .ok_or(TryRuntimeError::Other(
+        "observation slot accounting overflows",
+      ))?;
+    let stored_free_page_count = u32::try_from(ObservationFreeSlotPages::<T>::iter_keys().count())
+      .map_err(|_| TryRuntimeError::Other("observation free-page count overflows"))?;
+    if free_slot_count != free_len
+      || accounted_slots != next_slot
+      || stored_free_page_count != free_page_count
     {
       return Err(TryRuntimeError::Other(
         "observation subscription slot accounting disagrees",

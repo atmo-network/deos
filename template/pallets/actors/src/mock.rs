@@ -165,6 +165,8 @@ thread_local! {
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
+  static FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT: RefCell<bool> = RefCell::new(false);
+  static FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN: RefCell<bool> = RefCell::new(false);
   static LP_PAIR_BY_TOKEN: RefCell<alloc::collections::BTreeMap<TestAsset, (TestAsset, TestAsset)>> =
@@ -239,6 +241,8 @@ pub fn reset_mock_adapters() {
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
+  FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT.with(|v| *v.borrow_mut() = false);
+  FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow_mut() = false);
   #[cfg(feature = "runtime-benchmarks")]
@@ -499,6 +503,14 @@ pub fn set_staking_share_asset_available(value: bool) {
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_fail_add_liquidity_after_first_debit(value: bool) {
+  FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_fail_remove_liquidity_after_first_credit(value: bool) {
+  FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn set_fail_liquidity_donation_ops(value: bool) {
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = value);
 }
@@ -670,7 +682,7 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
   }
 
   fn add_liquidity(
-    _who: &AccountId,
+    who: &AccountId,
     _asset_a: TestAsset,
     _asset_b: TestAsset,
     amount_a: Balance,
@@ -682,6 +694,10 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         "TemporaryAddLiquidityCapacity",
       )));
     }
+    if FAIL_ADD_LIQUIDITY_AFTER_FIRST_DEBIT.with(|v| *v.borrow()) {
+      MockAssetOps::burn(who, _asset_a, amount_a)?;
+      return Err(DispatchError::Other("MockAddLiquidityAfterFirstDebitFailed").into());
+    }
     let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
     if lp_minted < min_lp_out {
       return Err(DispatchError::Other("MinimumLpOutputNotMet").into());
@@ -690,7 +706,7 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
   }
 
   fn remove_liquidity(
-    _who: &AccountId,
+    who: &AccountId,
     lp_asset: TestAsset,
     asset_a: TestAsset,
     asset_b: TestAsset,
@@ -698,10 +714,14 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     min_amount_a: Balance,
     min_amount_b: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
-    // Bind the ordered pair for the LP token so the event exposes it and later
-    // steps cannot reinterpret the admitted binding.
-    LP_PAIR_BY_TOKEN.with(|pairs| pairs.borrow_mut().insert(lp_asset, (asset_a, asset_b)));
+    if Self::lp_assets(lp_asset) != Some((asset_a, asset_b)) {
+      return Err(DispatchError::Other("LiquidityPairBindingMismatch").into());
+    }
     let half = lp_amount / 2;
+    if FAIL_REMOVE_LIQUIDITY_AFTER_FIRST_CREDIT.with(|v| *v.borrow()) {
+      MockAssetOps::mint(who, asset_a, half)?;
+      return Err(DispatchError::Other("MockRemoveLiquidityAfterFirstCreditFailed").into());
+    }
     if half < min_amount_a || half < min_amount_b {
       return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
     }
@@ -953,6 +973,13 @@ impl Get<u64> for TestMaxExecutionDelayBlocks {
   }
 }
 
+pub struct TestMaxCadenceDelayTicks;
+impl Get<u64> for TestMaxCadenceDelayTicks {
+  fn get() -> u64 {
+    631_152_000
+  }
+}
+
 pub struct TestMaxIdleStarvationBlocks;
 impl Get<u32> for TestMaxIdleStarvationBlocks {
   fn get() -> u32 {
@@ -1026,6 +1053,24 @@ impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
   }
 }
 
+pub struct MockSovereignAccountDeriver;
+
+impl crate::SovereignAccountDeriver<AccountId> for MockSovereignAccountDeriver {
+  fn user(pallet_id: PalletId, owner: &AccountId, owner_slot: u8) -> AccountId {
+    let seed = frame::hashing::blake2_256(&(pallet_id, b"user", owner, owner_slot).encode());
+    u64::from_le_bytes([
+      seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+    ])
+  }
+
+  fn system(pallet_id: PalletId, actor_id: crate::ActorId) -> AccountId {
+    let seed = frame::hashing::blake2_256(&(pallet_id, b"system", actor_id).encode());
+    u64::from_le_bytes([
+      seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+    ])
+  }
+}
+
 pub struct MockSovereignAccountPolicy;
 
 impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccountPolicy {
@@ -1052,6 +1097,7 @@ impl pallet_deos_actors::Config for Test {
   type ObservationFeedId = u32;
   type ObservationProvider = MockObservationProvider;
   type FundingAuthority = MockFundingAuthority;
+  type SovereignAccountDeriver = MockSovereignAccountDeriver;
   type SovereignAccountPolicy = MockSovereignAccountPolicy;
   type DexOps = MockDexOps;
   type StakingOps = MockStakingOps;
@@ -1085,6 +1131,7 @@ impl pallet_deos_actors::Config for Test {
   type MaxSplitTransferLegs = ConstU32<8>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
+  type MaxCadenceDelayTicks = TestMaxCadenceDelayTicks;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
   type ActorOnIdleReserve = TestActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;

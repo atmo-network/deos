@@ -39,6 +39,11 @@ parameter_types! {
   pub ProposalVetoMinimumVetoTurnout: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(1);
   pub const ProposalMinimumTurnout: u64 = 200;
+  pub const MaxGovernanceEpochCatchUpPerBlock: u32 = 1;
+  pub const MaxGovernanceMaturingProposalsPerBlock: u32 = 3;
+  pub const MaxGovernancePendingEnactmentsPerBlock: u32 = 4;
+  pub const MaxGovernanceFinalizedOutcomesPerBlock: u32 = 1024;
+  pub const MaxGovernanceExpiringAccountsPerBlock: u32 = 512;
   pub const FinalizedProposalOutcomeRetentionEpochs: u32 = 16;
   pub const MaxFinalizedProposalOutcomesPerEpoch: u32 = 1024;
   pub const MaxRecentFinalizedProposalsPerDomain: u32 = 16 * 1024;
@@ -117,6 +122,24 @@ pub fn governance_vote_power_custody_account() -> AccountId {
 }
 
 pub struct RuntimeVotePowerCustody;
+
+#[cfg(test)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum VotePowerCustodyFault {
+  LockAfterTransfer,
+  UnlockAfterTransfer,
+}
+
+#[cfg(test)]
+std::thread_local! {
+  static VOTE_POWER_CUSTODY_FAULT: core::cell::Cell<Option<VotePowerCustodyFault>> = const { core::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_vote_power_custody_fault(fault: Option<VotePowerCustodyFault>) {
+  VOTE_POWER_CUSTODY_FAULT.with(|configured| configured.set(fault));
+}
+
 impl pallet_governance::VotePowerCustody<AccountId, AssetId, AssetId, Balance>
   for RuntimeVotePowerCustody
 {
@@ -143,11 +166,15 @@ impl pallet_governance::VotePowerCustody<AccountId, AssetId, AssetId, Balance>
     track: pallet_governance::ProposalTrackFamily,
     account: &AccountId,
     current_locked: Balance,
-  ) -> Balance {
+  ) -> Result<Balance, polkadot_sdk::sp_runtime::DispatchError> {
     let Some(lock_id) = Self::lock_id(domain, track) else {
-      return current_locked;
+      return Ok(current_locked);
     };
-    current_locked.saturating_add(crate::Assets::balance(lock_id, account))
+    current_locked
+      .checked_add(crate::Assets::balance(lock_id, account))
+      .ok_or(polkadot_sdk::sp_runtime::DispatchError::Arithmetic(
+        polkadot_sdk::sp_runtime::ArithmeticError::Overflow,
+      ))
   }
 
   fn lock(
@@ -163,6 +190,14 @@ impl pallet_governance::VotePowerCustody<AccountId, AssetId, AssetId, Balance>
       amount,
       Preservation::Expendable,
     )?;
+    #[cfg(test)]
+    if VOTE_POWER_CUSTODY_FAULT
+      .with(|configured| configured.get() == Some(VotePowerCustodyFault::LockAfterTransfer))
+    {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced custody lock failure after transfer",
+      ));
+    }
     Ok(())
   }
 
@@ -179,7 +214,22 @@ impl pallet_governance::VotePowerCustody<AccountId, AssetId, AssetId, Balance>
       amount,
       Preservation::Expendable,
     )?;
+    #[cfg(test)]
+    if VOTE_POWER_CUSTODY_FAULT
+      .with(|configured| configured.get() == Some(VotePowerCustodyFault::UnlockAfterTransfer))
+    {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced custody unlock failure after transfer",
+      ));
+    }
     Ok(())
+  }
+
+  fn custodied_amount(lock_id: AssetId) -> Option<Balance> {
+    Some(crate::Assets::balance(
+      lock_id,
+      &governance_vote_power_custody_account(),
+    ))
   }
 }
 
@@ -276,7 +326,7 @@ fn track_base_weight(
       transferable_vote_power_balance(asset_id, account)
     }
     RuntimeGovernanceTrackBacking::NativeStake => {
-      DelegationWeightedCollatorSessionManager::conservative_native_lp_value(
+      DelegationWeightedCollatorSessionManager::conservative_native_lp_value_or_zero(
         crate::Staking::account_native_lp_locked(account),
       )
       .saturating_add(native_governance_asset_vote_power(account))
@@ -362,7 +412,7 @@ fn track_total_issuance(backing: RuntimeGovernanceTrackBacking, domain: AssetId)
       <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::total_issuance(asset_id)
     }
     RuntimeGovernanceTrackBacking::NativeStake => {
-      DelegationWeightedCollatorSessionManager::conservative_native_lp_value(
+      DelegationWeightedCollatorSessionManager::conservative_native_lp_value_or_zero(
         crate::Staking::total_native_lp_locked(),
       )
       .saturating_add(total_native_governance_asset_vote_power())
@@ -761,11 +811,9 @@ pub struct TacticalTreasuryInvoicePayload {
 fn tactical_treasury_account_for_invoice(
   domain: AssetId,
   funding_source: TacticalTreasuryFundingSource,
-) -> AccountId {
-  debug_assert_eq!(domain, tactical_governance_domain());
+) -> Option<AccountId> {
   match funding_source {
-    TacticalTreasuryFundingSource::BldrTreasury => governance_treasury_account(domain)
-      .expect("the admitted tactical governance domain has a configured treasury"),
+    TacticalTreasuryFundingSource::BldrTreasury => governance_treasury_account(domain),
   }
 }
 
@@ -868,7 +916,8 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
           .and_then(|amount| amount.checked_div(denominator))
           .ok_or(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
         let treasury_account =
-          tactical_treasury_account_for_invoice(domain, payload.funding_source);
+          tactical_treasury_account_for_invoice(domain, payload.funding_source)
+            .ok_or(pallet_governance::ProposalExecutionFailureReason::DispatchFailed)?;
         RuntimeCall::Assets(pallet_assets::Call::transfer {
           id: payload.payout_asset,
           target: polkadot_sdk::sp_runtime::MultiAddress::Id(payload.beneficiary.clone()),
@@ -891,7 +940,7 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
       }
       pallet_governance::ProposalPayloadKind::Intent
       | pallet_governance::ProposalPayloadKind::L2SignalToL1 => {
-        unreachable!("advisory payloads never enter the runtime executor")
+        Err(pallet_governance::ProposalExecutionFailureReason::UnsupportedCall)
       }
     }
   }
@@ -908,6 +957,11 @@ impl pallet_governance::Config for Runtime {
   type WinningVoteItemId = u32;
   type Epoch = BlockNumber;
   type EpochProvider = RuntimeGovernanceEpochProvider;
+  type MaxEpochCatchUpPerBlock = MaxGovernanceEpochCatchUpPerBlock;
+  type MaxMaturingProposalsPerBlock = MaxGovernanceMaturingProposalsPerBlock;
+  type MaxPendingEnactmentsPerBlock = MaxGovernancePendingEnactmentsPerBlock;
+  type MaxFinalizedProposalOutcomesPerBlock = MaxGovernanceFinalizedOutcomesPerBlock;
+  type MaxExpiringAccountsPerBlock = MaxGovernanceExpiringAccountsPerBlock;
   type WinningVoteLookbackEpochs = WinningVoteLookbackEpochs;
   type MaxWinningVotesPerEpoch = MaxWinningVotesPerEpoch;
   type MaxWinningVoteItemsPerEpoch = MaxWinningVoteItemsPerEpoch;
@@ -994,6 +1048,25 @@ mod tests {
       u64::MAX - (u64::MAX % 7),
       "the normalization cap must reserve the full declining-power multiplier"
     );
+  }
+
+  #[test]
+  fn protection_power_normalization_is_proportional_at_the_u128_supply_boundary() {
+    let total = u128::MAX;
+    let powers = [1, total / 3, total / 2, total];
+    let mut previous = 0;
+    for power in powers {
+      let normalized = normalize_protection_power(power, total);
+      let expected = (polkadot_sdk::sp_core::U256::from(power)
+        * polkadot_sdk::sp_core::U256::from(MAX_NORMALIZED_PROTECTION_POWER)
+        / polkadot_sdk::sp_core::U256::from(total))
+      .as_u64();
+      assert_eq!(normalized, expected);
+      assert!(normalized >= previous);
+      assert!(normalized.checked_mul(7).is_some());
+      previous = normalized;
+    }
+    assert_eq!(previous, normalize_protection_total(total));
   }
 
   #[test]

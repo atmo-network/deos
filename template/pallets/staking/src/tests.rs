@@ -1558,6 +1558,55 @@ fn lock_native_lp_rejects_invalid_lp_asset() {
 }
 
 #[test]
+fn widened_mul_div_reward_weight_and_unlock_deadline_fail_closed_at_boundaries() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      Staking::mul_div_floor(u128::MAX, u128::MAX, u128::MAX),
+      Some(u128::MAX)
+    );
+    assert_eq!(Staking::mul_div_floor(u128::MAX, u128::MAX, 1), None);
+    assert_eq!(Staking::mul_div_floor(1, 1, 0), None);
+    assert_eq!(
+      Staking::reward_weight_from_snapshot(u128::MAX, FixedU128::one(),)
+        .expect("identity coefficient remains exact"),
+      u128::MAX,
+    );
+    assert!(
+      Staking::reward_weight_from_snapshot(u128::MAX, FixedU128::from_inner(u128::MAX),).is_err()
+    );
+
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    System::set_block_number(u64::MAX);
+    assert_noop!(
+      Staking::request_unlock_native_lp(RuntimeOrigin::signed(1), 99, 15),
+      polkadot_sdk::sp_runtime::ArithmeticError::Overflow,
+    );
+    assert_eq!(
+      NativeLpLocks::<Test>::get(1, 99)
+        .expect("overflow preserves the live lock")
+        .amount,
+      40,
+    );
+    assert!(PendingNativeLpUnlocks::<Test>::get(1, 99).is_none());
+  });
+}
+
+#[test]
 fn unlock_after_planning_preserves_planned_rights_and_changes_only_later_epoch() {
   const LP_ASSET: AssetId = 0x7000_0001;
   new_test_ext().execute_with(|| {

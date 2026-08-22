@@ -1,0 +1,133 @@
+{
+  "formatVersion": 1,
+  "reviewedAt": "2026-08-21",
+  "licenseExceptions": [
+    {
+      "ecosystem": "npm",
+      "id": "svelte-toolbelt@0.10.6",
+      "expires": "2026-09-30",
+      "reason": "The published package omits its license field; the pinned upstream source contains an MIT LICENSE file. Replace or re-verify when the package changes."
+    }
+  ],
+  "exceptions": [
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0258",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "The vulnerable h2 0.3 line is not reachable from any workspace package under all features and all targets; the reachable h2 line was updated to 0.4.16. Remove with the next Polkadot SDK lock refresh."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0119",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "Both reported hickory-proto versions are absent from the all-feature, all-target workspace graph and cannot process runtime or release-build input."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0118",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "The reported hickory-proto version is absent from the all-feature, all-target workspace graph and DEOS owns no DNS resolver surface."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0009",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "ring 0.16.20 is absent from the all-feature, all-target workspace graph; consensus runtime cryptography does not reach this implementation."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0220",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "ruint 1.19.0 is absent from the all-feature, all-target workspace graph; DEOS authoritative arithmetic uses checked U256 from the active SDK graph."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0098",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot validate DEOS transport certificates."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0099",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot validate DEOS transport certificates."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0104",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "rustls-webpki 0.101.7 is absent from the all-feature, all-target workspace graph and cannot parse DEOS certificate revocation lists."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2025-0055",
+      "expires": "2026-09-30",
+      "reachability": "native-observability-only",
+      "reason": "tracing-subscriber 0.3.19 is constrained exactly by Polkadot SDK sc-tracing and excluded from no-std runtime Wasm; DEOS does not own a node or expose these developer logs as an authoritative parser input. The 0.2 line is lockfile-only."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0221",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "event-listener 5.4.1 is absent from the all-feature, all-target workspace graph."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0253",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "Both reported lru versions are absent from the all-feature, all-target workspace graph."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0002",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "lru 0.12.5 is absent from the all-feature, all-target workspace graph."
+    },
+    {
+      "ecosystem": "cargo",
+      "id": "RUSTSEC-2026-0186",
+      "expires": "2026-09-30",
+      "reachability": "lockfile-only",
+      "reason": "memmap2 0.5.10 is absent from the all-feature, all-target workspace graph."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "@polkadot-api/cli",
+      "expires": "2026-09-30",
+      "reachability": "trusted-generation-only",
+      "reason": "The high aggregate resolves exclusively to GHSA-ggr8-5vv4-36mx through write-package; the CLI consumes repository-owned metadata during descriptor generation and is not shipped in the browser bundle."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "deepmerge-ts",
+      "expires": "2026-09-30",
+      "reachability": "trusted-generation-only",
+      "reason": "GHSA-ggr8-5vv4-36mx requires a recursive attacker-controlled object graph; descriptor generation consumes locally exported runtime metadata and bounded repository configuration."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "polkadot-api",
+      "expires": "2026-09-30",
+      "reachability": "trusted-generation-only",
+      "reason": "The high aggregate is inherited from the package's CLI generation dependency; browser runtime imports do not invoke write-package or deepmerge-ts."
+    },
+    {
+      "ecosystem": "npm",
+      "id": "write-package",
+      "expires": "2026-09-30",
+      "reachability": "trusted-generation-only",
+      "reason": "The package is reachable only through local descriptor generation, and its recursive merge input is repository-owned rather than user supplied."
+    }
+  ]
+}

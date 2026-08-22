@@ -774,6 +774,31 @@ impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImp
   }
 }
 
+pub struct RuntimeLpPairIntegrity;
+
+impl pallet_deos_router::types::LpPairIntegrity for RuntimeLpPairIntegrity {
+  fn validate_binding(lp_token: u32, pair: (AssetKind, AssetKind)) -> Result<(), &'static str> {
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&pair.0, &pair.1)
+        .map_err(|_| "LP pair cannot derive a concrete pool identity")?;
+    let pool = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or("LP reverse index references an absent pool")?;
+    if pool.lp_token != lp_token {
+      return Err("LP reverse index disagrees with the pool LP token");
+    }
+    if !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(lp_token) {
+      return Err("LP reverse index references an absent LP asset");
+    }
+    Ok(())
+  }
+
+  fn expected_pool_count() -> Result<Option<u32>, &'static str> {
+    let count = u32::try_from(pallet_asset_conversion::Pools::<Runtime>::iter_keys().count())
+      .map_err(|_| "Asset Conversion pool cardinality exceeds u32")?;
+    Ok(Some(count))
+  }
+}
+
 impl pallet_deos_router::pallet::Config for Runtime {
   type AdminOrigin = frame_system::EnsureRoot<AccountId>;
   type AssetConversion = AssetConversionAdapter;
@@ -786,6 +811,7 @@ impl pallet_deos_router::pallet::Config for Runtime {
   type FeeAdapter = FeeManagerImpl<Runtime>;
   type MaxPriceDeviation = DeosRouterMaxPriceDeviation;
   type MaxLpPairs = DeosRouterMaxLpPairs;
+  type LpPairIntegrity = RuntimeLpPairIntegrity;
   type MaxRouterFee = DeosRouterMaxFee;
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;

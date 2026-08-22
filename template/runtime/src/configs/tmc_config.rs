@@ -76,6 +76,17 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
 }
 
 pub struct TmctolMintDistributionIngress;
+
+#[cfg(test)]
+std::thread_local! {
+  static FAIL_AFTER_FIRST_DISTRIBUTION_INGRESS: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_fail_after_first_distribution_ingress(value: bool) {
+  FAIL_AFTER_FIRST_DISTRIBUTION_INGRESS.with(|flag| flag.set(value));
+}
+
 impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngress {
   fn before_collateral_transfer(
     source: &AccountId,
@@ -116,6 +127,12 @@ impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngre
       source,
     )
     .map_err(|failure| failure.error)?;
+    #[cfg(test)]
+    if FAIL_AFTER_FIRST_DISTRIBUTION_INGRESS.with(|flag| flag.get()) {
+      return Err(DispatchError::Other(
+        "Forced failure after first distribution ingress",
+      ));
+    }
     RuntimeAddressEventIngress::on_internal_inbound(
       minted_account,
       minted_asset,
