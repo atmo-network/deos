@@ -496,6 +496,31 @@ impl<T: Config> Pallet<T> {
       }
     }
 
+    let payload_witnesses = PayloadAdmissionWitnesses::<T>::iter(); // deos-bypass: bounded-iter — try-runtime-only full reconciliation
+    for (_payload_hash, (domain, payload_kind), witness) in payload_witnesses {
+      if witness.domain != domain || witness.payload_kind != payload_kind {
+        return Err(TryRuntimeError::Other(
+          "payload admission witness does not match its semantic storage key",
+        ));
+      }
+      let (execution_authority, compatibility) =
+        T::ProposalPayloadPreimageProvider::current_compatibility(domain, payload_kind).map_err(
+          |_| TryRuntimeError::Other("payload admission witness contract is incompatible"),
+        )?;
+      let payload_length_ceiling =
+        T::ProposalPayloadPreimageProvider::payload_length_ceiling(domain, payload_kind)
+          .map_err(|_| TryRuntimeError::Other("payload admission witness bound is incompatible"))?;
+      if witness.execution_authority != execution_authority
+        || witness.compatibility != compatibility
+        || witness.payload_len > payload_length_ceiling
+        || witness.deposit != T::PayloadAdmissionWitnessDeposit::get()
+      {
+        return Err(TryRuntimeError::Other(
+          "payload admission witness fields violate the current runtime contract",
+        ));
+      }
+    }
+
     let phase = CurrentEpochServicePhase::<T>::get();
     if phase != EpochServicePhase::Maturing {
       let last_processed = Self::epoch_to_u32(LastProcessedEpoch::<T>::get())

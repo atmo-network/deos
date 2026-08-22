@@ -54,9 +54,9 @@ A direction is never inferred from its reverse. The feed records pre-execution r
 
 ## Reactive Actors Boundary
 
-A changed revision invokes a subscriber-independent O(1) Actors ingress hook. The hook marks only the latest dirty revision. Deferred fanout later traverses exact occupied subscriber pages and converges on the existing Actors pending latch, queue, wakeup, and scheduler.
+A changed revision invokes one atomic Actors transition-ingress hook carrying its exact previous and current scalar values. Broad `ObservationChange` remains latest-state reconsideration: it coalesces dirty state and later traverses exact occupied subscriber pages. Sparse `ObservationCrossing` instead retains revision-ordered transition obligations and visits only occupied thresholds crossed by that transition. If Actors cannot retain the required obligation, Oracle publication rolls back with it.
 
-Observation triggers request latest-state reconsideration. Predicates own thresholds and evaluate freshness when an actor attempt runs. DEOS Oracle does not synchronously execute subscribers or promise one actor run per intermediate revision.
+Both paths converge on the existing Actors pending latch, queue, wakeup, and scheduler; DEOS Oracle never executes subscribers synchronously. Predicates still own attempt-time conditions, while Crossing owns declarative fire/rearm hysteresis and cannot fire twice before a qualifying rearm.
 
 ## Read-Model Boundary
 

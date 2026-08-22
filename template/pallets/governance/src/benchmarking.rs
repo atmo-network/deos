@@ -352,11 +352,22 @@ mod benches {
   #[benchmark]
   fn submit_signed_proposal() {
     let proposer: T::AccountId = whitelisted_caller();
-    let (domain, payload_hash) = T::BenchmarkHelper::prepare_primary_eligible_submitter(&proposer)
-      .expect("benchmark helper must prepare a primary-eligible submitter and signed preimage");
+    let (domain, payload_hash, payload) =
+      T::BenchmarkHelper::prepare_primary_eligible_submitter(&proposer)
+        .expect("benchmark helper must prepare a primary-eligible submitter and signed preimage");
+    let payload = ProposalPayloadBytesOf::<T>::try_from(payload)
+      .expect("benchmark payload must fit the Governance call bound");
     let item_id = benchmark_item_id::<T>(1);
     let occupancy = T::MaxActiveProposalsPerDomain::get().saturating_sub(1);
     seed_active_proposals::<T>(domain, occupancy);
+    Pallet::<T>::prepare_payload_admission_witness(
+      RawOrigin::Signed(proposer.clone()).into(),
+      domain,
+      ProposalPayloadKind::L1RootAction,
+      payload_hash,
+      payload,
+    )
+    .expect("benchmark payload witness preparation must succeed");
     #[extrinsic_call]
     submit_signed_proposal(
       RawOrigin::Signed(proposer.clone()),
@@ -371,6 +382,28 @@ mod benches {
       ProposalAuthorsByItem::<T>::get(domain, item_id),
       Some(proposer)
     );
+  }
+
+  #[benchmark]
+  fn prepare_payload_admission_witness() {
+    let proposer: T::AccountId = whitelisted_caller();
+    let (domain, payload_kind, payload_hash, payload) =
+      T::BenchmarkHelper::prepare_maximum_payload_witness(&proposer)
+        .expect("benchmark helper must prepare the maximum valid signed payload preimage");
+    let payload = ProposalPayloadBytesOf::<T>::try_from(payload)
+      .expect("benchmark payload must fit the Governance call bound");
+    #[extrinsic_call]
+    prepare_payload_admission_witness(
+      RawOrigin::Signed(proposer),
+      domain,
+      payload_kind,
+      payload_hash,
+      payload,
+    );
+    assert!(PayloadAdmissionWitnesses::<T>::contains_key(
+      payload_hash,
+      (domain, payload_kind),
+    ));
   }
 
   #[benchmark]

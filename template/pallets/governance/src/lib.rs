@@ -2,6 +2,8 @@
 
 extern crate alloc;
 
+#[cfg(feature = "runtime-benchmarks")]
+use alloc::vec::Vec;
 use codec::{Decode, Encode};
 use frame::prelude::{DecodeWithMemTracking, MaxEncodedLen, TypeInfo};
 use frame::traits::StorageVersion;
@@ -227,6 +229,23 @@ pub trait ProposalPayloadPreimageNoteCostProvider<Balance> {
   }
 }
 
+#[derive(
+  Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct ProposalPayloadCompatibility {
+  pub schema_version: u16,
+  pub runtime_spec_version: Option<u32>,
+}
+
+#[derive(
+  Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct ValidatedProposalPayload {
+  pub payload_len: u32,
+  pub execution_authority: ProposalExecutionAuthority,
+  pub compatibility: ProposalPayloadCompatibility,
+}
+
 impl<AccountId, DomainId, ItemId, Epoch>
   ProposalVoteWeightProvider<AccountId, DomainId, ItemId, Epoch> for ()
 {
@@ -279,7 +298,11 @@ impl<AccountId, DomainId> ProposalSubmissionEligibilityProvider<AccountId, Domai
 pub trait BenchmarkHelper<AccountId, DomainId, Hash, LockId, Balance> {
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError>;
+  ) -> Result<(DomainId, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>;
+
+  fn prepare_maximum_payload_witness(
+    account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>;
 
   fn prepare_protection_voter(
     account: &AccountId,
@@ -296,7 +319,16 @@ impl<AccountId, DomainId, Hash, LockId, Balance>
 {
   fn prepare_primary_eligible_submitter(
     _account: &AccountId,
-  ) -> Result<(DomainId, Hash), polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(DomainId, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+
+  fn prepare_maximum_payload_witness(
+    _account: &AccountId,
+  ) -> Result<(DomainId, ProposalPayloadKind, Hash, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError>
+  {
     Err(polkadot_sdk::sp_runtime::DispatchError::Other(
       "GovernanceBenchmarkHelperNotConfigured",
     ))
@@ -339,16 +371,30 @@ pub trait ProposalPayloadPreimageProvider<Hash, DomainId> {
   fn preimage_len(_hash: &Hash) -> Option<u32> {
     None
   }
-  fn validate_for_submission(
+  fn validate_for_witness(
     _domain: DomainId,
     _payload_kind: ProposalPayloadKind,
-    hash: &Hash,
-  ) -> Result<(), ProposalPreimageAdmissionError> {
-    if Self::have_preimage(hash) {
-      Ok(())
-    } else {
-      Err(ProposalPreimageAdmissionError::Missing)
-    }
+    _hash: &Hash,
+    _payload: &[u8],
+  ) -> Result<ValidatedProposalPayload, ProposalPreimageAdmissionError> {
+    Err(ProposalPreimageAdmissionError::Invalid)
+  }
+
+  fn current_compatibility(
+    _domain: DomainId,
+    _payload_kind: ProposalPayloadKind,
+  ) -> Result<
+    (ProposalExecutionAuthority, ProposalPayloadCompatibility),
+    ProposalPreimageAdmissionError,
+  > {
+    Err(ProposalPreimageAdmissionError::Incompatible)
+  }
+
+  fn payload_length_ceiling(
+    _domain: DomainId,
+    _payload_kind: ProposalPayloadKind,
+  ) -> Result<u32, ProposalPreimageAdmissionError> {
+    Err(ProposalPreimageAdmissionError::Incompatible)
   }
 }
 
@@ -501,6 +547,7 @@ pub trait WeightInfo {
   fn record_winning_vote_batch(accounts: u32) -> Weight;
   fn submit_proposal() -> Weight;
   fn submit_signed_proposal() -> Weight;
+  fn prepare_payload_admission_witness() -> Weight;
   fn cast_vote() -> Weight;
   fn unlock_vote_power() -> Weight;
   fn resolve_proposal(accounts: u32) -> Weight;
@@ -529,6 +576,10 @@ impl WeightInfo for () {
   }
 
   fn submit_signed_proposal() -> Weight {
+    Weight::zero()
+  }
+
+  fn prepare_payload_admission_witness() -> Weight {
     Weight::zero()
   }
 
@@ -594,19 +645,20 @@ mod proposal_execution;
 mod proposal_resolution;
 mod reward_memory;
 
-const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
+const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
 
 #[frame::pallet]
 pub mod pallet {
   use crate::{
     EpochProvider as _, EpochServicePhase, GovernanceDomainPolicyProvider as _,
-    ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
-    ProposalRuntimeUpgradeAuthorizationProvider as _, VotePowerCustody as _, WeightInfo as _,
+    ProposalPayloadCompatibility, ProposalPayloadPreimageNoteCostProvider as _,
+    ProposalPayloadPreimageProvider as _, ProposalRuntimeUpgradeAuthorizationProvider as _,
+    VotePowerCustody as _, WeightInfo as _,
   };
   use codec::{Decode, Encode};
   use frame::prelude::*;
   use polkadot_sdk::frame_support::{
-    traits::{Currency, ExistenceRequirement},
+    traits::{Currency, ExistenceRequirement, ReservableCurrency},
     transactional,
   };
   use polkadot_sdk::sp_runtime::{
@@ -616,13 +668,16 @@ pub mod pallet {
 
   pub type BalanceOf<T> =
     <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+  pub type ProposalPayloadBytesOf<T> = BoundedVec<u8, <T as Config>::MaxProposalPayloadBytes>;
 
   #[pallet::config]
   pub trait Config: frame_system::Config<RuntimeEvent: From<Event<Self>>> {
     type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
-    type Currency: Currency<Self::AccountId>;
+    type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
     #[pallet::constant]
     type ProposalOpeningFee: Get<BalanceOf<Self>>;
+    #[pallet::constant]
+    type PayloadAdmissionWitnessDeposit: Get<BalanceOf<Self>>;
     type ProposalFeeRecipient: Get<Self::AccountId>;
     type DomainId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
     type VotePowerLockId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
@@ -663,6 +718,9 @@ pub mod pallet {
     type MaxWinningVoteResolutionItemsPerEpoch: Get<u32>;
     #[pallet::constant]
     type MaxWinningVoteAccountsPerCall: Get<u32>;
+    /// Maximum bytes accepted by the bounded payload-witness preparation call.
+    #[pallet::constant]
+    type MaxProposalPayloadBytes: Get<u32>;
     #[pallet::constant]
     type MaxActiveProposalsPerDomain: Get<u32>;
     /// Capacity withheld from general proposals for protocol-domain strategic ingress.
@@ -1141,6 +1199,19 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
+  pub struct ProposalPayloadAdmissionWitness<DomainId, AccountId, Balance> {
+    pub domain: DomainId,
+    pub payload_kind: ProposalPayloadKind,
+    pub payload_len: u32,
+    pub execution_authority: ProposalExecutionAuthority,
+    pub compatibility: ProposalPayloadCompatibility,
+    pub depositor: AccountId,
+    pub deposit: Balance,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
   pub struct ActiveProposal<Epoch> {
     pub submitted_epoch: Epoch,
   }
@@ -1244,6 +1315,20 @@ pub mod pallet {
   #[pallet::pallet]
   #[pallet::storage_version(crate::STORAGE_VERSION)]
   pub struct Pallet<T>(_);
+
+  #[pallet::genesis_config]
+  #[derive(frame::prelude::DefaultNoBound)]
+  pub struct GenesisConfig<T: Config> {
+    #[serde(skip)]
+    pub _marker: core::marker::PhantomData<T>,
+  }
+
+  #[pallet::genesis_build]
+  impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+    fn build(&self) {
+      crate::STORAGE_VERSION.put::<Pallet<T>>();
+    }
+  }
 
   #[pallet::storage]
   #[pallet::getter(fn winning_vote_window)]
@@ -1493,9 +1578,29 @@ pub mod pallet {
   #[pallet::getter(fn epoch_service_phase)]
   pub type CurrentEpochServicePhase<T: Config> = StorageValue<_, EpochServicePhase, ValueQuery>;
 
+  #[pallet::storage]
+  #[pallet::getter(fn payload_admission_witness)]
+  pub type PayloadAdmissionWitnesses<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::Hash,
+    Blake2_128Concat,
+    (T::DomainId, ProposalPayloadKind),
+    ProposalPayloadAdmissionWitness<T::DomainId, T::AccountId, BalanceOf<T>>,
+    OptionQuery,
+  >;
+
   #[pallet::event]
   #[pallet::generate_deposit(pub(super) fn deposit_event)]
   pub enum Event<T: Config> {
+    ProposalPayloadAdmissionWitnessPrepared {
+      payload_hash: T::Hash,
+      domain: T::DomainId,
+      payload_kind: ProposalPayloadKind,
+      payload_len: u32,
+      execution_authority: ProposalExecutionAuthority,
+      compatibility: ProposalPayloadCompatibility,
+    },
     ProposalOpeningFeeCollected {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
@@ -1682,6 +1787,8 @@ pub mod pallet {
     ProposalPreimageOversized,
     ProposalPreimageInvalid,
     ProposalPreimageIncompatible,
+    ProposalPreimageWitnessMissing,
+    ProposalPreimageWitnessStale,
     InsufficientProposalOpeningFeeBalance,
     ProposalVoteSetFull,
     ProposalVoteTallyOverflow,
@@ -1726,6 +1833,10 @@ pub mod pallet {
       assert!(
         T::WinningVoteLookbackEpochs::get() > 0,
         "WinningVoteLookbackEpochs must be nonzero"
+      );
+      assert!(
+        !T::PayloadAdmissionWitnessDeposit::get().is_zero(),
+        "PayloadAdmissionWitnessDeposit must be nonzero"
       );
       assert!(
         T::MaxEpochCatchUpPerBlock::get() == crate::MAX_EPOCH_CATCH_UP_HARD_LIMIT,
@@ -1899,7 +2010,86 @@ pub mod pallet {
           payload_hash,
         },
         admission,
+      )?;
+      let witness = PayloadAdmissionWitnesses::<T>::take(payload_hash, (domain, payload_kind))
+        .ok_or(Error::<T>::ProposalPreimageWitnessMissing)?;
+      let _ = T::Currency::unreserve(&witness.depositor, witness.deposit);
+      Ok(())
+    }
+
+    #[pallet::call_index(11)]
+    #[pallet::weight(T::WeightInfo::prepare_payload_admission_witness())]
+    #[transactional]
+    pub fn prepare_payload_admission_witness(
+      origin: OriginFor<T>,
+      domain: T::DomainId,
+      payload_kind: ProposalPayloadKind,
+      payload_hash: T::Hash,
+      payload: ProposalPayloadBytesOf<T>,
+    ) -> DispatchResult {
+      let preparer = ensure_signed(origin)?;
+      ensure!(
+        T::ProposalPayloadPreimageProvider::have_preimage(&payload_hash),
+        Error::<T>::ProposalPreimageMissing
+      );
+      let payload_len =
+        u32::try_from(payload.len()).map_err(|_| Error::<T>::ProposalPreimageOversized)?;
+      ensure!(
+        T::ProposalPayloadPreimageProvider::preimage_len(&payload_hash) == Some(payload_len),
+        Error::<T>::ProposalPreimageInvalid
+      );
+      let payload_length_ceiling =
+        T::ProposalPayloadPreimageProvider::payload_length_ceiling(domain, payload_kind)
+          .map_err(Self::proposal_preimage_admission_error)?;
+      ensure!(
+        payload_len <= payload_length_ceiling,
+        Error::<T>::ProposalPreimageOversized
+      );
+      let validated = T::ProposalPayloadPreimageProvider::validate_for_witness(
+        domain,
+        payload_kind,
+        &payload_hash,
+        payload.as_slice(),
       )
+      .map_err(Self::proposal_preimage_admission_error)?;
+      ensure!(
+        validated.payload_len == payload_len,
+        Error::<T>::ProposalPreimageInvalid
+      );
+      let existing = PayloadAdmissionWitnesses::<T>::get(payload_hash, (domain, payload_kind));
+      let deposit = T::PayloadAdmissionWitnessDeposit::get();
+      ensure!(!deposit.is_zero(), Error::<T>::ProposalPreimageInvalid);
+      if existing
+        .as_ref()
+        .is_none_or(|witness| witness.depositor != preparer)
+      {
+        T::Currency::reserve(&preparer, deposit)
+          .map_err(|_| Error::<T>::InsufficientProposalOpeningFeeBalance)?;
+      }
+      if let Some(previous) = existing {
+        if previous.depositor != preparer {
+          let _ = T::Currency::unreserve(&previous.depositor, previous.deposit);
+        }
+      }
+      let witness = ProposalPayloadAdmissionWitness {
+        domain,
+        payload_kind,
+        payload_len: validated.payload_len,
+        execution_authority: validated.execution_authority,
+        compatibility: validated.compatibility,
+        depositor: preparer,
+        deposit,
+      };
+      PayloadAdmissionWitnesses::<T>::insert(payload_hash, (domain, payload_kind), &witness);
+      Self::deposit_event(Event::ProposalPayloadAdmissionWitnessPrepared {
+        payload_hash,
+        domain,
+        payload_kind,
+        payload_len: witness.payload_len,
+        execution_authority: witness.execution_authority,
+        compatibility: witness.compatibility,
+      });
+      Ok(())
     }
 
     #[pallet::call_index(4)]

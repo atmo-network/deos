@@ -209,6 +209,9 @@ pub fn new_test_ext() -> TestExternalities {
   pallet_deos_actors::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
     .unwrap();
+  pallet_governance::GenesisConfig::<Runtime>::default()
+    .assimilate_storage(&mut t)
+    .unwrap();
   let mut ext = TestExternalities::new(t);
   ext.execute_with(|| {
     System::set_block_number(1);

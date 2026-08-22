@@ -6,21 +6,30 @@ use crate::configs::governance_config::{
   TacticalTreasuryInvoicePayload,
 };
 use crate::{
-  Actors, Assets, Balances, DeosRouter, Governance, Preimage, Runtime, RuntimeCall, RuntimeEvent,
-  RuntimeOrigin, Staking, System,
+  Actors, Address, Assets, Balances, DeosRouter, Executive, Governance, Preimage, Runtime,
+  RuntimeCall, RuntimeEvent, RuntimeOrigin, Signature, Staking, System, TxExtension,
+  UncheckedExtrinsic,
 };
-use codec::Encode;
+use codec::{Encode, MaxEncodedLen};
 use pallet_governance::ProposalPayloadExecutor;
 use polkadot_sdk::frame_support::traits::{
-  Hooks,
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::Preservation,
 };
 use polkadot_sdk::frame_support::{assert_noop, assert_ok};
+use polkadot_sdk::frame_support::{
+  dispatch::GetDispatchInfo,
+  traits::{Currency, GetStorageVersion, Hooks, StorageVersion},
+};
 use polkadot_sdk::frame_system;
-use polkadot_sdk::sp_core::traits::{ReadRuntimeVersion, ReadRuntimeVersionExt};
+use polkadot_sdk::sp_core::{
+  Pair, sr25519,
+  traits::{ReadRuntimeVersion, ReadRuntimeVersionExt},
+};
 use polkadot_sdk::sp_externalities::Externalities;
-use polkadot_sdk::sp_runtime::{MultiAddress, traits::Hash as _};
+use polkadot_sdk::sp_runtime::{
+  MultiAddress, generic, traits::Hash as _, transaction_validity::TransactionSource,
+};
 
 struct RejectRuntimeVersionRead;
 impl ReadRuntimeVersion for RejectRuntimeVersionRead {
@@ -35,6 +44,15 @@ impl ReadRuntimeVersion for RejectRuntimeVersionRead {
 
 const PROTOCOL_GOVERNANCE_DOMAIN: u32 = 0;
 const TACTICAL_GOVERNANCE_DOMAIN: u32 = primitives::ecosystem::protocol_tokens::BLDR_ASSET_ID;
+
+#[test]
+fn governance_0_7_22_storage_schema_is_a_fresh_genesis_baseline() {
+  new_test_ext().execute_with(|| {
+    let baseline = StorageVersion::new(4);
+    assert_eq!(Governance::in_code_storage_version(), baseline);
+    assert_eq!(Governance::on_chain_storage_version(), baseline);
+  });
+}
 
 fn approved_outcome(
   approved_epoch: u32,
@@ -91,6 +109,56 @@ fn note_treasury_preimage(signer: crate::AccountId) -> crate::Hash {
     payload
   ));
   hash
+}
+
+fn prepare_payload_witness(
+  signer: crate::AccountId,
+  domain: u32,
+  payload_kind: pallet_governance::ProposalPayloadKind,
+  payload_hash: crate::Hash,
+) {
+  use polkadot_sdk::frame_support::traits::PreimageProvider;
+  let payload = <Preimage as PreimageProvider<crate::Hash>>::get_preimage(&payload_hash)
+    .expect("witness preparation requires the exact noted payload bytes");
+  let payload = pallet_governance::ProposalPayloadBytesOf::<Runtime>::try_from(payload)
+    .expect("runtime test payload must fit the Governance call bound");
+  assert_ok!(Governance::prepare_payload_admission_witness(
+    RuntimeOrigin::signed(signer),
+    domain,
+    payload_kind,
+    payload_hash,
+    payload,
+  ));
+}
+
+fn signed_extrinsic(
+  signer: &sr25519::Pair,
+  nonce: crate::Nonce,
+  call: RuntimeCall,
+) -> UncheckedExtrinsic {
+  let tx_ext = TxExtension::new((
+    polkadot_sdk::frame_system::AuthorizeCall::<Runtime>::new(),
+    polkadot_sdk::frame_system::CheckNonZeroSender::<Runtime>::new(),
+    polkadot_sdk::frame_system::CheckSpecVersion::<Runtime>::new(),
+    polkadot_sdk::frame_system::CheckTxVersion::<Runtime>::new(),
+    polkadot_sdk::frame_system::CheckGenesis::<Runtime>::new(),
+    polkadot_sdk::frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
+    polkadot_sdk::frame_system::CheckNonce::<Runtime>::from(nonce),
+    polkadot_sdk::frame_system::CheckWeight::<Runtime>::new(),
+    crate::configs::address_event_ingress::AddressEventIngressExtension,
+    crate::configs::pool_index::PoolIndexExtension,
+    polkadot_sdk::pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(0),
+    polkadot_sdk::frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
+  ));
+  let payload =
+    generic::SignedPayload::new(call.clone(), tx_ext.clone()).expect("signed payload must encode");
+  let signature = payload.using_encoded(|encoded| signer.sign(encoded));
+  UncheckedExtrinsic::new_signed(
+    call,
+    Address::Id(crate::AccountId::from(signer.public())),
+    Signature::Sr25519(signature),
+    tx_ext,
+  )
 }
 
 fn service_pending_enactment(domain: u32, item_id: u32) {
@@ -294,6 +362,65 @@ fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
 }
 
 #[test]
+fn signed_witnessed_enactment_executes_only_the_bytes_committed_by_proposal_hash() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), 0, 500));
+
+    let committed_code_hash = crate::Hash::repeat_byte(41);
+    let competing_code_hash = crate::Hash::repeat_byte(42);
+    let committed_bytes = StrategicRuntimeUpgradePayload {
+      code_hash: committed_code_hash,
+    }
+    .encode();
+    let competing_bytes = StrategicRuntimeUpgradePayload {
+      code_hash: competing_code_hash,
+    }
+    .encode();
+    let committed_payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&committed_bytes);
+    let competing_payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&competing_bytes);
+    assert_ne!(committed_payload_hash, competing_payload_hash);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(BOB),
+      committed_bytes,
+    ));
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(BOB),
+      competing_bytes,
+    ));
+    prepare_payload_witness(
+      BOB,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      committed_payload_hash,
+    );
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      111,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      committed_payload_hash,
+    ));
+    assert_eq!(
+      Governance::proposal_metadata(PROTOCOL_GOVERNANCE_DOMAIN, 111)
+        .expect("signed proposal metadata must exist")
+        .payload_hash,
+      committed_payload_hash
+    );
+
+    resolve_root_action_proposal(111);
+
+    let authorized_upgrade = crate::System::authorized_upgrade()
+      .expect("the payload selected by the proposal hash must authorize an upgrade");
+    assert_eq!(authorized_upgrade.code_hash(), &committed_code_hash);
+    assert_ne!(authorized_upgrade.code_hash(), &competing_code_hash);
+  });
+}
+
+#[test]
 fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
   new_test_ext().execute_with(|| {
     let code_hash = crate::Hash::repeat_byte(29);
@@ -303,6 +430,12 @@ fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
       RuntimeOrigin::signed(ALICE),
       encoded_payload,
     ));
+    prepare_payload_witness(
+      ALICE,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    );
     let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
     assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
       veto_asset, &ALICE, 100,
@@ -393,6 +526,12 @@ fn signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserv
       RuntimeOrigin::signed(ALICE),
       encoded_payload,
     ));
+    prepare_payload_witness(
+      ALICE,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    );
     let bob_before = Balances::free_balance(BOB);
     let fee_sink_before = Balances::free_balance(actor_fee_sink_account());
     assert_ok!(Governance::submit_signed_proposal(
@@ -437,6 +576,12 @@ fn signed_l1_root_action_survives_saturated_general_capacity_and_releases_reserv
     ));
 
     System::set_block_number(System::block_number().saturating_add(1));
+    prepare_payload_witness(
+      ALICE,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    );
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(BOB),
       PROTOCOL_GOVERNANCE_DOMAIN,
@@ -1184,6 +1329,12 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
     let fee_sink = actor_fee_sink_account();
     let fee_sink_before = Balances::free_balance(&fee_sink);
     let payload_hash = note_advisory_preimage(BOB, b"protocol intent");
+    prepare_payload_witness(
+      BOB,
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::Intent,
+      payload_hash,
+    );
     let balance_before = Balances::free_balance(BOB);
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(BOB),
@@ -1199,7 +1350,9 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
     );
     assert_eq!(
       Balances::free_balance(BOB),
-      balance_before.saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+      balance_before
+        .saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+        .saturating_add(crate::configs::governance_config::PayloadAdmissionWitnessDeposit::get())
     );
     assert!(System::events().iter().any(|record| {
       record.event
@@ -1218,9 +1371,177 @@ fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer(
 }
 
 #[test]
+fn runtime_payload_witness_enforces_exact_advisory_bound_and_domain_contract() {
+  new_test_ext().execute_with(|| {
+    let maximum_payload = (
+      Some(crate::Hash::repeat_byte(1)),
+      vec![b'a'; 128],
+      Some(vec![b'b'; 96]),
+    )
+      .encode();
+    assert_eq!(maximum_payload.len(), 262);
+    let maximum_hash = <Runtime as frame_system::Config>::Hashing::hash(&maximum_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      maximum_payload.clone(),
+    ));
+    let maximum_payload =
+      pallet_governance::ProposalPayloadBytesOf::<Runtime>::try_from(maximum_payload)
+        .expect("maximum Governance payload must fit the call bound");
+    assert_ok!(Governance::prepare_payload_admission_witness(
+      RuntimeOrigin::signed(ALICE),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::Intent,
+      maximum_hash,
+      maximum_payload.clone(),
+    ));
+    assert_eq!(
+      Governance::payload_admission_witness(
+        maximum_hash,
+        (
+          PROTOCOL_GOVERNANCE_DOMAIN,
+          pallet_governance::ProposalPayloadKind::Intent,
+        ),
+      ),
+      Some(pallet_governance::ProposalPayloadAdmissionWitness {
+        domain: PROTOCOL_GOVERNANCE_DOMAIN,
+        payload_kind: pallet_governance::ProposalPayloadKind::Intent,
+        payload_len: 262,
+        execution_authority: pallet_governance::ProposalExecutionAuthority::NonExecutable,
+        compatibility: pallet_governance::ProposalPayloadCompatibility {
+          schema_version: 1,
+          runtime_spec_version: Some(crate::VERSION.spec_version),
+        },
+        depositor: ALICE,
+        deposit: crate::configs::governance_config::PayloadAdmissionWitnessDeposit::get(),
+      })
+    );
+
+    let mut different_payload = maximum_payload.clone().into_inner();
+    different_payload[35] = b'c';
+    let different_hash = <Runtime as frame_system::Config>::Hashing::hash(&different_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      different_payload,
+    ));
+    assert_noop!(
+      Governance::prepare_payload_admission_witness(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        pallet_governance::ProposalPayloadKind::Intent,
+        different_hash,
+        maximum_payload.clone(),
+      ),
+      pallet_governance::Error::<Runtime>::ProposalPreimageInvalid
+    );
+
+    let oversized_payload = vec![2u8; StrategicRuntimeUpgradePayload::max_encoded_len() + 1];
+    assert_eq!(oversized_payload.len(), 33);
+    let oversized_hash = <Runtime as frame_system::Config>::Hashing::hash(&oversized_payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      oversized_payload.clone(),
+    ));
+    let oversized_payload =
+      pallet_governance::ProposalPayloadBytesOf::<Runtime>::try_from(oversized_payload)
+        .expect("kind-specific oversized payload still fits the global call bound");
+    assert_noop!(
+      Governance::prepare_payload_admission_witness(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+        oversized_hash,
+        oversized_payload,
+      ),
+      pallet_governance::Error::<Runtime>::ProposalPreimageOversized
+    );
+    assert_noop!(
+      Governance::prepare_payload_admission_witness(
+        RuntimeOrigin::signed(ALICE),
+        17,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+        maximum_hash,
+        maximum_payload,
+      ),
+      pallet_governance::Error::<Runtime>::ProposalPreimageIncompatible
+    );
+  });
+}
+
+#[test]
+fn maximum_signed_governance_proposal_passes_real_check_weight_validation() {
+  new_test_ext().execute_with(|| {
+    let signer_pair = sr25519::Pair::from_seed(&[73u8; 32]);
+    let signer = crate::AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &signer,
+      1_000_000_000_000_000_000,
+    );
+    assert_ok!(create_test_asset(0, &signer));
+    assert_ok!(mint_tokens(0, &signer, &signer, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake(
+      RuntimeOrigin::signed(signer.clone()),
+      0,
+      500,
+    ));
+    let payload = StrategicRuntimeUpgradePayload {
+      code_hash: crate::Hash::repeat_byte(74),
+    }
+    .encode();
+    assert_eq!(
+      payload.len(),
+      StrategicRuntimeUpgradePayload::max_encoded_len()
+    );
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&payload);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(signer.clone()),
+      payload,
+    ));
+    prepare_payload_witness(
+      signer.clone(),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    );
+    let call = RuntimeCall::Governance(pallet_governance::Call::submit_signed_proposal {
+      domain: PROTOCOL_GOVERNANCE_DOMAIN,
+      item_id: 113,
+      cadence_mode: pallet_governance::ProposalCadenceMode::Ordinary,
+      payload_kind: pallet_governance::ProposalPayloadKind::L1RootAction,
+      payload_hash,
+    });
+    let dispatch_info = call.get_dispatch_info();
+    let block_weights = crate::configs::RuntimeBlockWeights::get();
+    let class_limits = block_weights.get(dispatch_info.class);
+    let max_extrinsic = class_limits
+      .max_extrinsic
+      .expect("signed Governance class must define max_extrinsic");
+    assert!(dispatch_info.call_weight.all_lte(max_extrinsic));
+    let extrinsic = signed_extrinsic(&signer_pair, 0, call);
+    assert_ok!(Executive::validate_transaction(
+      TransactionSource::External,
+      extrinsic.clone(),
+      System::block_hash(0),
+    ));
+    assert_ok!(Executive::apply_extrinsic(extrinsic));
+    assert_eq!(
+      Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 113),
+      Some(signer),
+    );
+  });
+}
+
+#[test]
 fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
     let payload_hash = note_advisory_preimage(ALICE, b"tactical signal");
+    prepare_payload_witness(
+      ALICE,
+      TACTICAL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L2SignalToL1,
+      payload_hash,
+    );
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(ALICE),
@@ -1236,7 +1557,9 @@ fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer(
     );
     assert_eq!(
       Balances::free_balance(ALICE),
-      balance_before.saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+      balance_before
+        .saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+        .saturating_add(crate::configs::governance_config::PayloadAdmissionWitnessDeposit::get())
     );
   });
 }
@@ -1245,6 +1568,12 @@ fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer(
 fn signed_tactical_treasury_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
     let payload_hash = note_treasury_preimage(ALICE);
+    prepare_payload_witness(
+      ALICE,
+      TACTICAL_GOVERNANCE_DOMAIN,
+      pallet_governance::ProposalPayloadKind::L2TreasurySpend,
+      payload_hash,
+    );
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(
       RuntimeOrigin::signed(ALICE),
@@ -1260,7 +1589,9 @@ fn signed_tactical_treasury_submission_collects_opening_fee_and_records_signer()
     );
     assert_eq!(
       Balances::free_balance(ALICE),
-      balance_before.saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+      balance_before
+        .saturating_sub(10 * crate::EXISTENTIAL_DEPOSIT)
+        .saturating_add(crate::configs::governance_config::PayloadAdmissionWitnessDeposit::get())
     );
   });
 }

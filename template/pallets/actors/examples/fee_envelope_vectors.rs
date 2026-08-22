@@ -269,13 +269,16 @@ fn main() {
   let args = env::args().skip(1).collect::<Vec<_>>();
   match args.as_slice() {
     [] => print!("{rendered}"),
+    [path] => {
+      fs::write(Path::new(path), rendered).expect("fee-envelope vector artifact is writable");
+    }
     [flag, path] if flag == "--check" => {
       let actual = fs::read_to_string(Path::new(path)).expect("vector artifact is readable");
       assert_eq!(actual, rendered, "fee-envelope vector artifact is stale");
     }
     _ => {
       panic!(
-        "usage: cargo run -p pallet-deos-actors --example fee_envelope_vectors -- [--check PATH]"
+        "usage: cargo run -p pallet-deos-actors --example fee_envelope_vectors -- [PATH | --check PATH]"
       )
     }
   }

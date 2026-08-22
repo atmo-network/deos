@@ -203,7 +203,12 @@ Public read helpers now expose these governance-observability layers, and the sa
 - Additive bounded preimage-note cost scaffold over one byte length
 - Reports the current runtime's generic preimage note deposit for that payload length so browser-side signed advisory composition can quote the optional `Preimage.note_preimage` path honestly without hardcoding runtime pricing constants
 
-14. `proposal_primary_track_family(domain, item_id)`
+14. `payload_admission_witness(payload_hash, (domain, payload_kind))`
+
+- Reports the compact typed evidence produced from the exact noted bytes by the bounded host validator
+- Binds encoded length, semantic domain/kind, derived execution authority, schema version, and runtime-spec compatibility without exposing or rereading the payload bytes
+
+15. `proposal_primary_track_family(domain, item_id)`
 
 - Additive primary-track contract scaffold over one proposal item
 - Reports whether the current runtime treats that proposal's primary lane as `Binary` or `Invoice`
@@ -241,6 +246,7 @@ Active proposer identity is also chain-native today through the bounded `Proposa
 - `ActiveProposals[(domain, item_id)]`: live proposal registry storing `submitted_epoch`
 - `ProposalAuthorsByItem[(domain, item_id)]`: explicit logical proposer / sponsor per active proposal
 - `ProposalMetadataByItem[(domain, item_id)]`: `CadenceMode`, payload kind, and payload hash scaffold
+- `PayloadAdmissionWitnesses[(payload_hash, (domain, payload_kind))]`: compact typed evidence used by signed admission; physical identity permits one hash to be validated independently for distinct semantic domain/kind pairs without overwriting another pair
 - `ProposalVotesByItem[(domain, item_id)]`: bounded primary/protection ballot sets with frozen weight/raw power
 - `GovernanceLocks[account]`: aggregate `lock_until` extended to the maximum touched enactment horizon
 - `VotePowerCustodyByAccount[(account, lock_id)]`: one aggregate transferable source position containing its locked amount and maximum ballot horizon
@@ -261,7 +267,7 @@ Epoch values are admitted through exact `Epoch <-> u32` round trips; voting-wind
 `MaxEpochCatchUpPerBlock = 1` advances through empty epochs chronologically, while `CurrentEpochServicePhase` serializes maturity, pending enactment, finalized-outcome expiry, and reward expiry for the first owned epoch. Each nonempty phase processes only its configured per-block item cap, retains the ordered suffix under the same epoch key, and prevents `LastProcessedEpoch` from advancing until all four families drain. Generated production Weight separately measures the phase/base path and each bounded item branch; runtime evidence proves every admitted branch fits the block in RefTime and ProofSize.
 
 `Migration state`:
-The current pre-fork storage baseline is `3` in this repository line. The active ballot schema stores vote-time epoch plus frozen computed weight and raw protection power directly in `ProposalVotesByItem`, and `GovernanceLocks` stores account-level lock horizons; downstream live forks must own explicit migrations if they carry an older deployed governance schema.
+The current fresh-genesis storage baseline is `4`. In addition to the active ballot and account-lock topology, `PayloadAdmissionWitnesses` stores compact typed admission evidence under payload hash plus domain/kind identity; this repository ships no bridge from baseline `3`, and a downstream live lineage must own an explicit bounded migration before adopting this layout.
 
 ## Core Execution Flows
 
@@ -321,9 +327,10 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 
 - Signed submit path for runtime-approved public combinations only
 - Reuses the single admission classifier also consumed by bounded authority/fee views
-- Applies rejection precedence as authority, required eligibility, preimage availability/size/typed compatibility, duplicate, domain capacity, author-index integrity, author capacity, and exact maturity-bucket capacity before fee transfer
+- Applies rejection precedence as authority, required eligibility, compact preimage status/witness compatibility, duplicate, domain capacity, author-index integrity, author capacity, and exact maturity-bucket capacity before fee transfer
 - Admission computes and retains the maturity epoch; insertion uses that admitted value and transactionally writes the same prechecked bucket after fee collection
-- Runtime validation decodes the exact bounded `L1RootAction`, Router parameter, tactical invoice, or advisory payload shape, rejects trailing bytes and the wrong domain/kind combination, and caps signed preimages at 256 bytes
+- Reads only compact preimage availability/length status plus `PayloadAdmissionWitnesses`; the generic `PreimageFor` value is absent from this call's generated storage proof
+- Requires exact witness agreement on hash-keyed semantic identity, byte length, execution authority, schema, and runtime-spec compatibility
 - Direct host-executor invocation with an advisory kind returns typed `UnsupportedCall`; missing tactical treasury configuration returns `DispatchFailed`; bounded winner projection returns `ProposalVoteSetFull` on disagreement rather than relying on panic-only assumptions
 - `PrimaryEligibleSigned` additionally calls the host eligibility provider before any fee or proposal mutation
 - The DEOS provider admits protocol / Native `L1RootAction` and `Intent` only when the signer has nonzero direct primary-track staking power; `$VETO` protection balance never enters that predicate
@@ -332,7 +339,15 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 - Uses transactional semantics so an unexpected late insertion failure rolls back the fee, while every declared admission failure including full maturity capacity happens before fee transfer
 - Reuses the same bounded active-proposal insertion path and GovXP authorship accounting once admitted
 - Emits `ProposalOpeningFeeCollected` when the opening fee is non-zero, then `ProposalSubmitted`
-- Charges a conservative measured `cast_vote` envelope plus four host reads for eligibility until a narrower runtime benchmark replaces that safe upper bound
+
+`prepare_payload_admission_witness(domain, payload_kind, payload_hash, payload)`:
+
+- Signed preparation boundary accepting at most 262 payload bytes, requiring their runtime hash and length to match compact current preimage status, and asking the host runtime for one complete typed result; callers never supply witness fields
+- Enforces kind-specific encoded ceilings: exact fixed typed bounds for Root upgrade and tactical invoice payloads, the six-byte Router-fee call encoding, and 262 bytes for the maximum advisory tuple
+- Rejects missing, oversized, malformed, trailing-byte, domain/kind-incompatible, authority-incompatible, or schema-incompatible bytes before writing
+- Reserves one runtime-configured nonzero native storage deposit from the preparer, stores the depositor and deposit with the derived compact witness under `(payload_hash, (domain, payload_kind))`, and emits `ProposalPayloadAdmissionWitnessPrepared`; a failed refresh preserves the prior witness, reserve, and events exactly
+- Successful signed submission consumes the exact witness and releases its deposit in the proposal transaction; abandoned witnesses retain their reserve even if the generic preimage is unnoted, bounding persistent state by funded liability
+- Reads no generic preimage value, so both witness preparation and later signed submission remain Normal-class dispatchable without increasing block limits; enactment separately reads the exact stored bytes selected by proposal hash
 
 `cast_vote(domain, item_id, vote)`:
 
@@ -495,12 +510,14 @@ The related state distinction is also important:
 | `8` | `requeue_proposal_for_auto_finalization` | deferred-item recovery |
 | `9` | `force_resolve_proposal_from_votes` | policy-aware early finalization |
 | `10` | `unlock_vote_power` | signed release of one matured transferable source position |
+| `11` | `prepare_payload_admission_witness` | bounded typed preimage validation and compact witness preparation |
 
 ## Events and Errors
 
 ### Events that form the live operational surface
 
 - `ProposalOpeningFeeCollected`: signed public submission paid the opening fee into Fee Sink
+- `ProposalPayloadAdmissionWitnessPrepared`: exact hash/domain/kind witness was derived from currently available typed bytes
 - `ProposalSubmitted`: active proposal creation, proposer identity, payload metadata, active-count pressure
 - `ProposalVoteCast`: bounded ballot ingress with vote epoch, replacement state, and stored track counts
 - `GovernanceLockExtended`: account-level lock horizon extension after an accepted ballot
@@ -528,6 +545,7 @@ The related state distinction is also important:
 - `ProposalWinnerSetEmpty`: manual resolution cannot inject an empty winner set
 - `ActiveProposalCapReached`: domain-local active proposal budget exhausted
 - `ProposalMaturityBucketFull`: auto-finalization scheduling cap hit for one epoch
+- `ProposalPreimageWitnessMissing` / `ProposalPreimageWitnessStale`: signed admission lacks current compact evidence or its length/authority/compatibility no longer matches
 - `DuplicateWinningVoteItem` / `DuplicateWinningVoteResolutionItem`: live memory uniqueness violation
 - `RewardWindowInvariant`: persisted reward-memory width disagrees with the configured lookback
 - `FinalizedProposalOutcomeExpiryBucketFull`: finalized-outcome retention expiry cap hit
@@ -750,7 +768,7 @@ The current line has one explicit bounded off-browser operator flow:
 
 1. `/scripts/authorized-upgrade-local.sh check` pins one finalized block and compares its runtime code with the selected local candidate
 2. the same read-only check requires `PrimaryEligibleSigned` for protocol `L1RootAction` and reports current `$VETO` issuance; zero issuance fails strategic lifecycle readiness closed rather than implying authorization can complete
-3. `prepare-authorization` emits candidate-bound stake, exact preimage, and signed proposal call data with finalized item/balance/fee checks; it never signs and withholds the protection `Pass` call while lifecycle readiness fails
+3. `prepare-authorization` emits candidate-bound stake, exact preimage, compact witness preparation, and signed proposal call data with finalized item/balance/fee checks; it never signs and withholds the protection `Pass` call while lifecycle readiness fails
 4. separately approved governance actions may create the proposal and, after legitimate protection power exists, authorize one `code_hash` through `L1RootAction -> System.authorize_upgrade { code_hash }`
 5. operators read `authorized_runtime_upgrade()` and the helper classifies the selected code as `awaiting-governance-authorization`, `authorized-hash-mismatch`, or `ready-to-relay-code`
 6. at `ready-to-relay-code`, `/scripts/authorized-upgrade-local.sh apply` provides the dedicated relay submit surface and stays plan-only unless `--submit` is passed explicitly
@@ -790,23 +808,26 @@ The runtime may read this projection at a native-security snapshot boundary. The
 The implementation is covered by:
 
 - Pallet tests in `template/pallets/governance/src/tests.rs`
-- Runtime integration tests in `template/runtime/src/tests/staking_integration_tests.rs`
+- Runtime integration tests in `template/runtime/src/tests/governance_integration_tests.rs`
 - FRAME v2 benchmarks in `template/pallets/governance/src/benchmarking.rs`
 - Runtime weight bridge in `template/runtime/src/weights/pallet_governance.rs`
-- Try-state reconciliation of reward-window width, rolling sums, epoch vote caps, resolution-window width, and per-domain finalized-projection cardinality
+- Try-state reconciliation of reward-window width, rolling sums, epoch vote caps, resolution-window width, per-domain finalized-projection cardinality, and payload-witness key/contract agreement
 
 The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` steps, and `20` repeats.
 
-`submit_signed_proposal` measures primary eligibility, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `630,049,000 / 4,197,809` plus 138 reads and seven writes. `cast_vote` measures the saturated immediate-veto terminal branch with 256 winning participants, production `$VETO` power reads, checked aggregate custody growth, and custody writes; it charges `1,249,760,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `67,817,000 / 6,208` plus five reads and five writes.
+`submit_signed_proposal` measures primary eligibility, compact status/witness admission, opening-fee transfer, and strategic creation with the domain index filled to `MaxActiveProposalsPerDomain - 1`; it charges `675,865,000 / 324,459` plus 138 reads and seven writes. `prepare_payload_admission_witness` measures the maximum valid 262-byte payload and charges `22,419,000 / 3,556` plus two compact-status reads and one witness write. `cast_vote` charges `1,266,312,000 / 656,094` plus 269 reads and 271 writes. `unlock_vote_power` charges `68,096,000 / 6,208` plus five reads and five writes.
 
 The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
 
-Error narrowness is compile-enforced at the preimage adapter boundary: `ProposalPreimageAdmissionError` has one exhaustive conversion into the four dispatch errors, and `preimage_admission_error_core_maps_exhaustively_to_dispatch` executes every mapping. Dispatch calls and bounded views add no second preimage-error vocabulary.
+Error narrowness is compile-enforced at the preimage adapter boundary: `ProposalPreimageAdmissionError` has one exhaustive conversion into the four validation dispatch errors, and `preimage_admission_error_core_maps_exhaustively_to_dispatch` executes every mapping. Compact witness absence and staleness remain distinct pallet-owned admission errors.
 
 Coverage includes:
 
 - Duplicate item protection
-- Transactional rollback of late batch failures
+- Pre-fee rejection without mutation for witness/status, author/domain-capacity, and maturity-bucket failures
+- Transactional opening-fee, event, proposal, index, maturity, and authorship rollback on a late post-fee counter failure
+- State-preserving witness refresh failure and exact signed enactment from the preimage selected by committed proposal hash despite a competing valid payload
+- Transactional rollback of late reward-memory batch failures
 - Weighted vote-derived outcomes
 - Turnout and approval-threshold rejection
 - Auto-finalization and retry deferral

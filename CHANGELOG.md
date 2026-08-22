@@ -4,6 +4,17 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.22: Reactive Topology and Relevant-Work Scaling
+
+- `Validation / Remote Gate`: Reduced remote CI to one stale-cancelled pull-request `validation-gate` running the deterministic heavy project profile; removed duplicate `main` and version-tag jobs while retaining pinned toolchains, lockfiles, local full release acceptance, and the project-versus-Skill dependency boundary.
+- `Release / Fresh Genesis`: Made the `0.7.22` fresh-genesis-only boundary explicit for Actors, Governance, the composed runtime, and local release operation, with release-line auditing that rejects missing boundary statements and no claim of `0.7.21` upgrade support.
+- `Governance / Dispatchability`: Split typed payload validation into a deposit-backed compact hash/domain/kind admission witness consumed on successful submission and a separately measured enactment read, added per-kind byte ceilings and stale-witness rejection, generated production weights, and proved the maximum signed Root action through the real transaction-extension and `CheckWeight` path without changing block limits or dispatch class.
+- `Governance / Atomicity`: Proved pre-fee rejection for witness/status, author/domain-capacity, and maturity pressure; exact rollback after post-fee authorship failure; state-preserving witness refresh failure; and signed enactment of only the exact preimage bytes selected by committed proposal hash even when a competing valid payload exists.
+- `Runtime / Dispatchability Matrix`: Added a 60-family matrix for every public DEOS custom-pallet call at maximum bounded input against Normal `max_extrinsic` and `max_total`; it exposed and closed witness preparation's 4.20 MB proof defect by validating hash-bound 262-byte call data against compact preimage status, with regenerated preparation Weight of `22,419,000 / 3,556`.
+- `Release / Canonical Ref Audit`: Extended the local release-line audit to reject a plain version ref beside any canonical `vX.Y.Z` tag and to bind the prepared tag, local `main`, and an explicitly supplied locally validated commit/tree without hidden CI or GitHub state.
+- `Actors / ObservationCrossing`: Added exact Rising/Falling hysteresis semantics, no-retrofire Active initialization, lossless revision-ordered Oracle transition queues, sparse exact-threshold radix pages with generation-checked ownership and cursor-safe compaction, fair bounded continuation, exact terminal source cleanup, fresh-genesis reconciliation, atomic publication rollback, maximum-herd evidence, and production-generated multidimensional worker weights.
+- `Actors / Activation Topology`: Unified all five detectors through one activation sink and FIFO; added a host-owned ranked DEOS System activation DAG with pre-commit validation and descriptive projection; preserved paid, same-block-bounded User cycles with economic apoptosis; carried loaded canonical state through scheduler, control, ingress, simulation, and read classification; rebalanced worker reserve to admit one complete Crossing unit; and regenerated release evidence.
+
 ## 0.7.21: Runtime Truth Closure
 
 - `Actors / Canonical State`: Added one five-partition loader for absence, dormancy, active state, Continuation ownership, and corruption; routed execution, simulation, reads, controls, scheduler placement, wakeups, fanout, and try-state through it; removed partial probes and closed malformed-state admission with typed failure and production-measured Weight.

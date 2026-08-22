@@ -5,13 +5,15 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.21`
+- **Release line**: `0.7.22`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System Actor catalog standardization, UI product flows
 
 `pallet-deos-actors` is a bounded deterministic actor kernel. A downstream runtime can embed it without inheriting DEOS governance policy, TMCTOL bucket topology, native staking design, or the current System Actor catalog.
+
+The `0.7.22` package is fresh-genesis source only. It defines no migration from `0.7.21` activation or index storage and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
 
 Use this guide with the normative [DEOS Actors Specification](./specification.en.md) and shipped [DEOS Actors Architecture](./architecture.en.md). The specification defines portable semantics; this package document defines the host contract; the architecture document maps the reusable package implementation and source ownership.
 
@@ -39,12 +41,13 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 
 - `AssetOps`: Transfer, burn, mint, balance, minimum-balance, and exact `preflight_transfer` consequences over local `AccountId`, `AssetId`, and `Balance` types. Preflight covers both source withdrawal and recipient depositability, preserves explicit retry classification, and must agree with the following transfer under unchanged state. Generic Actors does not promise that a provider-backed or reserved-only zero-free native recipient can accept sub-minimum ingress.
 - `ObservationProvider`: Current typed scalar state classified as Unavailable, Uninitialized, Fresh, or Stale over the embedding's `ObservationFeedId`; the same type identifies the scalar `ObservationChange { feed }` trigger. The one-feed subscription index, transactional latest-revision dirty ingress, and independently metered deferred fanout ship with the package. Fanout sets the existing pending latch and invokes the existing scheduler only; the boundary has no concrete Oracle, producer, history, or off-chain dependency.
-- `ObservationChangeIngress`: Typed certified-publisher boundary accepting one externally owned monotonic feed revision. The host publisher calls this trait rather than the pallet's inherent implementation directly.
+- `ObservationTransitionIngress`: Typed certified-publisher boundary accepting one externally owned monotonic feed revision with exact previous/current scalar values. The host publisher calls this trait rather than the pallet's broad-fanout helper directly; a rejection rolls back the publisher transaction.
 - `DexOps`: Caller-aware exact-in quotes and capacity-bounded exact-out swaps with deterministic fees, slippage, rounding, and failure behavior. Swap methods receive only `ExecutionContext { actor, actor_type }`; the package derives immutable `ActorType` from stored actor state so an embedding never reconstructs authority from account catalogs or sovereign-address heuristics.
 - `LiquidityOps`: Addition, removal, and pair-scoped donation; donation permits reserve strengthening without LP receipt minting when supported by runtime policy.
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
 - `SovereignAccountDeriver`: Deterministic infallible mapping from tagged User/System custody inputs into the host `AccountId`; it must preserve domain separation, reject no admitted identity through panic, and remain stable for custody reattachment.
+- `SystemActorContractValidator`: Read-only candidate validation called before an Active System Contract is installed or replaced. Bind `()` when the host defines no closed System activation topology; a host with an explicit catalog may reject undeclared or cyclic runtime-owned edges here. The validator must remain bounded and must not turn rank or edge metadata into Actor Contract identity or User policy.
 - `Time`, `CadenceTickMillis`, and `MaxCadenceDelayTicks`: Deterministic consensus milliseconds, the host's nonzero tick quantum, and its ten-Julian-year cadence horizon. The pallet floors readiness, ceils activation anchors, and never derives cadence or its admission bound from local block count. `TargetBlockTime` and `MaxExecutionDelayBlocks` independently bind the ten-Julian-year consensus-block horizon.
 - `WeightInfo`: The single runtime-derived numeric authority covers worst-case Task classes, calls, Predicates, fees, ingress, scheduler work, orchestration, Continuation, finalization, and cleanup in both Weight dimensions. Transfer, Mint, and split fanout include possible synchronous address-event ingress; Burn remains independently priced without transfer-ingress proof; adapter-free `StopCycle` prices its explicit stop event.
 - `Weight generation`: The `SubstrateWeight` and `()` implementations shipped in `src/weights.rs` are hand-written estimates, not benchmark output, and both underprice execution. The DEOS reference runtime measures `create_user_actor` at roughly thirteen times the packaged RefTime with seven times its ProofSize. Run `frame-benchmarking` against your own runtime and bind the generated file.
@@ -76,7 +79,7 @@ Unsupported adapters are valid only when user-facing plan builders and runtime d
 ## 3. Ownership Boundary
 
 - `Actors owns`: Actor ids, tagged derivation inputs, owner slots, sovereign reverse ownership, queue/wakeup scheduling, lifecycle transitions, fee reservation, amount resolution, task admission, task-scoped atomicity, step error policy, and bounded events.
-- `Runtime owns`: Infallible stable mapping of tagged custody inputs into its concrete `AccountId`, asset ledgers, caller-aware DEX pricing, liquidity pool and donation policy, staking topology/share mapping, atomic fee-collection policy and sink depositability, ingress producers, governance origins, genesis System Actor definitions, and task weight calibration.
+- `Runtime owns`: Infallible stable mapping of tagged custody inputs into its concrete `AccountId`, asset ledgers, caller-aware DEX pricing, liquidity pool and donation policy, staking topology/share mapping, atomic fee-collection policy and sink depositability, ingress producers, governance origins, genesis System Actor definitions, any closed System activation manifest and validator, and task weight calibration.
 - `UI owns`: Plan authoring affordances, dry-run/simulation UX, unsupported-task hiding, user recovery flows, per-cycle timeline rendering, and warnings around `ContinueNextStep` after mutating tasks.
 - `Docs own`: The separation between portable task-language patterns and a concrete runtime's System Actor topology.
 

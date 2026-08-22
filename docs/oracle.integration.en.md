@@ -50,7 +50,7 @@ The System Actors market guard consumes only Fresh nonzero directional observati
 
 ## Reactive Actors Hook
 
-`ActorObservationChangeIngress` binds `OnObservationChanged` to `Actors::note_observation_changed`. Changed publication coalesces one latest revision into Actors-owned exact active-dirty state. Equal output refresh invokes no hook.
+`ActorObservationChangeIngress` binds `OnObservationChanged` to `ObservationTransitionIngress`. Changed publication supplies its exact revision and previous/current scalar values transactionally. Actors may coalesce only the broad `ObservationChange` fanout; Crossing transition obligations retain their ordered identity. Equal output refresh invokes no hook.
 
 Ingress remains subscriber-independent O(1). It does not read subscriber pages, mark actor readiness, enqueue actors, evaluate conditions, or execute plans. Deferred Actors fanout follows exact active dirty feeds and occupied subscriber pages through the existing scheduler.
 

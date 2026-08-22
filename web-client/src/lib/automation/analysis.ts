@@ -230,23 +230,38 @@ export type ActorStaticSuffixEnvelope = {
 };
 
 export type ActorStaticTriggerAnalysis = {
-  kind: 'Manual' | 'AddressEvent' | 'ObservationChange' | 'Cadenced';
+  kind:
+    | 'Manual'
+    | 'AddressEvent'
+    | 'ObservationChange'
+    | 'ObservationCrossing'
+    | 'Cadenced';
   everyTicks: number | null;
-  sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
+  sourceKinds: Array<
+    'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
+  >;
   observationFeeds: ActorContractProjection[];
 };
 
 export type ActorStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
-      trigger: 'Manual' | 'AddressEvent' | 'ObservationChange';
-      sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
+      trigger:
+        | 'Manual'
+        | 'AddressEvent'
+        | 'ObservationChange'
+        | 'ObservationCrossing';
+      sourceKinds: Array<
+        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
+      >;
     }
   | { kind: 'PeriodicAdmission'; everyTicks: number }
   | {
       kind: 'TriggerAmountCompatibilityViolation';
       steps: number[];
-      sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
+      sourceKinds: Array<
+        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
+      >;
       reason: 'AddressEventOnlyRequired';
     }
   | {
@@ -1163,6 +1178,39 @@ function parseTrigger(
           member(trigger.value, 'feed', 'Trigger.ObservationChange'),
         ],
       };
+    case 'ObservationCrossing': {
+      const direction = variant(
+        member(trigger.value, 'direction', 'Trigger.ObservationCrossing'),
+        'Trigger.ObservationCrossing.direction',
+      );
+      if (direction.type !== 'Rising' && direction.type !== 'Falling') {
+        throw new Error(
+          `Unsupported CrossingDirection variant: ${direction.type}`,
+        );
+      }
+      const threshold = unsignedBigInt(
+        member(trigger.value, 'threshold', 'Trigger.ObservationCrossing'),
+        'Trigger.ObservationCrossing.threshold',
+      );
+      const rearmThreshold = unsignedBigInt(
+        member(trigger.value, 'rearm_threshold', 'Trigger.ObservationCrossing'),
+        'Trigger.ObservationCrossing.rearm_threshold',
+      );
+      if (
+        (direction.type === 'Rising' && rearmThreshold >= threshold) ||
+        (direction.type === 'Falling' && rearmThreshold <= threshold)
+      ) {
+        throw new Error('Trigger.ObservationCrossing has invalid hysteresis');
+      }
+      return {
+        kind: 'ObservationCrossing',
+        everyTicks: null,
+        sourceKinds: ['ObservationCrossing'],
+        observationFeeds: [
+          member(trigger.value, 'feed', 'Trigger.ObservationCrossing'),
+        ],
+      };
+    }
     case 'Cadenced': {
       const everyTicks = safeInteger(
         member(trigger.value, 'every_ticks', 'Trigger.Cadenced'),

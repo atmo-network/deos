@@ -904,6 +904,38 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
         finding.trigger === 'ObservationChange',
     ),
   );
+  const crossing = analyze(
+    artifactFor({
+      contract: contractWithTrigger({
+        type: 'ObservationCrossing',
+        value: {
+          feed: observationFeed,
+          direction: { type: 'Rising', value: undefined },
+          threshold: 100n,
+          rearm_threshold: 80n,
+        },
+      }),
+    }),
+  );
+  assert.deepEqual(crossing.trigger, {
+    kind: 'ObservationCrossing',
+    everyTicks: null,
+    sourceKinds: ['ObservationCrossing'],
+    observationFeeds: observation.trigger.observationFeeds,
+  });
+  const malformedCrossing = contractWithTrigger({
+    type: 'ObservationCrossing',
+    value: {
+      feed: observationFeed,
+      direction: { type: 'Rising', value: undefined },
+      threshold: 100n,
+      rearm_threshold: 100n,
+    },
+  });
+  assert.throws(
+    () => analyze(artifactFor({ contract: malformedCrossing })),
+    /invalid hysteresis/,
+  );
   const triggerAmountContract = contractWithTrigger({
     type: 'ObservationChange',
     value: { feed: observationFeed },

@@ -14,7 +14,7 @@
 
 ## Hooks and Consumers
 
-- `OnObservationChanged` must remain O(1), bounded, subscriber-independent, and report a conservative Weight that publication adds to its measured pallet path.
+- `OnObservationChanged` receives the exact revision plus previous/current scalar transition, must remain O(1), bounded, subscriber-independent, and reports a conservative Weight that publication adds to its measured pallet path. A hook error atomically rejects publication.
 - A required hook failure must propagate and roll back the observation plus the producer's enclosing transaction.
 - Consumers must author a nonzero maximum age and distinguish Unavailable, Uninitialized, Fresh, and Stale.
 - History, search, charts, subscriber fanout, and strategy execution remain outside this package.

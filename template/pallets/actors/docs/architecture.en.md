@@ -406,7 +406,13 @@ Recovery is governance-operated (circuit breaker or parameter adjustment); no em
 
 ### Trigger Sources
 
-`Manual`, `AddressEvent`, and `ObservationChange` each use `ActorHot.pending_signal` as the canonical readiness latch for the Actor that selected that one trigger. `Cadenced` uses the same latch only when its due tick materializes. No source set, parallel signal key, source tag, generation, bitmask, or event-block metadata enters consensus state.
+`Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, and due `Cadenced` detection all enter `request_activation`. That single sink loads the canonical Active state once, sets `ActorHot.pending_signal`, classifies with its loaded Continuation, and requests canonical FIFO/wakeup placement. Source-specific code owns only detection and source-state progression; no source set, parallel signal key, source tag, generation, bitmask, or event-block metadata enters consensus state.
+
+The scheduler carries one loaded Active state through live-ticket verification, same-block and lifecycle gates, classification, attempt admission, fee admission, and loaded-head consumption. Control preflight, ingress preflight/consequence, eligibility, simulation, sweep, and activation likewise classify with the Continuation returned by their complete canonical probe instead of rereading it through a view-only helper. A transaction boundary or adapter/task effect that may mutate actor state terminates that borrow and requires an explicit canonical reload before later placement.
+
+Crossing detection stores generation-checked exact-threshold memberships in bounded dense pages under a sparse radix path. Dense-page swap compaction rewinds an active range cursor when an unprocessed tail member moves behind it, preventing close or replacement of a skipped newly installed member from erasing older transition work. If activation terminally closes the final feed member, ordinary close cleanup removes the membership, queue, cursor, and pending-feed link atomically; the worker recognizes the resulting zero membership count as completed cleanup and does not recreate source state. A non-terminal placement failure rolls the complete actor unit back.
+
+Active System installation and replacement invoke the narrow `SystemActorContractValidator` host port before committing the Contract. Generic Actors neither derives a graph nor stores ranks or edges. The unit implementation accepts all contracts; the reference runtime binds its bounded topology policy independently from the portable package.
 
 Filter surface:
 

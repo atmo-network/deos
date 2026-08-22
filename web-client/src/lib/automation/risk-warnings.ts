@@ -12,6 +12,8 @@ export type ActorCompositionWarningKind =
   | 'ResidualCustodyThroughLocatorReuse'
   | 'DeepActorGraphAmplification'
   | 'TriggerRevisionCoalescing'
+  | 'BroadObservationFanout'
+  | 'SparseObservationCrossing'
   | 'StrictFifoHeadOfLine'
   | 'CompletedDoesNotImplyAllTasksSuccess';
 
@@ -29,7 +31,10 @@ export type ActorCompositionWarningInput = {
   simulatorStatus?: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   successfulTaskCount?: number;
   totalTaskCount?: number;
+  observationSubscriberCount?: number;
 };
+
+export const HIGH_CARDINALITY_OBSERVATION_SUBSCRIBERS = 1_000;
 
 function isTerminalStep(
   step: ActorContractStaticAnalysis['steps'][number],
@@ -112,6 +117,32 @@ export function projectActorCompositionWarnings(
     });
   }
 
+  if (analysis.trigger?.kind === 'ObservationChange') {
+    const subscriberCount = input.observationSubscriberCount;
+    const highCardinality =
+      subscriberCount != null &&
+      subscriberCount >= HIGH_CARDINALITY_OBSERVATION_SUBSCRIBERS;
+    warnings.push({
+      kind: 'BroadObservationFanout',
+      severity: highCardinality ? 'warning' : 'info',
+      message: highCardinality
+        ? 'This broad observation feed has high subscriber cardinality; every committed change requires bounded fanout across those Actors.'
+        : 'Observation change reacts to every committed feed change, so detection work grows with subscribed Actors.',
+      evidence:
+        subscriberCount == null
+          ? 'trigger=ObservationChange, broad feed-subscriber semantics'
+          : `trigger=ObservationChange, subscribers=${subscriberCount}`,
+    });
+  } else if (analysis.trigger?.kind === 'ObservationCrossing') {
+    warnings.push({
+      kind: 'SparseObservationCrossing',
+      severity: 'info',
+      message:
+        'Observation crossing reacts only when the declared directional fire or rearm boundary is crossed.',
+      evidence: 'trigger=ObservationCrossing, sparse threshold semantics',
+    });
+  }
+
   if (input.strictFifoHeadOfLine === true) {
     warnings.push({
       kind: 'StrictFifoHeadOfLine',
@@ -146,6 +177,8 @@ export const ACTORS_COMPOSITION_WARNING_KINDS: readonly ActorCompositionWarningK
     'ResidualCustodyThroughLocatorReuse',
     'DeepActorGraphAmplification',
     'TriggerRevisionCoalescing',
+    'BroadObservationFanout',
+    'SparseObservationCrossing',
     'StrictFifoHeadOfLine',
     'CompletedDoesNotImplyAllTasksSuccess',
   ];

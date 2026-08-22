@@ -90,6 +90,25 @@ The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs
 
 These builders configure the reusable task language; they do not create pallet-level roles or Actors-id policy branches.
 
+## System Activation DAG
+
+The DEOS runtime owns one bounded System activation manifest over known ids `0..=14`. Its nodes and ranks are descriptive host metadata, not Actor Contract fields. The only declared edge effect is a successful certified Actor `Transfer` or `SplitTransfer` into a known System sovereign whose active Contract selects `AddressEvent`.
+
+| Source | Certified activation targets |
+| --- | --- |
+| Fee Sink | Native staking LP provisioning actor |
+| Liquidity Actor | TOL Buckets A/B/C/D |
+| TOL Buckets B/C/D | Treasuries B/C/D respectively |
+| BLDR Splitter | BLDR Liquidity Actor; BLDR Treasury |
+| BLDR Liquidity Actor | BLDR Bucket A |
+| BLDR Bucket A | BLDR Treasury |
+
+`DeosSystemActorContractValidator` checks every Active System installation and replacement against this manifest before Contract mutation. The runtime integrity gate ranks all manifest nodes with bounded Kahn traversal, rejects a cycle, and validates every genesis System Contract. The derived projection scans only the bounded known catalog, includes edges whose target currently has an active `AddressEvent` Contract, and remains read-only; runtime tests require every projected edge to belong to the manifest and prove an undeclared back-edge is rejected without changing the stored Contract.
+
+The guarantee is deliberately closed-world. External Oracle publishers, ordinary users, market counterparties, and uncertified balance movement are outside this graph. Oracle publication enters the separately bounded transition-ingress contract; User cycles remain permitted and paid; uncertified movement never fabricates AddressEvent activation.
+
+User cycles use the ordinary FIFO rather than a graph lane. Runtime evidence covers a funded two-Actor cycle with repeated-signal coalescing and alternating ticket order, an externally closed self-cycle that reaches economic apoptosis, and an eight-Actor ring that starts under full queue pressure, deterministically coalesces to one circulating ticket, remains paid while solvent, and closes an underfunded member when FIFO service reaches it. No User path receives the System fee exemption or executes one Actor twice in a block.
+
 The package architecture owns the exhaustive public reachability matrix. DEOS production builders currently instantiate the reference topology subset, while typed creation/update calls and the independent embedding runtime keep the remaining portable variants executable. Constructor-free runtime-upgrade cancellation and context-free amount dependency placeholders are absent; adding any public variant requires its constructor, evaluator/adapter branch, and executable evidence in the same change.
 
 ## Governance Activation Flows
@@ -212,6 +231,9 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 | `WakeupPageSize` | 32 temporal entries per page |
 | `MaxQueueEntriesScannedPerBlock` | 10,000 physical inspections |
 | `MaxExecutionsPerBlock` | 1,000 defense-in-depth attempt ceiling |
+| Crossing worker | 10% of maximum block Weight; admits one complete generated worst-case unit |
+| Wakeup worker | 15% of maximum block Weight after the Crossing rebalance |
+| ObservationChange fanout | 20% of maximum block Weight |
 | `MaxContractSteps` | Configurable shared `1..=255` bound; DEOS baseline is 8 for both classes |
 | `MaxRetryAttempts` | 10 cursor-local unsuccessful attempts |
 | `MaxConsecutiveFailures` | 10 |
@@ -293,15 +315,27 @@ The reference Router binds `RuntimeLpPairIntegrity`, so try-state also requires 
 
 Each task executes inside one task-owned storage transaction. A rejected task restores its adapter writes and task success event; the surrounding attempt may still commit its specified `StepFailed`, counters, policy transition, and later independent steps. Tests distinguish that expected failure envelope from leaked partial adapter state.
 
-`scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and occupancy proof commands. Optimized-profile regressions prove that the 10,000-actor fairness/occupancy matrix serves every actor with nonce spread at most four and that 10,000 wakeups due at one block drain completely without drops or duplicate ownership. A standard 512-actor mixed-clock regression advances timestamp by 99 ticks at once and proves per-unit clock round-robin, within-clock FIFO, one execution and one canonical placement per actor, bounded completion, and no cadence catch-up burst. Package matrices separately cover saturated placement, tombstone-heavy reclamation, stale wakeup pointers, queue-ticket exhaustion, and tick-index exhaustion with fail-closed state preservation.
+`scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, Crossing relevance, and occupancy proof commands. Optimized-profile regressions prove that the 10,000-actor fairness/occupancy matrix serves every actor with nonce spread at most four, that 10,000 wakeups due at one block drain completely, and that a 10,000-member Crossing feed performs no placement on a zero-match transition before activating only an eight-actor crossed cohort with unique tickets. The same profile then converges all 10,000 memberships on one threshold, crosses and oscillates the maximum 625-page herd in exactly 10,002 atomic service units per transition, and proves exactly one unchanged live queue or deferred wakeup placement per actor under the 1,024-ticket package fixture. A 17-leaf range spaced across 113 binary orders preserves its suffix cursor after the mock Weight cap admits three leaves and converges in seven worker passes. These are service-unit and configured-fixture measurements, not user-facing time promises. A standard 512-actor mixed-clock regression advances timestamp by 99 ticks at once and proves per-unit clock round-robin, within-clock FIFO, one execution and one canonical placement per actor, bounded completion, and no cadence catch-up burst.
 
-Production-Wasm before/after runs at 50 steps and 20 repeats measure validated-context carry through live-head consumption. The System cheap-cycle slope falls from `102,331,665` to `96,422,023` RefTime per actor (5.78%); the alternating System/User slope falls from `129,266,555` to `121,935,994` (5.67%). Estimated ProofSize remains exactly `2,733` and `2,798` per actor, and measured database slopes remain five and six reads respectively: the proof already deduplicated repeated keys, while the retained change removes redundant decode/control work without deleting a canonical partition read. Repository toolchain authorities and canonical validation profiles own environment and profile selection; this integration document does not duplicate run timestamps or version pins.
+Production-Wasm runs at 50 steps and 20 repeats measure validated-context carry through live-head consumption. The current System cheap-cycle coefficient is `94,182,240 / 2,733` RefTime/ProofSize per actor with five reads and three writes; the alternating System/User coefficient is `120,287,892 / 2,798` with six reads and four writes. Repository toolchain authorities and canonical validation profiles own environment and profile selection; this integration document does not duplicate run timestamps or version pins.
+
+| Production Weight owner | RefTime / ProofSize / DB | Evidence boundary |
+| --- | --- | --- |
+| FIFO cheap actor slope | `94,182,240 / 2,733 / 5r 3w` | Loaded live-head service; generated linear coefficient |
+| Partial wakeup-page drain | `354,451,000 / 47,750 / 83r 18w` | One maximum 32-entry page unit |
+| Broad ObservationChange page | `2,644,513,000 / 718,430 / 332r 72w` | Remains subscriber-proportional; canonical identity joins add one read |
+| Crossing no-match transition | `31,988,000 / 6,060 / 5r 2w` | Fixed radix transition setup; zero Actor partition reads |
+| Crossing terminal actor | `594,359,000 / 162,782 / 91r 83w` | One matched actor closing through scheduler exhaustion and exact source cleanup |
+| Crossing same-threshold page | `426,457,000 / 162,782 / 85r 77w` | One bounded membership-page worker unit; herd completion spans units |
+| Manual activation placement | `84,719,000 / 12,200 / 12r 5w` | Complete call; all detectors share the same loaded activation sink after detection |
+
+These are generated coefficients before the runtime database schedule is added, except that each row states its generated read/write count explicitly. The rows establish bounded unit cost and read ownership, not block throughput or user-facing latency.
 
 The runtime Pool Index extension fault anchor admits a pool-creation call, injects failure only at post-dispatch LP/Oracle indexing, rejects the block candidate, and proves exact storage-root restoration across the pool, LP asset and reverse index, Oracle feeds, balances, events, and signer nonce. Package Router faults separately prove exact-root rollback when the second market leg or second directional Oracle publication fails after earlier pool, fee, and publication work.
 
 The runtime cross-pallet hook-rejection anchor fills Actors dirty capacity, attempts direct Oracle publication, and proves Oracle observation/revision, Actors feed/list state, and runtime events equal the captured pre-state. After capacity recovery, one producer retry commits Oracle revision `1` and Actors latest revision `1`; no replay state or Router publication path participates.
 
-`ACTORS_OBSERVATION_PUBLISHER_INVENTORY` closes the reference-runtime publisher set to `DEOS Oracle::OnObservationChanged`. The Oracle hook reaches Actors through `ObservationChangeIngress`; no second runtime publisher owns revision progression. Generated observation evidence scans the complete runtime-config Rust tree, requires exactly one Oracle-owned typed ingress call, and rejects direct `Actors::note_observation_changed` bypasses.
+`ACTORS_OBSERVATION_PUBLISHER_INVENTORY` closes the reference-runtime publisher set to `DEOS Oracle::OnObservationChanged`. The Oracle hook reaches Actors through `ObservationTransitionIngress` with the exact revision and previous/current scalar values; no second runtime publisher owns transition progression. Generated observation evidence scans the complete runtime-config Rust tree, requires exactly one Oracle-owned typed ingress call, and rejects direct broad-fanout bypasses.
 
 Task rollback and lifecycle rollback remain distinct corpus boundaries. A DEX adapter that fails after input transfer restores actor/pool task writes while `ContinueNextStep` permits the following transfer and cycle summary to commit. Corrupt dirty-list linkage makes deactivation fail closed and restores actor, subscription, dirty-feed, list, and event pre-state; explicit linkage repair permits a fresh deactivation attempt to finish cleanup.
 

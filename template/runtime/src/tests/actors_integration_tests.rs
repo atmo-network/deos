@@ -31,8 +31,8 @@ use codec::Encode;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
   ActorContract, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
-  AttemptDisposition, CloseReason, CompletionPolicy, ContractSteps, CycleResult, DexOps, Error,
-  Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
+  AttemptDisposition, CloseReason, CompletionPolicy, ContractSteps, CrossingDirection, CycleResult,
+  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
   IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass,
   ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf,
   StakingOps, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task, TaskOf, Trigger,
@@ -59,6 +59,325 @@ use polkadot_sdk::{
   staging_xcm_executor::{AssetsInHolding, traits::TransactAsset},
 };
 use primitives::AssetKind;
+
+fn system_transfer_steps(target_actor_id: ActorId) -> pallet_deos_actors::ContractSteps<Runtime> {
+  alloc::vec![StepOf::<Runtime> {
+    precondition: None,
+    task: Task::Transfer {
+      to: Actors::sovereign_account_id_system(target_actor_id),
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(1),
+    },
+    on_error: StepErrorPolicy::AbortCycle,
+  }]
+  .try_into()
+  .expect("one System transfer step fits")
+}
+
+#[test]
+fn host_system_activation_manifest_is_ranked_and_rejects_undeclared_cycle_edges_before_commit() {
+  seeded_test_ext().execute_with(|| {
+    use crate::configs::actor_config::{
+      DeosSystemActorContractValidator, SystemActivationEdge, SystemActivationEffect,
+    };
+    use primitives::ecosystem::actor_ids;
+
+    let topology = DeosSystemActorContractValidator::manifest().expect("DAG manifest");
+    let projection = DeosSystemActorContractValidator::projection().expect("derived topology");
+    assert!(
+      projection
+        .edges
+        .iter()
+        .all(|edge| topology.edges.contains(edge))
+    );
+    assert!(projection.nodes.iter().all(|node| {
+      topology
+        .nodes
+        .iter()
+        .any(|manifest_node| manifest_node.actor_id == node.actor_id)
+    }));
+    assert!(topology.edges.contains(&SystemActivationEdge {
+      source: actor_ids::FEE_SINK_ACTORS_ID,
+      target: actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+      effect: SystemActivationEffect::CertifiedActorTransfer,
+    }));
+    let fee_sink_rank = topology
+      .nodes
+      .iter()
+      .find(|node| node.actor_id == actor_ids::FEE_SINK_ACTORS_ID)
+      .expect("Fee Sink node")
+      .rank;
+    let liquidity_rank = topology
+      .nodes
+      .iter()
+      .find(|node| node.actor_id == actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID)
+      .expect("Native staking liquidity node")
+      .rank;
+    assert!(fee_sink_rank < liquidity_rank);
+
+    System::set_block_number(1);
+    let splitter_before =
+      pallet_deos_actors::ActorContracts::<Runtime>::get(actor_ids::BLDR_SPLITTER_ACTORS_ID)
+        .expect("Splitter contract");
+    assert_noop!(
+      update_actor_contract_partial(
+        RuntimeOrigin::root(),
+        actor_ids::BLDR_SPLITTER_ACTORS_ID,
+        (
+          system_transfer_steps(actor_ids::BURN_ACTOR_ID),
+          CompletionPolicy::Persistent
+        ),
+      ),
+      Error::<Runtime>::SystemActorTopologyInvalid
+    );
+    assert_eq!(
+      pallet_deos_actors::ActorContracts::<Runtime>::get(actor_ids::BLDR_SPLITTER_ACTORS_ID),
+      Some(splitter_before),
+      "cycle rejection must precede contract mutation"
+    );
+  });
+}
+
+#[test]
+fn paid_user_two_actor_cycle_is_fifo_bounded_and_cannot_recurse_in_one_block() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let first_account = Actors::sovereign_account_id(&ALICE, 0);
+    let second_account = Actors::sovereign_account_id(&ALICE, 1);
+    let first = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(second_account.clone(), AssetKind::Native, 10),
+    );
+    let second = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(first_account.clone(), AssetKind::Native, 10),
+    );
+    fund_native(first, 1_000_000_000_000);
+    fund_native(second, 1_000_000_000_000);
+    let fee_sink =
+      Actors::sovereign_account_id_system(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
+    let fees_before = Balances::free_balance(&fee_sink);
+
+    assert_ok!(TmctolAssetOps::transfer(
+      &ALICE,
+      &first_account,
+      AssetKind::Native,
+      100,
+    ));
+    // A repeated detection before service owns no second ticket.
+    let first_ticket = Actors::actor_hot(first)
+      .expect("first Actor hot state")
+      .queue_ticket;
+    assert_ok!(TmctolAssetOps::transfer(
+      &ALICE,
+      &first_account,
+      AssetKind::Native,
+      100,
+    ));
+    assert_eq!(
+      Actors::actor_hot(first).expect("first Actor").queue_ticket,
+      first_ticket
+    );
+
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(first)
+        .expect("first Actor")
+        .identity
+        .cycle_nonce,
+      1
+    );
+    assert_eq!(
+      Actors::active_actor_state(second)
+        .expect("second Actor")
+        .identity
+        .cycle_nonce,
+      0
+    );
+    assert!(Actors::pending_signal(second));
+    assert_eq!(Actors::combined_queue_occupancy(), 1);
+
+    System::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(second)
+        .expect("second Actor")
+        .identity
+        .cycle_nonce,
+      1
+    );
+    assert_eq!(
+      Actors::active_actor_state(first)
+        .expect("first Actor")
+        .identity
+        .cycle_nonce,
+      1
+    );
+    assert!(Actors::pending_signal(first));
+    assert_eq!(Actors::combined_queue_occupancy(), 1);
+    assert!(Balances::free_balance(&fee_sink) > fees_before);
+
+    for block in 3..=8 {
+      System::set_block_number(block);
+      run_idle(Weight::MAX);
+      assert!(Actors::combined_queue_occupancy() <= 1);
+    }
+    let first_nonce = Actors::active_actor_state(first)
+      .expect("first Actor solvent")
+      .identity
+      .cycle_nonce;
+    let second_nonce = Actors::active_actor_state(second)
+      .expect("second Actor solvent")
+      .identity
+      .cycle_nonce;
+    assert_eq!(first_nonce, 4);
+    assert_eq!(second_nonce, 4);
+  });
+}
+
+#[test]
+fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let account = Actors::sovereign_account_id(&ALICE, 0);
+    let actor_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let fee_sink =
+      Actors::sovereign_account_id_system(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
+    let fees_before = Balances::free_balance(&fee_sink);
+    for block in 1..=3 {
+      System::set_block_number(block);
+      assert_ok!(TmctolAssetOps::transfer(
+        &ALICE,
+        &account,
+        AssetKind::Native,
+        1_000_000_000,
+      ));
+      run_idle(Weight::MAX);
+      assert_eq!(
+        Actors::active_actor_state(actor_id)
+          .expect("funded Actor")
+          .identity
+          .cycle_nonce,
+        u64::from(block),
+      );
+    }
+    assert!(Balances::free_balance(&fee_sink) > fees_before);
+
+    let balance = Balances::free_balance(&account);
+    let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
+    deplete_user_sovereign(actor_id, balance.saturating_sub(protected_floor));
+    System::set_block_number(4);
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      AssetKind::Native,
+      1,
+      &ALICE,
+    ));
+    run_idle(Weight::MAX);
+    assert!(Actors::active_actor_state(actor_id).is_none());
+    assert!(System::events().iter().any(|record| matches!(
+      &record.event,
+      RuntimeEvent::Actors(Event::ActorClosed {
+        actor_id: closed,
+        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+      }) if *closed == actor_id
+    )));
+  });
+}
+
+#[test]
+fn paid_user_long_cycle_preserves_fifo_under_queue_pressure_and_closes_insolvent_member() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    const ACTOR_COUNT: u8 = 8;
+    let accounts = (0..ACTOR_COUNT)
+      .map(|slot| Actors::sovereign_account_id(&ALICE, slot))
+      .collect::<alloc::vec::Vec<_>>();
+    let mut actors = alloc::vec::Vec::new();
+    for slot in 0..ACTOR_COUNT {
+      let next = accounts[(usize::from(slot) + 1) % usize::from(ACTOR_COUNT)].clone();
+      let actor_id = create_user(
+        ALICE,
+        on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+        None,
+        transfer_contract_steps(next, AssetKind::Native, 10),
+      );
+      assert_eq!(actor_account(actor_id), accounts[usize::from(slot)]);
+      fund_native(actor_id, 2_000_000_000_000);
+      actors.push(actor_id);
+    }
+    let fee_sink =
+      Actors::sovereign_account_id_system(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
+    let fees_before = Balances::free_balance(&fee_sink);
+    for account in &accounts {
+      assert_ok!(TmctolAssetOps::transfer(
+        &CHARLIE,
+        account,
+        AssetKind::Native,
+        100,
+      ));
+    }
+    assert_eq!(Actors::combined_queue_occupancy(), u64::from(ACTOR_COUNT));
+
+    run_idle(Weight::MAX);
+    assert_eq!(Actors::combined_queue_occupancy(), 1);
+    for actor_id in &actors {
+      assert_eq!(
+        Actors::active_actor_state(*actor_id)
+          .expect("solvent ring member")
+          .identity
+          .cycle_nonce,
+        1,
+        "the initial queue-pressure cohort executes once in ticket order"
+      );
+    }
+    for block in 2..=9 {
+      System::set_block_number(block);
+      run_idle(Weight::MAX);
+      assert_eq!(Actors::combined_queue_occupancy(), 1);
+    }
+    assert!(actors.iter().all(|actor_id| {
+      Actors::active_actor_state(*actor_id)
+        .expect("solvent ring member")
+        .identity
+        .cycle_nonce
+        == 2
+    }));
+    assert!(Balances::free_balance(&fee_sink) > fees_before);
+
+    let insolvent = actors[3];
+    let balance = Balances::free_balance(actor_account(insolvent));
+    let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
+    deplete_user_sovereign(insolvent, balance.saturating_sub(protected_floor));
+    for block in 10..=13 {
+      System::set_block_number(block);
+      run_idle(Weight::MAX);
+    }
+    assert!(Actors::active_actor_state(insolvent).is_none());
+    assert!(System::events().iter().any(|record| matches!(
+      &record.event,
+      RuntimeEvent::Actors(Event::ActorClosed {
+        actor_id,
+        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+      }) if *actor_id == insolvent
+    )));
+    assert!(
+      actors
+        .iter()
+        .filter(|actor_id| **actor_id != insolvent)
+        .all(|actor_id| Actors::active_actor_state(*actor_id).is_some())
+    );
+  });
+}
 
 #[derive(Clone)]
 struct RuntimeSchedule {
@@ -224,6 +543,78 @@ fn oracle_publication_rolls_back_when_actor_change_hook_rejects() {
 }
 
 #[test]
+fn oracle_publication_rolls_back_when_crossing_transition_queue_is_full() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = deos_router_account();
+    let feed =
+      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(9));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    create_system(
+      ALICE,
+      RuntimeSchedule {
+        trigger: Trigger::observation_crossing(
+          feed,
+          CrossingDirection::Rising,
+          1_500_000_000_000,
+          800_000_000_000,
+        ),
+        cooldown_blocks: 0,
+      },
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
+    );
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      2_000_000_000_000,
+    ));
+    let observation = Oracle::observations(feed).expect("second publication commits");
+    let maximum =
+      <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get() as usize;
+    let saturated = pallet_deos_actors::CrossingTransitionQueueOf::<Runtime>::try_from(vec![
+      pallet_deos_actors::CrossingTransitionObligation {
+        revision: observation.revision,
+        previous: observation.value.saturating_sub(1),
+        current: observation.value,
+      };
+      maximum
+    ])
+    .expect("runtime Crossing queue bound fits");
+    pallet_deos_actors::CrossingTransitionQueues::<Runtime>::insert(feed, saturated);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert_noop!(
+      Oracle::publish(RuntimeOrigin::signed(producer), feed, 3_000_000_000_000),
+      Error::<Runtime>::CrossingTransitionCapacityExceeded
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    assert_eq!(Oracle::observations(feed), Some(observation));
+  });
+}
+
+#[test]
 fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
   super::common::new_test_ext().execute_with(|| {
     let anchors = TmctolGenesisSystemActors::native_flow_anchor_accounts();
@@ -242,7 +633,7 @@ fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
 #[test]
 fn actor_0_7_storage_schema_is_a_fresh_genesis_baseline() {
   seeded_test_ext().execute_with(|| {
-    let baseline = StorageVersion::new(1);
+    let baseline = StorageVersion::new(2);
     assert_eq!(Actors::in_code_storage_version(), baseline);
     assert_eq!(Actors::on_chain_storage_version(), baseline);
   });
@@ -1639,8 +2030,8 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.ref_time() / unit.ref_time())
     .min(available.proof_size() / unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(31_076_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(17_373_176_000, 718_430));
+  assert_eq!(base, Weight::from_parts(31_146_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(18_144_513_000, 718_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 1,
@@ -1699,20 +2090,33 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
     "fanout stays in its own envelope"
   );
 
+  let crossing_base = W::crossing_worker_base();
+  let crossing_unit = W::crossing_transition_unit()
+    .saturating_add(W::crossing_leaf_unit())
+    .saturating_add(W::crossing_page_unit())
+    .saturating_add(W::crossing_actor_unit());
+  let crossing_ceiling = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
+  let crossing_envelope = crossing_base.saturating_add(crossing_unit);
+  assert!(
+    crossing_envelope.all_lte(crossing_ceiling),
+    "one complete maximum Crossing worker unit must fit its two-dimensional envelope: base={crossing_base:?}, unit={crossing_unit:?}, combined={crossing_envelope:?}, ceiling={crossing_ceiling:?}"
+  );
+
   // One maximum actor unit: admission overhead plus one full cycle admission plus pure cleanup.
   let actor_unit = crate::Actors::scheduler_admission_overhead()
     .saturating_add(crate::Actors::close_dispatch_weight_upper());
   let guaranteed = <Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve::get();
   let combined = base
     .saturating_add(wakeup_envelope)
+    .saturating_add(crossing_envelope)
     .saturating_add(fanout_envelope)
     .saturating_add(actor_unit);
   assert!(
     combined.all_lte(guaranteed),
-    "fixed base + max wakeup worker + max fanout worker + one max actor unit must fit ActorOnIdleReserve: base={base:?}, wakeup={wakeup_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
+    "fixed base + max wakeup worker + one Crossing unit + max fanout worker + one max actor unit must fit ActorOnIdleReserve: base={base:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
   );
   println!(
-    "SCHED-WORKERS: base={base:?}, wakeup={wakeup_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
+    "SCHED-WORKERS: base={base:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
   );
 }
 
@@ -4577,7 +4981,7 @@ fn xcm_ingress_with_source_triggers_owner_only_on_address_event() {
     let sovereign = actor_account(actor_id);
     fund_native(actor_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
-    let recipient = account_location(sovereign);
+    let recipient = account_location(sovereign.clone());
     let origin = account_location(ALICE);
     let context = xcm::latest::XcmContext {
       origin: Some(origin),
@@ -4706,7 +5110,7 @@ fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
 }
 
 #[test]
-fn xcm_source_less_preflight_failure_preserves_exact_holding_and_state_on_both_deposit_paths() {
+fn xcm_source_less_scheduler_exhaustion_closes_actor_and_preserves_deposit() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let actor_id = create_user(
@@ -4716,44 +5120,27 @@ fn xcm_source_less_preflight_failure_preserves_exact_holding_and_state_on_both_d
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     let sovereign = actor_account(actor_id);
-    let recipient = account_location(sovereign);
+    let recipient = account_location(sovereign.clone());
     pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let before = native_balance(&sovereign);
     let asset = native_xcm_asset(5_000);
-    let result = <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
-      asset_to_holding(asset.clone()),
-      &recipient,
-      None,
+    assert_ok!(
+      <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
+        asset_to_holding(asset.clone()),
+        &recipient,
+        None,
+      )
     );
-    let Err((returned, xcm::latest::Error::FailedToTransactAsset(_))) = result else {
-      panic!("source-less preflight must reject with the original holding");
-    };
-    assert_eq!(
-      returned.assets_iter().collect::<Vec<_>>(),
-      vec![asset.clone()]
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before,
-      "read-only XCM preflight failure changes no ledger, event, or Actors state"
-    );
+    assert!(Actors::active_actor_state(actor_id).is_none());
 
-    let surplus_result =
+    assert_ok!(
       <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset_with_surplus(
         asset_to_holding(asset.clone()),
         &recipient,
         None,
-      );
-    let Err((returned, xcm::latest::Error::FailedToTransactAsset(_))) = surplus_result else {
-      panic!("surplus-deposit preflight must reject with the original holding");
-    };
-    assert_eq!(returned.assets_iter().collect::<Vec<_>>(), vec![asset]);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before,
-      "surplus-deposit preflight failure changes no ledger, event, or Actors state"
+      )
     );
+    assert_eq!(native_balance(&sovereign), before.saturating_add(10_000));
   });
 }
 
@@ -5373,7 +5760,7 @@ fn certified_ingress_inventory_is_closed_and_typed() {
 }
 
 #[test]
-fn certified_extension_notify_failure_rejects_and_rolls_back_value_and_ingress() {
+fn certified_extension_scheduler_exhaustion_closes_actor_without_rejecting_value() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let signer_pair = sr25519::Pair::from_seed(&[53u8; 32]);
@@ -5389,9 +5776,8 @@ fn certified_extension_notify_failure_rejects_and_rolls_back_value_and_ingress()
       BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
     );
     let sovereign = actor_account(actor_id);
-    // Monotonic ticket namespace at the ceiling: the certified post-movement
-    // notify cannot place readiness and must reject the whole outer transaction,
-    // restoring the value movement together with every Actors effect (spec 5.3).
+    // Monotonic ticket namespace at the ceiling closes the destination Actor
+    // through the unified sink without rejecting the certified movement.
     pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
     let sovereign_before = native_balance(&sovereign);
     let signer_before = native_balance(&signer);
@@ -5400,44 +5786,22 @@ fn certified_extension_notify_failure_rejects_and_rolls_back_value_and_ingress()
       dest: Address::Id(sovereign.clone()),
       value: transfer_amount,
     });
-    // A rejected certified movement aborts the block in production, so the ledger
-    // revert is block-level: FRAME does not retroactively roll back an already
-    // dispatched call on a post-dispatch extension error. Model that boundary
-    // explicitly: the rejected extrinsic leaves no balance or Actors residue.
-    let rejected = polkadot_sdk::frame_support::storage::with_transaction(
-      || -> polkadot_sdk::frame_support::storage::TransactionOutcome<Result<bool, DispatchError>> {
-        let result = Executive::apply_extrinsic(signed_extrinsic(&signer_pair, 0, call));
-        let rejected = result.is_err() || matches!(result, Ok(Err(_)));
-        match rejected {
-          true => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(rejected)),
-          false => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(rejected)),
-        }
-      },
-    )
-    .expect("certified movement rejection check");
-    assert!(
-      rejected,
-      "certified movement must fail when Actors readiness cannot commit"
-    );
+    assert!(matches!(
+      Executive::apply_extrinsic(signed_extrinsic(&signer_pair, 0, call)),
+      Ok(Ok(_))
+    ));
     assert_eq!(
       native_balance(&sovereign),
-      sovereign_before,
-      "rejected certified movement restores the value movement"
+      sovereign_before.saturating_add(transfer_amount),
+      "certified value movement survives scheduler-exhaustion closure"
     );
-    assert_eq!(
-      native_balance(&signer),
-      signer_before,
-      "rejected extrinsic leaves the payer untouched"
-    );
-    assert!(
-      !Actors::pending_signal(actor_id),
-      "no readiness latch survives a rejected certified movement"
-    );
+    assert!(native_balance(&signer) < signer_before);
+    assert!(Actors::active_actor_state(actor_id).is_none());
   });
 }
 
 #[test]
-fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
+fn asset_ops_transfer_preserves_value_while_closing_scheduler_exhaustion() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let actor_id = create_user(
@@ -5448,29 +5812,22 @@ fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
     );
     let sovereign = actor_account(actor_id);
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&ALICE, 100_000_000_000_000);
-    // Monotonic ticket exhaustion is Permanent through the certified Actors transfer
-    // path, and the movement rolls back with the failed notify (spec 6.1).
+    // Monotonic ticket exhaustion closes the destination Actor while preserving
+    // the already-certified movement (spec 6.1).
     pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
     let actor_before = native_balance(&sovereign);
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    let failure = TmctolAssetOps::transfer(&ALICE, &sovereign, AssetKind::Native, 5_000)
-      .expect_err("ticket exhaustion must reject the certified transfer");
-    assert_eq!(
-      failure.retry,
-      RetryClass::Permanent,
-      "monotonic namespace exhaustion stays Permanent through TaskFailure"
-    );
+    assert_ok!(TmctolAssetOps::transfer(
+      &ALICE,
+      &sovereign,
+      AssetKind::Native,
+      5_000,
+    ));
     assert_eq!(
       native_balance(&sovereign),
-      actor_before,
-      "certified transfer rolls back movement and Actors effects together"
+      actor_before.saturating_add(5_000),
+      "certified transfer survives terminal scheduler closure"
     );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before,
-      "late ingress rejection restores ledgers, events, funding, and scheduler state"
-    );
+    assert!(Actors::active_actor_state(actor_id).is_none());
     // An absent sovereign destination is balance-only: the same transfer succeeds
     // and performs no Actors work.
     let bob_before = native_balance(&BOB);
@@ -5485,7 +5842,7 @@ fn asset_ops_transfer_preserves_ingress_classification_through_task_failure() {
 }
 
 #[test]
-fn asset_ops_source_less_mint_preflight_is_read_only_on_rejection() {
+fn asset_ops_source_less_mint_closes_scheduler_exhaustion_after_movement() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let actor_id = create_user(
@@ -5496,16 +5853,10 @@ fn asset_ops_source_less_mint_preflight_is_read_only_on_rejection() {
     );
     let sovereign = actor_account(actor_id);
     pallet_deos_actors::NextQueueTicket::<Runtime>::put(u64::MAX);
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    let failure = TmctolAssetOps::mint(&sovereign, AssetKind::Native, 5_000)
-      .expect_err("ticket exhaustion must reject before source-less mint movement");
-    assert_eq!(failure.retry, RetryClass::Permanent);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before,
-      "source-less preflight rejection changes no ledger, event, or Actors state"
-    );
+    let before = native_balance(&sovereign);
+    assert_ok!(TmctolAssetOps::mint(&sovereign, AssetKind::Native, 5_000));
+    assert_eq!(native_balance(&sovereign), before.saturating_add(5_000));
+    assert!(Actors::active_actor_state(actor_id).is_none());
   });
 }
 
@@ -8089,9 +8440,12 @@ fn eligibility_projection_binds_genesis_actors_and_signal_readiness() {
     let idle = Actors::actor_eligibility(fee_sink_id).expect("projection computes");
     assert!(matches!(
       idle,
-      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActorClassification {
-        terminal_reason: None,
-        execution_phase: pallet_deos_actors::ActorExecutionPhase::WaitingCadenceTick(_),
+      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActiveActorActivation {
+        eligibility: pallet_deos_actors::ActorClassification {
+          terminal_reason: None,
+          execution_phase: pallet_deos_actors::ActorExecutionPhase::WaitingCadenceTick(_),
+        },
+        ..
       })
     ));
 
@@ -8099,9 +8453,12 @@ fn eligibility_projection_binds_genesis_actors_and_signal_readiness() {
     let funded = Actors::actor_eligibility(fee_sink_id).expect("projection computes");
     assert!(matches!(
       funded,
-      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActorClassification {
-        terminal_reason: None,
-        execution_phase: pallet_deos_actors::ActorExecutionPhase::WaitingCadenceTick(_),
+      pallet_deos_actors::ActorEligibility::Active(pallet_deos_actors::ActiveActorActivation {
+        eligibility: pallet_deos_actors::ActorClassification {
+          terminal_reason: None,
+          execution_phase: pallet_deos_actors::ActorExecutionPhase::WaitingCadenceTick(_),
+        },
+        ..
       })
     ));
   });

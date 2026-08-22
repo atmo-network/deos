@@ -41,6 +41,7 @@ thread_local! {
   static VETO_VOTE_WEIGHTS: RefCell<BTreeMap<AccountId, u64>> = RefCell::new(BTreeMap::new());
   static VETO_TOTAL_ISSUANCE: RefCell<u64> = const { RefCell::new(0) };
   static PAYLOAD_PREIMAGE_STATES: RefCell<BTreeMap<H256, (bool, bool, Option<u32>)>> = RefCell::new(BTreeMap::new());
+  static PAYLOAD_COMPATIBILITY_SCHEMA: RefCell<u16> = const { RefCell::new(1) };
   static AUTHORIZED_RUNTIME_UPGRADE: RefCell<Option<pallet_governance::AuthorizedRuntimeUpgrade<H256>>> = const { RefCell::new(None) };
   static PAYLOAD_EXECUTOR_ENABLED: RefCell<bool> = const { RefCell::new(false) };
   static PAYLOAD_EXECUTION_RESULTS: RefCell<BTreeMap<H256, bool>> = RefCell::new(BTreeMap::new());
@@ -190,16 +191,42 @@ impl pallet_governance::BenchmarkHelper<AccountId, DomainId, H256, DomainId, u12
 {
   fn prepare_primary_eligible_submitter(
     account: &AccountId,
-  ) -> Result<(DomainId, H256), polkadot_sdk::sp_runtime::DispatchError> {
+  ) -> Result<(DomainId, H256, Vec<u8>), polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::sp_runtime::traits::Hash as _;
     PROPOSAL_VOTE_WEIGHTS.with(|weights| {
       weights.borrow_mut().insert(*account, 1);
     });
-    set_payload_preimage_state(H256::default(), true, false);
+    let payload = vec![0u8; 32];
+    let payload_hash = BlakeTwo256::hash(&payload);
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(payload.len() as u32));
     let _ =
       <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
         account, 100,
       );
-    Ok((42, H256::default()))
+    Ok((42, payload_hash, payload))
+  }
+
+  fn prepare_maximum_payload_witness(
+    _account: &AccountId,
+  ) -> Result<
+    (
+      DomainId,
+      pallet_governance::ProposalPayloadKind,
+      H256,
+      Vec<u8>,
+    ),
+    polkadot_sdk::sp_runtime::DispatchError,
+  > {
+    use polkadot_sdk::sp_runtime::traits::Hash as _;
+    let payload = vec![0u8; 256];
+    let payload_hash = BlakeTwo256::hash(&payload);
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(payload.len() as u32));
+    Ok((
+      44,
+      pallet_governance::ProposalPayloadKind::Intent,
+      payload_hash,
+      payload,
+    ))
   }
 
   fn prepare_protection_voter(
@@ -284,18 +311,67 @@ impl pallet_governance::ProposalPayloadPreimageProvider<H256, DomainId>
     PAYLOAD_PREIMAGE_STATES.with(|states| states.borrow().get(hash).and_then(|state| state.2))
   }
 
-  fn validate_for_submission(
+  fn validate_for_witness(
+    _domain: DomainId,
+    payload_kind: pallet_governance::ProposalPayloadKind,
+    _hash: &H256,
+    payload: &[u8],
+  ) -> Result<
+    pallet_governance::ValidatedProposalPayload,
+    pallet_governance::ProposalPreimageAdmissionError,
+  > {
+    let length = u32::try_from(payload.len())
+      .map_err(|_| pallet_governance::ProposalPreimageAdmissionError::Oversized)?;
+    if length > 256 {
+      return Err(pallet_governance::ProposalPreimageAdmissionError::Oversized);
+    }
+    Ok(pallet_governance::ValidatedProposalPayload {
+      payload_len: length,
+      execution_authority: mock_payload_execution_authority(payload_kind),
+      compatibility: mock_payload_compatibility(),
+    })
+  }
+
+  fn current_compatibility(
+    _domain: DomainId,
+    payload_kind: pallet_governance::ProposalPayloadKind,
+  ) -> Result<
+    (
+      pallet_governance::ProposalExecutionAuthority,
+      pallet_governance::ProposalPayloadCompatibility,
+    ),
+    pallet_governance::ProposalPreimageAdmissionError,
+  > {
+    Ok((
+      mock_payload_execution_authority(payload_kind),
+      mock_payload_compatibility(),
+    ))
+  }
+
+  fn payload_length_ceiling(
     _domain: DomainId,
     _payload_kind: pallet_governance::ProposalPayloadKind,
-    hash: &H256,
-  ) -> Result<(), pallet_governance::ProposalPreimageAdmissionError> {
-    let state = PAYLOAD_PREIMAGE_STATES.with(|states| states.borrow().get(hash).copied());
-    match state {
-      Some((true, _, Some(length))) if length <= 256 => Ok(()),
-      Some((true, _, Some(_))) => Err(pallet_governance::ProposalPreimageAdmissionError::Oversized),
-      Some((true, _, None)) => Err(pallet_governance::ProposalPreimageAdmissionError::Invalid),
-      _ => Err(pallet_governance::ProposalPreimageAdmissionError::Missing),
-    }
+  ) -> Result<u32, pallet_governance::ProposalPreimageAdmissionError> {
+    Ok(256)
+  }
+}
+
+fn mock_payload_execution_authority(
+  payload_kind: pallet_governance::ProposalPayloadKind,
+) -> pallet_governance::ProposalExecutionAuthority {
+  use pallet_governance::{ProposalExecutionAuthority as Authority, ProposalPayloadKind as Kind};
+  match payload_kind {
+    Kind::L1RootAction => Authority::Root,
+    Kind::L2TreasurySpend => Authority::DomainTreasury,
+    Kind::L2ParameterChange => Authority::DomainParameters,
+    Kind::Intent | Kind::L2SignalToL1 => Authority::NonExecutable,
+  }
+}
+
+fn mock_payload_compatibility() -> pallet_governance::ProposalPayloadCompatibility {
+  pallet_governance::ProposalPayloadCompatibility {
+    schema_version: PAYLOAD_COMPATIBILITY_SCHEMA.with(|schema| *schema.borrow()),
+    runtime_spec_version: None,
   }
 }
 
@@ -331,6 +407,7 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, DomainId, u32, H256>
 parameter_types! {
   pub const ExistentialDeposit: u128 = 1;
   pub const ProposalOpeningFee: u128 = 10;
+  pub const PayloadAdmissionWitnessDeposit: u128 = 1;
   pub const ProposalFeeRecipient: AccountId = 99;
   pub ProposalApprovalThreshold: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(60);
@@ -367,6 +444,7 @@ impl pallet_governance::Config for Test {
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
+  type PayloadAdmissionWitnessDeposit = PayloadAdmissionWitnessDeposit;
   type ProposalFeeRecipient = ProposalFeeRecipient;
   type DomainId = DomainId;
   type VotePowerLockId = DomainId;
@@ -384,6 +462,7 @@ impl pallet_governance::Config for Test {
   type MaxWinningVoteItemsPerEpoch = ConstU32<2>;
   type MaxWinningVoteResolutionItemsPerEpoch = ConstU32<16>;
   type MaxWinningVoteAccountsPerCall = ConstU32<256>;
+  type MaxProposalPayloadBytes = ConstU32<262>;
   type MaxActiveProposalsPerDomain = ConstU32<16>;
   type StrategicProposalReserve = ConstU32<1>;
   type MaxActiveProposalsPerAuthor = ConstU32<8>;
@@ -472,6 +551,10 @@ pub fn set_payload_preimage_state_with_len(
   });
 }
 
+pub fn set_payload_compatibility_schema(schema_version: u16) {
+  PAYLOAD_COMPATIBILITY_SCHEMA.with(|schema| *schema.borrow_mut() = schema_version);
+}
+
 pub fn set_payload_executor_enabled(enabled: bool) {
   PAYLOAD_EXECUTOR_ENABLED.with(|value| *value.borrow_mut() = enabled);
 }
@@ -494,6 +577,9 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   }
   .assimilate_storage(&mut storage)
   .unwrap();
+  pallet_governance::GenesisConfig::<Test>::default()
+    .assimilate_storage(&mut storage)
+    .unwrap();
   let mut ext: polkadot_sdk::sp_io::TestExternalities = storage.into();
   ext.execute_with(|| {
     PROPOSAL_VOTE_WEIGHTS.with(|weights| weights.borrow_mut().clear());
@@ -501,6 +587,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
     VETO_VOTE_WEIGHTS.with(|weights| weights.borrow_mut().clear());
     VETO_TOTAL_ISSUANCE.with(|total| *total.borrow_mut() = 0);
     PAYLOAD_PREIMAGE_STATES.with(|states| states.borrow_mut().clear());
+    PAYLOAD_COMPATIBILITY_SCHEMA.with(|schema| *schema.borrow_mut() = 1);
     AUTHORIZED_RUNTIME_UPGRADE.with(|authorization| authorization.borrow_mut().take());
     PAYLOAD_EXECUTOR_ENABLED.with(|enabled| *enabled.borrow_mut() = false);
     PAYLOAD_EXECUTION_RESULTS.with(|results| results.borrow_mut().clear());

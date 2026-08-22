@@ -101,6 +101,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         return 'Address event';
       case 'ObservationChange':
         return 'Observation change';
+      case 'ObservationCrossing':
+        return `Observation crossing · ${trigger.direction}`;
       case 'Cadenced':
         return `Cadenced · ${trigger.everyTicks} ticks`;
     }
@@ -137,6 +139,35 @@ Zone: Presentation widget; composes system projections, automation capabilities,
           ? 'Global breaker'
           : `Global breaker · close due ${eligibility.terminalReason}`;
     }
+  }
+
+  function activationLabel(actor: AutomationActorSnapshot): string {
+    const eligibility = actor.eligibility;
+    if (eligibility?.type !== 'Active') return 'Unavailable';
+    const trigger = eligibility.trigger;
+    const placement = (() => {
+      switch (eligibility.placement.type) {
+        case 'Unplaced':
+          return eligibility.pendingSignal
+            ? 'pending · placement deferred'
+            : 'idle';
+        case 'Queue':
+          return `FIFO #${eligibility.placement.ticket}`;
+        case 'WakeupBlock':
+          return `wakeup block ${eligibility.placement.block}`;
+        case 'WakeupTick':
+          return `wakeup tick ${eligibility.placement.tick}`;
+      }
+    })();
+    if (trigger.type === 'ObservationCrossing') {
+      const phase = trigger.phase === 'Armed' ? 'armed' : 'waiting for rearm';
+      return `${trigger.direction} · ${phase} · fire ${trigger.threshold} / rearm ${trigger.rearmThreshold} · ${trigger.pendingRevisions} revision${trigger.pendingRevisions === 1 ? '' : 's'} · ${placement}`;
+    }
+    if (trigger.type === 'ObservationChange') {
+      const cost = trigger.subscriberCount >= 1_000 ? 'High fanout' : 'Broad';
+      return `${cost} · ${trigger.subscriberCount} subscriber${trigger.subscriberCount === 1 ? '' : 's'} · ${placement}`;
+    }
+    return placement;
   }
 
   function issuesForStep(index: number): ActorAuthoringIssue[] {
@@ -415,6 +446,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
+                    label="Activation"
+                    value={activationLabel(actor)}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
                     label="Balance"
                     value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
@@ -462,6 +498,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   <DetailRow
                     label="Eligibility"
                     value={eligibilityLabel(actor)}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Activation"
+                    value={activationLabel(actor)}
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow

@@ -12,7 +12,7 @@ use crate::{
 use codec::Encode;
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
-  traits::{Get, Hooks},
+  traits::{Currency, Get, Hooks},
   weights::Weight,
 };
 use polkadot_sdk::sp_core::H256;
@@ -198,6 +198,16 @@ fn submit_signed_intent_proposal(
   proposer: u64,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
   set_payload_preimage_state(H256::default(), true, false);
+  if Governance::payload_admission_witness(H256::default(), (domain, ProposalPayloadKind::Intent))
+    .is_none()
+  {
+    prepare_mock_payload_witness(
+      domain,
+      ProposalPayloadKind::Intent,
+      H256::default(),
+      proposer,
+    )?;
+  }
   Governance::submit_signed_proposal(
     RuntimeOrigin::signed(proposer),
     domain,
@@ -205,6 +215,26 @@ fn submit_signed_intent_proposal(
     ProposalCadenceMode::Ordinary,
     ProposalPayloadKind::Intent,
     Default::default(),
+  )
+}
+
+fn prepare_mock_payload_witness(
+  domain: u32,
+  payload_kind: ProposalPayloadKind,
+  payload_hash: H256,
+  preparer: u64,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  use crate::ProposalPayloadPreimageProvider as _;
+  let payload_len = MockProposalPayloadPreimageProvider::preimage_len(&payload_hash)
+    .ok_or(Error::<Test>::ProposalPreimageInvalid)?;
+  let payload = crate::ProposalPayloadBytesOf::<Test>::try_from(vec![0u8; payload_len as usize])
+    .map_err(|_| Error::<Test>::ProposalPreimageOversized)?;
+  Governance::prepare_payload_admission_witness(
+    RuntimeOrigin::signed(preparer),
+    domain,
+    payload_kind,
+    payload_hash,
+    payload,
   )
 }
 
@@ -1236,6 +1266,158 @@ fn payload_hash_preimage_status_is_explicit_and_queryable() {
 }
 
 #[test]
+fn payload_admission_witness_is_derived_from_validated_preimage_contract() {
+  new_test_ext().execute_with(|| {
+    let payload_hash = H256::repeat_byte(21);
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(32));
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      10,
+    ));
+    assert_eq!(Balances::reserved_balance(10), 1);
+    assert_eq!(
+      Governance::payload_admission_witness(payload_hash, (44, ProposalPayloadKind::Intent),),
+      Some(crate::ProposalPayloadAdmissionWitness {
+        domain: 44,
+        payload_kind: ProposalPayloadKind::Intent,
+        payload_len: 32,
+        execution_authority: ProposalExecutionAuthority::NonExecutable,
+        compatibility: crate::ProposalPayloadCompatibility {
+          schema_version: 1,
+          runtime_spec_version: None,
+        },
+        depositor: 10,
+        deposit: 1,
+      })
+    );
+  });
+}
+
+#[test]
+fn failed_payload_witness_refresh_preserves_the_previous_witness_and_events() {
+  new_test_ext().execute_with(|| {
+    let payload_hash = H256::repeat_byte(22);
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(32));
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      10,
+    ));
+    let witness_before =
+      Governance::payload_admission_witness(payload_hash, (44, ProposalPayloadKind::Intent));
+    let events_before = System::events();
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(257));
+    assert_noop!(
+      prepare_mock_payload_witness(44, ProposalPayloadKind::Intent, payload_hash, 10),
+      Error::<Test>::ProposalPreimageOversized
+    );
+    assert_eq!(
+      Governance::payload_admission_witness(payload_hash, (44, ProposalPayloadKind::Intent),),
+      witness_before
+    );
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn signed_submission_rejects_missing_and_stale_payload_witnesses_before_mutation() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10;
+    let payload_hash = H256::repeat_byte(23);
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(32));
+    let balance_before = Balances::free_balance(proposer);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageWitnessMissing
+    );
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      proposer,
+    ));
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(31));
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageWitnessStale
+    );
+    set_payload_preimage_state_with_len(payload_hash, true, false, Some(32));
+    set_payload_compatibility_schema(2);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageWitnessStale
+    );
+    set_payload_preimage_state_with_len(payload_hash, false, false, None);
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        105,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ProposalPreimageMissing
+    );
+    assert_eq!(
+      Balances::free_balance(proposer),
+      balance_before.saturating_sub(1)
+    );
+    assert_eq!(Balances::reserved_balance(proposer), 1);
+    assert!(!ActiveProposals::<Test>::contains_key(44, 105));
+  });
+}
+
+#[test]
+#[cfg(feature = "try-runtime")]
+fn governance_try_state_rejects_payload_witness_key_or_contract_corruption() {
+  new_test_ext().execute_with(|| {
+    let payload_hash = H256::repeat_byte(24);
+    crate::PayloadAdmissionWitnesses::<Test>::insert(
+      payload_hash,
+      (44, ProposalPayloadKind::Intent),
+      crate::ProposalPayloadAdmissionWitness {
+        domain: 43,
+        payload_kind: ProposalPayloadKind::Intent,
+        payload_len: 32,
+        execution_authority: ProposalExecutionAuthority::NonExecutable,
+        compatibility: crate::ProposalPayloadCompatibility {
+          schema_version: 1,
+          runtime_spec_version: None,
+        },
+        depositor: 500,
+        deposit: 1,
+      },
+    );
+    assert!(Governance::do_try_state().is_err());
+  });
+}
+
+#[test]
 fn executable_payload_stays_approved_when_executor_is_disabled() {
   new_test_ext().execute_with(|| {
     let payload_hash = polkadot_sdk::sp_core::H256::repeat_byte(10);
@@ -1921,6 +2103,12 @@ fn full_maturity_bucket_rejects_signed_submission_before_fee_or_state() {
     let proposer = 10u64;
     let payload_hash = H256::repeat_byte(89);
     set_payload_preimage_state(payload_hash, true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      proposer,
+    ));
     let maturity_epoch = 3;
     for item_id in 0..4u32 {
       assert_ok!(submit_test_proposal(
@@ -2018,6 +2206,11 @@ fn signed_submission_collects_opening_fee_and_records_proposer() {
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     assert_ok!(submit_signed_intent_proposal(44, 105, proposer));
     assert_eq!(Governance::proposal_author(44, 105), Some(proposer));
+    assert_eq!(Balances::reserved_balance(proposer), 0);
+    assert!(
+      Governance::payload_admission_witness(H256::default(), (44, ProposalPayloadKind::Intent),)
+        .is_none()
+    );
     assert_eq!(
       Balances::free_balance(proposer),
       balance_before.saturating_sub(10)
@@ -2042,6 +2235,13 @@ fn signed_submission_collects_opening_fee_and_records_proposer() {
 fn protocol_intent_requires_primary_eligibility_before_fee_or_state_mutation() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
+    set_payload_preimage_state(H256::default(), true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      42,
+      ProposalPayloadKind::Intent,
+      H256::default(),
+      proposer,
+    ));
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     let events_before = System::events();
@@ -2064,7 +2264,7 @@ fn protocol_intent_requires_primary_eligibility_before_fee_or_state_mutation() {
     assert_eq!(Governance::active_proposal_count(42), 1);
     assert_eq!(
       Balances::free_balance(proposer),
-      balance_before.saturating_sub(10)
+      balance_before.saturating_sub(9)
     );
     assert_eq!(
       Balances::free_balance(ProposalFeeRecipient::get()),
@@ -2079,6 +2279,12 @@ fn primary_eligible_signed_submission_preserves_fee_and_bounded_proposal_path() 
     let proposer = 10u64;
     set_vote_weight(proposer, 1);
     set_payload_preimage_state(H256::default(), true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      42,
+      ProposalPayloadKind::L1RootAction,
+      H256::default(),
+      proposer,
+    ));
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     assert_ok!(Governance::submit_signed_proposal(
@@ -2093,7 +2299,7 @@ fn primary_eligible_signed_submission_preserves_fee_and_bounded_proposal_path() 
     assert_eq!(Governance::active_proposal_count(42), 1);
     assert_eq!(
       Balances::free_balance(proposer),
-      balance_before.saturating_sub(10)
+      balance_before.saturating_sub(9)
     );
     assert_eq!(
       Balances::free_balance(ProposalFeeRecipient::get()),
@@ -2108,6 +2314,12 @@ fn primary_eligible_submission_rolls_back_fee_at_active_capacity() {
     let proposer = 10u64;
     set_vote_weight(proposer, 1);
     set_payload_preimage_state(H256::default(), true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      42,
+      ProposalPayloadKind::L1RootAction,
+      H256::default(),
+      proposer,
+    ));
     set_active_proposal_count(42, 16);
     let balance_before = Balances::free_balance(proposer);
     let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
@@ -2131,6 +2343,56 @@ fn primary_eligible_submission_rolls_back_fee_at_active_capacity() {
     assert_eq!(System::events(), events_before);
     assert!(!ActiveProposals::<Test>::contains_key(42, 107));
     assert_eq!(Governance::proposal_author(42, 107), None);
+  });
+}
+
+#[test]
+fn signed_submission_rejects_author_capacity_before_opening_fee_or_state() {
+  new_test_ext().execute_with(|| {
+    let domain = 44;
+    let proposer = 10u64;
+    let payload_hash = H256::repeat_byte(92);
+    for item_id in 0..8u32 {
+      ActiveProposals::<Test>::insert(
+        domain,
+        item_id,
+        crate::ActiveProposal { submitted_epoch: 1 },
+      );
+      crate::ProposalAuthorsByItem::<Test>::insert(domain, item_id, proposer);
+    }
+    set_active_proposal_count(domain, 8);
+    set_payload_preimage_state(payload_hash, true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      domain,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      proposer,
+    ));
+    let proposer_balance_before = Balances::free_balance(proposer);
+    let recipient_balance_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        domain,
+        108,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::ActiveProposalAuthorCapReached
+    );
+
+    assert_eq!(Balances::free_balance(proposer), proposer_balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_balance_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert!(!ActiveProposals::<Test>::contains_key(domain, 108));
+    assert_eq!(Governance::proposal_author(domain, 108), None);
+    assert_eq!(Governance::active_proposal_ids(domain).len(), 8);
   });
 }
 
@@ -2219,6 +2481,12 @@ fn signed_admission_rejection_precedence_is_authority_then_eligibility_then_dupl
 
     set_vote_weight(proposer, 1);
     set_payload_preimage_state(H256::default(), true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      42,
+      ProposalPayloadKind::L1RootAction,
+      H256::default(),
+      proposer,
+    ));
     assert_noop!(
       Governance::submit_signed_proposal(
         RuntimeOrigin::signed(proposer),
@@ -2249,6 +2517,14 @@ fn signed_admission_rejection_precedence_is_authority_then_eligibility_then_dupl
 #[test]
 fn signed_submission_rejects_when_opening_fee_balance_is_insufficient() {
   new_test_ext().execute_with(|| {
+    set_payload_preimage_state(H256::default(), true, false);
+    let _ = Balances::deposit_creating(&500, 2);
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      H256::default(),
+      500,
+    ));
     assert_noop!(
       submit_signed_intent_proposal(44, 107, 500),
       Error::<Test>::InsufficientProposalOpeningFeeBalance
@@ -2261,12 +2537,32 @@ fn signed_submission_rejects_when_opening_fee_balance_is_insufficient() {
 fn signed_submission_rolls_back_opening_fee_when_proposal_creation_fails() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
+    set_payload_preimage_state(H256::default(), true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      H256::default(),
+      proposer,
+    ));
     let balance_before = Balances::free_balance(proposer);
     assert_ok!(submit_signed_intent_proposal(44, 108, proposer));
+    assert_ok!(prepare_mock_payload_witness(
+      44,
+      ProposalPayloadKind::Intent,
+      H256::default(),
+      proposer,
+    ));
     let balance_after_success = Balances::free_balance(proposer);
     let recipient_after_success = Balances::free_balance(ProposalFeeRecipient::get());
     assert_noop!(
-      submit_signed_intent_proposal(44, 108, proposer),
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        44,
+        108,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        H256::default(),
+      ),
       Error::<Test>::ProposalAlreadyActive
     );
     assert_eq!(Balances::free_balance(proposer), balance_after_success);
@@ -2275,6 +2571,66 @@ fn signed_submission_rolls_back_opening_fee_when_proposal_creation_fails() {
       recipient_after_success
     );
     assert_eq!(balance_before.saturating_sub(balance_after_success), 10);
+  });
+}
+
+#[test]
+fn signed_submission_rolls_back_opening_fee_and_all_state_on_late_authorship_failure() {
+  new_test_ext().execute_with(|| {
+    let domain = 44;
+    let item_id = 109;
+    let proposer = 10u64;
+    let payload_hash = H256::repeat_byte(91);
+    set_payload_preimage_state(payload_hash, true, false);
+    assert_ok!(prepare_mock_payload_witness(
+      domain,
+      ProposalPayloadKind::Intent,
+      payload_hash,
+      proposer,
+    ));
+    ProposalAuthorshipTotalsByAccount::<Test>::insert(
+      domain,
+      proposer,
+      crate::ProposalAuthorshipTotals {
+        authored_proposals: u64::MAX,
+        successful_authored_proposals: 0,
+      },
+    );
+    let proposer_balance_before = Balances::free_balance(proposer);
+    let recipient_balance_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        domain,
+        item_id,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::Intent,
+        payload_hash,
+      ),
+      Error::<Test>::RewardCounterOverflow
+    );
+
+    assert_eq!(Balances::free_balance(proposer), proposer_balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_balance_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert!(!ActiveProposals::<Test>::contains_key(domain, item_id));
+    assert_eq!(Governance::proposal_author(domain, item_id), None);
+    assert_eq!(ProposalMetadataByItem::<Test>::get(domain, item_id), None);
+    assert_eq!(Governance::active_proposal_count(domain), 0);
+    assert!(Governance::active_proposal_ids(domain).is_empty());
+    assert!(Governance::proposal_maturity_bucket(3).is_empty());
+    assert_eq!(
+      ProposalAuthorshipTotalsByAccount::<Test>::get(domain, proposer),
+      crate::ProposalAuthorshipTotals {
+        authored_proposals: u64::MAX,
+        successful_authored_proposals: 0,
+      }
+    );
   });
 }
 

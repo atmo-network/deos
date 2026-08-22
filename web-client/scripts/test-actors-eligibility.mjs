@@ -94,13 +94,21 @@ test('projectActorEligibility projects canonical active classification', () => {
     value: {
       type: 'Active',
       value: {
-        terminal_reason: undefined,
-        execution_phase: { type: 'WaitingCadenceTick', value: 42n },
+        trigger: { type: 'Cadenced', value: { every_ticks: 120n } },
+        pending_signal: true,
+        placement: { type: 'Queue', value: 9n },
+        eligibility: {
+          terminal_reason: undefined,
+          execution_phase: { type: 'WaitingCadenceTick', value: 42n },
+        },
       },
     },
   });
   assert.deepEqual(projectActorEligibility(decoded), {
     type: 'Active',
+    trigger: { type: 'Cadenced', everyTicks: 120n },
+    pendingSignal: true,
+    placement: { type: 'Queue', ticket: 9n },
     terminalReason: null,
     executionPhase: { type: 'WaitingCadenceTick', tick: 42 },
   });
@@ -119,15 +127,79 @@ test('projectActorEligibility preserves absence, dormancy, terminal reason, and 
     value: {
       type: 'Active',
       value: {
-        terminal_reason: { type: 'WindowExpired', value: undefined },
-        execution_phase: { type: 'GlobalCircuitBreaker', value: undefined },
+        trigger: { type: 'Manual', value: undefined },
+        pending_signal: false,
+        placement: { type: 'Unplaced', value: undefined },
+        eligibility: {
+          terminal_reason: { type: 'WindowExpired', value: undefined },
+          execution_phase: { type: 'GlobalCircuitBreaker', value: undefined },
+        },
       },
     },
   });
   assert.deepEqual(projectActorEligibility(active), {
     type: 'Active',
+    trigger: { type: 'Manual' },
+    pendingSignal: false,
+    placement: { type: 'Unplaced' },
     terminalReason: 'WindowExpired',
     executionPhase: { type: 'GlobalCircuitBreaker' },
+  });
+});
+
+test('projectActorEligibility preserves semantic Crossing activation state', () => {
+  const feed = {
+    asset_in: { type: 'Native', value: undefined },
+    asset_out: { type: 'Local', value: 7 },
+    method: { type: 'PreExecutionSpot', value: undefined },
+    aggregation: { type: 'LastValue', value: undefined },
+    scale: 12,
+  };
+  const decoded = encodeProjection({
+    success: true,
+    value: {
+      type: 'Active',
+      value: {
+        trigger: {
+          type: 'ObservationCrossing',
+          value: {
+            feed,
+            direction: { type: 'Rising', value: undefined },
+            threshold: 100n,
+            rearm_threshold: 80n,
+            phase: { type: 'WaitingForRearm', value: undefined },
+            pending_revisions: 2,
+            processing_revision: 7n,
+          },
+        },
+        pending_signal: true,
+        placement: {
+          type: 'Wakeup',
+          value: { type: 'Block', value: 44 },
+        },
+        eligibility: {
+          terminal_reason: undefined,
+          execution_phase: { type: 'WaitingBlock', value: 44 },
+        },
+      },
+    },
+  });
+  assert.deepEqual(projectActorEligibility(decoded), {
+    type: 'Active',
+    trigger: {
+      type: 'ObservationCrossing',
+      feed,
+      direction: 'Rising',
+      threshold: 100n,
+      rearmThreshold: 80n,
+      phase: 'WaitingForRearm',
+      pendingRevisions: 2,
+      processingRevision: 7n,
+    },
+    pendingSignal: true,
+    placement: { type: 'WakeupBlock', block: 44 },
+    terminalReason: null,
+    executionPhase: { type: 'WaitingBlock', block: 44 },
   });
 });
 
@@ -158,8 +230,13 @@ test('projectActorEligibility rejects unknown runtime variants and malformed res
         value: {
           type: 'Active',
           value: {
-            terminal_reason: { type: 'Mystery' },
-            execution_phase: { type: 'Ready' },
+            trigger: { type: 'Manual' },
+            pending_signal: false,
+            placement: { type: 'Unplaced' },
+            eligibility: {
+              terminal_reason: { type: 'Mystery' },
+              execution_phase: { type: 'Ready' },
+            },
           },
         },
       }),
@@ -172,12 +249,39 @@ test('projectActorEligibility rejects unknown runtime variants and malformed res
         value: {
           type: 'Active',
           value: {
-            terminal_reason: undefined,
-            execution_phase: { type: 'Mystery' },
+            trigger: { type: 'Manual' },
+            pending_signal: false,
+            placement: { type: 'Unplaced' },
+            eligibility: {
+              terminal_reason: undefined,
+              execution_phase: { type: 'Mystery' },
+            },
           },
         },
       }),
     /Unsupported runtime execution phase Mystery/,
+  );
+  assert.throws(
+    () =>
+      projectActorEligibility({
+        success: true,
+        value: {
+          type: 'Active',
+          value: {
+            trigger: {
+              type: 'ObservationCrossing',
+              value: { direction: { type: 'Sideways' } },
+            },
+            pending_signal: false,
+            placement: { type: 'Unplaced' },
+            eligibility: {
+              terminal_reason: undefined,
+              execution_phase: { type: 'Ready' },
+            },
+          },
+        },
+      }),
+    /Unsupported runtime Crossing direction Sideways/,
   );
   assert.throws(
     () => projectActorEligibility({ success: 'maybe' }),

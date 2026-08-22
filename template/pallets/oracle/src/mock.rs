@@ -17,7 +17,7 @@ pub type AccountId = u64;
 
 std::thread_local! {
   static HOOK_FAILURE: RefCell<bool> = const { RefCell::new(false) };
-  static HOOK_CALLS: RefCell<Vec<(u32, u64)>> = const { RefCell::new(Vec::new()) };
+  static HOOK_CALLS: RefCell<Vec<(u32, u64, Option<u128>, u128)>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct TestObservationHook;
@@ -25,13 +25,15 @@ impl crate::OnObservationChanged<u32> for TestObservationHook {
   fn on_observation_changed(
     feed: u32,
     revision: crate::Revision,
+    previous: Option<crate::OracleValue>,
+    current: crate::OracleValue,
   ) -> polkadot_sdk::sp_runtime::DispatchResult {
     if HOOK_FAILURE.with(|value| *value.borrow()) {
       return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
         "ObservationHookRejected",
       ));
     }
-    HOOK_CALLS.with(|calls| calls.borrow_mut().push((feed, revision)));
+    HOOK_CALLS.with(|calls| calls.borrow_mut().push((feed, revision, previous, current)));
     Ok(())
   }
 
@@ -44,7 +46,7 @@ pub fn set_hook_failure(fail: bool) {
   HOOK_FAILURE.with(|value| *value.borrow_mut() = fail);
 }
 
-pub fn hook_calls() -> Vec<(u32, u64)> {
+pub fn hook_calls() -> Vec<(u32, u64, Option<u128>, u128)> {
   HOOK_CALLS.with(|calls| calls.borrow().clone())
 }
 

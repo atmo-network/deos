@@ -258,6 +258,20 @@ pub fn staking_share_balance_reads() -> u32 {
 
 pub struct MockObservationProvider;
 impl crate::ObservationProvider<u32, u64> for MockObservationProvider {
+  fn current(feed: &u32) -> crate::CanonicalObservationState {
+    match Self::observe(feed, 0, u32::MAX) {
+      crate::ScalarObservationState::Fresh { value, .. } => {
+        crate::CanonicalObservationState::Available { value, revision: 1 }
+      }
+      crate::ScalarObservationState::Uninitialized => {
+        crate::CanonicalObservationState::Uninitialized
+      }
+      crate::ScalarObservationState::Unavailable | crate::ScalarObservationState::Stale => {
+        crate::CanonicalObservationState::Unavailable
+      }
+    }
+  }
+
   fn observe(feed: &u32, _: u64, _: u32) -> crate::ScalarObservationState<u64> {
     OBSERVATIONS.with(|values| {
       values
@@ -994,6 +1008,13 @@ impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit 
   }
 }
 
+pub struct TestCrossingWorkerWeightLimit;
+impl Get<polkadot_sdk::sp_weights::Weight> for TestCrossingWorkerWeightLimit {
+  fn get() -> polkadot_sdk::sp_weights::Weight {
+    polkadot_sdk::sp_weights::Weight::from_parts(10_000_000_000, 2_000_000)
+  }
+}
+
 pub struct TestWakeupWeightLimit;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestWakeupWeightLimit {
   fn get() -> polkadot_sdk::sp_weights::Weight {
@@ -1121,6 +1142,12 @@ impl pallet_deos_actors::Config for Test {
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
   type ObservationPageSize = ConstU32<16>;
+  type MaxCrossingTransitionsPerFeed = ConstU32<4>;
+  type MaxCrossingTransitionsPerBlock = ConstU32<4>;
+  type MaxCrossingLeavesPerBlock = ConstU32<8>;
+  type MaxCrossingPagesPerBlock = ConstU32<8>;
+  type MaxCrossingActorsPerBlock = ConstU32<16>;
+  type CrossingWorkerWeightLimit = TestCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
   type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
@@ -1147,6 +1174,7 @@ impl pallet_deos_actors::Config for Test {
   type MinUserBalance = TestMinUserBalance;
   type WeightInfo = crate::weights::TestWeightInfo;
   type GenesisSystemActors = ();
+  type SystemActorContractValidator = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = MockBenchmarkHelper;
 }

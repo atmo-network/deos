@@ -14,6 +14,9 @@ REQUIRED_HEAVY_PROFILES=(
     "stress_10k_actors_queue_scheduler"
     "checkpoint_a_s6_dense_10k_wakeups_converge_without_drops"
 )
+PACKAGE_HEAVY_PROFILES=(
+    "crossing_scale_10k_zero_match_small_cohort_and_maximum_herd"
+)
 OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
 DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
 
@@ -97,6 +100,18 @@ verify_heavy_profiles_resolve_exactly_once() {
         log_info "  exact profile: ${profile} (1 test)"
     done
     log_success "All required heavy profiles resolve to exactly one test"
+
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --$CARGO_PROFILE -p pallet-deos-actors --locked -- --list 2>/dev/null)"
+    for profile in "${PACKAGE_HEAVY_PROFILES[@]}"; do
+        local matches
+        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
+        if [[ "$matches" -ne 1 ]]; then
+            log_error "Package heavy profile '${profile}' resolved to ${matches} test(s); expected exactly 1."
+            return 1
+        fi
+        log_info "  exact package profile: ${profile} (1 test)"
+    done
+    log_success "All package heavy profiles resolve to exactly one test"
 }
 
 run_gate() {
@@ -152,6 +167,12 @@ run_gate() {
             "Actors gate: exact heavy profile ${profile}" \
             "" \
             "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked ${profile} -- --ignored --nocapture"
+    done
+    for profile in "${PACKAGE_HEAVY_PROFILES[@]}"; do
+        run_shell_step \
+            "Actors gate: exact package heavy profile ${profile}" \
+            "" \
+            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-deos-actors --locked ${profile} -- --ignored --nocapture"
     done
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" != "1" ]]; then
         log_warning "Skipping occupancy profile"

@@ -159,6 +159,7 @@ function automationTriggerLabel(trigger?: {
   if (!trigger) return 'Unavailable';
   if (trigger.type === 'AddressEvent') return 'Address event';
   if (trigger.type === 'ObservationChange') return 'Observation change';
+  if (trigger.type === 'ObservationCrossing') return 'Observation crossing';
   if (trigger.type !== 'Cadenced') return trigger.type;
   const everyTicks = triggerRecord(trigger.value)?.every_ticks;
   const cadence =

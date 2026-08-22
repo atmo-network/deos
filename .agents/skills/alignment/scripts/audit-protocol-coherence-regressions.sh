@@ -349,8 +349,47 @@ main() {
         "Governance strategic-reserve regression evidence is missing"
     require_anchor 'signed_preimage_required: authority != ProposalSubmissionAuthority::AdminOnly' \
         "$governance_src/epoch_service.rs" "Governance signed-preimage policy owner is missing"
-    require_anchor 'ProposalPayloadPreimageProvider::validate_for_submission' \
-        "$governance_src/epoch_service.rs" "Signed proposal admission no longer validates the canonical preimage"
+    require_anchor 'Self::ensure_payload_admission_witness' \
+        "$governance_src/epoch_service.rs" "Signed proposal admission no longer requires the compact payload witness"
+    require_anchor 'PayloadAdmissionWitnesses::<T>::get' \
+        "$governance_src/epoch_service.rs" "Signed proposal admission no longer reads the canonical compact payload witness"
+    reject_pattern 'validate_for_witness' \
+        "Signed proposal admission regressed to loading and validating full preimage bytes" \
+        "$governance_src/epoch_service.rs"
+    require_anchor 'ProposalPayloadPreimageProvider::validate_for_witness' \
+        "$governance_src/lib.rs" "Bounded witness preparation no longer validates the canonical preimage"
+    require_anchor 'Hashing::hash\(bytes\)' \
+        "$runtime_configs/governance_config.rs" "Runtime witness validation no longer binds supplied bytes to the noted preimage hash"
+    reject_pattern 'get_preimage\(hash\)' \
+        "Witness preparation regressed to loading the generic preimage value from storage" \
+        "$runtime_configs/governance_config.rs"
+    reject_pattern 'DispatchClass::|Pays::' \
+        "Custom public call changed dispatch class or payment semantics outside the runtime dispatchability matrix" \
+        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/asset-registry/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/governance/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/oracle/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/staking/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/tmc/src/lib.rs"
+    require_anchor 'every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input' \
+        "$TEMPLATE_DIR/runtime/src/tests/dispatchability_matrix_tests.rs" "Custom-call dispatchability matrix is missing"
+    local custom_call_count expected_custom_call_count
+    custom_call_count="$(rg -N -o '#\[pallet::call_index\(' \
+        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/asset-registry/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/governance/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/oracle/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/staking/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/tmc/src/lib.rs" | wc -l | tr -d '[:space:]')"
+    expected_custom_call_count="$(awk \
+        '$1 == "const" && $2 == "EXPECTED_CUSTOM_CALL_FAMILIES:" { gsub(/;/, "", $5); print $5 }' \
+        "$TEMPLATE_DIR/runtime/src/tests/dispatchability_matrix_tests.rs")"
+    [[ -n "$expected_custom_call_count" && "$custom_call_count" == "$expected_custom_call_count" ]] || {
+        log_error "Custom-call source inventory ($custom_call_count) and dispatchability matrix ($expected_custom_call_count) diverged"
+        exit 1
+    }
     require_anchor 'signed_preimage_failures_precede_capacity_fee_events_and_state' \
         "$governance_src/tests.rs" "Hard signed-preimage rejection evidence is missing"
     reject_pattern '\b(?:proposal_submission_authority|proposal_opening_fee)\b' \

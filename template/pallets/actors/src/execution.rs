@@ -908,6 +908,11 @@ impl<T: Config> Pallet<T> {
     expected_contract: ActorContractOf<T>,
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
+    Self::validate_trigger(
+      &expected_contract.trigger,
+      expected_contract.cooldown_blocks,
+    )
+    .map_err(|_| SimulationError::InvalidContract)?;
     let state = match Self::load_actor_state(actor_id) {
       LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
@@ -939,8 +944,8 @@ impl<T: Config> Pallet<T> {
       }
       _ => {}
     }
-    let classification =
-      Self::classify_actor(actor_id, &instance).map_err(SimulationError::Classification)?;
+    let classification = Self::classify_actor_loaded(&instance, continuation.as_ref())
+      .map_err(SimulationError::Classification)?;
     if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
       return Err(SimulationError::GlobalCircuitBreaker);
     }

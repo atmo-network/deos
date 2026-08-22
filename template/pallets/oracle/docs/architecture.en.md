@@ -26,7 +26,7 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 `FeedId` remains the immutable identity key chosen by the host. `FeedConfig` stores the authorized producer, explicit meaning and provenance, scalar scale, aggregation policy, zero policy, and lifecycle. The package never infers semantic equivalence, reverse direction, market meaning, or producer trust.
 
-`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives only `(feed, revision)` after a changed scalar and declares its independent weight.
+`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current)` after a changed scalar and declares its independent weight. The hook failure rolls back both the Oracle value and downstream transition admission.
 
 ## Storage Topology
 
@@ -46,7 +46,7 @@ Try-state walks only host-bounded registries. It requires `FeedIds`, `Feeds`, `P
 
 Publication loads one feed, verifies the exact producer and Active lifecycle, applies the immutable zero policy, and computes LastValue or EMA. EMA uses `elapsed = max(current_block - updated_at, 1)` with `Perbill` floor arithmetic; block-age subtraction is the explicit observational-age clamp, while denominator, weighted-sum, and revision growth fail on checked overflow. Registration narrows decoded cardinalities with checked conversion before comparing host bounds. Observation presence, not scalar value, distinguishes initialization.
 
-The first accepted sample stores revision `1`. A changed published scalar increments revision with checked arithmetic and invokes `OnObservationChanged`. Equal output refreshes `updated_at` without hook or revision increment.
+The first accepted sample stores revision `1` and invokes `OnObservationChanged` with no previous value. A later changed scalar increments revision with checked arithmetic and supplies its exact committed previous and computed current values. Equal output refreshes `updated_at` without hook or revision increment.
 
 The complete path is transactional. Hook failure propagates its dispatch error and rolls back observation state and publication events. The package does not iterate subscribers, execute downstream work, persist history, retry a failed hook, or weaken the host's rollback semantics. Recovery is a new producer attempt after the host integration becomes available.
 

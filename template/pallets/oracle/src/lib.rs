@@ -79,12 +79,22 @@ pub enum ObservationState<BlockNumber> {
 }
 
 pub trait OnObservationChanged<FeedId> {
-  fn on_observation_changed(feed: FeedId, revision: Revision) -> DispatchResult;
+  fn on_observation_changed(
+    feed: FeedId,
+    revision: Revision,
+    previous: Option<OracleValue>,
+    current: OracleValue,
+  ) -> DispatchResult;
   fn weight() -> Weight;
 }
 
 impl<FeedId> OnObservationChanged<FeedId> for () {
-  fn on_observation_changed(_: FeedId, _: Revision) -> DispatchResult {
+  fn on_observation_changed(
+    _: FeedId,
+    _: Revision,
+    _: Option<OracleValue>,
+    _: OracleValue,
+  ) -> DispatchResult {
     Ok(())
   }
 
@@ -427,7 +437,12 @@ pub mod pallet {
         Some(observation) => (observation.revision, false),
       };
       if changed {
-        T::OnObservationChanged::on_observation_changed(feed, revision)?;
+        T::OnObservationChanged::on_observation_changed(
+          feed,
+          revision,
+          previous.map(|observation| observation.value),
+          value,
+        )?;
       }
       Observations::<T>::insert(
         feed,

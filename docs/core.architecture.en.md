@@ -143,6 +143,7 @@ Token onboarding composes explicit asset registration, pool or curve creation, a
 - `Static operations`: Tasks own no mutable workflow memory. Sparse scheduler-owned Continuation records only bounded unresolved-suffix progress while a Mutable run remains suspended.
 - `Observable automation`: One `CycleStarted` and terminal `CycleSummary` bound each logical cycle; continuation events correlate attempts. Sparse starvation transitions expose scheduler-budget phase changes.
 - `Bounded execution`: Actors admits opening plans or unresolved retry suffixes plus terminal cleanup under both Weight dimensions. No unbounded loops exist.
+- `Public-call dispatchability`: A runtime matrix enumerates all 60 public custom-pallet call families at maximum valid bounded input and requires each production-generated `Weight(RefTime, ProofSize)` to fit the Normal-class `max_extrinsic` and `max_total` envelopes. The protocol-coherence audit rejects an unreviewed custom dispatch-class override so the matrix's class contract cannot drift silently.
 
 ## 4. Deterministic Execution via Actors Scheduler
 
@@ -188,6 +189,8 @@ The system implements "Economic Backpressure" to handle volatility gracefully.
 ### 4.3 Adapter Architecture
 
 Actors delegates host behavior through typed runtime contracts:
+
+Reactive work follows `specialize detection -> unify activation -> unify execution`: Manual calls, certified address movement, broad observation changes, sparse observation crossings, and cadence deadlines retain distinct bounded detectors, then share one readiness latch, placement contract, cutoff, and FIFO.
 
 - `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
 - `DexOps`: caller-aware exact-input and exact-output swaps

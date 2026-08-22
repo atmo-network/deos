@@ -297,6 +297,11 @@ verify_weight_file_contract() {
         "scheduler_paged_mixed_scan"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
+        "crossing_worker_base"
+        "crossing_transition_unit"
+        "crossing_leaf_unit"
+        "crossing_page_unit"
+        "crossing_actor_unit"
         "predicate_set_evaluation"
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do

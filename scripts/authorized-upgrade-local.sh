@@ -455,6 +455,17 @@ try {
       ));
     }
     creationCalls.push(await encoded(
+      "derive compact typed payload-admission witness",
+      "Signed proposer",
+      api.tx.Governance.prepare_payload_admission_witness,
+      {
+        domain: governanceDomainId,
+        payload_kind: PapiEnum("L1RootAction"),
+        payload_hash: strategicPayloadHash,
+        payload: strategicPayloadBytes,
+      },
+    ));
+    creationCalls.push(await encoded(
       "create protocol L1RootAction proposal through AUTH-1",
       "Signed proposer with primary governance power",
       api.tx.Governance.submit_signed_proposal,
