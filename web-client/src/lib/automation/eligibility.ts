@@ -7,7 +7,9 @@ cooldown, window, retry backoff, breaker, or latch arithmetic.
 */
 export const ACTORS_ELIGIBILITY_RUNTIME_API =
   'ActorEligibilityApi_actor_eligibility' as const;
-export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 2 as const;
+export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 4 as const;
+export const ACTORS_TRIGGER_STATE_BOND_RUNTIME_API =
+  'ActorEligibilityApi_trigger_state_bond' as const;
 
 export type ActorEligibilityFailure =
   | 'ActorInvariant'
@@ -60,6 +62,7 @@ export type ActorTriggerActivation =
       threshold: bigint;
       rearmThreshold: bigint;
       phase: 'Armed' | 'WaitingForRearm';
+      installedAtRevision: bigint;
       pendingRevisions: number;
       processingRevision: bigint | null;
     }
@@ -205,6 +208,10 @@ function projectTriggerActivation(value: unknown): ActorTriggerActivation {
         'Crossing rearm threshold',
       ),
       phase,
+      installedAtRevision: asU64(
+        fields.installed_at_revision,
+        'Crossing installation revision',
+      ),
       pendingRevisions: asCount(
         fields.pending_revisions,
         'pending Crossing revisions',

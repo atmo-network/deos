@@ -876,6 +876,26 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
     super::assets_config::register_pool_lp_pair(asset1, asset2)
   }
 
+  fn prepare_observation_hook(
+    asset1: AssetKind,
+    asset2: AssetKind,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    let feed = super::oracle_config::deos_router_pool_feed(asset1, asset2);
+    if crate::Oracle::observations(feed).is_none() {
+      pallet_oracle::Observations::<Runtime>::insert(
+        feed,
+        pallet_oracle::Observation {
+          value: 10u128.pow(u32::from(feed.scale)).saturating_mul(99) / 100,
+          updated_at: crate::System::block_number(),
+          revision: 1,
+        },
+      );
+    }
+    <super::oracle_config::OraclePublicationBenchmarkHelper as pallet_oracle::PublicationBenchmarkHelper<
+      primitives::OracleFeedId,
+    >>::prepare_changed_hook(feed, pallet_oracle::ChangedHookBenchmarkTopology::Combined)
+  }
+
   fn create_tmc_curve(
     token_asset: AssetKind,
     collateral_asset: AssetKind,

@@ -223,7 +223,8 @@ normalize_weight_file() {
     sed -i 's/ pallet_xcm::WeightInfo/ polkadot_sdk::pallet_xcm::WeightInfo/' "$file"
     sed -i "s#${TEMPLATE_DIR}#template#g" "$file"
     sed -i -E "s#template/runtime/src/weights/\\.${pallet_name}\\.weights\\.[[:alnum:]]+#template/runtime/src/weights/${pallet_name}.rs#g" "$file"
-    if [[ "$pallet_name" == "pallet_oracle" ]]; then
+    if [[ "$pallet_name" == "pallet_oracle" ]] \
+        && grep -q 'fn register_feed_new_producer()' "$file"; then
         local measured_proof
         measured_proof="$(sed -n '/fn register_feed_new_producer()/,/^[[:space:]]*}/p' "$file" \
             | awk '/Measured:/ { gsub(/`/, "", $3); print $3; exit }')"
@@ -263,6 +264,13 @@ verify_weight_file_contract() {
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
         "close_actor_system_pure"
+        "close_actor_crossing_page"
+        "close_actor_crossing_tail"
+        "close_actor_crossing_cursor_repair"
+        "close_actor_crossing_middle"
+        "close_actor_observation_change"
+        "create_user_actor_crossing_existing"
+        "update_contract_observation_change"
         "condition_set_all_max"
         "condition_set_observation"
     )
@@ -340,6 +348,13 @@ run_pallet_benchmark() {
             "scheduler_cooldown_ineligible_idle"
             "scheduler_wakeup_sparse_gap_recovery"
             "close_actor_system_pure"
+            "close_actor_crossing_page"
+            "close_actor_crossing_tail"
+            "close_actor_crossing_cursor_repair"
+            "close_actor_crossing_middle"
+            "close_actor_observation_change"
+            "create_user_actor_crossing_existing"
+            "update_contract_observation_change"
             "precondition_all_max"
             "precondition_observation"
             "observation_fanout_blocked_page"

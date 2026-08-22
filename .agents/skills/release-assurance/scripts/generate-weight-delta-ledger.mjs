@@ -8,7 +8,8 @@ import process from 'node:process';
 
 const skill = path.resolve(import.meta.dirname, '..');
 const root = path.resolve(skill, '../../..');
-const baseline = 'v0.7.20';
+const baseline = 'v0.7.22';
+const candidate = '0.7.23';
 const output = path.join(skill, 'evidence/runtime-weight-delta-ledger.md');
 const check = process.argv.includes('--check');
 const weightFiles = [
@@ -127,7 +128,9 @@ for (const [pallet, file] of weightFiles) {
   for (const [method, body] of newMethods) {
     const current = weightFormula(body);
     const previous = oldMethods.has(method) ? weightFormula(oldMethods.get(method)) : null;
-    rows.push({ pallet, method, previous, current, reason: reason(pallet, method) });
+    if (!previous || JSON.stringify(previous) !== JSON.stringify(current)) {
+      rows.push({ pallet, method, previous, current, reason: reason(pallet, method) });
+    }
   }
   for (const method of oldMethods.keys()) {
     if (!newMethods.has(method)) retired.push(`${pallet} \`${method}\``);
@@ -141,13 +144,13 @@ const lines = [
   '',
   `This generated ledger compares the production Weight implementations in Git tag \`${baseline}\` with the candidate worktree. RefTime formulas exclude database Weight; reads and writes are therefore recorded independently. ProofSize is the generated conservative estimate. A parameterized formula records its generated slope rather than collapsing it to an unstated component value.`,
   '',
-  'The candidate files were generated with `frame-omni-bencher 0.22.0` against production runtime Wasm at 50 steps and 20 repeats. Asset Registry and Governance used compact Wasm SHA-256 `b87e7eacebd99fe4e272fd5363e23c75c6693bef2b495d68e39ce16623b39a12`; Oracle, Router, Staking, and TMC used `fd9445658d448278e3f78cda80db488c5cdcdff6550121eb4dbb16494e0f857b`; the final Actors cancellation/wakeup refresh used `af07e3836198baff08830b439fcd9697082285bfc10c4b2f95957969d684c1db`. After version and accepted files were integrated, the production release candidate rebuilt as `7117a599485125acf3e20095aea0d42a29900fe6f067dc24681103669108204e`. Exact release identity remains conditional on the final full-evidence gate and signed release attestation.',
+  `Candidate release: \`${candidate}\`. The locally validated production runtime was generated with \`./scripts/03-build-runtime.sh\`; compact Wasm SHA-256 is \`4b04e98b598cb0e72516e12382b742858ba720631f769b60be433d7e1acd989a\`. The accepted benchmark owners use \`frame-omni-bencher 0.22.0\` / CLI \`58.0.0\`, \`50\` steps, \`20\` repeats, compiled Wasm execution, RocksDB, 1,024 MiB cache, host \`fedora\`, and CPU \`AMD Ryzen 7 4800H with Radeon Graphics\`; each generated method records date, reads, writes, measured ProofSize, and conservative ProofSize in its authoritative source. The benchmark-runtime Wasm and production Wasm are distinct evidence identities. Exact candidate commit/tree identity remains unavailable until the validated worktree is committed through the authorized release gate.`, 
   '',
-  'Interpretation codes: `I` is the reserved-location identity guard remeasurement; `C` is a correctness-driven canonical-state, arithmetic, custody, rollback, or scheduler measurement; `P` is bounded phased Governance service; `M` is the merged complete actor-state probe replacing partial probes; `O` is measured duplicate-work deletion or lazy-read optimization.',
+  'Interpretation codes classify changed paths only: `I` identity guard; `C` correctness; `P` bounded service topology; `M` merged canonical work; `O` measured optimization.',
   '',
   '## Changed Production Paths',
   '',
-  '| Pallet | Weight method | RefTime: 0.7.20 → candidate | Base delta | ProofSize: 0.7.20 → candidate | Reads: 0.7.20 → candidate | Writes: 0.7.20 → candidate | Code |',
+  `| Pallet | Weight method | RefTime: ${baseline} → ${candidate} candidate | Base delta | ProofSize: ${baseline} → ${candidate} candidate | Reads: ${baseline} → ${candidate} candidate | Writes: ${baseline} → ${candidate} candidate | Code |`,
   '| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
 ];
 for (const row of rows) {
@@ -156,21 +159,22 @@ for (const row of rows) {
     `| ${row.pallet} | \`${row.method}\` | \`${old?.refTime ?? '—'} → ${row.current.refTime}\` | ${old ? delta(old.baseRefTime, row.current.baseRefTime) : 'new'} | \`${old?.proof ?? '—'} → ${row.current.proof}\` | \`${old?.reads ?? '—'} → ${row.current.reads}\` | \`${old?.writes ?? '—'} → ${row.current.writes}\` | ${row.reason} |`,
   );
 }
+if (!rows.length) {
+  lines.push('| None | No production Weight source delta | `—` | — | `—` | `—` | `—` | — |');
+}
 lines.push(
   '',
   '## Interpretation',
   '',
-  'The large scheduler wakeup, page-drain, fanout, and Continuation completion increases are accepted correctness costs rather than regressions on unchanged semantics. The prior paths probed only hot, contract, or selected Continuation partitions; the candidate charges the complete five-partition canonical actor-state classification and corruption rejection on every affected branch. `continuation_cancel` additionally measures exact middle-page wakeup invalidation before a retained pending signal is re-primed, preventing a stale physical slot from conflicting with the new live pointer. Governance service increases similarly pay for chronological phased progress, retained same-epoch suffixes, aggregate custody reconciliation, and checked arithmetic. No database or ProofSize increase is hidden inside a RefTime percentage.',
-  '',
-  'The measured optimization requirement is satisfied independently in multiple production paths. Ledger-only fee collection removes queue signaling and cuts base RefTime by 51.25%. Fresh independent Oracle observations skip duplicate reserve lookup, reducing exact-input Router task RefTime by 6.03% and exact-output by 6.93% in this tag-to-candidate ledger while preserving identical ProofSize and database envelopes. Canonical loaded-state carry also removes repeated actor-state reads from live-head execution; owning Actors architecture evidence records the matched slope comparison.',
-  '',
-  'Asset Registry coefficients are unchanged or lower apart from run minima comments, so the host-reserved `Here` rejection adds no database access. Governance base coefficients without a service-topology change remain within 4.11% except `cast_vote`; its 11.16% increase is explained by checked aggregate custody and replacement-vote reconciliation. The larger per-ballot slopes for `resolve_proposal_from_votes` and its force variant pay for checked tally folds and typed overflow instead of saturating vote totals. The final Oracle refresh lowers every base coefficient without increasing database or ProofSize envelopes. Router direct mint adds one read and 0.54% base RefTime for the independent reference guard. TMC distribution adds one read and 6.05% base RefTime to prevalidate the checked cumulative native-mint total before any mint; the four writes remain unchanged. Staking paths are lower or unchanged at the base except that retained-epoch work is now represented by explicit RefTime slopes in epoch opening/settlement rather than hidden in a fixed coefficient. The candidate rejects any future unexplained positive delta: regenerate this file, inspect each formula and storage annotation, and update semantics or code rather than accepting benchmark noise by default.',
+  rows.length
+    ? 'Every listed dimension requires review against the owning implementation and benchmark evidence. Positive deltas remain unexplained until the release candidate records their measured reason; this generated comparison does not accept them by itself.'
+    : `The ${candidate} candidate currently has no production Weight source delta from ${baseline}. Regenerate after accepted Weight changes; this source comparison does not substitute for final production-Wasm benchmark provenance.`,
   '',
   '## Retired Weight Owners',
   '',
   retired.length ? retired.map((item) => `- ${item}`).join('\n') : '- None.',
   '',
-  'The two retired Actors partition probes are replaced by `scheduler_actor_state_probe`; no runtime binding retains either partial owner.',
+  'Any retired owner requires implementation review before release acceptance; absence from the candidate alone does not prove safe replacement.',
   '',
   '## Reproduction',
   '',

@@ -1,5 +1,5 @@
+use super::ObservationValue;
 use super::lifecycle::ActorId;
-use super::{CrossingPhase, ObservationValue};
 use frame::prelude::*;
 
 pub type ObservationRevision = u64;
@@ -129,12 +129,9 @@ impl<MaxEntries: Get<u32>> Default for CrossingMemberPage<MaxEntries> {
 )]
 pub struct CrossingMembershipLocator<FeedId> {
   pub key: CrossingLeafKey<FeedId>,
-  pub role: CrossingMembershipRole,
-  pub phase: CrossingPhase,
   pub page: u32,
   pub offset: u32,
   pub generation: u64,
-  pub installed_at_revision: ObservationRevision,
 }
 
 #[derive(
@@ -186,6 +183,62 @@ pub struct CrossingRangeCursor {
   pub page: u32,
   pub offset: u32,
   pub exhausted: bool,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum CrossingWorkerFaultClass {
+  Invariant,
+  Capacity,
+  SchedulerExhausted,
+  Other,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct CrossingWorkerFault<FeedId> {
+  pub feed: FeedId,
+  pub revision: Option<ObservationRevision>,
+  pub threshold: Option<ObservationValue>,
+  pub class: CrossingWorkerFaultClass,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct ObservationFanoutWorkerFault<FeedId> {
+  pub feed: FeedId,
+  pub revision: ObservationRevision,
+  pub subscriber_page: Option<u32>,
+  pub class: CrossingWorkerFaultClass,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum CrossingWorkPlan {
+  Empty,
+  CompleteTransition,
+  SeekMiss,
+  OpenLeaf,
+  AdvanceLeaf,
+  AdvancePage,
+  SkipPostInstallationTransition,
+  SkipPostInstallationPairPending,
+  SkipPostInstallationPair,
+  RearmCohort,
+  RearmCohortPairPending,
+  RearmCohortPair,
+  FireCohortPending,
+  FireCohortPairPending,
+  FireCohortPlacedBatch,
+  FireCohortCoalescedPair,
+  FireCohortCoalesced,
+  FireCohortPlaced,
+  FireCohortClosed,
+  StructuralFault,
 }
 
 #[derive(

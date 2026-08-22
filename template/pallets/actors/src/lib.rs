@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![recursion_limit = "256"]
 
 extern crate alloc;
 
@@ -85,6 +86,36 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
+}
+
+pub trait TriggerStateBond<AccountId, Trigger, Balance> {
+  fn amount(trigger: &Trigger) -> Balance;
+  fn maximum() -> Balance;
+  fn set_bond(
+    owner: &AccountId,
+    current: Balance,
+    target: Balance,
+  ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
+}
+
+impl<AccountId, Trigger, Balance: Zero + Copy> TriggerStateBond<AccountId, Trigger, Balance>
+  for ()
+{
+  fn amount(_trigger: &Trigger) -> Balance {
+    Zero::zero()
+  }
+
+  fn maximum() -> Balance {
+    Zero::zero()
+  }
+
+  fn set_bond(
+    _owner: &AccountId,
+    _current: Balance,
+    _target: Balance,
+  ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
+    Ok(())
+  }
 }
 
 pub trait FeeCollector<AccountId, AssetId, Balance> {
@@ -250,15 +281,27 @@ sp_api::decl_runtime_apis! {
   /// the same pure owners as
   /// admission so clients do not reimplement cadence phase, cooldown, window
   /// floor, retry backoff, breaker, or latch arithmetic.
-  #[api_version(2)]
-  pub trait ActorEligibilityApi<FeedId, BlockNumber>
+  #[api_version(4)]
+  pub trait ActorEligibilityApi<FeedId, BlockNumber, Trigger, Balance>
   where
     FeedId: codec::Codec,
     BlockNumber: codec::Codec,
+    Trigger: codec::Codec,
+    Balance: codec::Codec,
   {
     fn actor_eligibility(
       actor_id: types::ActorId,
     ) -> Result<types::ActorEligibility<FeedId, BlockNumber>, types::ActorClassificationError>;
+
+    fn materialization_faults() -> (
+      Option<types::CrossingWorkerFault<FeedId>>,
+      Option<types::ObservationFanoutWorkerFault<FeedId>>,
+      Option<types::WakeupWorkerFault<BlockNumber>>,
+    );
+
+    fn crossing_capacity(feed: FeedId) -> (u32, u32, u32, u32);
+
+    fn trigger_state_bond(trigger: Trigger) -> Balance;
   }
 }
 
@@ -266,8 +309,8 @@ sp_api::decl_runtime_apis! {
 pub mod pallet {
   use super::{
     AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector, FeeEnvelopeError, FeeEnvelopeInput,
-    FundingAuthority, LiquidityOps, ObservationProvider, WeightInfo, compose_attempt_fee_envelope,
-    contract_steps_bound_is_valid,
+    FundingAuthority, LiquidityOps, ObservationProvider, TriggerStateBond, WeightInfo,
+    compose_attempt_fee_envelope, contract_steps_bound_is_valid,
   };
   use crate::adapters::{
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
@@ -352,6 +395,10 @@ pub mod pallet {
     #[pallet::constant]
     type ObservationPageSize: Get<u32>;
     #[pallet::constant]
+    type MaxCrossingMembersPerFeed: Get<u32>;
+    #[pallet::constant]
+    type MaxUserCrossingMembersPerFeed: Get<u32>;
+    #[pallet::constant]
     type MaxCrossingTransitionsPerFeed: Get<u32>;
     #[pallet::constant]
     type MaxCrossingTransitionsPerBlock: Get<u32>;
@@ -415,6 +462,7 @@ pub mod pallet {
     /// Runtime-bound upper weights for every Actors task variant
     type FeeSink: Get<Self::AccountId>;
     type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
+    type TriggerStateBond: TriggerStateBond<Self::AccountId, TriggerOf<Self>, Self::Balance>;
 
     #[pallet::constant]
     type MaxConsecutiveFailures: Get<u32>;
@@ -456,6 +504,22 @@ pub mod pallet {
     CrossingMembershipLocator<<T as Config>::ObservationFeedId>;
   pub type CrossingTransitionQueueOf<T> =
     BoundedVec<CrossingTransitionObligation, <T as Config>::MaxCrossingTransitionsPerFeed>;
+
+  #[derive(Clone, Copy)]
+  pub(crate) enum TriggerTransitionIntent {
+    GenesisInstallation,
+    CreateActive,
+    ActivateDormant,
+    ReplaceActive,
+    Deactivate,
+    Close,
+  }
+
+  pub(crate) struct TriggerTransitionPlan<T: Config> {
+    intent: TriggerTransitionIntent,
+    crossing: crate::crossing::CrossingMembershipTransition<T::ObservationFeedId>,
+    observation_feeds: ActorObservationFeedsOf<T>,
+  }
 
   pub type TriggerOf<T> = Trigger<
     <T as frame_system::Config>::AccountId,
@@ -557,7 +621,7 @@ pub mod pallet {
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
 
   pub type ActorFundingStateOf<T> =
-    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
+    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>, <T as Config>::Balance>;
 
   pub type ActorIdentityOf<T> =
     ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
@@ -581,7 +645,7 @@ pub mod pallet {
   #[pallet::storage_version(STORAGE_VERSION)]
   pub struct Pallet<T>(_);
 
-  const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+  const STORAGE_VERSION: StorageVersion = StorageVersion::new(9);
 
   #[pallet::storage]
   #[pallet::getter(fn next_actor_id)]
@@ -635,7 +699,7 @@ pub mod pallet {
         wakeup_pointer: hot.wakeup_pointer,
         last_control_mutation_block: identity.last_control_mutation_block,
         schedule_anchor: hot.schedule_anchor,
-        cadence_anchor_tick: hot.cadence_anchor_tick,
+        cadence_anchor_tick: hot.trigger_runtime_state.cadence_anchor_tick(),
         last_cycle_block: hot.last_cycle_block,
       }
     }
@@ -650,7 +714,10 @@ pub mod pallet {
         (None, None, None, None, None) => LoadedActorStateOf::NotRegistered,
         (Some(identity), None, None, None, None) => LoadedActorStateOf::Dormant(identity),
         (Some(identity), Some(hot), Some(contract), Some(funding), continuation)
-          if (hot.cycle_state == CycleState::Suspended) == continuation.is_some() =>
+          if (hot.cycle_state == CycleState::Suspended) == continuation.is_some()
+            && hot
+              .trigger_runtime_state
+              .is_compatible_with(&contract.trigger) =>
         {
           LoadedActorStateOf::Active(ActiveActorState {
             identity,
@@ -724,23 +791,113 @@ pub mod pallet {
       )
     }
 
+    pub(crate) fn preflight_trigger_transition(
+      actor_id: ActorId,
+      trigger: &TriggerOf<T>,
+      intent: TriggerTransitionIntent,
+    ) -> Result<TriggerTransitionPlan<T>, DispatchError> {
+      Ok(TriggerTransitionPlan {
+        intent,
+        crossing: Self::preflight_crossing_membership(actor_id, trigger)?,
+        observation_feeds: Self::preflight_observation_subscription_replace(actor_id, trigger)?,
+      })
+    }
+
+    fn preflight_trigger_cleanup(
+      actor_id: ActorId,
+      intent: TriggerTransitionIntent,
+    ) -> Result<TriggerTransitionPlan<T>, DispatchError> {
+      ensure!(
+        matches!(
+          intent,
+          TriggerTransitionIntent::Deactivate | TriggerTransitionIntent::Close
+        ),
+        Error::<T>::ActorInvariant
+      );
+      Self::preflight_remove_observation_subscriptions(actor_id)?;
+      Self::preflight_trigger_transition(actor_id, &TriggerOf::<T>::Manual, intent)
+    }
+
+    fn commit_trigger_transition(
+      actor_id: ActorId,
+      plan: TriggerTransitionPlan<T>,
+      prospective_is_user: Option<bool>,
+    ) -> Result<Option<(CrossingPhase, ObservationRevision)>, DispatchError> {
+      let _intent = plan.intent;
+      let is_user = prospective_is_user.unwrap_or_else(|| {
+        ActorIdentities::<T>::get(actor_id)
+          .is_some_and(|identity| matches!(identity.actor_class, ActorClass::User { .. }))
+      });
+      let crossing_state = Self::commit_crossing_membership(actor_id, plan.crossing, is_user)?;
+      Self::commit_observation_subscription_replace(actor_id, plan.observation_feeds)?;
+      Ok(crossing_state)
+    }
+
     pub(crate) fn insert_active_actor(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
-      hot: ActorHotStateOf<T>,
+      mut hot: ActorHotStateOf<T>,
       contract: ActorContractOf<T>,
+      intent: TriggerTransitionIntent,
     ) -> DispatchResult {
-      Self::replace_crossing_membership(actor_id, &contract.trigger)?;
-      Self::replace_observation_subscriptions(actor_id, &contract.trigger)?;
+      let transition = Self::preflight_trigger_transition(actor_id, &contract.trigger, intent)?;
+      let crossing_state = Self::commit_trigger_transition(
+        actor_id,
+        transition,
+        Some(matches!(identity.actor_class, ActorClass::User { .. })),
+      )?;
+      hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
+        &contract.trigger,
+        hot.trigger_runtime_state.cadence_anchor_tick(),
+        crossing_state,
+      )?;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
       ActorContracts::<T>::insert(actor_id, contract);
       Ok(())
     }
 
-    pub(crate) fn remove_active_actor(actor_id: ActorId) -> DispatchResult {
-      Self::remove_crossing_membership(actor_id)?;
-      Self::remove_observation_subscriptions(actor_id)?;
+    fn provisional_trigger_runtime_state(
+      trigger: &TriggerOf<T>,
+      cadence_anchor_tick: Option<SchedulerTick>,
+    ) -> TriggerRuntimeState {
+      if matches!(trigger, Trigger::Cadenced { .. }) {
+        TriggerRuntimeState::Cadenced {
+          anchor_tick: cadence_anchor_tick,
+        }
+      } else {
+        TriggerRuntimeState::Stateless
+      }
+    }
+
+    fn installed_trigger_runtime_state(
+      trigger: &TriggerOf<T>,
+      cadence_anchor_tick: Option<SchedulerTick>,
+      crossing_state: Option<(CrossingPhase, ObservationRevision)>,
+    ) -> Result<TriggerRuntimeState, DispatchError> {
+      match trigger {
+        Trigger::ObservationCrossing { .. } => {
+          let (phase, installed_at_revision) =
+            crossing_state.ok_or(Error::<T>::CrossingIndexInvariant)?;
+          Ok(TriggerRuntimeState::ObservationCrossing {
+            phase,
+            installed_at_revision,
+          })
+        }
+        Trigger::Cadenced { .. } => Ok(TriggerRuntimeState::Cadenced {
+          anchor_tick: cadence_anchor_tick,
+        }),
+        Trigger::Manual | Trigger::AddressEvent { .. } | Trigger::ObservationChange { .. } => {
+          Ok(TriggerRuntimeState::Stateless)
+        }
+      }
+    }
+
+    pub(crate) fn remove_active_actor(
+      actor_id: ActorId,
+      trigger_transition: TriggerTransitionPlan<T>,
+    ) -> DispatchResult {
+      Self::commit_trigger_transition(actor_id, trigger_transition, None)?;
       ActorHot::<T>::remove(actor_id);
       ActorContracts::<T>::remove(actor_id);
       ContinuationStateStore::<T>::remove(actor_id);
@@ -829,6 +986,11 @@ pub mod pallet {
   /// Clock selected first when both temporal domains have due work.
   #[pallet::storage]
   pub type NextWakeupClock<T> = StorageValue<_, WakeupClock, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_worker_fault)]
+  pub type WakeupWorkerFaultState<T: Config> =
+    StorageValue<_, WakeupWorkerFault<BlockNumberFor<T>>, OptionQuery>;
 
   pub type OwnerSlotBitmap = [u8; 32];
 
@@ -929,6 +1091,11 @@ pub mod pallet {
   pub type DirtyObservationListState<T: Config> =
     StorageValue<_, DirtyObservationList<T::ObservationFeedId>, ValueQuery>;
 
+  #[pallet::storage]
+  #[pallet::getter(fn observation_fanout_worker_fault)]
+  pub type ObservationFanoutWorkerFaultState<T: Config> =
+    StorageValue<_, ObservationFanoutWorkerFault<T::ObservationFeedId>, OptionQuery>;
+
   /// Exact current Crossing obligation owned by one active Actor.
   #[pallet::storage]
   #[pallet::getter(fn crossing_membership)]
@@ -963,6 +1130,12 @@ pub mod pallet {
   pub type CrossingFeedMembershipCount<T: Config> =
     StorageMap<_, Blake2_128Concat, T::ObservationFeedId, u32, ValueQuery>;
 
+  /// Exact live User Crossing membership count per feed; System capacity remains reserved.
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_user_feed_membership_count)]
+  pub type CrossingUserFeedMembershipCount<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, u32, ValueQuery>;
+
   /// Exact bounded revision queue retained while one feed has Crossing members.
   #[pallet::storage]
   #[pallet::getter(fn crossing_transition_queue)]
@@ -995,6 +1168,16 @@ pub mod pallet {
   #[pallet::getter(fn crossing_range_cursor)]
   pub type CrossingRangeCursors<T: Config> =
     StorageMap<_, Blake2_128Concat, T::ObservationFeedId, CrossingRangeCursor, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn crossing_worker_fault)]
+  pub type CrossingWorkerFaultState<T: Config> =
+    StorageValue<_, CrossingWorkerFault<T::ObservationFeedId>, OptionQuery>;
+
+  /// Round-robin start family: 0 wakeups, 1 Crossing, 2 broad fanout.
+  #[pallet::storage]
+  #[pallet::getter(fn materialization_family_cursor)]
+  pub type MaterializationFamilyCursor<T> = StorageValue<_, u8, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
@@ -1132,9 +1315,12 @@ pub mod pallet {
           cycle_nonce: 0,
           last_control_mutation_block: Zero::zero(),
         };
+        let trigger_runtime_state =
+          Pallet::<T>::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
+          trigger_runtime_state,
           unsuccessful_attempt_streak: 0,
           pending_signal: false,
           queue_ticket: None,
@@ -1143,7 +1329,6 @@ pub mod pallet {
             .window
             .map(|window| Pallet::<T>::window_terminal_at(&window)),
           schedule_anchor,
-          cadence_anchor_tick,
           last_cycle_block: None,
         };
         let active_count = Pallet::<T>::active_instance_count();
@@ -1160,16 +1345,23 @@ pub mod pallet {
           "duplicate genesis System sovereign locator: {actor_id}"
         );
         SystemSovereigns::<T>::insert(actor_id, SystemSovereignState::Occupied(actor_id));
-        SystemSovereignCount::<T>::mutate(|count| *count += 1);
+        SystemSovereignCount::<T>::mutate(|count| *count = count.saturating_add(1));
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        Pallet::<T>::insert_active_actor(actor_id, identity, hot, contract)
-          .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}"));
+        Pallet::<T>::insert_active_actor(
+          actor_id,
+          identity,
+          hot,
+          contract,
+          TriggerTransitionIntent::GenesisInstallation,
+        )
+        .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}")); // deos-bypass: panic-owner genesis construction fails before launch
         ActorFunding::<T>::insert(
           actor_id,
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
+            trigger_state_bond: Zero::zero(),
           },
         );
         ActiveActorCount::<T>::put(
@@ -1230,7 +1422,7 @@ pub mod pallet {
           "duplicate genesis System sovereign locator: {actor_id}"
         );
         SystemSovereigns::<T>::insert(actor_id, SystemSovereignState::Occupied(actor_id));
-        SystemSovereignCount::<T>::mutate(|count| *count += 1);
+        SystemSovereignCount::<T>::mutate(|count| *count = count.saturating_add(1));
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         ActorIdentities::<T>::insert(actor_id, identity);
@@ -1260,8 +1452,66 @@ pub mod pallet {
           "duplicate genesis System sovereign locator: {actor_id}"
         );
         SystemSovereigns::<T>::insert(actor_id, SystemSovereignState::Vacant);
-        SystemSovereignCount::<T>::mutate(|count| *count += 1);
+        SystemSovereignCount::<T>::mutate(|count| *count = count.saturating_add(1));
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
+      }
+    }
+  }
+
+  impl<T: Config> Pallet<T> {
+    pub(crate) fn materialization_family_has_work(family: u8, now: BlockNumberFor<T>) -> bool {
+      match family {
+        0 if !WakeupWorkerFaultState::<T>::exists() => {
+          let Ok(now_tick) = Self::current_scheduler_tick() else {
+            return false;
+          };
+          [WakeupClock::Block, WakeupClock::Tick]
+            .into_iter()
+            .filter_map(Self::wakeup_cursor_peek_key)
+            .any(|key| match key {
+              WakeupKey::Block(block) => block <= now,
+              WakeupKey::Tick(tick) => tick <= now_tick,
+            })
+        }
+        1 => {
+          !CrossingWorkerFaultState::<T>::exists()
+            && CrossingPendingFeedListState::<T>::get().count > 0
+        }
+        2 => {
+          !ObservationFanoutWorkerFaultState::<T>::exists()
+            && DirtyObservationListState::<T>::get().count > 0
+        }
+        _ => false,
+      }
+    }
+
+    fn service_materialization_family(
+      family: u8,
+      now: BlockNumberFor<T>,
+      remaining: Weight,
+      wakeups: &mut WakeupDrainStats,
+      crossing: &mut crate::crossing::CrossingWorkCounters,
+      fanout_pages: &mut u32,
+    ) -> Weight {
+      match family {
+        0 => {
+          let mut meter = WeightMeter::with_limit(remaining);
+          *wakeups = Self::drain_overdue_wakeups_cursor_resuming(now, &mut meter, *wakeups);
+          meter.consumed()
+        }
+        1 => {
+          let (consumed, updated) =
+            Self::service_crossing_transitions_resuming(remaining, *crossing);
+          *crossing = updated;
+          consumed
+        }
+        2 => {
+          let (consumed, updated) =
+            Self::fanout_dirty_observations_with_pages(remaining, *fanout_pages);
+          *fanout_pages = updated;
+          consumed
+        }
+        _ => Weight::zero(),
       }
     }
   }
@@ -1340,6 +1590,16 @@ pub mod pallet {
         "ObservationPageSize must be non-zero"
       );
       assert!(
+        T::MaxCrossingMembersPerFeed::get() > 0
+          && T::MaxCrossingMembersPerFeed::get() <= T::MaxActiveActors::get(),
+        "MaxCrossingMembersPerFeed must be non-zero and bounded by active capacity"
+      );
+      assert!(
+        T::MaxUserCrossingMembersPerFeed::get() > 0
+          && T::MaxUserCrossingMembersPerFeed::get() < T::MaxCrossingMembersPerFeed::get(),
+        "MaxUserCrossingMembersPerFeed must leave positive System capacity"
+      );
+      assert!(
         T::MaxCrossingTransitionsPerFeed::get() > 0,
         "MaxCrossingTransitionsPerFeed must be non-zero"
       );
@@ -1369,10 +1629,53 @@ pub mod pallet {
         fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0,
         "observation fanout Weight limit must be non-zero in both dimensions"
       );
+      let fanout_unit = T::WeightInfo::observation_fanout_base()
+        .saturating_add(T::WeightInfo::observation_fanout_page());
+      assert!(
+        fanout_unit.all_lte(fanout_limit),
+        "positive observation fanout cap must admit one complete page unit"
+      );
+      let crossing_branch = T::WeightInfo::crossing_transition_unit()
+        .max(T::WeightInfo::crossing_leaf_unit())
+        .max(T::WeightInfo::crossing_page_unit())
+        .max(T::WeightInfo::crossing_rearm_unit())
+        .max(T::WeightInfo::crossing_rearm_pair_unit())
+        .max(T::WeightInfo::crossing_coalesced_unit())
+        .max(T::WeightInfo::crossing_coalesced_pair_unit())
+        .max(T::WeightInfo::crossing_placed_unit())
+        .max(T::WeightInfo::crossing_placed_pair_unit())
+        .max(T::WeightInfo::crossing_skip_unit())
+        .max(T::WeightInfo::crossing_skip_pair_unit())
+        .max(T::WeightInfo::crossing_actor_unit());
+      let crossing_unit = T::WeightInfo::crossing_worker_base()
+        .saturating_add(T::WeightInfo::crossing_work_probe())
+        .saturating_add(
+          T::WeightInfo::crossing_fire_pair_probe()
+            .max(T::WeightInfo::crossing_rearm_pair_probe())
+            .max(T::WeightInfo::crossing_skip_pair_probe()),
+        )
+        .saturating_add(crossing_branch);
+      assert!(
+        crossing_unit.all_lte(crossing_limit),
+        "positive Crossing cap must admit one complete maximum unit"
+      );
       let wakeup_limit = T::WakeupWeightLimit::get();
       assert!(
         wakeup_limit.ref_time() > 0 && wakeup_limit.proof_size() > 0,
         "wakeup worker Weight limit must be non-zero in both dimensions"
+      );
+      let wakeup_unit = T::WeightInfo::scheduler_wakeup_cursor_worker_future()
+        .saturating_add(Self::wakeup_cursor_drain_unit_weight_upper(true));
+      assert!(
+        wakeup_unit.all_lte(wakeup_limit),
+        "positive wakeup cap must admit one complete maximum unit"
+      );
+      let minimum_quanta = Self::materialization_family_minimum(0)
+        .saturating_add(Self::materialization_family_minimum(1))
+        .saturating_add(Self::materialization_family_minimum(2));
+      assert!(
+        minimum_quanta.all_lte(Self::materialization_weight_limit()),
+        "shared materialization envelope must admit one complete maximum unit from every family"
       );
       let actor_service = Self::guaranteed_actor_service_weight()
         .expect("configured housekeeping Weight must fit ActorOnIdleReserve");
@@ -1395,11 +1698,13 @@ pub mod pallet {
         remaining_weight.proof_size().min(reserved.proof_size()),
       );
       let base_weight = T::WeightInfo::scheduler_on_idle_base();
-      if !base_weight.all_lte(available) {
+      let coordinator_weight = T::WeightInfo::materialization_coordinator_base();
+      let fixed_weight = base_weight.saturating_add(coordinator_weight);
+      if !fixed_weight.all_lte(available) {
         return Weight::zero();
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      let after_base = available.saturating_sub(base_weight);
+      let after_base = available.saturating_sub(fixed_weight);
       let cleanup_units = u32::from(QueueHead::<T>::get() < QueueTail::<T>::get());
       let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
       let saturated_cleanup_weight = if cleanup_units > 0
@@ -1416,42 +1721,66 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_cleanup = after_base.saturating_sub(saturated_cleanup_weight);
-      // Wakeup pass: due wakeups and bounded lazy physical cleanup before fanout (spec 8.2.1).
-      // The worker is bounded component-wise by both its configured ceiling and the actual
-      // on_idle budget left after base work and saturated queue cleanup.
-      let configured_wakeup_limit = T::WakeupWeightLimit::get();
-      let wakeup_limit = Weight::from_parts(
-        configured_wakeup_limit
+      let family_cursor = MaterializationFamilyCursor::<T>::get();
+      if family_cursor >= 3 {
+        return fixed_weight.saturating_add(saturated_cleanup_weight);
+      }
+      let mut materialization_weight = Weight::zero();
+      let shared_limit = Self::materialization_weight_limit();
+      let mut remaining_materialization_budget = Weight::from_parts(
+        shared_limit
           .ref_time()
           .min(remaining_after_cleanup.ref_time()),
-        configured_wakeup_limit
+        shared_limit
           .proof_size()
           .min(remaining_after_cleanup.proof_size()),
       );
-      let mut wakeup_meter = WeightMeter::with_limit(wakeup_limit);
-      Self::drain_overdue_wakeups_cursor(now, &mut wakeup_meter);
-      let wakeup_weight = wakeup_meter.consumed();
-      let remaining_after_wakeups = remaining_after_cleanup.saturating_sub(wakeup_weight);
-      // Crossing pass: revision-ordered sparse threshold materialization before broad fanout.
-      let crossing_weight = if CrossingPendingFeedListState::<T>::get().count > 0 {
-        Self::service_crossing_transitions(remaining_after_wakeups)
-      } else {
-        Weight::zero()
-      };
-      let remaining_after_crossing = remaining_after_wakeups.saturating_sub(crossing_weight);
-      // Fanout pass: observation fanout under ObservationFanoutWeightLimit, after wakeups and
-      // before the cutoff/actor-execution pass.
-      let fanout_weight = if DirtyObservationListState::<T>::get().count > 0 {
-        Self::fanout_dirty_observations(remaining_after_crossing)
-      } else {
-        Weight::zero()
-      };
-      let remaining_after_housekeeping = remaining_after_crossing.saturating_sub(fanout_weight);
-      let housekeeping_weight = base_weight
+      let mut wakeup_counters = WakeupDrainStats::default();
+      let mut crossing_counters = crate::crossing::CrossingWorkCounters::default();
+      let mut fanout_pages = 0u32;
+      let all_minimum_quanta = Self::materialization_family_minimum(0)
+        .saturating_add(Self::materialization_family_minimum(1))
+        .saturating_add(Self::materialization_family_minimum(2));
+      let can_reserve_all_minima = all_minimum_quanta.all_lte(remaining_materialization_budget);
+      for offset in 0u8..3 {
+        let family = family_cursor.saturating_add(offset) % 3;
+        let family_budget = Self::materialization_family_budget(
+          family_cursor,
+          offset,
+          remaining_materialization_budget,
+          can_reserve_all_minima,
+        );
+        let consumed = Self::service_materialization_family(
+          family,
+          now,
+          family_budget,
+          &mut wakeup_counters,
+          &mut crossing_counters,
+          &mut fanout_pages,
+        );
+        materialization_weight = materialization_weight.saturating_add(consumed);
+        remaining_materialization_budget =
+          remaining_materialization_budget.saturating_sub(consumed);
+      }
+      if !remaining_materialization_budget.is_zero()
+        && Self::materialization_family_has_work(family_cursor, now)
+      {
+        let consumed = Self::service_materialization_family(
+          family_cursor,
+          now,
+          remaining_materialization_budget,
+          &mut wakeup_counters,
+          &mut crossing_counters,
+          &mut fanout_pages,
+        );
+        materialization_weight = materialization_weight.saturating_add(consumed);
+      }
+      MaterializationFamilyCursor::<T>::put(family_cursor.saturating_add(1) % 3);
+      let remaining_after_housekeeping =
+        remaining_after_cleanup.saturating_sub(materialization_weight);
+      let housekeeping_weight = fixed_weight
         .saturating_add(saturated_cleanup_weight)
-        .saturating_add(wakeup_weight)
-        .saturating_add(crossing_weight)
-        .saturating_add(fanout_weight);
+        .saturating_add(materialization_weight);
       if breaker_active {
         return housekeeping_weight;
       }
@@ -1631,6 +1960,22 @@ pub mod pallet {
     GlobalCircuitBreakerSet {
       paused: bool,
     },
+    CrossingWorkerFaultCleared {
+      feed: T::ObservationFeedId,
+      revision: Option<ObservationRevision>,
+      class: CrossingWorkerFaultClass,
+    },
+    ObservationFanoutWorkerFaultCleared {
+      feed: T::ObservationFeedId,
+      revision: ObservationRevision,
+      subscriber_page: Option<u32>,
+      class: CrossingWorkerFaultClass,
+    },
+    WakeupWorkerFaultCleared {
+      key: WakeupKey<BlockNumberFor<T>>,
+      page: WakeupPageId,
+      class: CrossingWorkerFaultClass,
+    },
     ManualTriggerSet {
       actor_id: ActorId,
     },
@@ -1723,10 +2068,14 @@ pub mod pallet {
     ObservationUnavailable,
     ObservationUninitialized,
     CrossingIndexCapacityExceeded,
+    CrossingUserCapacityExceeded,
     CrossingIndexInvariant,
     CrossingGenerationExhausted,
     CrossingTransitionCapacityExceeded,
     CrossingTransitionInvariant,
+    CrossingWorkerFaultNotFound,
+    ObservationFanoutWorkerFaultNotFound,
+    WakeupWorkerFaultNotFound,
     SystemActorTopologyInvalid,
     AdmissionBoundOverflow,
   }
@@ -1734,7 +2083,7 @@ pub mod pallet {
   #[pallet::call]
   impl<T: Config> Pallet<T> {
     #[pallet::call_index(0)]
-    #[pallet::weight(T::WeightInfo::create_user_actor())]
+    #[pallet::weight(T::WeightInfo::create_user_actor().max(T::WeightInfo::create_user_actor_crossing_new_page()))]
     pub fn create_user_actor(
       origin: OriginFor<T>,
       mutability: Mutability,
@@ -1745,7 +2094,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(1)]
-    #[pallet::weight(T::WeightInfo::create_user_actor_at_slot())]
+    #[pallet::weight(T::WeightInfo::create_user_actor_at_slot().max(T::WeightInfo::create_user_actor_crossing_new_page()))]
     pub fn create_user_actor_at_slot(
       origin: OriginFor<T>,
       owner_slot: u8,
@@ -1759,6 +2108,7 @@ pub mod pallet {
     #[pallet::call_index(2)]
     #[pallet::weight(if contract.is_some() {
       T::WeightInfo::create_system_actor()
+        .max(T::WeightInfo::create_user_actor_crossing_new_page())
     } else {
       T::WeightInfo::create_dormant_system_actor()
     })]
@@ -1773,7 +2123,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(3)]
-    #[pallet::weight(T::WeightInfo::create_system_actor_at_sovereign_id())]
+    #[pallet::weight(T::WeightInfo::create_system_actor_at_sovereign_id().max(T::WeightInfo::create_user_actor_crossing_new_page()))]
     pub fn create_system_actor_at_sovereign_id(
       origin: OriginFor<T>,
       sovereign_id: SystemSovereignId,
@@ -1968,6 +2318,13 @@ pub mod pallet {
       }
       let new_tracked = Self::derive_funding_tracked_assets(&contract.steps)?;
       let mut funding_state = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let target_trigger_state_bond = if snapshot.actor_class.actor_type() == ActorType::User {
+        T::TriggerStateBond::amount(&contract.trigger)
+      } else {
+        Zero::zero()
+      };
+      let current_trigger_state_bond = funding_state.trigger_state_bond;
+      funding_state.trigger_state_bond = target_trigger_state_bond;
       funding_state.funding_tracked_assets = new_tracked.clone();
       funding_state
         .funding_accumulated
@@ -1977,22 +2334,41 @@ pub mod pallet {
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
       let cadence_anchor_tick =
         Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
+      let trigger_transition = schedule_changed
+        .then(|| {
+          Self::preflight_trigger_transition(
+            actor_id,
+            &contract.trigger,
+            TriggerTransitionIntent::ReplaceActive,
+          )
+        })
+        .transpose()?;
       Self::with_control_transaction(|| {
+        T::TriggerStateBond::set_bond(
+          &snapshot.owner,
+          current_trigger_state_bond,
+          target_trigger_state_bond,
+        )?;
         let continuation_cancelled = if let Some(reason) = cancellation_reason {
           Self::cancel_continuation_internal(actor_id, reason, None)?
         } else {
           false
         };
-        if schedule_changed {
-          Self::replace_crossing_membership(actor_id, &contract.trigger)?;
-          Self::replace_observation_subscriptions(actor_id, &contract.trigger)?;
-        }
+        let crossing_state = if let Some(transition) = trigger_transition {
+          Self::commit_trigger_transition(actor_id, transition, None)?
+        } else {
+          None
+        };
         ActorContracts::<T>::insert(actor_id, contract.clone());
         ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
           let hot = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
           if schedule_changed {
             hot.schedule_anchor = schedule_anchor;
-            hot.cadence_anchor_tick = cadence_anchor_tick;
+            hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
+              &contract.trigger,
+              cadence_anchor_tick,
+              crossing_state,
+            )?;
             hot.terminal_at = contract
               .window
               .map(|window| Self::window_terminal_at(&window));
@@ -2009,6 +2385,8 @@ pub mod pallet {
         })?;
         ActorFunding::<T>::insert(actor_id, funding_state);
         Self::deposit_event(Event::ContractUpdated { actor_id });
+        #[cfg(test)]
+        crate::mock::control_atomicity_checkpoint(actor_id)?;
         if schedule_changed || continuation_cancelled {
           Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
         }
@@ -2144,6 +2522,49 @@ pub mod pallet {
       );
       Self::ensure_control_mutation_allowed(&instance, frame_system::Pallet::<T>::block_number())?;
       Self::do_deactivate_actor(actor_id, instance)
+    }
+
+    #[pallet::call_index(20)]
+    #[pallet::weight(T::WeightInfo::clear_crossing_worker_fault())]
+    pub fn clear_crossing_worker_fault(origin: OriginFor<T>) -> DispatchResult {
+      T::GlobalBreakerOrigin::ensure_origin(origin)?;
+      let fault =
+        CrossingWorkerFaultState::<T>::take().ok_or(Error::<T>::CrossingWorkerFaultNotFound)?;
+      Self::deposit_event(Event::CrossingWorkerFaultCleared {
+        feed: fault.feed,
+        revision: fault.revision,
+        class: fault.class,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(21)]
+    #[pallet::weight(T::WeightInfo::clear_observation_fanout_worker_fault())]
+    pub fn clear_observation_fanout_worker_fault(origin: OriginFor<T>) -> DispatchResult {
+      T::GlobalBreakerOrigin::ensure_origin(origin)?;
+      let fault = ObservationFanoutWorkerFaultState::<T>::take()
+        .ok_or(Error::<T>::ObservationFanoutWorkerFaultNotFound)?;
+      Self::deposit_event(Event::ObservationFanoutWorkerFaultCleared {
+        feed: fault.feed,
+        revision: fault.revision,
+        subscriber_page: fault.subscriber_page,
+        class: fault.class,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(22)]
+    #[pallet::weight(T::WeightInfo::clear_wakeup_worker_fault())]
+    pub fn clear_wakeup_worker_fault(origin: OriginFor<T>) -> DispatchResult {
+      T::GlobalBreakerOrigin::ensure_origin(origin)?;
+      let fault =
+        WakeupWorkerFaultState::<T>::take().ok_or(Error::<T>::WakeupWorkerFaultNotFound)?;
+      Self::deposit_event(Event::WakeupWorkerFaultCleared {
+        key: fault.key,
+        page: fault.page,
+        class: fault.class,
+      });
+      Ok(())
     }
 
     #[pallet::call_index(19)]
@@ -2356,15 +2777,74 @@ pub mod pallet {
         .saturating_add(Self::close_cleanup_weight_upper())
     }
 
+    pub fn materialization_weight_limit() -> Weight {
+      T::WakeupWeightLimit::get()
+        .saturating_add(T::CrossingWorkerWeightLimit::get())
+        .saturating_add(T::ObservationFanoutWeightLimit::get())
+    }
+
+    pub(crate) fn materialization_family_budget(
+      family_cursor: u8,
+      offset: u8,
+      remaining: Weight,
+      reserve_all_minima: bool,
+    ) -> Weight {
+      if !reserve_all_minima {
+        return remaining;
+      }
+      let reserved_for_later = ((offset + 1)..3).fold(Weight::zero(), |reserved, later| {
+        reserved.saturating_add(Self::materialization_family_minimum(
+          family_cursor.saturating_add(later) % 3,
+        ))
+      });
+      remaining
+        .checked_sub(&reserved_for_later)
+        .unwrap_or_else(Weight::zero)
+    }
+
+    pub fn materialization_family_minimum(family: u8) -> Weight {
+      match family {
+        0 => T::WeightInfo::scheduler_wakeup_cursor_worker_future()
+          .saturating_mul(2)
+          .saturating_add(Self::wakeup_cursor_drain_unit_weight_upper(true)),
+        1 => {
+          let branch = T::WeightInfo::crossing_transition_unit()
+            .max(T::WeightInfo::crossing_leaf_unit())
+            .max(T::WeightInfo::crossing_page_unit())
+            .max(T::WeightInfo::crossing_rearm_unit())
+            .max(T::WeightInfo::crossing_rearm_pair_unit())
+            .max(T::WeightInfo::crossing_coalesced_unit())
+            .max(T::WeightInfo::crossing_coalesced_pair_unit())
+            .max(T::WeightInfo::crossing_placed_unit())
+            .max(T::WeightInfo::crossing_placed_pair_unit())
+            .max(T::WeightInfo::crossing_skip_unit())
+            .max(T::WeightInfo::crossing_skip_pair_unit())
+            .max(T::WeightInfo::crossing_actor_unit());
+          T::WeightInfo::crossing_worker_base()
+            .saturating_add(T::WeightInfo::crossing_work_probe())
+            .saturating_add(
+              T::WeightInfo::crossing_fire_pair_probe()
+                .max(T::WeightInfo::crossing_rearm_pair_probe())
+                .max(T::WeightInfo::crossing_skip_pair_probe()),
+            )
+            .saturating_add(branch)
+        }
+        2 => T::WeightInfo::observation_fanout_base()
+          .saturating_add(T::WeightInfo::observation_fanout_page()),
+        _ => Weight::zero(),
+      }
+    }
+
     pub fn guaranteed_actor_service_weight() -> Option<Weight> {
       T::ActorOnIdleReserve::get()
         .checked_sub(&T::WeightInfo::scheduler_on_idle_base())
         .and_then(|remaining| {
+          remaining.checked_sub(&T::WeightInfo::materialization_coordinator_base())
+        })
+        .and_then(|remaining| {
           remaining.checked_sub(&T::WeightInfo::scheduler_paged_tombstone_drain(1))
         })
-        .and_then(|remaining| remaining.checked_sub(&T::WakeupWeightLimit::get()))
-        .and_then(|remaining| remaining.checked_sub(&T::CrossingWorkerWeightLimit::get()))
-        .and_then(|remaining| remaining.checked_sub(&T::ObservationFanoutWeightLimit::get()))
+        .and_then(|remaining| remaining.checked_sub(&Self::materialization_weight_limit()))
     }
 
     fn ensure_contract_steps_fits_idle_budget(
@@ -2650,7 +3130,16 @@ pub mod pallet {
             SystemSovereignState::Occupied(actor_id),
           );
           if requested_system_sovereign_id.is_none() {
-            SystemSovereignCount::<T>::mutate(|count| *count += 1);
+            if let Err(error) = SystemSovereignCount::<T>::try_mutate(|count| -> DispatchResult {
+              *count = count
+                .checked_add(1)
+                .ok_or(Error::<T>::SystemSovereignCapacityExceeded)?;
+              Ok(())
+            }) {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error,
+              ));
+            }
           }
         }
         NextActorId::<T>::put(next_id);
@@ -2856,6 +3345,15 @@ pub mod pallet {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
         }
+        let trigger_state_bond = if actor_type == ActorType::User {
+          T::TriggerStateBond::amount(&contract.trigger)
+        } else {
+          Zero::zero()
+        };
+        if let Err(error) = T::TriggerStateBond::set_bond(&owner, Zero::zero(), trigger_state_bond)
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
         let cadence_anchor_tick = match Self::cadence_anchor_tick(&contract.trigger) {
           Ok(anchor) => anchor,
@@ -2873,9 +3371,12 @@ pub mod pallet {
           cycle_nonce: 0,
           last_control_mutation_block: now,
         };
+        let trigger_runtime_state =
+          Self::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
+          trigger_runtime_state,
           unsuccessful_attempt_streak: 0,
           pending_signal: false,
           queue_ticket: None,
@@ -2884,11 +3385,16 @@ pub mod pallet {
             .window
             .map(|window| Self::window_terminal_at(&window)),
           schedule_anchor,
-          cadence_anchor_tick,
           last_cycle_block: None,
         };
         SovereignIndex::<T>::insert(sovereign_account.clone(), actor_id);
-        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, contract) {
+        if let Err(error) = Self::insert_active_actor(
+          actor_id,
+          identity,
+          hot,
+          contract,
+          TriggerTransitionIntent::CreateActive,
+        ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
@@ -2896,6 +3402,7 @@ pub mod pallet {
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
+            trigger_state_bond,
           },
         );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2920,7 +3427,16 @@ pub mod pallet {
             SystemSovereignState::Occupied(actor_id),
           );
           if requested_system_sovereign_id.is_none() {
-            SystemSovereignCount::<T>::mutate(|count| *count += 1);
+            if let Err(error) = SystemSovereignCount::<T>::try_mutate(|count| -> DispatchResult {
+              *count = count
+                .checked_add(1)
+                .ok_or(Error::<T>::SystemSovereignCapacityExceeded)?;
+              Ok(())
+            }) {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error,
+              ));
+            }
           }
         }
         NextActorId::<T>::put(next_id);
@@ -3009,9 +3525,17 @@ pub mod pallet {
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
       let cadence_anchor_tick =
         Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
+      let trigger_runtime_state =
+        Self::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
+      let trigger_state_bond = if actor_type == ActorType::User {
+        T::TriggerStateBond::amount(&contract.trigger)
+      } else {
+        Zero::zero()
+      };
       let hot = ActorHotState {
         lifecycle: ActiveLifecycle::Active,
         cycle_state: CycleState::Idle,
+        trigger_runtime_state,
         unsuccessful_attempt_streak: 0,
         pending_signal: false,
         queue_ticket: None,
@@ -3020,7 +3544,6 @@ pub mod pallet {
           .window
           .map(|window| Self::window_terminal_at(&window)),
         schedule_anchor,
-        cadence_anchor_tick,
         last_cycle_block: None,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -3029,7 +3552,18 @@ pub mod pallet {
             Error::<T>::ActorAlreadyActive.into(),
           ));
         }
-        if let Err(error) = Self::insert_active_actor(actor_id, identity, hot, contract) {
+        if let Err(error) =
+          T::TriggerStateBond::set_bond(&identity.owner, Zero::zero(), trigger_state_bond)
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = Self::insert_active_actor(
+          actor_id,
+          identity,
+          hot,
+          contract,
+          TriggerTransitionIntent::ActivateDormant,
+        ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
@@ -3037,6 +3571,7 @@ pub mod pallet {
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
+            trigger_state_bond,
           },
         );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -3061,6 +3596,8 @@ pub mod pallet {
 
     fn do_deactivate_actor(actor_id: ActorId, _instance: ActiveActorViewOf<T>) -> DispatchResult {
       let now = frame_system::Pallet::<T>::block_number();
+      let trigger_transition =
+        Self::preflight_trigger_cleanup(actor_id, TriggerTransitionIntent::Deactivate)?;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if let Err(error) = Self::record_control_mutation(actor_id, now) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
@@ -3085,7 +3622,14 @@ pub mod pallet {
             Error::<T>::ActorNotFound.into(),
           ));
         }
-        if let Err(error) = Self::remove_active_actor(actor_id) {
+        if let Err(error) = T::TriggerStateBond::set_bond(
+          &state.identity.owner,
+          state.funding.trigger_state_bond,
+          Zero::zero(),
+        ) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = Self::remove_active_actor(actor_id, trigger_transition) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::remove(actor_id);
@@ -3273,7 +3817,7 @@ pub mod pallet {
               continue;
             }
             if canonical_clauses[subset_index]
-              .iter()
+              .iter() // deos-bypass: bounded-iter -- MaxPredicateClauses bounds canonical DNF.
               .all(|predicate| canonical_clauses[superset_index].contains(predicate))
             {
               absorbed[superset_index] = true;
@@ -3286,7 +3830,7 @@ pub mod pallet {
           .filter_map(|(clause, is_absorbed)| (!is_absorbed).then_some(clause))
           .collect();
         let predicate_count = canonical_clauses
-          .iter()
+          .iter() // deos-bypass: bounded-iter -- MaxPredicateClauses bounds canonical DNF.
           .try_fold(0u32, |total, clause| total.checked_add(clause.len() as u32))
           .ok_or(Error::<T>::AdmissionBoundOverflow)?;
         ensure!(
@@ -3294,7 +3838,7 @@ pub mod pallet {
           Error::<T>::AdmissionBoundOverflow
         );
         let step_opening_count = canonical_clauses
-          .iter()
+          .iter() // deos-bypass: bounded-iter -- MaxPredicateClauses bounds canonical DNF.
           .flat_map(|clause| clause.iter())
           .filter(|timed| timed.timing == ObservationTiming::Opening)
           .count() as u32;
@@ -3705,6 +4249,11 @@ pub mod pallet {
           Error::<T>::SystemSovereignInvariant
         );
       }
+      let trigger_state_bond = ActorFunding::<T>::get(actor_id)
+        .ok_or(Error::<T>::ActorNotFound)?
+        .trigger_state_bond;
+      let trigger_transition =
+        Self::preflight_trigger_cleanup(actor_id, TriggerTransitionIntent::Close)?;
 
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let result = (|| -> DispatchResult {
@@ -3712,7 +4261,8 @@ pub mod pallet {
 
           // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as
           // soon as hot state disappears. Terminal cleanup performs no shared-container scan.
-          Self::remove_active_actor(actor_id)?;
+          T::TriggerStateBond::set_bond(&instance.owner, trigger_state_bond, Zero::zero())?;
+          Self::remove_active_actor(actor_id, trigger_transition)?;
           ActorIdentities::<T>::remove(actor_id);
           ActorFunding::<T>::remove(actor_id);
           ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -3855,6 +4405,11 @@ pub mod pallet {
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
+      if MaterializationFamilyCursor::<T>::get() >= 3 {
+        return Err(TryRuntimeError::Other(
+          "materialization family cursor is outside the canonical three-family domain",
+        ));
+      }
       let limit = Self::effective_active_actor_limit();
       let active_count = Self::active_instance_count();
       let actual_active_count = ActorHot::<T>::iter_keys().count() as u32;
@@ -3925,6 +4480,16 @@ pub mod pallet {
           ));
         }
         let instance = Self::derive_active_actor_view(identity, hot, contract);
+        let expected_trigger_state_bond = if instance.actor_class.actor_type() == ActorType::User {
+          T::TriggerStateBond::amount(&instance.trigger)
+        } else {
+          Zero::zero()
+        };
+        if funding.trigger_state_bond != expected_trigger_state_bond {
+          return Err(TryRuntimeError::Other(
+            "ActorFunding Trigger-state bond disagrees with Actor class and Trigger policy",
+          ));
+        }
         if !Self::contract_steps_admission_weight_upper(
           instance.actor_class.actor_type(),
           &instance.steps,
@@ -4041,7 +4606,7 @@ pub mod pallet {
         }
         let expected_opening_predicates = contract
           .steps
-          .iter()
+          .iter() // deos-bypass: bounded-iter -- MaxSteps bounds the Contract.
           .map(|step| {
             step.precondition.as_ref().map_or(0, |precondition| {
               precondition.opening_predicate_count() as usize

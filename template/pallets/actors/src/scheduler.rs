@@ -1,6 +1,6 @@
 use super::pallet::*;
 use super::{AddressEvent, AssetOps, FundingAuthority, IngressFailure, weights::WeightInfo};
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err;
 use polkadot_sdk::sp_runtime::traits::{One, Zero};
@@ -16,6 +16,14 @@ struct QueueTopology {
   head: QueueTicket,
   tail: QueueTicket,
   occupancy: u32,
+}
+
+pub(crate) struct QueueAppendPlan<T: Config> {
+  actors: Vec<(ActorId, ActorHotStateOf<T>)>,
+  pages: Vec<(QueuePageId, QueuePageOf<T>)>,
+  next_ticket: QueueTicket,
+  next_tail: QueueTicket,
+  next_occupancy: u32,
 }
 
 enum AdmissionDecision {
@@ -71,12 +79,37 @@ impl From<DispatchError> for ActivationFailure {
   }
 }
 
+pub(crate) enum PrimeSchedulePlan<BlockNumber> {
+  None,
+  Enqueue,
+  BlockWakeup(BlockNumber),
+}
+
+pub(crate) enum ActivationAction<T: Config> {
+  CloseWindowExpired,
+  CoalesceLive,
+  EnqueueCadenced(Result<QueueAppendPlan<T>, EnqueueOutcome>),
+  PrimeSchedule(Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome>),
+}
+
+pub(crate) struct ActivationPlan<T: Config> {
+  pub actor_id: ActorId,
+  pub already_pending: bool,
+  pub prospective_hot: ActorHotStateOf<T>,
+  pub instance: ActiveActorViewOf<T>,
+  pub terminal_reason: Option<CloseReason>,
+  pub action: ActivationAction<T>,
+}
+
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 
 #[cfg(test)]
 std::thread_local! {
   static CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+  static QUEUE_APPEND_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+  static CROSSING_CURSOR_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
+  static FIRST_CROSSING_BRANCH_WEIGHT: core::cell::Cell<Option<Weight>> = const { core::cell::Cell::new(None) };
 }
 
 /// Why the actor pass stopped at a queue boundary. Only a weight block over live FIFO work with
@@ -575,54 +608,250 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  pub fn try_paged_enqueue(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    with_transaction_opaque_err(|| {
-      let transition = || -> Result<(), EnqueueOutcome> {
-        let mut hot = match Self::load_actor_state(actor_id) {
-          LoadedActorStateOf::Active(state) => state.hot,
-          LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
-            return Err(EnqueueOutcome::CapacityUnavailable);
-          }
-          LoadedActorStateOf::Corrupt => return Err(EnqueueOutcome::CorruptedTopology),
-        };
-        if hot.queue_ticket.is_some() {
-          return Err(EnqueueOutcome::AlreadyLive);
-        }
-        let topology = Self::queue_topology_preflight(QueueMutation::Enqueue)?;
-        if topology.occupancy >= T::MaxQueueLength::get() {
-          return Err(EnqueueOutcome::CapacityUnavailable);
-        }
-        let ticket = NextQueueTicket::<T>::get();
-        let next_ticket = ticket
-          .checked_add(1)
-          .ok_or(EnqueueOutcome::TicketExhausted)?;
-        let next_tail = topology
-          .tail
-          .checked_add(1)
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-        let next_occupancy = topology
-          .occupancy
-          .checked_add(1)
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-        let (page_id, slot) = Self::queue_page_and_slot(topology.tail);
-        let mut page = QueuePages::<T>::get(page_id).unwrap_or_default();
-        if page.len() != slot || page.try_push(QueueEntry { ticket, actor_id }).is_err() {
-          return Err(EnqueueOutcome::CorruptedTopology);
-        }
-        hot.queue_ticket = Some(ticket);
-        QueuePages::<T>::insert(page_id, page);
-        QueueTail::<T>::put(next_tail);
-        QueueOccupancy::<T>::put(next_occupancy);
-        NextQueueTicket::<T>::put(next_ticket);
-        ActorHot::<T>::insert(actor_id, hot);
-        Ok(())
+  pub(crate) fn preflight_paged_enqueue_cohort(
+    actors: Vec<(ActorId, ActorHotStateOf<T>)>,
+  ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
+    if actors.is_empty() || actors.len() > T::MaxCrossingActorsPerBlock::get() as usize {
+      return Err(EnqueueOutcome::CapacityUnavailable);
+    }
+    let topology = Self::queue_topology_preflight(QueueMutation::Enqueue)?;
+    let mut plan = QueueAppendPlan {
+      actors: Vec::new(),
+      pages: Vec::new(),
+      next_ticket: NextQueueTicket::<T>::get(),
+      next_tail: topology.tail,
+      next_occupancy: topology.occupancy,
+    };
+    for (actor_id, hot) in actors.into_iter(/* deos-bypass: bounded-iter */) {
+      Self::reserve_following_paged_enqueue(&mut plan, actor_id, hot)?;
+    }
+    Ok(plan)
+  }
+
+  fn preflight_paged_enqueue_loaded(
+    actor_id: ActorId,
+    hot: ActorHotStateOf<T>,
+  ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
+    Self::preflight_paged_enqueue_cohort(vec![(actor_id, hot)])
+  }
+
+  pub(crate) fn reserve_following_paged_enqueue(
+    plan: &mut QueueAppendPlan<T>,
+    actor_id: ActorId,
+    mut hot: ActorHotStateOf<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    if plan.actors.len() >= T::MaxCrossingActorsPerBlock::get() as usize {
+      return Err(EnqueueOutcome::CapacityUnavailable);
+    }
+    if hot.queue_ticket.is_some()
+      || plan
+        .actors
+        .iter(/* deos-bypass: bounded-iter */)
+        .any(|(planned_actor, _)| *planned_actor == actor_id)
+    {
+      return Err(EnqueueOutcome::AlreadyLive);
+    }
+    if plan.next_occupancy >= T::MaxQueueLength::get() {
+      return Err(EnqueueOutcome::CapacityUnavailable);
+    }
+    let ticket = plan.next_ticket;
+    let next_ticket = ticket
+      .checked_add(1)
+      .ok_or(EnqueueOutcome::TicketExhausted)?;
+    let position = plan.next_tail;
+    let next_tail = position
+      .checked_add(1)
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    let next_occupancy = plan
+      .next_occupancy
+      .checked_add(1)
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    let (page_id, slot) = Self::queue_page_and_slot(position);
+    let page = if let Some((_, page)) = plan
+      .pages
+      .iter_mut(/* deos-bypass: bounded-iter */)
+      .find(|(planned_page_id, _)| *planned_page_id == page_id)
+    {
+      page
+    } else {
+      plan
+        .pages
+        .push((page_id, QueuePages::<T>::get(page_id).unwrap_or_default()));
+      let Some((_, page)) = plan.pages.last_mut() else {
+        return Err(EnqueueOutcome::CorruptedTopology);
       };
-      match transition() {
-        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
+      page
+    };
+    if page.len() != slot || page.try_push(QueueEntry { ticket, actor_id }).is_err() {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    hot.queue_ticket = Some(ticket);
+    plan.actors.push((actor_id, hot));
+    plan.next_ticket = next_ticket;
+    plan.next_tail = next_tail;
+    plan.next_occupancy = next_occupancy;
+    Ok(())
+  }
+
+  fn preflight_paged_enqueue(actor_id: ActorId) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
+    let hot = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::Active(state) => state.hot,
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Err(EnqueueOutcome::CapacityUnavailable);
       }
+      LoadedActorStateOf::Corrupt => return Err(EnqueueOutcome::CorruptedTopology),
+    };
+    Self::preflight_paged_enqueue_loaded(actor_id, hot)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_preflight_queue_pair(
+    first: ActorId,
+    second: ActorId,
+  ) -> Result<[QueueTicket; 2], EnqueueOutcome> {
+    let first_hot = match Self::load_actor_state(first) {
+      LoadedActorStateOf::Active(state) => state.hot,
+      _ => return Err(EnqueueOutcome::CorruptedTopology),
+    };
+    let second_hot = match Self::load_actor_state(second) {
+      LoadedActorStateOf::Active(state) => state.hot,
+      _ => return Err(EnqueueOutcome::CorruptedTopology),
+    };
+    let plan =
+      Self::preflight_paged_enqueue_cohort(vec![(first, first_hot), (second, second_hot)])?;
+    let first_ticket = plan.actors[0]
+      .1
+      .queue_ticket
+      .ok_or(EnqueueOutcome::CorruptedTopology)?;
+    let second_ticket = plan.actors[1]
+      .1
+      .queue_ticket
+      .ok_or(EnqueueOutcome::CorruptedTopology)?;
+    Ok([first_ticket, second_ticket])
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_preflight_queue_quartet(
+    actors: [ActorId; 4],
+  ) -> Result<[QueueTicket; 4], EnqueueOutcome> {
+    let first_hot = match Self::load_actor_state(actors[0]) {
+      LoadedActorStateOf::Active(state) => state.hot,
+      _ => return Err(EnqueueOutcome::CorruptedTopology),
+    };
+    let mut cohort = vec![(actors[0], first_hot)];
+    for actor_id in actors.iter(/* deos-bypass: bounded-iter */).skip(1) {
+      let hot = match Self::load_actor_state(*actor_id) {
+        LoadedActorStateOf::Active(state) => state.hot,
+        _ => return Err(EnqueueOutcome::CorruptedTopology),
+      };
+      cohort.push((*actor_id, hot));
+    }
+    let plan = Self::preflight_paged_enqueue_cohort(cohort)?;
+    let mut tickets = [0; 4];
+    for (index, (_, hot)) in plan
+      .actors
+      .iter(/* deos-bypass: bounded-iter */)
+      .enumerate()
+    {
+      tickets[index] = hot.queue_ticket.ok_or(EnqueueOutcome::CorruptedTopology)?;
+    }
+    Ok(tickets)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_commit_queue_quartet(actors: [ActorId; 4]) -> Result<(), EnqueueOutcome> {
+    let mut cohort = Vec::new();
+    for actor_id in actors {
+      let mut hot = match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => state.hot,
+        _ => return Err(EnqueueOutcome::CorruptedTopology),
+      };
+      hot.pending_signal = true;
+      cohort.push((actor_id, hot));
+    }
+    let plan = Self::preflight_paged_enqueue_cohort(cohort)?;
+    Self::commit_paged_enqueue(plan);
+    Ok(())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_preflight_queue_over_cap(actors: Vec<ActorId>) -> Result<(), EnqueueOutcome> {
+    let mut cohort = Vec::new();
+    for actor_id in actors {
+      let hot = match Self::load_actor_state(actor_id) {
+        LoadedActorStateOf::Active(state) => state.hot,
+        _ => return Err(EnqueueOutcome::CorruptedTopology),
+      };
+      cohort.push((actor_id, hot));
+    }
+    Self::preflight_paged_enqueue_cohort(cohort).map(|_| ())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_reset_crossing_cursor_commits() {
+    CROSSING_CURSOR_COMMITS.with(|count| count.set(0));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_crossing_cursor_commits() -> u32 {
+    CROSSING_CURSOR_COMMITS.with(core::cell::Cell::get)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_record_crossing_cursor_commit() {
+    CROSSING_CURSOR_COMMITS.with(|count| count.set(count.get().saturating_add(1)));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_reset_first_crossing_branch_weight() {
+    FIRST_CROSSING_BRANCH_WEIGHT.with(|weight| weight.set(None));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_first_crossing_branch_weight() -> Option<Weight> {
+    FIRST_CROSSING_BRANCH_WEIGHT.with(core::cell::Cell::get)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_record_first_crossing_branch_weight(weight: Weight) {
+    FIRST_CROSSING_BRANCH_WEIGHT.with(|recorded| {
+      if recorded.get().is_none() {
+        recorded.set(Some(weight));
+      }
+    });
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_reset_queue_append_commits() {
+    QUEUE_APPEND_COMMITS.with(|count| count.set(0));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_queue_append_commits() -> u32 {
+    QUEUE_APPEND_COMMITS.with(core::cell::Cell::get)
+  }
+
+  pub(crate) fn commit_paged_enqueue(plan: QueueAppendPlan<T>) {
+    #[cfg(test)]
+    QUEUE_APPEND_COMMITS.with(|count| count.set(count.get().saturating_add(1)));
+    for (page_id, page) in plan.pages {
+      QueuePages::<T>::insert(page_id, page);
+    }
+    QueueTail::<T>::put(plan.next_tail);
+    QueueOccupancy::<T>::put(plan.next_occupancy);
+    NextQueueTicket::<T>::put(plan.next_ticket);
+    for (actor_id, hot) in plan.actors {
+      ActorHot::<T>::insert(actor_id, hot);
+    }
+  }
+
+  pub fn try_paged_enqueue(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| match Self::preflight_paged_enqueue(actor_id) {
+      Ok(plan) => {
+        Self::commit_paged_enqueue(plan);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      }
+      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
     })
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
   }
@@ -655,48 +884,110 @@ impl<T: Config> Pallet<T> {
     })
   }
 
-  fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
-    let state = match Self::load_actor_state(actor_id) {
-      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
-        return Ok(ActivationOutcome::IgnoredStale);
-      }
-      LoadedActorStateOf::Active(state) => state,
-      LoadedActorStateOf::Corrupt => {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-    };
+  pub(crate) fn preflight_activation_loaded(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+  ) -> Result<ActivationPlan<T>, ActivationFailure> {
     let already_pending = state.hot.pending_signal;
     let continuation = state.continuation;
     let mut hot = state.hot;
-    if !already_pending {
-      hot.pending_signal = true;
-      ActorHot::<T>::insert(actor_id, &hot);
-    }
-    let instance = Self::derive_active_actor_view(state.identity, hot, state.contract);
+    hot.pending_signal = true;
+    let instance = Self::derive_active_actor_view(state.identity, hot.clone(), state.contract);
     let classification =
       Self::classify_actor_loaded(&instance, continuation.as_ref()).map_err(|error| {
         ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
       })?;
-    if classification.terminal_reason == Some(CloseReason::WindowExpired) {
-      Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired)
-        .map_err(ActivationFailure::Permanent)?;
-      return Ok(ActivationOutcome::Closed);
-    }
-
-    if instance.queue_ticket.is_some() {
-      return Ok(if already_pending {
-        ActivationOutcome::Coalesced
-      } else {
-        ActivationOutcome::Latched
-      });
-    }
-
-    let placement = if matches!(instance.trigger, Trigger::Cadenced { .. }) {
-      Self::enqueue(actor_id)
+    let action = if classification.terminal_reason == Some(CloseReason::WindowExpired) {
+      ActivationAction::CloseWindowExpired
+    } else if instance.queue_ticket.is_some() {
+      ActivationAction::CoalesceLive
+    } else if matches!(instance.trigger, Trigger::Cadenced { .. }) {
+      ActivationAction::EnqueueCadenced(Self::preflight_paged_enqueue_loaded(actor_id, hot.clone()))
     } else {
-      Self::prime_actor_schedule_loaded(actor_id, &instance)
+      ActivationAction::PrimeSchedule(Self::preflight_prime_schedule_loaded(
+        &instance,
+        continuation.as_ref(),
+      ))
+    };
+    Ok(ActivationPlan {
+      actor_id,
+      already_pending,
+      prospective_hot: hot,
+      instance,
+      terminal_reason: classification.terminal_reason,
+      action,
+    })
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_activation_plan_kind(actor_id: ActorId) -> Result<u8, ActivationFailure> {
+    let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+      return Err(ActivationFailure::Permanent(
+        Error::<T>::ActorInvariant.into(),
+      ));
+    };
+    let plan = Self::preflight_activation_loaded(actor_id, state)?;
+    Ok(match plan.action {
+      ActivationAction::CloseWindowExpired => 0,
+      ActivationAction::CoalesceLive => 1,
+      ActivationAction::EnqueueCadenced(_) => 2,
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => 3,
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => 4,
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(_))) => 5,
+      ActivationAction::PrimeSchedule(Err(_)) => 6,
+    })
+  }
+
+  pub(crate) fn commit_activation_plan(
+    plan: ActivationPlan<T>,
+  ) -> Result<ActivationOutcome, ActivationFailure> {
+    let ActivationPlan {
+      actor_id,
+      already_pending,
+      prospective_hot,
+      instance,
+      terminal_reason: _,
+      action,
+    } = plan;
+    if !already_pending {
+      ActorHot::<T>::insert(actor_id, prospective_hot);
+    }
+    match action {
+      ActivationAction::CloseWindowExpired => {
+        Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired)
+          .map_err(ActivationFailure::Permanent)?;
+        return Ok(ActivationOutcome::Closed);
+      }
+      ActivationAction::CoalesceLive => {
+        return Ok(if already_pending {
+          ActivationOutcome::Coalesced
+        } else {
+          ActivationOutcome::Latched
+        });
+      }
+      ActivationAction::EnqueueCadenced(_) | ActivationAction::PrimeSchedule(_) => {}
+    }
+
+    let placement = match action {
+      ActivationAction::EnqueueCadenced(Ok(queue_plan)) => {
+        Self::commit_paged_enqueue(queue_plan);
+        Ok(())
+      }
+      ActivationAction::EnqueueCadenced(Err(EnqueueOutcome::CapacityUnavailable)) => {
+        Self::enqueue(actor_id)
+      }
+      ActivationAction::EnqueueCadenced(Err(error)) => Err(error),
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => Ok(()),
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => Self::enqueue(actor_id),
+      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(block))) => {
+        Self::defer_wakeup(actor_id, block)
+      }
+      ActivationAction::PrimeSchedule(Err(error)) => Err(error),
+      ActivationAction::CloseWindowExpired | ActivationAction::CoalesceLive => {
+        return Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ));
+      }
     };
     match placement {
       Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(if already_pending {
@@ -721,6 +1012,22 @@ impl<T: Config> Pallet<T> {
         Error::<T>::SchedulerIndexExhausted.into(),
       )),
     }
+  }
+
+  fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
+    let state = match Self::load_actor_state(actor_id) {
+      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
+        return Ok(ActivationOutcome::IgnoredStale);
+      }
+      LoadedActorStateOf::Active(state) => state,
+      LoadedActorStateOf::Corrupt => {
+        return Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ));
+      }
+    };
+    let plan = Self::preflight_activation_loaded(actor_id, state)?;
+    Self::commit_activation_plan(plan)
   }
 
   pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {
@@ -1630,7 +1937,7 @@ impl<T: Config> Pallet<T> {
     result.is_ok()
   }
 
-  fn wakeup_cursor_peek_key(clock: WakeupClock) -> Option<WakeupKey<BlockNumberFor<T>>> {
+  pub(crate) fn wakeup_cursor_peek_key(clock: WakeupClock) -> Option<WakeupKey<BlockNumberFor<T>>> {
     (WakeupCursorLen::<T>::get(clock) > 0)
       .then(|| Self::wakeup_cursor_get(clock, 0))
       .flatten()
@@ -1801,6 +2108,43 @@ impl<T: Config> Pallet<T> {
     Self::prime_actor_schedule_loaded(actor_id, &instance)
   }
 
+  fn preflight_prime_schedule_loaded(
+    instance: &ActiveActorViewOf<T>,
+    continuation: Option<&ContinuationStateOf<T>>,
+  ) -> Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome> {
+    if instance.lifecycle.is_paused() {
+      return Ok(
+        Self::window_expiry_wakeup(instance)
+          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
+      );
+    }
+    let now = frame_system::Pallet::<T>::block_number();
+    let eligible_at = if instance.cycle_state == CycleState::Suspended {
+      Self::retry_eligible_at_loaded(
+        instance,
+        continuation.ok_or(EnqueueOutcome::CorruptedTopology)?,
+      )?
+    } else if instance.pending_signal {
+      Self::next_eligible_at(instance, now)?
+    } else {
+      return Ok(
+        Self::window_expiry_wakeup(instance)
+          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
+      );
+    };
+    let wakeup_at = instance.window.map_or(eligible_at, |window| {
+      eligible_at.min(Self::window_terminal_at(&window))
+    });
+    let exact_next_block = now
+      .checked_add(&One::one())
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    Ok(if wakeup_at < exact_next_block {
+      PrimeSchedulePlan::Enqueue
+    } else {
+      PrimeSchedulePlan::BlockWakeup(wakeup_at)
+    })
+  }
+
   fn prime_actor_schedule_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -1892,7 +2236,7 @@ impl<T: Config> Pallet<T> {
 
   /// Conservatively prices pure actor-local terminal deletion from the measured User close path.
   /// Shared queue and wakeup records become lazy tombstones.
-  pub(crate) fn close_cleanup_weight_upper() -> Weight {
+  pub fn close_cleanup_weight_upper() -> Weight {
     T::WeightInfo::close_actor()
   }
 
@@ -1935,13 +2279,22 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     meter: &mut WeightMeter,
   ) -> WakeupDrainStats {
-    let mut total = WakeupDrainStats::default();
+    Self::drain_overdue_wakeups_cursor_resuming(now, meter, WakeupDrainStats::default())
+  }
+
+  pub(crate) fn drain_overdue_wakeups_cursor_resuming(
+    now: BlockNumberFor<T>,
+    meter: &mut WeightMeter,
+    mut total: WakeupDrainStats,
+  ) -> WakeupDrainStats {
     let max_scans = T::MaxWakeupsPerBlock::get();
+    if total.entries_scanned >= max_scans {
+      return total;
+    }
     let now_tick = match Self::current_scheduler_tick() {
       Ok(tick) => tick,
       Err(_) => return total,
     };
-    let mut worker_meter = WeightMeter::with_limit(T::WakeupWeightLimit::get());
     while total.entries_scanned < max_scans {
       let first_clock = NextWakeupClock::<T>::get();
       let clocks = match first_clock {
@@ -1951,11 +2304,13 @@ impl<T: Config> Pallet<T> {
       let mut selected = None;
       for clock in clocks {
         let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
-        if !worker_meter.can_consume(cursor_weight) || !meter.can_consume(cursor_weight) {
+        if !meter.can_consume(cursor_weight) {
           break;
         }
-        worker_meter.consume(cursor_weight);
         meter.consume(cursor_weight);
+        if WakeupWorkerFaultState::<T>::exists() {
+          return total;
+        }
         let Some(key) = Self::wakeup_cursor_peek_key(clock) else {
           continue;
         };
@@ -1979,25 +2334,21 @@ impl<T: Config> Pallet<T> {
       };
       let base_weight = Self::wakeup_cursor_drain_branch_weight(false);
       if Self::combined_queue_occupancy() >= u64::from(T::MaxActiveActors::get())
-        || !worker_meter.can_consume(base_weight)
         || !meter.can_consume(base_weight)
       {
         break;
       }
       let Some(bucket) = WakeupBuckets::<T>::get(wakeup_key) else {
-        worker_meter.consume(base_weight);
         meter.consume(base_weight);
         break;
       };
       let removes_bucket = bucket.live_entries <= 1;
       let unit_weight = Self::wakeup_cursor_drain_branch_weight(removes_bucket);
       let admission_weight = Self::wakeup_cursor_drain_unit_weight_upper(removes_bucket);
-      if !worker_meter.can_consume(admission_weight) || !meter.can_consume(admission_weight) {
-        worker_meter.consume(base_weight);
+      if !meter.can_consume(admission_weight) {
         meter.consume(base_weight);
         break;
       }
-      worker_meter.consume(unit_weight);
       meter.consume(unit_weight);
       let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
         let (ready, stats) = Self::wakeup_substrate_drain_key(wakeup_key, 1);
@@ -2019,7 +2370,12 @@ impl<T: Config> Pallet<T> {
                 polkadot_sdk::sp_runtime::DispatchError::Other("tick wakeup owner is not cadenced"),
               ));
             };
-            if state.hot.cadence_anchor_tick.is_none() {
+            if state
+              .hot
+              .trigger_runtime_state
+              .cadence_anchor_tick()
+              .is_none()
+            {
               let Ok(Some(anchor_tick)) = Self::cadence_anchor_tick(&state.contract.trigger) else {
                 return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                   polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence anchor failed"),
@@ -2031,7 +2387,9 @@ impl<T: Config> Pallet<T> {
                   polkadot_sdk::sp_runtime::DispatchError::Other("genesis cadence deadline failed"),
                 ));
               };
-              state.hot.cadence_anchor_tick = Some(anchor_tick);
+              state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+                anchor_tick: Some(anchor_tick),
+              };
               ActorHot::<T>::insert(actor_id, state.hot);
               if let Err(error) = Self::defer_tick_wakeup(actor_id, due_tick) {
                 if !Self::scheduler_index_is_exhausted(error)
@@ -2077,11 +2435,18 @@ impl<T: Config> Pallet<T> {
           closed_for_exhaustion,
         )))
       });
-      let Ok((stats, closed_for_exhaustion)) = outcome else {
-        break;
+      let (stats, closed_for_exhaustion) = match outcome {
+        Ok(outcome) => outcome,
+        Err(_) => {
+          WakeupWorkerFaultState::<T>::put(WakeupWorkerFault {
+            key: wakeup_key,
+            page: bucket.head_page,
+            class: CrossingWorkerFaultClass::Invariant,
+          });
+          break;
+        }
       };
       if closed_for_exhaustion {
-        worker_meter.consume(Self::close_cleanup_weight_upper());
         meter.consume(Self::close_cleanup_weight_upper());
       }
       if stats.entries_scanned == 0 {
@@ -2583,8 +2948,15 @@ impl<T: Config> Pallet<T> {
           .ok_or(ActorClassificationError::ActorInvariant)?;
         let locator = CrossingMemberships::<T>::get(actor_id)
           .ok_or(ActorClassificationError::ActorInvariant)?;
-        let (key, role) = Self::crossing_obligation(&crossing, locator.phase);
-        if locator.key != key || locator.role != role {
+        let TriggerRuntimeState::ObservationCrossing {
+          phase,
+          installed_at_revision,
+        } = state.hot.trigger_runtime_state
+        else {
+          return Err(ActorClassificationError::ActorInvariant);
+        };
+        let (key, _) = Self::crossing_obligation(&crossing, phase);
+        if locator.key != key {
           return Err(ActorClassificationError::ActorInvariant);
         }
         ActorTriggerActivation::ObservationCrossing {
@@ -2592,7 +2964,8 @@ impl<T: Config> Pallet<T> {
           direction: crossing.direction,
           threshold: crossing.threshold,
           rearm_threshold: crossing.rearm_threshold,
-          phase: locator.phase,
+          phase,
+          installed_at_revision,
           pending_revisions: CrossingTransitionQueues::<T>::get(crossing.feed)
             .map_or(0, |queue| queue.len() as u32),
           processing_revision: CrossingRangeCursors::<T>::get(crossing.feed)

@@ -24,11 +24,17 @@ mod benches {
   type ScheduleOf<T> = Schedule<TriggerOf<T>>;
 
   fn ensure_creation_balance<T: Config>(owner: &T::AccountId) {
+    // The generic mint adapter need not establish a System provider before a host bond adapter
+    // creates reserved/held custody. Real signed owners already have one through their funded
+    // account; benchmark setup must establish the same prerequisite explicitly.
+    polkadot_sdk::frame_system::Pallet::<T>::inc_providers(owner);
     let creation_fee = T::ActorCreationFee::get();
     if creation_fee.is_zero() {
       return;
     }
-    let amount = creation_fee.saturating_add(One::one());
+    let amount = creation_fee
+      .saturating_add(T::TriggerStateBond::maximum())
+      .saturating_add(One::one());
     let _ = T::AssetOps::mint(owner, T::FeeNativeAssetId::get(), amount);
   }
 
@@ -311,11 +317,9 @@ mod benches {
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
-    // Pool layout: [slot donor, measured].
-    let feeds = observation_feed_pool::<T>(2);
-    seed_recycled_observation_slot::<T>(feeds[0]);
+    let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
-      trigger: observation_trigger::<T>(feeds[1]),
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -328,11 +332,8 @@ mod benches {
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after create_user_actor");
     assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
-    assert_eq!(
-      ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.len() as u32),
-      Some(1),
-      "measured create must install its one observation subscription"
-    );
+    assert!(CrossingMemberships::<T>::contains_key(actor_id));
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
 
   #[benchmark]
@@ -345,8 +346,9 @@ mod benches {
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, requested_slot, &contract_steps);
+    let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
-      trigger: Trigger::manual(),
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -360,6 +362,7 @@ mod benches {
     let inst = Pallet::<T>::active_actor_view(actor_id)
       .expect("Actors must exist after create_user_actor_at_slot");
     assert_eq!(inst.actor_class.owner_slot(), Some(requested_slot));
+    assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -369,8 +372,9 @@ mod benches {
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
     let contract_steps = make_contract_steps::<T>(recipient);
+    let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
-      trigger: Trigger::manual(),
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
       cooldown_blocks: 100,
     };
     #[extrinsic_call]
@@ -389,6 +393,7 @@ mod benches {
         sovereign_id: actor_id,
       }
     );
+    assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -413,15 +418,91 @@ mod benches {
     Pallet::<T>::close_actor(RawOrigin::Root.into(), actor_id)
       .expect("close_actor must succeed in benchmark setup");
     let fresh_id = NextActorId::<T>::get();
+    let feed = observation_feed_pool::<T>(1)[0];
+    let crossing_schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
+      cooldown_blocks: 100,
+    };
     #[extrinsic_call]
     create_system_actor_at_sovereign_id(
       RawOrigin::Root,
       actor_id,
       owner,
       Mutability::Mutable,
-      system_contract::<T>(schedule, contract_steps),
+      system_contract::<T>(crossing_schedule, contract_steps),
     );
     assert!(Pallet::<T>::active_actor_exists(fresh_id));
+    assert!(CrossingMemberships::<T>::contains_key(fresh_id));
+  }
+
+  // Diagnostic install branch: append to an existing non-full Crossing leaf page.
+  #[benchmark]
+  fn create_user_actor_crossing_existing() {
+    let caller: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&caller);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    let guard_owner: T::AccountId = account("crossing-existing-guard", 0, 0);
+    let guard = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    let expected_slot = prefill_owner_slots_for_worst_case::<T>(&caller);
+    let recipient: T::AccountId = account("crossing-existing-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 10,
+    };
+    #[block]
+    {
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(caller).into(),
+        Mutability::Mutable,
+        user_contract::<T>(schedule, contract_steps),
+      )
+      .expect("existing-leaf Crossing creation must succeed");
+    }
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let guard_locator = CrossingMemberships::<T>::get(guard).expect("guard membership exists");
+    let locator = CrossingMemberships::<T>::get(actor_id).expect("measured membership exists");
+    assert_eq!(locator.key, guard_locator.key);
+    assert_eq!(locator.page, guard_locator.page);
+    assert_eq!(locator.offset, guard_locator.offset.saturating_add(1));
+  }
+
+  // Diagnostic install branch: allocate a new page on an existing full Crossing leaf.
+  #[benchmark]
+  fn create_user_actor_crossing_new_page() {
+    let caller: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&caller);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    for index in 0..T::ObservationPageSize::get() {
+      let guard_owner: T::AccountId = account("crossing-page-guard", index, 0);
+      let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    }
+    let expected_slot = prefill_owner_slots_for_worst_case::<T>(&caller);
+    let recipient: T::AccountId = account("crossing-page-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 10,
+    };
+    #[block]
+    {
+      Pallet::<T>::create_user_actor(
+        RawOrigin::Signed(caller).into(),
+        Mutability::Mutable,
+        user_contract::<T>(schedule, contract_steps),
+      )
+      .expect("new-page Crossing creation must succeed");
+    }
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let locator = CrossingMemberships::<T>::get(actor_id).expect("measured membership exists");
+    let leaf = CrossingLeafStates::<T>::get(locator.key).expect("Crossing leaf exists");
+    assert_eq!(locator.page, 1);
+    assert_eq!(locator.offset, 0);
+    assert_eq!(leaf.page_count, 2);
   }
 
   #[benchmark]
@@ -449,12 +530,10 @@ mod benches {
     .expect("dormant System identity creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient: T::AccountId = account("activate-recipient", 0, 0);
-    // Pool layout: [slot donor, measured].
-    let feeds = observation_feed_pool::<T>(2);
-    seed_recycled_observation_slot::<T>(feeds[0]);
+    let feed = observation_feed_pool::<T>(1)[0];
     let contract = system_contract::<T>(
       Schedule {
-        trigger: observation_trigger::<T>(feeds[1]),
+        trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
         cooldown_blocks: 100,
       },
       make_contract_steps::<T>(recipient),
@@ -467,11 +546,8 @@ mod benches {
     );
     assert!(Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
-    assert_eq!(
-      ActorObservationFeeds::<T>::get(actor_id).map(|feeds| feeds.len() as u32),
-      Some(1),
-      "measured activation must install its one observation subscription"
-    );
+    assert!(CrossingMemberships::<T>::contains_key(actor_id));
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
 
   #[benchmark]
@@ -479,13 +555,14 @@ mod benches {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("deactivate-recipient", 0, 0);
     let contract_steps = make_contract_steps::<T>(recipient);
+    let feed = observation_feed_pool::<T>(1)[0];
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
       system_contract::<T>(
         Schedule {
-          trigger: Trigger::manual(),
+          trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
           cooldown_blocks: 100,
         },
         contract_steps,
@@ -498,6 +575,7 @@ mod benches {
     deactivate_actor(RawOrigin::Signed(owner), actor_id);
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
@@ -543,7 +621,235 @@ mod benches {
     ensure_creation_balance::<T>(&owner);
     let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
     let recipient: T::AccountId = account("close-recipient", 0, 0);
-    // Pool layout: [guard_low, measured, guard_high].
+    let feed = observation_feed_pool::<T>(1)[0];
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
+      cooldown_blocks: 1,
+    };
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    Pallet::<T>::create_user_actor_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_contract::<T>(schedule, contract_steps),
+    )
+    .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let locator = CrossingMemberships::<T>::get(actor_id).expect("Crossing membership exists");
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("pending Crossing transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: locator.key.traversal,
+        search_bound: 2,
+        current_threshold: None,
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[extrinsic_call]
+    close_actor(RawOrigin::Signed(owner), actor_id);
+    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
+    assert!(!CrossingTransitionQueues::<T>::contains_key(feed));
+    assert!(!CrossingRangeCursors::<T>::contains_key(feed));
+    assert!(!CrossingPendingFeeds::<T>::contains_key(feed));
+  }
+
+  // Diagnostic removal branch: delete the last page while the Crossing leaf survives.
+  #[benchmark]
+  fn close_actor_crossing_page() {
+    let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    for index in 0..T::ObservationPageSize::get() {
+      let guard_owner: T::AccountId = account("crossing-remove-page-guard", index, 0);
+      let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    }
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
+    let recipient: T::AccountId = account("crossing-remove-page-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 1,
+    };
+    Pallet::<T>::create_user_actor_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_contract::<T>(schedule, contract_steps),
+    )
+    .expect("page-removal User setup must succeed");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let removed = CrossingMemberships::<T>::get(actor_id).expect("tail-page membership exists");
+    assert_eq!(removed.page, 1);
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("page-removal Crossing close must succeed");
+    }
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+    assert!(!CrossingMemberPages::<T>::contains_key(removed.key, 1));
+    let leaf = CrossingLeafStates::<T>::get(removed.key).expect("surviving leaf exists");
+    assert_eq!(leaf.tail_page, 0);
+    assert_eq!(leaf.page_count, 1);
+    assert_eq!(leaf.member_count, T::ObservationPageSize::get());
+  }
+
+  // Diagnostic removal branch: remove the tail member while its leaf page survives.
+  #[benchmark]
+  fn close_actor_crossing_tail() {
+    let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    let guard_owner: T::AccountId = account("crossing-tail-guard", 0, 0);
+    let guard = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
+    let recipient: T::AccountId = account("crossing-tail-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 1,
+    };
+    Pallet::<T>::create_user_actor_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_contract::<T>(schedule, contract_steps),
+    )
+    .expect("tail-removal User setup must succeed");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let removed = CrossingMemberships::<T>::get(actor_id).expect("tail membership exists");
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("tail Crossing close must succeed");
+    }
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+    assert!(CrossingMemberships::<T>::contains_key(guard));
+    let leaf = CrossingLeafStates::<T>::get(removed.key).expect("surviving leaf exists");
+    assert_eq!(leaf.page_count, 1);
+    assert_eq!(leaf.member_count, 1);
+  }
+
+  // Diagnostic removal branch: repair an in-progress range cursor after dense compaction.
+  #[benchmark]
+  fn close_actor_crossing_cursor_repair() {
+    let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    let guard_owner: T::AccountId = account("crossing-cursor-guard", 0, 0);
+    let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
+    let recipient: T::AccountId = account("crossing-cursor-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 1,
+    };
+    Pallet::<T>::create_user_actor_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_contract::<T>(schedule, contract_steps),
+    )
+    .expect("cursor-repair User setup must succeed");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let tail_owner: T::AccountId = account("crossing-cursor-tail", 0, 0);
+    let _ = bench_create_system_crossing::<T>(tail_owner, feed, threshold);
+    let removed = CrossingMemberships::<T>::get(actor_id).expect("middle membership exists");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 1,
+        traversal: removed.key.traversal,
+        search_bound: threshold,
+        current_threshold: Some(threshold),
+        page: removed.page,
+        offset: removed.offset.saturating_add(1),
+        exhausted: false,
+      },
+    );
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("cursor-repair Crossing close must succeed");
+    }
+    let cursor = CrossingRangeCursors::<T>::get(feed).expect("range cursor survives");
+    assert_eq!(cursor.page, removed.page);
+    assert_eq!(cursor.offset, removed.offset);
+  }
+
+  // Diagnostic removal branch: remove a dense middle member and repair the moved tail locator.
+  #[benchmark]
+  fn close_actor_crossing_middle() {
+    let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let threshold = u128::MAX;
+    let guard_owner: T::AccountId = account("crossing-middle-guard", 0, 0);
+    let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
+    let recipient: T::AccountId = account("crossing-middle-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
+    let schedule = Schedule {
+      trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+      cooldown_blocks: 1,
+    };
+    Pallet::<T>::create_user_actor_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_contract::<T>(schedule, contract_steps),
+    )
+    .expect("middle-removal User setup must succeed");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let tail_owner: T::AccountId = account("crossing-middle-tail", 0, 0);
+    let tail_id = bench_create_system_crossing::<T>(tail_owner, feed, threshold);
+    let removed = CrossingMemberships::<T>::get(actor_id).expect("middle membership exists");
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("middle Crossing close must succeed");
+    }
+    assert!(!CrossingMemberships::<T>::contains_key(actor_id));
+    let moved = CrossingMemberships::<T>::get(tail_id).expect("moved tail membership exists");
+    assert_eq!(moved.page, removed.page);
+    assert_eq!(moved.offset, removed.offset);
+  }
+
+  // Diagnostic counterpart for broad ObservationChange cleanup; compare it with the production
+  // Crossing close before accepting one conservative public close owner.
+  #[benchmark]
+  fn close_actor_observation_change() {
+    let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
+    let recipient: T::AccountId = account("close-observation-recipient", 0, 0);
     let feeds = observation_feed_pool::<T>(3);
     let measured = feeds[1];
     install_observation_guard::<T>(feeds[0], 0);
@@ -560,19 +866,17 @@ mod benches {
       Mutability::Mutable,
       user_contract::<T>(schedule, contract_steps),
     )
-    .expect("create_user_actor_at_slot must succeed in close_actor benchmark setup");
+    .expect("ObservationChange close benchmark setup must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     mark_observation_chain_dirty::<T>(&feeds);
-    #[extrinsic_call]
-    close_actor(RawOrigin::Signed(owner), actor_id);
+    #[block]
+    {
+      Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
+        .expect("ObservationChange close must succeed");
+    }
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
-    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
-    assert_eq!(
-      DirtyObservationListState::<T>::get().count,
-      2,
-      "only the two guard feeds remain dirty after the measured close"
-    );
+    assert_eq!(DirtyObservationListState::<T>::get().count, 2);
   }
 
   // Diagnostic counterpart for the System branch; production close pricing uses the heavier User path.
@@ -601,9 +905,9 @@ mod benches {
   }
 
   #[benchmark]
-  fn update_contract() {
+  fn update_contract_observation_change() {
     let caller: T::AccountId = whitelisted_caller();
-    // Worst case replaces one dirty middle-node subscription with a disjoint feed.
+    // Diagnostic broad branch replaces one dirty middle-node subscription with a disjoint feed.
     // Pool layout: [slot donor, guard_low, replaced, installed, guard_high].
     let feeds = observation_feed_pool::<T>(5);
     let guard_high = feeds[4];
@@ -674,11 +978,109 @@ mod benches {
     );
   }
 
+  // Production update owner: focused comparison proves unique-leaf Crossing replacement dominates
+  // the excluded broad ObservationChange branch in RefTime, ProofSize, reads, and writes.
+  #[benchmark]
+  fn update_contract() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = observation_feed_pool::<T>(1)[0];
+    let actor_id = bench_create_user_with_trigger::<T>(
+      caller.clone(),
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX - 1, 0),
+    );
+    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .pending_signal = true;
+    });
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe.as_mut().expect("benchmark actor funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("funding accumulator benchmark bound fits");
+      }
+    });
+    let recipient = account("crossing-update-recipient", 0, 0);
+    let replacement = make_contract_steps::<T>(recipient);
+    let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
+      BoundedBTreeSet::default();
+    for index in 0..T::MaxWhitelistSize::get() {
+      allowed
+        .try_insert(account("crossing-funding-source", index, 0))
+        .expect("funding source must fit benchmark bound");
+    }
+    let funding = FundingSourcePolicy::SignedAllowlist(allowed);
+    #[block]
+    {
+      Pallet::<T>::update_contract(
+        RawOrigin::Signed(caller).into(),
+        actor_id,
+        ActorContract {
+          trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
+          cooldown_blocks: 20,
+          window: None,
+          steps: replacement,
+          funding,
+          completion: CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
+        },
+      )
+      .expect("Crossing update must succeed");
+    }
+    let locator =
+      CrossingMemberships::<T>::get(actor_id).expect("Crossing replacement membership must exist");
+    assert_eq!(locator.key.threshold, u128::MAX);
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
+  }
+
   #[benchmark]
   fn set_global_circuit_breaker() {
     #[extrinsic_call]
     set_global_circuit_breaker(RawOrigin::Root, true);
     assert!(GlobalCircuitBreaker::<T>::get());
+  }
+
+  #[benchmark]
+  fn clear_crossing_worker_fault() {
+    CrossingWorkerFaultState::<T>::put(CrossingWorkerFault {
+      feed: observation_feed_pool::<T>(1)[0],
+      revision: Some(1),
+      threshold: Some(1),
+      class: CrossingWorkerFaultClass::Invariant,
+    });
+    #[extrinsic_call]
+    clear_crossing_worker_fault(RawOrigin::Root);
+    assert!(CrossingWorkerFaultState::<T>::get().is_none());
+  }
+
+  #[benchmark]
+  fn clear_observation_fanout_worker_fault() {
+    ObservationFanoutWorkerFaultState::<T>::put(ObservationFanoutWorkerFault {
+      feed: observation_feed_pool::<T>(1)[0],
+      revision: 1,
+      subscriber_page: Some(0),
+      class: CrossingWorkerFaultClass::Invariant,
+    });
+    #[extrinsic_call]
+    clear_observation_fanout_worker_fault(RawOrigin::Root);
+    assert!(ObservationFanoutWorkerFaultState::<T>::get().is_none());
+  }
+
+  #[benchmark]
+  fn clear_wakeup_worker_fault() {
+    WakeupWorkerFaultState::<T>::put(WakeupWorkerFault {
+      key: WakeupKey::Block(1u32.into()),
+      page: 0,
+      class: CrossingWorkerFaultClass::Invariant,
+    });
+    #[extrinsic_call]
+    clear_wakeup_worker_fault(RawOrigin::Root);
+    assert!(WakeupWorkerFaultState::<T>::get().is_none());
   }
 
   #[benchmark]
@@ -1186,7 +1588,10 @@ mod benches {
       .next()
       .expect("one Crossing benchmark feed is required");
     let owner: T::AccountId = account("crossing-worker", 0, 0);
-    let actor_id = bench_create_system_crossing::<T>(owner, feed, threshold);
+    let actor_id = bench_create_user_with_trigger::<T>(
+      owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
+    );
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -1197,6 +1602,29 @@ mod benches {
     )
     .expect("Crossing benchmark transition must be admitted");
     (feed, actor_id)
+  }
+
+  fn prepare_non_tail_crossing_batch<T: Config>(tail_members: u32) -> alloc::vec::Vec<ActorId> {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let total = T::ObservationPageSize::get().saturating_add(tail_members);
+    let mut actors = alloc::vec![first_actor];
+    for index in 0..total.saturating_sub(1) {
+      let owner: T::AccountId = account("crossing-non-tail-unit", index, tail_members);
+      actors.push(bench_create_system_crossing::<T>(owner, feed, 2));
+    }
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    actors
   }
 
   fn bench_create_system_manual<T: Config>(seed: u32) -> ActorId {
@@ -1452,6 +1880,21 @@ mod benches {
       core::hint::black_box(DirtyObservationListState::<T>::get());
       Pallet::<T>::update_idle_starvation_state(now, true);
     }
+  }
+
+  #[benchmark]
+  fn materialization_coordinator_base() {
+    MaterializationFamilyCursor::<T>::put(0);
+    let now = frame_system::Pallet::<T>::block_number();
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::materialization_family_has_work(0, now));
+      core::hint::black_box(Pallet::<T>::materialization_family_has_work(1, now));
+      core::hint::black_box(Pallet::<T>::materialization_family_has_work(2, now));
+      let cursor = MaterializationFamilyCursor::<T>::get();
+      MaterializationFamilyCursor::<T>::put(cursor.saturating_add(1) % 3);
+    }
+    assert_eq!(MaterializationFamilyCursor::<T>::get(), 1);
   }
 
   // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
@@ -1913,7 +2356,7 @@ mod benches {
         maybe_hot
           .as_mut()
           .expect("benchmark actor hot state exists")
-          .cadence_anchor_tick = None;
+          .trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
       });
       Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 0)
         .expect("benchmark bootstrap wakeup fits");
@@ -1933,7 +2376,7 @@ mod benches {
       Some(1)
     );
     let rearmed_tick = ActorHot::<T>::get(first)
-      .and_then(|hot| hot.cadence_anchor_tick)
+      .and_then(|hot| hot.trigger_runtime_state.cadence_anchor_tick())
       .and_then(|anchor| anchor.checked_add(1))
       .expect("benchmark cadence re-anchors");
     assert_eq!(
@@ -2464,6 +2907,7 @@ mod benches {
   fn observation_fanout_base() {
     #[block]
     {
+      core::hint::black_box(ObservationFanoutWorkerFaultState::<T>::get());
       core::hint::black_box(Pallet::<T>::dirty_observation_fanout_base_probe());
     }
   }
@@ -2524,12 +2968,11 @@ mod benches {
       Pallet::<T>::do_fanout_dirty_observation_page()
         .expect("blocked observation fanout page must remain retryable");
     }
-    assert!(DirtyObservationFeeds::<T>::get(feed).is_some());
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(
-        ActorHot::<T>::get(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_none() })
-      );
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
+      }));
     }
   }
 
@@ -2537,7 +2980,467 @@ mod benches {
   fn crossing_worker_base() {
     #[block]
     {
+      core::hint::black_box(CrossingWorkerFaultState::<T>::get());
       core::hint::black_box(CrossingPendingFeedListState::<T>::get().count);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_work_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    while CrossingPendingFeedListState::<T>::get().count > 0 {
+      Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
+    }
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 3,
+        previous: Some(2),
+        current: 0,
+      },
+    )
+    .expect("Crossing rearm transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 3,
+        traversal: CrossingTraversal::Downward,
+        search_bound: 0,
+        current_threshold: Some(0),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_crossing_work_preflight(),
+        CrossingWorkPlan::RearmCohort
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_search_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::crossing_radix_min_ge(feed, CrossingTraversal::Upward, 0, 0, 0, u128::MAX,),
+        Ok(Some(2))
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_fire_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      assert!(matches!(
+        Pallet::<T>::classify_crossing_work(),
+        CrossingWorkPlan::FireCohortPlaced
+          | CrossingWorkPlan::FireCohortCoalesced
+          | CrossingWorkPlan::FireCohortClosed
+      ));
+    }
+  }
+
+  #[benchmark]
+  fn crossing_fire_pair_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    for index in 0..31 {
+      let owner: T::AccountId = account("crossing-pair-queue-boundary", index, 0);
+      let actor_id = bench_create_user_with_trigger::<T>(owner, Trigger::manual());
+      Pallet::<T>::request_activation(actor_id).expect("queue-boundary actor activation");
+    }
+    assert_eq!(QueueOccupancy::<T>::get(), 31);
+    let second_owner: T::AccountId = account("crossing-pair-probe", 0, 0);
+    let _ = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_crossing_work(),
+        CrossingWorkPlan::FireCohortPlacedBatch
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_tail_refill_probe() {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    for index in 1..8 {
+      let owner: T::AccountId = account("crossing-tail-user", index, 0);
+      let _ = bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      );
+    }
+    let system_count = T::ObservationPageSize::get()
+      .saturating_add(4)
+      .saturating_sub(8);
+    for index in 0..system_count {
+      let owner: T::AccountId = account("crossing-tail-system", index, 0);
+      let _ = bench_create_system_crossing::<T>(owner, feed, 2);
+    }
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let state = CrossingLeafStates::<T>::get(locator.key).expect("Crossing leaf state");
+    let source = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("non-tail Crossing source page");
+    assert!(locator.page < state.tail_page);
+    #[block]
+    {
+      let tail = CrossingMemberPages::<T>::get(locator.key, state.tail_page)
+        .expect("Crossing tail refill page");
+      assert_eq!(
+        Pallet::<T>::crossing_source_cohort_count(
+          &source,
+          locator.offset,
+          4,
+          Some(tail.entries.len() as u32),
+        ),
+        4
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_fire_cohort_preflight(c: Linear<1, 4>) {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    for index in 1..c {
+      let owner: T::AccountId = account("crossing-cohort-preflight", index, 0);
+      let _ = bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      );
+    }
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("Crossing cohort source page");
+    let transition = CrossingTransitionObligation {
+      revision: 2,
+      previous: 0,
+      current: 2,
+    };
+    #[block]
+    {
+      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
+        locator.key,
+        locator.page,
+        &page,
+        locator.offset,
+        c,
+      )
+      .expect("bounded cohort snapshot");
+      let preflight = Pallet::<T>::preflight_crossing_cohort(&snapshot, transition, true, None)
+        .expect("homogeneous cohort preflight");
+      assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortPlaced);
+      assert_eq!(preflight.admitted_candidates, c);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_coalesced_cohort_preflight(c: Linear<1, 4>) {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    let mut actors = alloc::vec![first];
+    for index in 1..c {
+      let owner: T::AccountId = account("crossing-coalesced-cohort", index, 0);
+      actors.push(bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      ));
+    }
+    for actor_id in actors {
+      Pallet::<T>::request_activation(actor_id).expect("coalesced cohort activation");
+    }
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("Crossing cohort source page");
+    let transition = CrossingTransitionObligation {
+      revision: 2,
+      previous: 0,
+      current: 2,
+    };
+    #[block]
+    {
+      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
+        locator.key,
+        locator.page,
+        &page,
+        locator.offset,
+        c,
+      )
+      .expect("bounded cohort snapshot");
+      let preflight = Pallet::<T>::preflight_crossing_cohort(
+        &snapshot,
+        transition,
+        true,
+        Some(CrossingWorkPlan::FireCohortCoalesced),
+      )
+      .expect("homogeneous coalesced preflight");
+      assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortCoalesced);
+      assert_eq!(preflight.admitted_candidates, c);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_terminal_cohort_preflight(c: Linear<1, 4>) {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    for index in 1..c {
+      let owner: T::AccountId = account("crossing-terminal-cohort", index, 0);
+      let _ = bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      );
+    }
+    NextQueueTicket::<T>::put(u64::MAX);
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("Crossing cohort source page");
+    let transition = CrossingTransitionObligation {
+      revision: 2,
+      previous: 0,
+      current: 2,
+    };
+    #[block]
+    {
+      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
+        locator.key,
+        locator.page,
+        &page,
+        locator.offset,
+        c,
+      )
+      .expect("bounded cohort snapshot");
+      let preflight = Pallet::<T>::preflight_crossing_cohort(
+        &snapshot,
+        transition,
+        true,
+        Some(CrossingWorkPlan::FireCohortClosed),
+      )
+      .expect("homogeneous terminal preflight");
+      assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortClosed);
+      assert_eq!(preflight.admitted_candidates, c);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_skip_cohort_preflight(c: Linear<1, 4>) {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    let mut actors = alloc::vec![first];
+    for index in 1..c {
+      let owner: T::AccountId = account("crossing-skip-cohort", index, 0);
+      actors.push(bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      ));
+    }
+    for actor_id in actors {
+      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+        let hot = maybe_hot.as_mut().expect("Crossing cohort Actor");
+        let TriggerRuntimeState::ObservationCrossing {
+          installed_at_revision,
+          ..
+        } = &mut hot.trigger_runtime_state
+        else {
+          panic!("Crossing runtime state")
+        };
+        *installed_at_revision = 2;
+      });
+    }
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("Crossing cohort source page");
+    let transition = CrossingTransitionObligation {
+      revision: 2,
+      previous: 0,
+      current: 2,
+    };
+    #[block]
+    {
+      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
+        locator.key,
+        locator.page,
+        &page,
+        locator.offset,
+        c,
+      )
+      .expect("bounded cohort snapshot");
+      let preflight = Pallet::<T>::preflight_crossing_cohort(
+        &snapshot,
+        transition,
+        true,
+        Some(CrossingWorkPlan::SkipPostInstallationTransition),
+      )
+      .expect("homogeneous skip preflight");
+      assert_eq!(
+        preflight.plan,
+        CrossingWorkPlan::SkipPostInstallationTransition
+      );
+      assert_eq!(preflight.admitted_candidates, c);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_rearm_cohort_preflight(c: Linear<1, 4>) {
+    let (feed, first) = prepare_crossing_work::<T>(2);
+    for index in 1..c {
+      let owner: T::AccountId = account("crossing-rearm-cohort", index, 0);
+      let _ = bench_create_user_with_trigger::<T>(
+        owner,
+        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+      );
+    }
+    while CrossingPendingFeedListState::<T>::get().count > 0 {
+      Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
+    }
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 3,
+        previous: Some(2),
+        current: 0,
+      },
+    )
+    .expect("Crossing rearm transition must be admitted");
+    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
+    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
+      .expect("Crossing cohort source page");
+    let transition = CrossingTransitionObligation {
+      revision: 3,
+      previous: 2,
+      current: 0,
+    };
+    #[block]
+    {
+      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
+        locator.key,
+        locator.page,
+        &page,
+        locator.offset,
+        c,
+      )
+      .expect("bounded cohort snapshot");
+      let preflight = Pallet::<T>::preflight_crossing_cohort(
+        &snapshot,
+        transition,
+        true,
+        Some(CrossingWorkPlan::RearmCohort),
+      )
+      .expect("homogeneous rearm preflight");
+      assert_eq!(preflight.plan, CrossingWorkPlan::RearmCohort);
+      assert_eq!(preflight.admitted_candidates, c);
+    }
+  }
+
+  #[benchmark]
+  fn crossing_rearm_pair_probe() {
+    let (feed, _) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-rearm-pair-probe", 0, 0);
+    let _ = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    while CrossingPendingFeedListState::<T>::get().count > 0 {
+      Pallet::<T>::crossing_work_unit().expect("initial pair fire must drain");
+    }
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 3,
+        previous: Some(2),
+        current: 0,
+      },
+    )
+    .expect("pair rearm transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 3,
+        traversal: CrossingTraversal::Downward,
+        search_bound: 0,
+        current_threshold: Some(0),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_crossing_work(),
+        CrossingWorkPlan::RearmCohortPair
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_skip_pair_probe() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-skip-pair-probe", 0, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    for actor_id in [first_actor, second_actor] {
+      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+        let hot = maybe_hot.as_mut().expect("pair Actor hot state must exist");
+        let TriggerRuntimeState::ObservationCrossing {
+          installed_at_revision,
+          ..
+        } = &mut hot.trigger_runtime_state
+        else {
+          panic!("pair Actor must use Crossing state");
+        };
+        *installed_at_revision = 2;
+      });
+    }
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_crossing_work(),
+        CrossingWorkPlan::SkipPostInstallationPair
+      );
     }
   }
 
@@ -2568,10 +3471,377 @@ mod benches {
     {
       Pallet::<T>::crossing_work_unit().expect("matched Crossing page work must succeed");
     }
-    assert!(
-      CrossingMemberships::<T>::get(actor_id)
-        .is_some_and(|locator| locator.phase == CrossingPhase::WaitingForRearm)
+    assert!(matches!(
+      ActorHot::<T>::get(actor_id).map(|hot| hot.trigger_runtime_state),
+      Some(TriggerRuntimeState::ObservationCrossing {
+        phase: CrossingPhase::WaitingForRearm,
+        ..
+      })
+    ));
+  }
+
+  #[benchmark]
+  fn crossing_rearm_unit() {
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
+    while CrossingPendingFeedListState::<T>::get().count > 0 {
+      Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
+    }
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 3,
+        previous: Some(2),
+        current: 0,
+      },
+    )
+    .expect("Crossing rearm transition must be admitted");
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("Crossing rearm work must succeed");
+    }
+    assert!(matches!(
+      ActorHot::<T>::get(actor_id).map(|hot| hot.trigger_runtime_state),
+      Some(TriggerRuntimeState::ObservationCrossing {
+        phase: CrossingPhase::Armed,
+        ..
+      })
+    ));
+  }
+
+  #[benchmark]
+  fn crossing_rearm_pair_unit() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-rearm-pair-unit", 0, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
+    while CrossingPendingFeedListState::<T>::get().count > 0 {
+      Pallet::<T>::crossing_work_unit().expect("initial pair fire must drain");
+    }
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 3,
+        previous: Some(2),
+        current: 0,
+      },
+    )
+    .expect("pair rearm transition must be admitted");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 3,
+        traversal: CrossingTraversal::Downward,
+        search_bound: 0,
+        current_threshold: Some(0),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_pair_work_unit().expect("Crossing rearm pair must succeed");
+    }
+    for actor_id in [first_actor, second_actor] {
+      assert!(matches!(
+        ActorHot::<T>::get(actor_id).map(|hot| hot.trigger_runtime_state),
+        Some(TriggerRuntimeState::ObservationCrossing {
+          phase: CrossingPhase::Armed,
+          ..
+        })
+      ));
+    }
+  }
+
+  #[benchmark]
+  fn crossing_coalesced_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    Pallet::<T>::request_activation(actor_id).expect("benchmark actor activation must succeed");
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("coalesced Crossing fire must succeed");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.pending_signal
+        && hot.queue_ticket.is_some()
+        && matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing {
+            phase: CrossingPhase::WaitingForRearm,
+            ..
+          }
+        )
+    }));
+  }
+
+  #[benchmark]
+  fn crossing_coalesced_pair_unit() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-coalesced-pair", 0, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    Pallet::<T>::request_activation(first_actor).expect("first pair latch must succeed");
+    Pallet::<T>::request_activation(second_actor).expect("second pair latch must succeed");
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortCoalescedPair
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_pair_work_unit().expect("coalesced Crossing pair must succeed");
+    }
+    for actor_id in [first_actor, second_actor] {
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.queue_ticket.is_some()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::WaitingForRearm,
+              ..
+            }
+          )
+      }));
+    }
+  }
+
+  #[benchmark]
+  fn crossing_placed_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("placed Crossing fire must succeed");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.pending_signal
+        && hot.queue_ticket.is_some()
+        && matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing {
+            phase: CrossingPhase::WaitingForRearm,
+            ..
+          }
+        )
+    }));
+  }
+
+  #[benchmark]
+  fn crossing_placed_pair_unit() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-pair-unit", 0, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_placed_batch_work_unit(2).expect("placed Crossing pair must succeed");
+    }
+    for actor_id in [first_actor, second_actor] {
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.queue_ticket.is_some()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::WaitingForRearm,
+              ..
+            }
+          )
+      }));
+    }
+  }
+
+  #[benchmark]
+  fn crossing_placed_maximum_unit() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let mut actors = alloc::vec![first_actor];
+    for index in 0..T::ObservationPageSize::get().saturating_sub(1) {
+      let owner: T::AccountId = account("crossing-maximum-unit", index, 0);
+      actors.push(if index < 3 {
+        bench_create_user_with_trigger::<T>(
+          owner,
+          Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+        )
+      } else {
+        bench_create_system_crossing::<T>(owner, feed, 2)
+      });
+    }
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_placed_batch_work_unit(4)
+        .expect("placed Crossing maximum batch must succeed");
+    }
+    for actor_id in actors.into_iter().take(4) {
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.queue_ticket.is_some()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::WaitingForRearm,
+              ..
+            }
+          )
+      }));
+    }
+  }
+
+  #[benchmark]
+  fn crossing_placed_non_tail_emptied_unit() {
+    let actors = prepare_non_tail_crossing_batch::<T>(4);
+    #[block]
+    {
+      Pallet::<T>::crossing_placed_batch_work_unit(4)
+        .expect("non-tail Crossing batch with emptied tail must succeed");
+    }
+    for actor_id in actors.into_iter().take(4) {
+      assert!(
+        ActorHot::<T>::get(actor_id)
+          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_placed_non_tail_trimmed_unit() {
+    let actors = prepare_non_tail_crossing_batch::<T>(6);
+    #[block]
+    {
+      Pallet::<T>::crossing_placed_batch_work_unit(4)
+        .expect("non-tail Crossing batch with trimmed tail must succeed");
+    }
+    for actor_id in actors.into_iter().take(4) {
+      assert!(
+        ActorHot::<T>::get(actor_id)
+          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+      );
+    }
+  }
+
+  #[benchmark]
+  fn crossing_skip_unit() {
+    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+      let hot = maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state must exist");
+      let TriggerRuntimeState::ObservationCrossing {
+        installed_at_revision,
+        ..
+      } = &mut hot.trigger_runtime_state
+      else {
+        panic!("benchmark actor must use Crossing state");
+      };
+      *installed_at_revision = 2;
+    });
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("post-installation Crossing skip must succeed");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      !hot.pending_signal
+        && hot.queue_ticket.is_none()
+        && matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing {
+            phase: CrossingPhase::Armed,
+            installed_at_revision: 2,
+          }
+        )
+    }));
+  }
+
+  #[benchmark]
+  fn crossing_skip_pair_unit() {
+    let (feed, first_actor) = prepare_crossing_work::<T>(2);
+    let second_owner: T::AccountId = account("crossing-skip-pair-unit", 0, 0);
+    let second_actor = bench_create_user_with_trigger::<T>(
+      second_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    for actor_id in [first_actor, second_actor] {
+      ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+        let hot = maybe_hot.as_mut().expect("pair Actor hot state must exist");
+        let TriggerRuntimeState::ObservationCrossing {
+          installed_at_revision,
+          ..
+        } = &mut hot.trigger_runtime_state
+        else {
+          panic!("pair Actor must use Crossing state");
+        };
+        *installed_at_revision = 2;
+      });
+    }
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_pair_work_unit().expect("Crossing skip pair must succeed");
+    }
+    for actor_id in [first_actor, second_actor] {
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        !hot.pending_signal
+          && hot.queue_ticket.is_none()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::Armed,
+              installed_at_revision: 2,
+            }
+          )
+      }));
+    }
   }
 
   #[benchmark]

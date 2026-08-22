@@ -9,7 +9,7 @@ type RouterWeights = crate::weights::pallet_deos_router::SubstrateWeight<Runtime
 type StakingWeights = crate::weights::pallet_staking::SubstrateWeight<Runtime>;
 type TmcWeights = crate::weights::pallet_tmc::SubstrateWeight<Runtime>;
 
-const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 60;
+const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 63;
 
 #[derive(Clone, Copy)]
 struct DispatchabilityRow {
@@ -32,7 +32,7 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
   use pallet_deos_actors::WeightInfo as _;
   use pallet_deos_router::WeightInfo as _;
   use pallet_governance::WeightInfo as _;
-  use pallet_oracle::{OnObservationChanged, WeightInfo as _};
+  use pallet_oracle::WeightInfo as _;
   use pallet_staking::WeightInfo as _;
   use pallet_tmc::WeightInfo as _;
 
@@ -42,12 +42,14 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
   let max_reward_claims =
     <Runtime as pallet_staking::Config>::MaxSecurityRewardClaimsPerCall::get();
   let observation_publish = OracleWeights::publish_ema_changed()
+    .max(OracleWeights::publish_ema_changed_primary_first())
+    .max(OracleWeights::publish_ema_changed_primary_existing())
+    .max(OracleWeights::publish_ema_changed_secondary_first())
+    .max(OracleWeights::publish_ema_changed_secondary_existing())
+    .max(OracleWeights::publish_ema_changed_combined())
+    .max(OracleWeights::publish_ema_changed_secondary_capacity())
     .max(OracleWeights::publish_ema_refresh())
-    .max(OracleWeights::publish_last_value())
-    .saturating_add(
-      <<Runtime as pallet_oracle::Config>::OnObservationChanged as OnObservationChanged<_>>::weight(
-      ),
-    );
+    .max(OracleWeights::publish_last_value());
 
   let rows = [
     normal(
@@ -86,6 +88,18 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
     normal(
       "Actors.set_global_circuit_breaker",
       ActorsWeights::set_global_circuit_breaker(),
+    ),
+    normal(
+      "Actors.clear_crossing_worker_fault",
+      ActorsWeights::clear_crossing_worker_fault(),
+    ),
+    normal(
+      "Actors.clear_observation_fanout_worker_fault",
+      ActorsWeights::clear_observation_fanout_worker_fault(),
+    ),
+    normal(
+      "Actors.clear_wakeup_worker_fault",
+      ActorsWeights::clear_wakeup_worker_fault(),
     ),
     normal(
       "Actors.permissionless_sweep",

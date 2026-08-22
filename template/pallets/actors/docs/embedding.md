@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.22`
+- **Release line**: `0.7.23`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions
@@ -13,7 +13,7 @@
 
 `pallet-deos-actors` is a bounded deterministic actor kernel. A downstream runtime can embed it without inheriting DEOS governance policy, TMCTOL bucket topology, native staking design, or the current System Actor catalog.
 
-The `0.7.22` package is fresh-genesis source only. It defines no migration from `0.7.21` activation or index storage and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
+The `0.7.22` package is fresh-genesis source only. The current baseline defines no migration from an earlier activation, detector, bond, or index layout and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
 
 Use this guide with the normative [DEOS Actors Specification](./specification.en.md) and shipped [DEOS Actors Architecture](./architecture.en.md). The specification defines portable semantics; this package document defines the host contract; the architecture document maps the reusable package implementation and source ownership.
 
@@ -31,7 +31,7 @@ The default profile proves deterministic unsupported optional adapters and all t
 | Concurrent ingress | Executive transfer during suspension latches once without duplicate ticket or wakeup |
 | Permissions | Immutable rejects `RetryLater { max_attempts }`; User rejects `Mint`; User accepts `SwapOut` |
 | Optional capability | Default DEX/staking/donation fail Permanent; DEX fixture supplies only local pairs |
-| State and weights | Continuation metadata, fresh storage version, try-state, and nonzero production-derived classes |
+| State and weights | Canonical Trigger runtime state, refundable bond field, coordinator cursor, fresh storage version, try-state reconciliation, and nonzero production-derived classes |
 
 Both profiles use the pallet's canonical FIFO and wakeup stores. The fixture defines no DEOS primitive, TMCTOL helper, System Actor catalog, custom scheduler, or product topology.
 
@@ -46,6 +46,7 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 - `LiquidityOps`: Addition, removal, and pair-scoped donation; donation permits reserve strengthening without LP receipt minting when supported by runtime policy.
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
+- `TriggerStateBond`: Exhaustive host policy mapping every authored Trigger family to the refundable amount reserved for an Active User. The adapter transactionally moves the old stored amount to the prospective amount before topology commit, releases it on deactivation and terminal close, reports one maximum for benchmark provisioning, and returns zero for System Actors. Bond policy must depend only on authored Trigger semantics, not pages, radix shape, queue occupancy, or detector history.
 - `SovereignAccountDeriver`: Deterministic infallible mapping from tagged User/System custody inputs into the host `AccountId`; it must preserve domain separation, reject no admitted identity through panic, and remain stable for custody reattachment.
 - `SystemActorContractValidator`: Read-only candidate validation called before an Active System Contract is installed or replaced. Bind `()` when the host defines no closed System activation topology; a host with an explicit catalog may reject undeclared or cyclic runtime-owned edges here. The validator must remain bounded and must not turn rank or edge metadata into Actor Contract identity or User policy.
 - `Time`, `CadenceTickMillis`, and `MaxCadenceDelayTicks`: Deterministic consensus milliseconds, the host's nonzero tick quantum, and its ten-Julian-year cadence horizon. The pallet floors readiness, ceils activation anchors, and never derives cadence or its admission bound from local block count. `TargetBlockTime` and `MaxExecutionDelayBlocks` independently bind the ten-Julian-year consensus-block horizon.
@@ -56,6 +57,8 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 - `FeeCollector` + `FeeSink`: One atomic ledger-only runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination without invoking Actors ingress, funding, readiness, or placement.
 - `AddressEventIngress`: Typed certified-ingress boundary (`AddressEventIngress::preflight`/`notify`) over the package `AddressEvent` value. Preflight is read-only (lifecycle, funding, trigger, and required placement); notify executes exactly once at the host's declared post-movement or transactional-precommit consequence point and rejects through `IngressFailure { error, retry }` with the same closed Temporary/Permanent classification as `TaskFailure`.
 - Governance/system origins, a two-dimensional hook weight meter, runtime-reserved `ActorOnIdleReserve`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxOpeningSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
+- Reactive-capacity configuration: total and User Crossing memberships per feed, the protected System difference, transition/leaf/page/candidate caps, broad-fanout pages, wakeup scans, and three two-dimensional family ceilings. Their sum is one shared materialization envelope; generated maximum-unit minima, persisted rotated family order, resumable component counters, and one bounded lending pass preserve the exact Actor execution remainder.
+- Fault control: Host origins for the global breaker and bounded current Crossing, broad-fanout, and wakeup fault repair. A host read model may expose semantic current faults and per-feed capacity, but raw pages, radix geometry, generations, cursors, and unbounded history remain private topology or materialized data.
 - Canonical FIFO configuration: non-zero page size, bounded `MaxQueueLength`, `MaxQueueEntriesScannedPerBlock`, and `MaxExecutionsPerBlock`. One `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Continuation owner govern every actor. Actor class, actor id, execution share, and priority policy never change service order.
 - Under `runtime-benchmarks`, `setup_predicate_assets` must provide enough valid distinct assets to measure the maximum bounded-DNF predicate count honestly; repeated keys do not establish worst-case ProofSize.
 
@@ -142,7 +145,9 @@ Actors guarantees Task-scoped atomicity, not whole-contract atomicity. A failed 
 
 Pure close has no task-scoped atomicity case: it prechecks fallible invariants, then deletes only actor-owned state and indexes without fees or balance movement.
 
-## 8. External Runtime Test Checklist
+## 8. Package Portability and External Runtime Tests
+
+An independent consumer should run native `cargo check --no-default-features` and direct `cargo check --target wasm32v1-none --no-default-features` against the packaged crate. The direct target build traverses the upstream `secp256k1-sys` C build and therefore requires a WebAssembly-capable C compiler such as `clang` or Zig configured for `wasm32-freestanding`; ordinary host GCC is not equivalent because it rejects WebAssembly target options including `-mmutable-globals`. A missing target compiler is an environment failure, not successful no-std evidence, and native checking must be reported separately rather than substituted for it.
 
 A runtime embedding Actors should add local tests for any adapter that mutates more than one storage item:
 

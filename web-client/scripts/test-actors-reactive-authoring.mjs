@@ -10,6 +10,7 @@ import test from 'node:test';
 
 import { analyzeActorContract } from '../src/lib/automation/analysis.ts';
 import { createActorArtifactFromAuthoring } from '../src/lib/automation/authoring.ts';
+import { actorReactiveCapacityFailureMessage } from '../src/lib/automation/capacity-failure.ts';
 import { inspectActorContractArtifact } from '../src/lib/automation/contract-artifact.ts';
 import { composeActorRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import { runActorMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
@@ -346,6 +347,17 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
   assert.equal(response.outcome.closeReason, 'ProductiveCycleCompleted');
 });
 
+test('reactive capacity failures preserve typed User and total admission boundaries', () => {
+  assert.match(
+    actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
+    /System reserve cannot be consumed by User Actors/,
+  );
+  assert.match(
+    actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
+    /Total Crossing capacity.*fails atomically/,
+  );
+});
+
 test('reactive authoring UI exposes every canonical fixture control', async () => {
   const sources = await Promise.all(
     [
@@ -364,6 +376,12 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
     'RetryLater',
     'Close after productive cycle',
     'Persistent',
+    'CrossingUserCapacityExceeded',
+    'CrossingIndexCapacityExceeded',
+    'Refundable bond',
+    'Service cost scales boundedly with subscribed pages',
+    'Repeated fires while already latched coalesce',
+    'backpressure may defer service',
   ]) {
     assert(source.includes(control), `${control} control is missing`);
   }

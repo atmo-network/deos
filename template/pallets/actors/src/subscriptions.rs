@@ -54,11 +54,11 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn preflight_observation_subscription_replace(
     actor_id: ActorId,
     trigger: &TriggerOf<T>,
-  ) -> DispatchResult {
+  ) -> Result<ActorObservationFeedsOf<T>, DispatchError> {
     let new_feeds = Self::derive_observation_feeds(trigger)?;
     let old_feeds = ActorObservationFeeds::<T>::get(actor_id).unwrap_or_default();
     if old_feeds == new_feeds {
-      return Ok(());
+      return Ok(new_feeds);
     }
     let mut removed_feeds = alloc::vec::Vec::new();
     for feed in old_feeds.as_slice() {
@@ -96,7 +96,7 @@ impl<T: Config> Pallet<T> {
         );
       }
     }
-    Ok(())
+    Ok(new_feeds)
   }
 
   fn allocate_observation_subscription_slot(actor_id: ActorId) -> Result<u32, DispatchError> {
@@ -391,12 +391,10 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
-  pub(crate) fn replace_observation_subscriptions(
+  pub(crate) fn commit_observation_subscription_replace(
     actor_id: ActorId,
-    trigger: &TriggerOf<T>,
+    new_feeds: ActorObservationFeedsOf<T>,
   ) -> DispatchResult {
-    Self::preflight_observation_subscription_replace(actor_id, trigger)?;
-    let new_feeds = Self::derive_observation_feeds(trigger)?;
     let old_feeds = ActorObservationFeeds::<T>::get(actor_id).unwrap_or_default();
     if old_feeds == new_feeds {
       return Ok(());
@@ -471,20 +469,6 @@ impl<T: Config> Pallet<T> {
       Error::<T>::ObservationSubscriptionInvariant
     );
     Self::preflight_clear_dirty_observation_feeds(feeds.as_slice())
-  }
-
-  pub(crate) fn remove_observation_subscriptions(actor_id: ActorId) -> DispatchResult {
-    Self::preflight_remove_observation_subscriptions(actor_id)?;
-    let Some(feeds) = ActorObservationFeeds::<T>::get(actor_id) else {
-      return Ok(());
-    };
-    let slot = ObservationSubscriptionSlot::<T>::get(actor_id)
-      .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
-    for feed in feeds {
-      Self::remove_observation_subscriber(actor_id, slot, feed)?;
-    }
-    ActorObservationFeeds::<T>::remove(actor_id);
-    Self::release_observation_subscription_slot(actor_id)
   }
 
   #[cfg(feature = "try-runtime")]
@@ -680,7 +664,11 @@ impl<T: Config> Pallet<T> {
           "observation occupied-page list bounds disagree",
         ));
       }
-      page_list_count += 1;
+      page_list_count = page_list_count
+        .checked_add(1)
+        .ok_or(TryRuntimeError::Other(
+          "observation occupied-page list count exceeds usize",
+        ))?;
     }
     if page_list_count != actual_pages_by_feed.len() || actual_by_feed != expected_by_feed {
       return Err(TryRuntimeError::Other(

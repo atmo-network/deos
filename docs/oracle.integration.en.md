@@ -78,30 +78,30 @@ The client must not reconstruct history from session observations or present cac
 
 `template/runtime/src/weights/pallet_oracle.rs` owns the executable DEOS Oracle methods. Production generation must use the reference benchmark runtime and preserve RefTime, measured or estimated ProofSize, reads, and writes as separate evidence.
 
-Registration measures existing-producer and new-producer storage topologies separately. The runtime binds their component-wise conservative maximum. Publication benchmarks include the composed changed-hook topology, while the dispatch envelope separately includes the hook's declared bound.
+Registration measures existing-producer and new-producer storage topologies separately. Publication binds one generated maximum across empty, Primary first/existing, Secondary first/existing, combined, capacity-rejection, and equal-refresh branches. Each changed branch measures the concrete Actors hook in place; no independent hook Weight is added.
 
 Any change to Actors ingress storage, Oracle hook composition, runtime bounds, producer identity, or pool admission invalidates composed publication evidence even when the reusable Oracle algorithm remains unchanged.
 
 ## Accepted Production Weight Evidence
 
-Production-Wasm `50 × 20` generation on 2026-08-21 produced the following runtime methods. RefTime below excludes runtime database charges while the reads and writes columns expose those charges explicitly.
+Production-Wasm `50 × 20` generation on 2026-08-23 produced the following runtime methods. RefTime excludes runtime database charges; reads and writes expose those charges separately.
 
 | Path | RefTime | ProofSize | Reads | Writes |
 | --- | ---: | ---: | ---: | ---: |
-| Register for existing producer at maximum occupancy | 132,142,000 | 20,532 | 3 | 3 |
-| Register new producer at maximum occupancy | 194,720,000 | 44,394 conservative bridge | 4 | 4 |
-| Pause | 15,365,000 | 3,551 | 1 | 1 |
-| Resume | 15,365,000 | 3,551 | 1 | 1 |
-| Deactivate | 15,365,000 | 3,551 | 1 | 1 |
-| Publish LastValue with no-subscriber hook branch | 30,033,000 | 3,559 | 5 | 1 |
-| Publish changed EMA with no-subscriber hook branch | 33,385,000 | 3,559 | 5 | 1 |
-| Publish equal EMA refresh | 21,931,000 | 3,551 | 2 | 1 |
+| Register existing producer | 146,111,000 | 20,532 | 3 | 3 |
+| Register new producer | 215,185,000 | 44,394 conservative bridge | 4 | 4 |
+| Pause / resume / deactivate maximum | 15,435,000 | 3,551 | 1 | 1 |
+| Publish LastValue empty | 33,733,000 | 3,559 | 6 | 1 |
+| Publish changed EMA empty | 37,156,000 | 3,559 | 6 | 1 |
+| Publish Primary first | 46,795,000 | 3,559 | 7 | 4 |
+| Publish Primary existing | 46,864,000 | 3,559 | 6 | 3 |
+| Publish Secondary first | 49,239,000 | 6,060 | 9 | 4 |
+| Publish Secondary existing | 49,099,000 | 6,060 | 9 | 4 |
+| Publish combined | 58,667,000 | 6,060 | 10 | 7 |
+| Reject at Secondary capacity | 45,188,000 | 6,060 | 8 | 0 |
+| Publish equal EMA refresh | 22,280,000 | 3,551 | 2 | 1 |
 
-The new-producer benchmark measured `44,394` ProofSize above its generated `34,255` estimate. The runtime file deliberately replaces that estimate with the measured value.
-
-Changed publication measurement includes the composed no-subscriber Actors hook branch. Dispatch then adds the independently declared worst-branch Actors ingress envelope, currently `558,385,000 / 6,128` with runtime RocksDB charges, so publication remains safe when a clean subscribed feed appends to the active-dirty list.
-
-The component-wise maximum DEOS Oracle publication method plus that hook declares `816,770,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
+The new-producer benchmark measured `44,394` ProofSize above its generated `34,255` estimate, so normalization retains the measured conservative bridge. Combined publication is the successful maximum; failed capacity append commits no writes.
 
 These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
 

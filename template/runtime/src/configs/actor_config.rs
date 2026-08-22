@@ -11,7 +11,7 @@ use codec::Encode;
 use primitives::{AssetKind, ecosystem};
 
 use polkadot_sdk::frame_support::traits::{
-  Currency, Get,
+  Currency, Get, ReservableCurrency,
   fungible::{Inspect as NativeInspect, Mutate as NativeMutate},
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
@@ -23,7 +23,7 @@ use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenErro
 use crate::{AssetConversion, RuntimeOrigin, Timestamp};
 use pallet_deos_actors::{
   ActorType, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FeeCollector, FundingAuthority,
-  LiquidityOps, TaskFailure,
+  LiquidityOps, TaskFailure, TriggerStateBond,
 };
 
 parameter_types! {
@@ -31,6 +31,11 @@ parameter_types! {
 
   pub const ActorsPalletId: PalletId = PalletId(*ecosystem::pallet_ids::ACTORS_PALLET_ID);
   pub const ActorFeeNativeAssetId: AssetKind = AssetKind::Native;
+  pub const ActorManualTriggerBond: Balance = EXISTENTIAL_DEPOSIT;
+  pub const ActorAddressEventTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
+  pub const ActorObservationChangeTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
+  pub const ActorObservationCrossingTriggerBond: Balance = 5 * EXISTENTIAL_DEPOSIT;
+  pub const ActorCadencedTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
   pub const ActorCadenceTickMillis: u64 = ecosystem::params::ACTOR_CADENCE_TICK_MILLIS;
   /// User Actors slot capacity per owner; System Actors is not constrained by this limit
   pub const ActorMaxOwnerSlots: u8 = 255;
@@ -66,10 +71,13 @@ parameter_types! {
   /// Independent observation subscriber/fanout page granularity.
   pub const ActorObservationPageSize: u32 = 64;
   pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
-  pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
+  pub const ActorMaxCrossingMembersPerFeed: u32 = 10_000;
+pub const ActorMaxUserCrossingMembersPerFeed: u32 = 9_000;
+pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
   pub const ActorMaxCrossingLeavesPerBlock: u32 = 64;
   pub const ActorMaxCrossingPagesPerBlock: u32 = 64;
-  pub const ActorMaxCrossingActorsPerBlock: u32 = 256;
+  /// Reachable placed-fire ceiling under the generated pair cohort and 10% worker reserve.
+  pub const ActorMaxCrossingActorsPerBlock: u32 = 4;
   pub const ActorMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const ActorMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const ActorMaxWakeupsPerBlock: u32 = 512;
@@ -79,7 +87,7 @@ parameter_types! {
     Perbill::from_percent(10) * MAXIMUM_BLOCK_WEIGHT;
   /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
   /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
-  pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(15) * MAXIMUM_BLOCK_WEIGHT;
+  pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(14) * MAXIMUM_BLOCK_WEIGHT;
   pub ActorOnIdleReserve: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
   // --- Lifecycle and sweep controls ---
@@ -134,6 +142,66 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
     }
     TmctolAssetOps::transfer_native_ledger_only(payer, fee_sink, amount)
       .map_err(|failure| failure.error)
+  }
+}
+
+pub struct RuntimeTriggerStateBond;
+
+#[cfg(test)]
+std::thread_local! {
+  static FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT: core::cell::Cell<bool> = const {
+    core::cell::Cell::new(false)
+  };
+}
+
+#[cfg(test)]
+pub fn fail_next_trigger_bond_after_adjustment() {
+  FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT.with(|flag| flag.set(true));
+}
+
+impl TriggerStateBond<AccountId, pallet_deos_actors::TriggerOf<Runtime>, Balance>
+  for RuntimeTriggerStateBond
+{
+  fn amount(trigger: &pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
+    match trigger {
+      pallet_deos_actors::types::Trigger::Manual => ActorManualTriggerBond::get(),
+      pallet_deos_actors::types::Trigger::AddressEvent { .. } => {
+        ActorAddressEventTriggerBond::get()
+      }
+      pallet_deos_actors::types::Trigger::ObservationChange { .. } => {
+        ActorObservationChangeTriggerBond::get()
+      }
+      pallet_deos_actors::types::Trigger::ObservationCrossing { .. } => {
+        ActorObservationCrossingTriggerBond::get()
+      }
+      pallet_deos_actors::types::Trigger::Cadenced { .. } => ActorCadencedTriggerBond::get(),
+    }
+  }
+
+  fn maximum() -> Balance {
+    ActorObservationCrossingTriggerBond::get()
+  }
+
+  fn set_bond(owner: &AccountId, current: Balance, target: Balance) -> DispatchResult {
+    let result = if target > current {
+      <Balances as ReservableCurrency<AccountId>>::reserve(owner, target - current)
+    } else if current > target {
+      let remainder =
+        <Balances as ReservableCurrency<AccountId>>::unreserve(owner, current - target);
+      if remainder == 0 {
+        Ok(())
+      } else {
+        Err(DispatchError::Token(TokenError::FundsUnavailable))
+      }
+    } else {
+      Ok(())
+    };
+    result?;
+    #[cfg(test)]
+    if FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT.with(|flag| flag.replace(false)) {
+      return Err(DispatchError::Other("injected Trigger-state bond failure"));
+    }
+    Ok(())
   }
 }
 
@@ -1176,12 +1244,9 @@ impl DeosSystemActorContractValidator {
     }
     let mut admitted = [false; SYSTEM_ACTOR_TOPOLOGY_IDS.len()];
     let mut processed = 0usize;
-    loop {
-      let Some(index) = (0..SYSTEM_ACTOR_TOPOLOGY_IDS.len())
-        .find(|index| !admitted[*index] && indegree[*index] == 0)
-      else {
-        break;
-      };
+    while let Some(index) =
+      (0..SYSTEM_ACTOR_TOPOLOGY_IDS.len()).find(|index| !admitted[*index] && indegree[*index] == 0)
+    {
       admitted[index] = true;
       processed += 1;
       for edge in ranked
@@ -2260,6 +2325,7 @@ impl pallet_deos_actors::Config for Runtime {
   type ActorCreationFee = ActorCreationFee;
   type FeeSink = ActorFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
+  type TriggerStateBond = RuntimeTriggerStateBond;
   type GenesisSystemActors = TmctolGenesisSystemActors;
   type SystemActorContractValidator = DeosSystemActorContractValidator;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
@@ -2282,6 +2348,8 @@ impl pallet_deos_actors::Config for Runtime {
   type WakeupPageSize = ActorWakeupPageSize;
   type ObservationPageSize = ActorObservationPageSize;
   type MaxCrossingTransitionsPerFeed = ActorMaxCrossingTransitionsPerFeed;
+  type MaxCrossingMembersPerFeed = ActorMaxCrossingMembersPerFeed;
+  type MaxUserCrossingMembersPerFeed = ActorMaxUserCrossingMembersPerFeed;
   type MaxCrossingTransitionsPerBlock = ActorMaxCrossingTransitionsPerBlock;
   type MaxCrossingLeavesPerBlock = ActorMaxCrossingLeavesPerBlock;
   type MaxCrossingPagesPerBlock = ActorMaxCrossingPagesPerBlock;

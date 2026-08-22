@@ -1,0 +1,27 @@
+{
+  "actorsWeightSha256": "26afb6f472d0471082fc2f92c1c8f1639a2c4d9a10c7dffede4dae9f6e8c6b01",
+  "formatVersion": 1,
+  "metadataSha256": "3a5402c7b7f4a1f58dc8569d67638221961bde9e8efe7587b7dc09fef49f9873",
+  "vectors": [
+    {
+      "amount": "1000000000",
+      "triggerFamily": "Manual"
+    },
+    {
+      "amount": "2000000000",
+      "triggerFamily": "AddressEvent"
+    },
+    {
+      "amount": "2000000000",
+      "triggerFamily": "ObservationChange"
+    },
+    {
+      "amount": "5000000000",
+      "triggerFamily": "ObservationCrossing"
+    },
+    {
+      "amount": "2000000000",
+      "triggerFamily": "Cadenced"
+    }
+  ]
+}

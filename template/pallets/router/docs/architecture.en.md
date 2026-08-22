@@ -424,21 +424,19 @@ Located in `runtime/src/tests/deos_router_integration_tests.rs`:
 
 ### Benchmarks
 
-`swap` and `update_router_fee` use generated V2 runtime weights. The swap benchmark includes standalone Oracle publication and the subscriber-independent Actors change hook through admitted directional pool feeds.
+`swap` and `update_router_fee` use generated V2 runtime weights. Each XYK route seeds a nearby valid safety reference, then measures changed Oracle publication with combined broad and Crossing ingress on every committed directional pool feed. Exact-output fixtures use a non-dust amount so the reference guard and measured route remain representative.
 
 Production `50 × 20` generation measures every semantic route class independently:
 
 | Class | RefTime / ProofSize | Reads / Writes |
 | --- | --- | --- |
-| Exact-input direct XYK | `294,176,000 / 12,200` | `25 / 12` |
-| Exact-input direct mint | `315,129,000 / 23,410` | `33 / 14` |
-| Exact-input Native-anchored XYK | `435,468,000 / 19,253` | `36 / 17` |
-| Exact-output direct XYK | `164,898,000 / 6,208` | `10 / 5` |
-| Exact-output Native-anchored XYK | `302,348,000 / 16,644` | `21 / 10` |
+| Exact-input direct XYK | `343,205,000 / 12,200` | `30 / 18` |
+| Exact-input direct mint | `321,275,000 / 23,410` | `33 / 14` |
+| Exact-input Native-anchored XYK | `500,770,000 / 19,253` | `44 / 27` |
+| Exact-output direct XYK | `332,170,000 / 12,200` | `29 / 18` |
+| Exact-output Native-anchored XYK | `506,427,000 / 19,253` | `43 / 27` |
 
-The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. Direct mint's additional read obtains an independent safety reference rather than self-certifying from its execution quote; the cross-release delta belongs to the root Weight ledger. `update_router_fee` measures `8,591,000 / 1,489`, one read, and one write.
-
-The accepted full Actors production generation uses the maximum reachable Router topology plus the System reference guard. Lazily skipping reserve fallback when a Fresh observation exists reduced exact-input from `514,320,000` to `499,862,000` RefTime (`2.81%`) and exact-output from `510,269,000` to `491,760,000` (`3.63%`) under identical `50 x 20` production-Wasm generation. ProofSize remains `19,253`; exact-input remains 38 reads and 17 writes, and exact-output 37 reads and 17 writes, because the repeated pool key was already represented in the measured proof/database set.
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. Direct mint's additional read obtains an independent safety reference rather than self-certifying from its execution quote. `update_router_fee` measures `8,591,000 / 1,489`, one read, and one write.
 
 ## Conclusion
 

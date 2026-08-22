@@ -39,6 +39,8 @@ mod benches {
     let to = T::NativeAsset::get();
     fund::<T>(&caller, &[from, to]);
     add_pool::<T>(&caller, from, to);
+    T::BenchmarkHelper::prepare_observation_hook(from, to)
+      .expect("combined observation hook setup must succeed");
     let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
 
     #[block]
@@ -75,6 +77,10 @@ mod benches {
     fund::<T>(&caller, &[from, native, to]);
     add_pool::<T>(&caller, from, native);
     add_pool::<T>(&caller, native, to);
+    T::BenchmarkHelper::prepare_observation_hook(from, native)
+      .expect("first combined observation hook setup must succeed");
+    T::BenchmarkHelper::prepare_observation_hook(native, to)
+      .expect("second combined observation hook setup must succeed");
     let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
 
     #[block]
@@ -95,11 +101,15 @@ mod benches {
     let to = T::NativeAsset::get();
     fund::<T>(&caller, &[from, to]);
     add_pool::<T>(&caller, from, to);
+    T::BenchmarkHelper::prepare_observation_hook(from, to)
+      .expect("combined observation hook setup must succeed");
+    let amount_out = T::MinSwapForeign::get().saturating_mul(1000u32.into());
 
     #[block]
     {
-      let outcome = Pallet::<T>::execute_exact_out_for(&caller, from, to, 1, u128::MAX, &caller)
-        .expect("direct exact-output execution must succeed");
+      let outcome =
+        Pallet::<T>::execute_exact_out_for(&caller, from, to, amount_out, u128::MAX, &caller)
+          .expect("direct exact-output execution must succeed");
       assert_eq!(outcome.weight_class, RouteWeightClass::ExactOutputDirectXyk);
     }
   }
@@ -113,11 +123,17 @@ mod benches {
     fund::<T>(&caller, &[from, native, to]);
     add_pool::<T>(&caller, from, native);
     add_pool::<T>(&caller, native, to);
+    T::BenchmarkHelper::prepare_observation_hook(from, native)
+      .expect("first combined observation hook setup must succeed");
+    T::BenchmarkHelper::prepare_observation_hook(native, to)
+      .expect("second combined observation hook setup must succeed");
+    let amount_out = T::MinSwapForeign::get().saturating_mul(1000u32.into());
 
     #[block]
     {
-      let outcome = Pallet::<T>::execute_exact_out_for(&caller, from, to, 1, u128::MAX, &caller)
-        .expect("Native-anchored exact-output execution must succeed");
+      let outcome =
+        Pallet::<T>::execute_exact_out_for(&caller, from, to, amount_out, u128::MAX, &caller)
+          .expect("Native-anchored exact-output execution must succeed");
       assert_eq!(
         outcome.weight_class,
         RouteWeightClass::ExactOutputNativeAnchoredXyk

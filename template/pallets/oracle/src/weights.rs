@@ -18,6 +18,12 @@ pub trait WeightInfo {
   fn deactivate_feed() -> Weight;
   fn publish_last_value() -> Weight;
   fn publish_ema_changed() -> Weight;
+  fn publish_ema_changed_primary_first() -> Weight;
+  fn publish_ema_changed_primary_existing() -> Weight;
+  fn publish_ema_changed_secondary_first() -> Weight;
+  fn publish_ema_changed_secondary_existing() -> Weight;
+  fn publish_ema_changed_combined() -> Weight;
+  fn publish_ema_changed_secondary_capacity() -> Weight;
   fn publish_ema_refresh() -> Weight;
 }
 
@@ -48,6 +54,30 @@ impl WeightInfo for () {
 
   fn publish_ema_changed() -> Weight {
     Weight::from_parts(45_000_000, 6_000)
+  }
+
+  fn publish_ema_changed_primary_first() -> Weight {
+    Self::publish_ema_changed()
+  }
+
+  fn publish_ema_changed_primary_existing() -> Weight {
+    Self::publish_ema_changed()
+  }
+
+  fn publish_ema_changed_secondary_first() -> Weight {
+    Self::publish_ema_changed()
+  }
+
+  fn publish_ema_changed_secondary_existing() -> Weight {
+    Self::publish_ema_changed()
+  }
+
+  fn publish_ema_changed_combined() -> Weight {
+    Self::publish_ema_changed()
+  }
+
+  fn publish_ema_changed_secondary_capacity() -> Weight {
+    Self::publish_ema_changed()
   }
 
   fn publish_ema_refresh() -> Weight {

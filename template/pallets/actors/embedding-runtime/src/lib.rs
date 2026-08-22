@@ -627,6 +627,8 @@ impl pallet_deos_actors::Config for Runtime {
   type WakeupPageSize = ConstU32<8>;
   type ObservationPageSize = ConstU32<8>;
   type MaxCrossingTransitionsPerFeed = ConstU32<8>;
+  type MaxCrossingMembersPerFeed = ConstU32<16>;
+  type MaxUserCrossingMembersPerFeed = ConstU32<12>;
   type MaxCrossingTransitionsPerBlock = ConstU32<2>;
   type MaxCrossingLeavesPerBlock = ConstU32<4>;
   type MaxCrossingPagesPerBlock = ConstU32<4>;
@@ -653,6 +655,7 @@ impl pallet_deos_actors::Config for Runtime {
   type WeightToFee = LinearWeightToFee;
   type FeeSink = FeeSink;
   type FeeCollector = NativeFeeCollector;
+  type TriggerStateBond = ();
   type MaxConsecutiveFailures = ConstU32<2>;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = ConstU128<10>;
@@ -975,7 +978,7 @@ mod tests {
   #[test]
   fn independent_runtime_starts_from_the_fresh_schema_without_system_topology() {
     new_test_ext().execute_with(|| {
-      let baseline = StorageVersion::new(2);
+      let baseline = StorageVersion::new(9);
       assert_eq!(Actors::in_code_storage_version(), baseline);
       assert_eq!(Actors::on_chain_storage_version(), baseline);
       assert_eq!(Actors::actor_identity_count(), 0);

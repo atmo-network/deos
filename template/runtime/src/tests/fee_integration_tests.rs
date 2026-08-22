@@ -9,7 +9,7 @@ use crate::{
     actor_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemActors},
   },
 };
-use pallet_deos_actors::{AssetOps, FeeCollector, WakeupKey};
+use pallet_deos_actors::{AssetOps, FeeCollector, TriggerRuntimeState, WakeupKey};
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
@@ -24,7 +24,12 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 
 fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
   let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
-  let key = if Actors::actor_hot(fee_sink_id).is_some_and(|hot| hot.cadence_anchor_tick.is_none()) {
+  let key = if Actors::actor_hot(fee_sink_id).is_some_and(|hot| {
+    matches!(
+      hot.trigger_runtime_state,
+      TriggerRuntimeState::Cadenced { anchor_tick: None }
+    )
+  }) {
     initialize_genesis_fee_sink_cadence(1_000)
   } else {
     key
@@ -129,10 +134,12 @@ fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_earl
       .expect("Fee Sink cadence bootstrap remains armed")
       .block;
     assert_eq!(initial, WakeupKey::Tick(0));
-    assert_eq!(
-      Actors::actor_hot(fee_sink_id).unwrap().cadence_anchor_tick,
-      None
-    );
+    assert!(matches!(
+      Actors::actor_hot(fee_sink_id)
+        .expect("Fee Sink hot state exists")
+        .trigger_runtime_state,
+      TriggerRuntimeState::Cadenced { anchor_tick: None }
+    ));
 
     let due = initialize_genesis_fee_sink_cadence(1_000);
     assert_eq!(due, WakeupKey::Tick(122));

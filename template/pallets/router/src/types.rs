@@ -129,6 +129,7 @@ pub trait BenchmarkHelper<AssetKind, AccountId, Balance> {
   fn create_asset(asset: AssetKind) -> DispatchResult;
   fn mint_asset(asset: AssetKind, to: &AccountId, amount: Balance) -> DispatchResult;
   fn create_pool(asset1: AssetKind, asset2: AssetKind) -> DispatchResult;
+  fn prepare_observation_hook(asset1: AssetKind, asset2: AssetKind) -> DispatchResult;
   fn create_tmc_curve(token_asset: AssetKind, collateral_asset: AssetKind) -> DispatchResult;
   fn add_liquidity(
     who: &AccountId,

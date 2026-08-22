@@ -85,7 +85,7 @@ check_prerequisites() {
         exit 1
     }
     [[ -f "$EXCEPTIONS" ]] || { log_error "Dependency exception ledger is missing"; exit 1; }
-    (cd "$TEMPLATE_DIR" && rustc --version | grep -Fq 'rustc 1.93.1 ')
+    (cd "$TEMPLATE_DIR" && rustc --version | grep -Fq 'rustc 1.94.1 ')
     node -e '
       const p = require(process.argv[1]);
       if (process.version.slice(1) !== p.volta.node) process.exit(1);

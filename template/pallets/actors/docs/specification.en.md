@@ -18,6 +18,7 @@ Rust code blocks that do not declare public types, interfaces, events, errors, o
 - Every admitted path ends in a named completion, skip, failure, suspension, cancellation, close, or state-preserving deferral; unknown capability or failure fails closed.
 - Actor Contract identity is the domain-separated digest of canonical typed SCALE bytes plus explicit runtime binding; JSON text, whitespace, object-key order, comments, labels, and client serialization choices MUST NOT affect it.
 - `ActorIdentity`, `ActorHot`, `ActorContract`, `ActorFunding`, and optional `ContinuationState` are the only canonical actor partitions; composite views are read-only.
+- Authored Trigger semantics live only in `ActorContract`; stateful Trigger phase lives only in `ActorHot.trigger_runtime_state`; detector pages, radix geometry, subscriptions, locators, cursors, generations, and worker limits are derived physical topology with no semantic authority.
 - User and System share one strict FIFO, temporal-readiness layer, cutoff, and service order.
 - One generated runtime `WeightInfo` owns every numeric Weight and every Weight-derived User fee.
 - Attempt Weight and User fee bounds are derived from the current bounded contract at use time; no derived Weight or fee state is stored.
@@ -48,7 +49,32 @@ Rust code blocks that do not declare public types, interfaces, events, errors, o
 
 A step failure inside an admitted attempt is not a rejected transition. Authored whole-plan rollback is forbidden; rollback of the enclosing scheduler transaction remains required on its own failure.
 
-### 1.2 Non-goals
+### 1.2 Declarative Trigger Topology
+
+The canonical Trigger machine is:
+
+```text
+Actor Contract semantics
+-> canonical Trigger runtime state
+-> one derived current detector obligation
+-> specialized physical detection topology
+-> semantically relevant transition
+-> one normalized activation operation
+-> at most one canonical placement
+-> one bounded FIFO execution attempt
+```
+
+An Actor owns exactly one authored Trigger, one compatible canonical Trigger runtime state, at most one external-signal latch, and at most one live scheduler placement. Detection remains heterogeneous: Manual, AddressEvent, ObservationChange, ObservationCrossing, and Cadenced retain specialized bounded physical paths, but every readiness request converges through one activation and one FIFO execution plane.
+
+Physical topology MAY coalesce readiness but MUST NOT fabricate or lose causal Trigger-state transitions. A committed producer transition that can alter canonical Trigger state MUST be durably represented for bounded deferred service or the producer mutation MUST fail atomically. Irrelevant work MUST NOT probe unrelated Actors; relevant work MAY scale only with the exact affected cohort under explicit finite bounds and generated multidimensional Weight. `MaxCrossingMembersPerFeed` independently bounds one feed's total exact-threshold membership and MUST be nonzero and no greater than global Active capacity. `MaxUserCrossingMembersPerFeed` MUST be nonzero and strictly lower; its exact reconciled count rejects User installation with a distinct typed capacity error and reserves the difference for System Actors. Lifecycle installation or replacement above either applicable cap fails atomically before the prospective Active state commits.
+
+Trigger lifecycle mutation MUST use one bounded preflight/commit owner across Active creation, Dormant activation, Active replacement, deactivation, close, and genesis installation. The owner derives the prospective canonical state and physical obligation, returns exact semantic no-op before control mutation, prevalidates every fallible dependency, and commits Contract, Trigger runtime state, detector topology, economic state, and placement reconstruction atomically.
+
+Work ownership is disjoint: the originating call or producer owns its complete synchronous consequence; readiness materialization owns deferred detector search and affected-cohort progression; activation owns latch and placement request; placement owns canonical FIFO/temporal mutation; execution owns one admitted FIFO attempt. The same storage or branch MUST NOT be charged through two owners, and no owner MAY defer an uncharged synchronous consequence into another budget.
+
+Economic ownership is likewise explicit. Call origin pays synchronous lifecycle mutation through transaction fees. Oracle publisher pays bounded cardinality-independent publication ingress, not deferred matching. Runtime reserve pays bounded detector search and readiness materialization under hard caps. User execution remains Actor-funded and System execution remains Actors-fee-exempt. Every persistent Active User detector footprint MUST have an exhaustive runtime-owned refundable Trigger-state bond or a measured zero-cost justification; physical occupancy MUST NOT make the bond unpredictable, and no implicit per-observation, per-rearm, or per-page User debit exists.
+
+### 1.3 Non-goals
 
 Actors defines no ownership transfer, arbitrary dispatch, loops, same-block actor-graph continuity, priority lane, actual-Weight refund, readiness-bypassing simulation, signal-payload amount resolution, adaptive rent/deposit pricing, generic migration engine, close-time asset enumeration, implicit multi-asset refund, or Router route semantics. Uncertified balance movements are not retroactively interpreted as Actors ingress.
 
@@ -73,6 +99,15 @@ enum SystemSovereignState { Vacant, Occupied(ActorId) }
 enum Mutability { Mutable, Immutable }
 enum ActiveLifecycle { Active, Paused }
 enum CycleState { Idle, Suspended }
+enum CrossingPhase { Armed, WaitingForRearm }
+enum TriggerRuntimeState {
+  Stateless,
+  ObservationCrossing {
+    phase: CrossingPhase,
+    installed_at_revision: ObservationRevision,
+  },
+  Cadenced { anchor_tick: Option<u64> },
+}
 
 struct ActorIdentity<AccountId, BlockNumber> {
   sovereign_account: AccountId, owner: AccountId, actor_class: ActorClass,
@@ -83,6 +118,7 @@ struct WakeupPointer<BlockNumber> {
 }
 struct ActorHot<BlockNumber> {
   lifecycle: ActiveLifecycle, cycle_state: CycleState,
+  trigger_runtime_state: TriggerRuntimeState,
   unsuccessful_attempt_streak: u32,
   pending_signal: bool, queue_ticket: Option<QueueTicket>,
   wakeup_pointer: Option<WakeupPointer<BlockNumber>>, terminal_at: Option<BlockNumber>,
@@ -128,6 +164,8 @@ enum StepSkippedReason { PreconditionFalse, ResolutionSkipped, FundingUnavailabl
 Relations:
 
 - Active iff identity, hot, contract, and funding partitions exist; Dormant iff only identity exists.
+- `Manual`, `AddressEvent`, and `ObservationChange` require `Stateless`; `ObservationCrossing` requires `ObservationCrossing`; `Cadenced` requires `Cadenced`. Any mismatch is `ActorInvariant`.
+- Trigger runtime phase, observation revision, physical membership generation, locator, cursor, and every index field are excluded from Actor Contract identity.
 - `ContinuationState` exists iff `cycle_state == Suspended`.
 - `ActorClass` solely determines class; `ActorType` is derived and never stored.
 - A composite actor value is read-only and MUST NOT become another write model.
@@ -482,13 +520,19 @@ System-to-System activation policy is host-owned. Before an Active System Contra
 
 ### 3.2 Triggers and Timing
 
-| Trigger | Readiness |
-| --- | --- |
-| `Manual` | An admitted owner signal sets `pending_signal` |
-| `AddressEvent` | One matching certified positive movement sets `pending_signal` |
-| `ObservationChange` | One matching deferred feed publication sets `pending_signal` |
-| `ObservationCrossing` | One armed directional boundary crossing sets `pending_signal`; rearm crossings change detection state only |
-| `Cadenced` | One internal timestamp deadline materializes readiness without a latch |
+| Trigger | Source | Runtime state | Physical binding | Latch and coalescing | Temporal behavior | Cleanup | Economic footprint |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `Manual` | Admitted owner call | `Stateless` | None | Sets the sole `pending_signal`; repeats coalesce | Block cooldown/window after signal | Deactivation deletes latch; close deletes Actor | Lifecycle caller pays mutation; User pays eventual attempt |
+| `AddressEvent` | Matching certified positive movement | `Stateless` | Certified ingress only; no detector index | Sets the sole latch; matching movements coalesce while latched | Block cooldown/window after movement | Deactivation removes readiness; close deletes Actor | Producer pays synchronous consequence; User pays eventual attempt |
+| `ObservationChange` | Every accepted changed feed revision | `Stateless` | Actor/feed reverse ownership plus broad subscriber pages | Deferred fanout sets the sole latch; newer revisions remain represented while a pass drains | Block cooldown/window after materialization | Deactivation removes subscription and final-subscriber dirty state; close does the same | Publisher pays O(1) ingress; runtime reserve pays fanout; User pays eventual attempt |
+| `ObservationCrossing` | Ordered exact `previous -> current` feed revisions | `ObservationCrossing { phase, installed_at_revision }` | One generation-checked fire or rearm membership under the sparse threshold index | Fire sets the sole latch; rearm never latches; a full fire/rearm/fire while already latched may coalesce to one later cycle | Block cooldown/window after fire materialization | Deactivation removes membership and queued work loses authority; close removes all derived topology | Publisher pays O(1) ingress; runtime reserve pays Crossing service; User pays eventual attempt |
+| `Cadenced` | Consensus timestamp deadline | `Cadenced { anchor_tick }` | One cadence wakeup, temporarily replaced by one retry wakeup while suspended | Uses no external latch; delayed periods coalesce to one current opportunity without catch-up | Timestamp cadence while Idle; block backoff while Suspended | Deactivation removes wakeup; close removes all temporal state | Runtime reserve pays wakeup materialization; User pays eventual attempt |
+
+Pause preserves accepted latch, Trigger runtime state, detector membership, pending observation work, and cadence meaning while blocking execution; resume reconstructs only the canonical placement needed by retained state. The global breaker likewise blocks Actor execution, not bounded detector evolution, wakeup materialization, fault recording, or mandatory cleanup.
+
+One persisted bounded coordinator MUST give overdue temporal wakeups, Crossing transitions, and broad observation fanout one service opportunity per block in deterministic rotated family order before capturing the Actor-execution cutoff. It MAY give only the rotated first family one additional bounded lending opportunity when resumable per-block counters and charged remaining-work classification preserve every component cap. Each family MUST preserve its own canonical deadline or revision order, MUST retain one admissible configured service quantum when nonempty, and MUST yield without creating work when empty. Fixed coordination, mandatory cleanup, and all three service ceilings MUST be deducted before deriving the guaranteed Actor-execution floor. Corrupt family-order state MUST fail closed without granting one family service authority or mutating its work. Unused family capacity MAY be lent only within one explicit bounded materialization budget; fixed percentages that strand available materialization Weight are not the target contract.
+
+Observation revision equality is an exact no-op and regression fails. Unavailable current observation rejects Active Crossing installation without inventing historical state. Once installed, accepted queued revisions remain ordered through temporary service unavailability; replacement or deactivation makes old generation/revision work physically removable but semantically unauthorized, so it cannot retrofire. Broad `ObservationChange` remains subscribed to accepted changed revisions independently of Crossing phase.
 
 A Trigger changes readiness only. Every detector converges through one activation operation that sets `pending_signal` `false -> true` and requests the same canonical placement contract. `pending_signal` is the sole external-signal latch. An AddressEvent without concrete source matches only `SourceFilter::Any`. One Actor never combines independent readiness sources.
 
@@ -502,7 +546,7 @@ An armed Rising crossing fires exactly when `previous < threshold && current >= 
 
 Active installation, reactivation, or semantic replacement initializes Crossing state from the current canonical observation without retroactive activation. A Rising value already `>= threshold`, or a Falling value already `<= threshold`, starts disarmed and waits for rearm; every other valid current value starts armed. Unavailable or uninitialized current state rejects Active admission through a typed error. Dormant authoring remains valid because it establishes no derived detection membership.
 
-One fire disarms the Crossing before requesting activation and atomically moves its derived membership to the rearm boundary. Queue pressure, delayed activation materialization, duplicate publication, and a set `pending_signal` cannot produce another fire before a qualifying rearm. Rearm requests no activation and atomically restores fire membership. Detection owns armed state; the canonical FIFO owns eventual execution.
+One fire commits canonical `WaitingForRearm` before requesting activation and atomically moves the derived membership to the rearm boundary. Queue pressure, delayed activation materialization, duplicate publication, and a set `pending_signal` cannot produce another fire before a qualifying rearm. Rearm commits canonical `Armed` without requesting activation and atomically restores fire membership. `ActorHot.trigger_runtime_state` owns phase and installation revision; physical membership contains only bounded removal/stale-rejection back-pointers and has no activation authority. The canonical FIFO owns eventual execution.
 
 Every committed canonical observation update owns a monotonically increasing feed revision and one exact `previous -> current` transition. A transition that could fire or rearm is either durably admitted for bounded ordered processing or the observation publication fails atomically. Implementations MUST NOT coalesce revisions when an intermediate reversal, fire, or rearm could be lost, and later revisions for one feed cannot overtake its earlier incomplete transition.
 
@@ -1077,6 +1121,16 @@ The generated certified-publisher inventory is the sole observation-publication 
 
 Changed publication atomically maintains one highest accepted revision and one pending obligation per subscribed feed. Revision `0` or regression fails; equality is exact no-op; greater revision updates. Publication is O(1) and does not inspect subscriber groups, mutate actors, enqueue, evaluate, or execute. A path outside the certified inventory has no Actors observation effect.
 
+Crossing service preserves revision order per feed and deterministic feed rotation globally. One admitted search unit traverses the fixed radix depth at most once and either records one exact occupied threshold for later candidate service, records exhaustion, or completes the head transition; search never evaluates or activates an Actor. A recorded threshold is not searched again until its current source leaf is exhausted or removed.
+
+One candidate unit owns a bounded prefix of exactly one source membership page. Before mutation it derives the admitted candidate count from the encoded page remainder, `ObservationPageSize`, remaining multidimensional Weight, and explicit transition/leaf/page/Actor caps. Zero candidates is a state-preserving deferral. The source page is loaded once, candidate authority is restricted to the snapshotted `(actor_id, generation, locator)` prefix, and no candidate may authorize reads or writes for another Actor.
+
+Candidate preflight validates every snapshotted locator, canonical Trigger phase and installation revision, authored Crossing semantics, destination obligation capacity, activation branch, and terminal branch before cohort commit. Any structural failure rolls back that candidate unit, preserves all prior committed units, and records the first deterministic bounded worker fault. The unit never skips corruption, expands its prefix after admission, or converts one Actor's failure into authority over another.
+
+Commit applies phase movement before fire activation, groups identical destination obligations only as a storage optimization, compacts the source page once in deterministic snapshot order, writes each touched destination page at most once, and updates every moved locator exactly. Post-installation skips retain phase and obligation. A canonical phase change moves membership exactly once. Fire coalescing, new FIFO placement, and terminal close remain semantically distinct generated branches; rearm never activates. The cursor resumes at the first unprocessed source entry or advances exactly once after source exhaustion, including partial cohorts and closure-driven membership removal.
+
+Crossing Weight has disjoint generated owners for base probes, radix search, source-page I/O parameterized by admitted candidates, destination groups, canonical membership movement, activation classification, coalesced fire, placed fire, terminal close, rearm, skip, and transition completion. A component is charged only when its physical operation occurs. The count and both Weight dimensions MUST admit the complete selected unit before mutation; `MaxCrossingActorsPerBlock` is an independently enforced defense-in-depth ceiling over actually inspected candidates.
+
 Fanout runs before cutoff. One admitted unit reserves complete Weight, visits one bounded group, latches live actors, and ensures future placement before advancing durable progress. A pass snapshots one revision. Newer revisions update only latest revision and do not reset the current pass. Under recurring budget, eventual placement capacity, and finite subscription churn, each snapshotted pass completes, although the feed may remain dirty indefinitely. Completion means subscriber groups were visited, not actors executed.
 
 ### 5.3 Address-Event Ingress
@@ -1130,6 +1184,8 @@ base
 ```
 
 `OnIdleBaseWeightUpper` covers entry, breaker read, fixed orchestration, cutoff snapshot, and maximum starvation-state branch. Temporal and observation worker bases live inside their own limits. FIFO discovery, consumption, attempt, final placement, and terminal cleanup live inside the admitted actor-service bound.
+
+Insufficient remaining Weight is silent deferral and MUST preserve worker state without creating a fault. A deferred structural error MUST roll back its complete unit, retain at most one bounded typed current fault, and halt unchanged-mechanism retries for that obligation. The projection identifies the worker family, source or temporal key, available revision/cursor identity, and failure class. Resumption requires an authorized explicit clear after repair of the underlying invariant; clearing the record MUST NOT discard or advance the preserved obligation, and unchanged corruption deterministically faults again. No unbounded failure history is canonical state.
 
 ```text
 ActorServiceReserve =
@@ -1306,6 +1362,8 @@ manual_trigger                 close_actor
 update_contract                cancel_continuation
 set_global_circuit_breaker     set_active_actor_limit
 permissionless_sweep           permissionless_sweep_many
+clear_crossing_worker_fault    clear_observation_fanout_worker_fault
+clear_wakeup_worker_fault
 ```
 
 Authorization:
@@ -1314,7 +1372,7 @@ Authorization:
 | --- | --- |
 | User creation | signed caller, who becomes owner |
 | System creation, System locator reuse, active-limit control | `SystemOrigin` |
-| breaker control | `GlobalBreakerOrigin` |
+| breaker and materialization-fault repair control | `GlobalBreakerOrigin` |
 | User actor control | signed owner |
 | System actor control | signed owner or `SystemOrigin` |
 | sweep | any signed origin |
@@ -1477,11 +1535,22 @@ enum ActorEligibility<BlockNumber> {
   Dormant,
   Active(ActorClassification<BlockNumber>),
 }
-trait ActorEligibilityApi<BlockNumber> {
+#[api_version(4)]
+trait ActorEligibilityApi<FeedId, BlockNumber, Trigger, Balance> {
   fn actor_eligibility(actor_id: ActorId)
-    -> Result<ActorEligibility<BlockNumber>, ActorClassificationError>;
+    -> Result<ActorEligibility<FeedId, BlockNumber>, ActorClassificationError>;
+  fn materialization_faults() -> (
+    Option<CrossingWorkerFault<FeedId>>,
+    Option<ObservationFanoutWorkerFault<FeedId>>,
+    Option<WakeupWorkerFault<BlockNumber>>,
+  );
+  fn crossing_capacity(feed: FeedId)
+    -> (user_cap: u32, total_cap: u32, user_count: u32, total_count: u32);
+  fn trigger_state_bond(trigger: Trigger) -> Balance;
 }
 ```
+
+The Active Trigger projection is semantic rather than physical. Crossing includes authored direction/thresholds, canonical `phase`, canonical `installed_at_revision`, pending revision count, current processing revision, latch, placement, and eligibility; it exposes no radix key, page, offset, generation, or cursor geometry. `materialization_faults` returns only the three bounded current typed faults and no history or raw topology. `crossing_capacity` returns runtime policy plus exact semantic User/total membership counts for one feed; it does not expose occupancy by leaf or page. `trigger_state_bond` returns the prospective refundable User bond from the same exhaustive runtime policy consumed by lifecycle dispatch, without consulting physical detector occupancy.
 
 Eligibility resolves absent and valid Dormant ids before invoking Section 4.1. For an Active actor, a classification error maps exactly under Section 9.2 and success returns the canonical `ActorClassification` without stripping terminal reason or execution-phase payloads. `WaitingRetry(block)` and `WaitingTemporal(block)` retain their exact block; no parallel next-block field exists.
 
@@ -1521,6 +1590,9 @@ LiquidityRemoved { actor_id: ActorId, cycle_nonce: u64, step_index: u32, lp_asse
 ContractUpdated { actor_id: ActorId }
 ActiveActorLimitSet { old_limit: u32, new_limit: u32 }
 GlobalCircuitBreakerSet { paused: bool }
+CrossingWorkerFaultCleared { feed: FeedId, revision: Option<u64>, class: CrossingWorkerFaultClass }
+ObservationFanoutWorkerFaultCleared { feed: FeedId, revision: u64, subscriber_page: Option<u32>, class: ObservationFanoutWorkerFaultClass }
+WakeupWorkerFaultCleared { key: WakeupKey<BlockNumber>, page: u32, class: WakeupWorkerFaultClass }
 ManualTriggerSet { actor_id: ActorId }
 FundingAccumulated { actor_id: ActorId, asset: AssetId, added: Balance, accumulated: Balance }
 SweepBatchProcessed { requested: u32, closed: u32, alive: u32, missing: u32 }
@@ -1591,9 +1663,11 @@ enum Error {
   ObservationSubscriptionCapacityExceeded, ObservationSubscriptionInvariant,
   InvalidObservationRevision, DirtyObservationCapacityExceeded,
   DirtyObservationInvariant, ObservationUnavailable, ObservationUninitialized,
-  CrossingIndexCapacityExceeded, CrossingIndexInvariant, CrossingGenerationExhausted,
+  CrossingIndexCapacityExceeded, CrossingUserCapacityExceeded,
+  CrossingIndexInvariant, CrossingGenerationExhausted,
   CrossingTransitionCapacityExceeded, CrossingTransitionInvariant,
-  SystemActorTopologyInvalid, AdmissionBoundOverflow,
+  CrossingWorkerFaultNotFound, ObservationFanoutWorkerFaultNotFound,
+  WakeupWorkerFaultNotFound, SystemActorTopologyInvalid, AdmissionBoundOverflow,
 }
 ```
 

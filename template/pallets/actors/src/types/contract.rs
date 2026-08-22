@@ -1328,9 +1328,10 @@ pub struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets> {
+pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets, Balance> {
   pub funding_accumulated: FundingAccumulated,
   pub funding_tracked_assets: FundingTrackedAssets,
+  pub trigger_state_bond: Balance,
 }
 
 #[derive(

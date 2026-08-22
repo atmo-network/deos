@@ -21,6 +21,7 @@ use polkadot_sdk::frame_support::{
 
 pub trait WeightInfo {
   fn create_user_actor() -> Weight;
+  fn create_user_actor_crossing_new_page() -> Weight;
   fn create_user_actor_at_slot() -> Weight;
   fn create_system_actor() -> Weight;
   fn create_system_actor_at_sovereign_id() -> Weight;
@@ -34,9 +35,47 @@ pub trait WeightInfo {
   fn observation_fanout_base() -> Weight;
   fn observation_fanout_page() -> Weight;
   fn crossing_worker_base() -> Weight { Weight::from_parts(25_000_000, 8_000) }
+  fn crossing_work_probe() -> Weight { Weight::from_parts(400_000_000, 20_000) }
+  fn crossing_search_probe() -> Weight { Weight::from_parts(400_000_000, 100_000) }
+  fn crossing_fire_probe() -> Weight { Weight::from_parts(1_000_000_000, 300_000) }
+  fn crossing_tail_refill_probe() -> Weight { Weight::from_parts(50_000_000, 10_000) }
+  fn crossing_fire_pair_probe() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
+  fn crossing_fire_cohort_preflight(c: u32) -> Weight {
+    Weight::from_parts(100_000_000, 40_000)
+      .saturating_mul(c.into())
+  }
+  fn crossing_coalesced_cohort_preflight(c: u32) -> Weight {
+    Weight::from_parts(100_000_000, 40_000)
+      .saturating_mul(c.into())
+  }
+  fn crossing_terminal_cohort_preflight(c: u32) -> Weight {
+    Weight::from_parts(100_000_000, 40_000)
+      .saturating_mul(c.into())
+  }
+  fn crossing_skip_cohort_preflight(c: u32) -> Weight {
+    Weight::from_parts(30_000_000, 10_000)
+      .saturating_mul(c.into())
+  }
+  fn crossing_rearm_cohort_preflight(c: u32) -> Weight {
+    Weight::from_parts(40_000_000, 20_000)
+      .saturating_mul(c.into())
+  }
+  fn crossing_rearm_pair_probe() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
+  fn crossing_skip_pair_probe() -> Weight { Weight::from_parts(1_000_000_000, 300_000) }
   fn crossing_transition_unit() -> Weight { Weight::from_parts(75_000_000, 24_000) }
   fn crossing_leaf_unit() -> Weight { Weight::from_parts(500_000_000, 180_000) }
   fn crossing_page_unit() -> Weight { Weight::from_parts(100_000_000, 48_000) }
+  fn crossing_rearm_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
+  fn crossing_rearm_pair_unit() -> Weight { Weight::from_parts(1_200_000_000, 400_000) }
+  fn crossing_coalesced_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
+  fn crossing_coalesced_pair_unit() -> Weight { Weight::from_parts(1_200_000_000, 400_000) }
+  fn crossing_placed_unit() -> Weight { Weight::from_parts(650_000_000, 220_000) }
+  fn crossing_placed_pair_unit() -> Weight { Weight::from_parts(1_300_000_000, 400_000) }
+  fn crossing_placed_maximum_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
+  fn crossing_placed_non_tail_emptied_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
+  fn crossing_placed_non_tail_trimmed_unit() -> Weight { Weight::from_parts(2_600_000_000, 800_000) }
+  fn crossing_skip_unit() -> Weight { Weight::from_parts(500_000_000, 180_000) }
+  fn crossing_skip_pair_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
   fn crossing_actor_unit() -> Weight { Weight::from_parts(750_000_000, 250_000) }
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
@@ -57,6 +96,7 @@ pub trait WeightInfo {
   fn task_dex_exact_in() -> Weight;
   fn task_dex_exact_out() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
+  fn materialization_coordinator_base() -> Weight;
   fn scheduler_paged_append_existing_page() -> Weight;
   fn scheduler_paged_append_new_page() -> Weight;
   fn scheduler_wakeup_append_existing_page() -> Weight;
@@ -90,6 +130,9 @@ pub trait WeightInfo {
   fn continuation_suffix_admission(steps: u32) -> Weight;
   fn update_contract() -> Weight;
   fn set_global_circuit_breaker() -> Weight;
+  fn clear_crossing_worker_fault() -> Weight;
+  fn clear_observation_fanout_worker_fault() -> Weight;
+  fn clear_wakeup_worker_fault() -> Weight;
   fn set_active_actor_limit() -> Weight;
   fn permissionless_sweep() -> Weight;
   fn permissionless_sweep_many(batch: u32) -> Weight;
@@ -101,6 +144,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(25_000_000, 2000)
       .saturating_add(T::DbWeight::get().reads(4))
       .saturating_add(T::DbWeight::get().writes(5))
+  }
+
+  fn create_user_actor_crossing_new_page() -> Weight {
+    Self::create_user_actor()
   }
 
   fn create_user_actor_at_slot() -> Weight {
@@ -273,6 +320,12 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn materialization_coordinator_base() -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
   fn scheduler_paged_append_existing_page() -> Weight {
     Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 3))
   }
@@ -424,6 +477,21 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn clear_crossing_worker_fault() -> Weight {
+    Weight::from_parts(16_000_000, 1_529)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn clear_observation_fanout_worker_fault() -> Weight {
+    Weight::from_parts(16_000_000, 1_529)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn clear_wakeup_worker_fault() -> Weight {
+    Weight::from_parts(16_000_000, 1_529)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
   fn set_active_actor_limit() -> Weight {
     Weight::from_parts(10_000_000, 800)
       .saturating_add(T::DbWeight::get().reads(1))
@@ -453,6 +521,7 @@ pub struct TestWeightInfo;
 #[cfg(any(test, feature = "runtime-benchmarks"))]
 impl WeightInfo for TestWeightInfo {
   fn create_user_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
+  fn create_user_actor_crossing_new_page() -> Weight { Self::create_user_actor() }
   fn create_user_actor_at_slot() -> Weight { Self::create_user_actor() }
   fn create_system_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
   fn create_system_actor_at_sovereign_id() -> Weight { Weight::from_parts(100_642_000, 174_945) }
@@ -498,6 +567,7 @@ impl WeightInfo for TestWeightInfo {
   fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
+  fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
@@ -552,7 +622,16 @@ impl WeightInfo for TestWeightInfo {
   }
   fn update_contract() -> Weight { Weight::from_parts(162_733_000, 10_181) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
+  fn clear_crossing_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
+  fn clear_observation_fanout_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
+  fn clear_wakeup_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
+  fn crossing_placed_non_tail_emptied_unit() -> Weight {
+    Weight::from_parts(2_700_000_000, 850_000)
+  }
+  fn crossing_placed_non_tail_trimmed_unit() -> Weight {
+    Weight::from_parts(2_800_000_000, 900_000)
+  }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }
   fn permissionless_sweep_many(batch: u32) -> Weight {
     let bounded = u64::from(batch.min(3));

@@ -52,7 +52,9 @@ use polkadot_sdk::frame_support::{
 };
 use polkadot_sdk::sp_core::{Pair, crypto::Ss58Codec, sr25519};
 use polkadot_sdk::sp_runtime::traits::{AccountIdConversion, TransactionExtension};
-use polkadot_sdk::sp_runtime::{DispatchError, Perbill, generic};
+use polkadot_sdk::sp_runtime::{
+  DispatchError, Perbill, generic, transaction_validity::TransactionSource,
+};
 use polkadot_sdk::sp_weights::{WeightMeter, WeightToFee};
 use polkadot_sdk::{
   staging_xcm as xcm,
@@ -244,6 +246,8 @@ fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let account = Actors::sovereign_account_id(&ALICE, 0);
+    let reserved_before =
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE);
     let actor_id = create_user(
       ALICE,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
@@ -284,6 +288,11 @@ fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
     ));
     run_idle(Weight::MAX);
     assert!(Actors::active_actor_state(actor_id).is_none());
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before,
+      "economic apoptosis releases the refundable Trigger-state bond"
+    );
     assert!(System::events().iter().any(|record| matches!(
       &record.event,
       RuntimeEvent::Actors(Event::ActorClosed {
@@ -543,6 +552,93 @@ fn oracle_publication_rolls_back_when_actor_change_hook_rejects() {
 }
 
 #[test]
+fn insolvent_crossing_fire_releases_bond_and_preserves_peer_cursor_continuity() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = deos_router_account();
+    let feed =
+      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(19));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    let reserved_before =
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE);
+    let crossing = RuntimeSchedule {
+      trigger: Trigger::observation_crossing(
+        feed,
+        CrossingDirection::Rising,
+        1_500_000_000_000,
+        800_000_000_000,
+      ),
+      cooldown_blocks: 0,
+    };
+    let insolvent = create_user(
+      ALICE,
+      crossing.clone(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let peer = create_user(
+      ALICE,
+      crossing,
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let crossing_bond = crate::configs::actor_config::ActorObservationCrossingTriggerBond::get();
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before + crossing_bond * 2
+    );
+    let balance = Balances::free_balance(actor_account(insolvent));
+    let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
+    deplete_user_sovereign(insolvent, balance.saturating_sub(protected_floor));
+
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      100_000_000_000_000,
+    ));
+    for block in System::block_number()..=System::block_number().saturating_add(2) {
+      System::set_block_number(block);
+      run_idle(Weight::MAX);
+    }
+
+    assert!(Actors::active_actor_state(insolvent).is_none());
+    assert!(Actors::active_actor_state(peer).is_some());
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before + crossing_bond
+    );
+    assert_eq!(Actors::crossing_feed_membership_count(feed), 1);
+    assert!(Actors::crossing_membership(peer).is_some());
+    assert!(Actors::crossing_membership(insolvent).is_none());
+    assert!(Actors::crossing_worker_fault().is_none());
+    assert!(System::events().iter().any(|record| matches!(
+      &record.event,
+      RuntimeEvent::Actors(Event::ActorClosed {
+        actor_id,
+        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+      }) if *actor_id == insolvent
+    )));
+  });
+}
+
+#[test]
 fn oracle_publication_rolls_back_when_crossing_transition_queue_is_full() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -633,7 +729,7 @@ fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
 #[test]
 fn actor_0_7_storage_schema_is_a_fresh_genesis_baseline() {
   seeded_test_ext().execute_with(|| {
-    let baseline = StorageVersion::new(2);
+    let baseline = StorageVersion::new(9);
     assert_eq!(Actors::in_code_storage_version(), baseline);
     assert_eq!(Actors::on_chain_storage_version(), baseline);
   });
@@ -1689,7 +1785,12 @@ fn create_user_charges_creation_fee_to_fee_sink() {
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
     assert_eq!(native_balance(&fee_sink), sink_before.saturating_add(fee));
-    assert_eq!(native_balance(&ALICE), alice_before.saturating_sub(fee));
+    assert_eq!(
+      native_balance(&ALICE),
+      alice_before
+        .saturating_sub(fee)
+        .saturating_sub(crate::configs::actor_config::ActorManualTriggerBond::get())
+    );
   });
 }
 
@@ -2017,6 +2118,217 @@ fn paged_queue_limits_are_independent_runtime_controls() {
 }
 
 #[test]
+fn user_trigger_state_bond_adjusts_and_releases_across_control_lifecycle() {
+  seeded_test_ext().execute_with(|| {
+    let reserved_before =
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE);
+    let actor_id = create_user(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let expected = crate::configs::actor_config::ActorManualTriggerBond::get();
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before + expected
+    );
+    assert_eq!(
+      pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
+        .expect("active User funding partition exists")
+        .trigger_state_bond,
+      expected
+    );
+
+    assert_ok!(update_actor_contract_partial(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      (Trigger::cadenced(1), 0, None),
+    ));
+    let cadenced = crate::configs::actor_config::ActorCadencedTriggerBond::get();
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before + cadenced
+    );
+    assert_eq!(
+      pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
+        .expect("replacement preserves funding partition")
+        .trigger_state_bond,
+      cadenced
+    );
+
+    age_fixture_control_clock(actor_id);
+    assert_ok!(Actors::deactivate_actor(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before
+    );
+    assert!(pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id).is_none());
+
+    let close_id = create_user(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before + expected
+    );
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), close_id));
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
+      reserved_before
+    );
+  });
+}
+
+#[test]
+fn insufficient_user_trigger_bond_rejects_active_creation_before_partial_mutation() {
+  seeded_test_ext().execute_with(|| {
+    let owner = crate::AccountId::from([42u8; 32]);
+    let steps = transfer_contract_steps(BOB, AssetKind::Native, 1);
+    prefund_active_user_creation(&owner, &steps);
+    let creation_fee = <Runtime as pallet_deos_actors::Config>::ActorCreationFee::get();
+    let one_ed = crate::EXISTENTIAL_DEPOSIT;
+    let _ =
+      <Balances as Currency<crate::AccountId>>::deposit_creating(&owner, creation_fee + one_ed);
+    let actor_id = Actors::next_actor_id();
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert!(
+      Actors::create_user_actor(
+        RuntimeOrigin::signed(owner.clone()),
+        Mutability::Mutable,
+        user_active_contract(
+          RuntimeSchedule {
+            trigger: Trigger::cadenced(1),
+            cooldown_blocks: 0,
+          },
+          None,
+          steps,
+        ),
+      )
+      .is_err()
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    assert_eq!(Actors::next_actor_id(), actor_id);
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&owner),
+      0
+    );
+    assert!(pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id).is_none());
+
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&owner, one_ed);
+    let root_after_top_up =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    crate::configs::actor_config::fail_next_trigger_bond_after_adjustment();
+    assert!(
+      Actors::create_user_actor(
+        RuntimeOrigin::signed(owner.clone()),
+        Mutability::Mutable,
+        user_active_contract(
+          manual_schedule(),
+          None,
+          transfer_contract_steps(BOB, AssetKind::Native, 1)
+        ),
+      )
+      .is_err()
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_after_top_up,
+      "a failure after successful reserve must roll back owner custody and all Actor state"
+    );
+    assert_eq!(
+      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&owner),
+      0
+    );
+    assert_eq!(Actors::next_actor_id(), actor_id);
+  });
+}
+
+#[test]
+fn crossing_capacity_policy_is_bound_to_measured_minimum_progress_and_explicit_horizons() {
+  use pallet_deos_actors::WeightInfo as _;
+
+  type ActorsWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  let tail_refill = ActorsWeight::crossing_tail_refill_probe();
+  assert!(tail_refill.ref_time() > 0);
+  assert!(tail_refill.proof_size() > 0);
+  for (one, four) in [
+    (
+      ActorsWeight::crossing_fire_cohort_preflight(1),
+      ActorsWeight::crossing_fire_cohort_preflight(4),
+    ),
+    (
+      ActorsWeight::crossing_coalesced_cohort_preflight(1),
+      ActorsWeight::crossing_coalesced_cohort_preflight(4),
+    ),
+    (
+      ActorsWeight::crossing_terminal_cohort_preflight(1),
+      ActorsWeight::crossing_terminal_cohort_preflight(4),
+    ),
+    (
+      ActorsWeight::crossing_skip_cohort_preflight(1),
+      ActorsWeight::crossing_skip_cohort_preflight(4),
+    ),
+    (
+      ActorsWeight::crossing_rearm_cohort_preflight(1),
+      ActorsWeight::crossing_rearm_cohort_preflight(4),
+    ),
+  ] {
+    assert!(four.ref_time() > one.ref_time());
+    assert!(four.proof_size() > one.proof_size());
+  }
+
+  let limit = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
+  let base = crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_worker_base();
+  let pair_unit =
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_work_probe()
+      .saturating_add(
+        crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_fire_pair_probe(),
+      )
+      .saturating_add(
+        crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::crossing_placed_pair_unit(),
+      );
+  let available = limit.saturating_sub(base);
+  let admitted_pairs = (available.ref_time() / pair_unit.ref_time())
+    .min(available.proof_size() / pair_unit.proof_size());
+  let candidates_per_block = admitted_pairs.saturating_mul(2).min(u64::from(
+    <Runtime as pallet_deos_actors::Config>::MaxCrossingActorsPerBlock::get(),
+  ));
+  assert_eq!(candidates_per_block, 4);
+
+  let user_cap = crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed::get();
+  let total_cap = crate::configs::actor_config::ActorMaxCrossingMembersPerFeed::get();
+  let user_blocks = u64::from(user_cap).div_ceil(candidates_per_block);
+  let total_blocks = u64::from(total_cap).div_ceil(candidates_per_block);
+  assert_eq!((user_cap, total_cap), (9_000, 10_000));
+  assert_eq!((user_blocks, total_blocks), (2_250, 2_500));
+  assert_eq!(
+    total_blocks * 6,
+    15_000,
+    "maximum herd is 4h10m at six-second blocks"
+  );
+  assert_eq!(
+    <Runtime as pallet_deos_actors::Config>::MaxQueueLength::get(),
+    total_cap
+  );
+  assert_eq!(
+    <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get(),
+    64
+  );
+}
+
+#[test]
 fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
   let base =
     <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_base();
@@ -2030,8 +2342,8 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.ref_time() / unit.ref_time())
     .min(available.proof_size() / unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(31_146_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(18_144_513_000, 718_430));
+  assert_eq!(base, Weight::from_parts(56_705_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(18_151_008_000, 718_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 1,
@@ -2060,6 +2372,8 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
   use crate::weights::pallet_deos_actors::SubstrateWeight;
   type W = SubstrateWeight<Runtime>;
   let base = W::scheduler_on_idle_base();
+  let coordinator = W::materialization_coordinator_base();
+  let mandatory_cleanup = W::scheduler_paged_tombstone_drain(1);
   // Maximum wakeup worker envelope: cursor probe plus one worst-case complete wakeup unit per
   // `MaxWakeupsPerBlock` slot, capped by the dedicated two-dimensional `WakeupWeightLimit`.
   let cursor_probe = W::scheduler_wakeup_cursor_worker_future();
@@ -2105,18 +2419,60 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
   // One maximum actor unit: admission overhead plus one full cycle admission plus pure cleanup.
   let actor_unit = crate::Actors::scheduler_admission_overhead()
     .saturating_add(crate::Actors::close_dispatch_weight_upper());
-  let guaranteed = <Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve::get();
+  let reserve = <Runtime as pallet_deos_actors::Config>::ActorOnIdleReserve::get();
+  let shared_materialization = crate::Actors::materialization_weight_limit();
+  assert_eq!(
+    shared_materialization,
+    wakeup_ceiling
+      .saturating_add(crossing_ceiling)
+      .saturating_add(fanout_ceiling),
+    "one shared materialization envelope must own all three bounded family ceilings"
+  );
+  let minimum_quanta = crate::Actors::materialization_family_minimum(0)
+    .saturating_add(crate::Actors::materialization_family_minimum(1))
+    .saturating_add(crate::Actors::materialization_family_minimum(2));
+  assert!(
+    minimum_quanta.all_lte(shared_materialization),
+    "the shared envelope must admit one maximum unit from every family"
+  );
+  assert!(
+    minimum_quanta.ref_time() < shared_materialization.ref_time()
+      && minimum_quanta.proof_size() < shared_materialization.proof_size(),
+    "the production envelope must retain lendable capacity after all minimum quanta"
+  );
+  let actor_service = crate::Actors::guaranteed_actor_service_weight()
+    .expect("configured housekeeping must fit the runtime reserve");
+  assert_eq!(
+    actor_service,
+    reserve
+      .saturating_sub(base)
+      .saturating_sub(coordinator)
+      .saturating_sub(mandatory_cleanup)
+      .saturating_sub(shared_materialization),
+    "the Actor floor must be the exact reserve remainder after shared materialization ownership"
+  );
+  let close_cleanup = crate::Actors::close_cleanup_weight_upper();
+  assert!(
+    close_cleanup.all_lte(actor_service),
+    "bond-aware terminal cleanup across Crossing and pending queues must fit the Actor floor: cleanup={close_cleanup:?}, floor={actor_service:?}"
+  );
+  assert!(
+    actor_unit.all_lte(actor_service),
+    "dense materialization must retain one maximum Actor service unit: actor={actor_unit:?}, floor={actor_service:?}"
+  );
   let combined = base
+    .saturating_add(coordinator)
+    .saturating_add(mandatory_cleanup)
     .saturating_add(wakeup_envelope)
     .saturating_add(crossing_envelope)
     .saturating_add(fanout_envelope)
     .saturating_add(actor_unit);
   assert!(
-    combined.all_lte(guaranteed),
-    "fixed base + max wakeup worker + one Crossing unit + max fanout worker + one max actor unit must fit ActorOnIdleReserve: base={base:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
+    combined.all_lte(reserve),
+    "fixed base + coordinator + cleanup + max wakeup worker + one Crossing unit + max fanout worker + one max actor unit must fit ActorOnIdleReserve: base={base:?}, coordinator={coordinator:?}, cleanup={mandatory_cleanup:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, reserve={reserve:?}"
   );
   println!(
-    "SCHED-WORKERS: base={base:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
+    "SCHED-WORKERS: base={base:?}, coordinator={coordinator:?}, cleanup={mandatory_cleanup:?}, wakeup={wakeup_envelope:?}, crossing={crossing_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, floor={actor_service:?}, combined={combined:?}, reserve={reserve:?}"
   );
 }
 
@@ -6388,6 +6744,71 @@ fn maximum_single_task_attempt_and_cleanup_fit_derived_service_envelope() {
 }
 
 #[test]
+fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let signer_pair = sr25519::Pair::from_seed(&[55u8; 32]);
+    let signer = AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&signer, 1_000_000_000_000_000_000);
+    let steps = transfer_contract_steps(BOB, AssetKind::Native, 1);
+    prefund_active_user_creation(&signer, &steps);
+    let actor_id = Actors::next_actor_id();
+    let create = RuntimeCall::Actors(pallet_deos_actors::Call::create_user_actor {
+      mutability: Mutability::Mutable,
+      contract: user_active_contract(manual_schedule(), None, steps.clone()),
+    });
+    let create_info = create.get_dispatch_info();
+    let expected_create = <Runtime as pallet_deos_actors::Config>::WeightInfo::create_user_actor()
+      .max(
+        <Runtime as pallet_deos_actors::Config>::WeightInfo::create_user_actor_crossing_new_page(),
+      );
+    assert_eq!(create_info.call_weight, expected_create);
+    let create_extrinsic = signed_extrinsic(&signer_pair, 0, create);
+    assert_ok!(Executive::validate_transaction(
+      TransactionSource::External,
+      create_extrinsic.clone(),
+      System::block_hash(0),
+    ));
+    assert_ok!(Executive::apply_extrinsic(create_extrinsic));
+    assert!(Actors::active_actor_state(actor_id).is_some());
+
+    age_fixture_control_clock(actor_id);
+    let replacement = RuntimeCall::Actors(pallet_deos_actors::Call::update_contract {
+      actor_id,
+      contract: user_active_contract(
+        RuntimeSchedule {
+          trigger: Trigger::manual(),
+          cooldown_blocks: 1,
+        },
+        None,
+        steps,
+      )
+      .expect("active replacement contract"),
+    });
+    let replacement_info = replacement.get_dispatch_info();
+    assert_eq!(
+      replacement_info.call_weight,
+      <Runtime as pallet_deos_actors::Config>::WeightInfo::update_contract()
+        .saturating_add(Actors::close_dispatch_weight_upper())
+    );
+    let replacement_extrinsic = signed_extrinsic(&signer_pair, 1, replacement);
+    assert_ok!(Executive::validate_transaction(
+      TransactionSource::External,
+      replacement_extrinsic.clone(),
+      System::block_hash(0),
+    ));
+    assert_ok!(Executive::apply_extrinsic(replacement_extrinsic));
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("updated actor remains active")
+        .contract
+        .cooldown_blocks,
+      1
+    );
+  });
+}
+
+#[test]
 fn on_initialize_is_a_zero_weight_noop() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -6759,7 +7180,9 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     ));
     assert_eq!(
       Balances::free_balance(&ALICE),
-      initial_alice_balance - create_fee
+      initial_alice_balance
+        - create_fee
+        - crate::configs::actor_config::ActorCadencedTriggerBond::get()
     );
     let sov = Actors::sovereign_account_id(&ALICE, 0);
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();

@@ -14,8 +14,12 @@ use super::common::{
   SWAP_AMOUNT, add_liquidity, burn_actor_account, deos_router_account,
   ensure_asset_conversion_pool, seeded_test_ext, setup_deos_router_infrastructure,
 };
-use crate::{Assets, Balances, DeosRouter, Runtime, RuntimeOrigin, System};
-use polkadot_sdk::frame_support::{assert_noop, assert_ok};
+use crate::{Actors, Assets, Balances, DeosRouter, Oracle, Runtime, RuntimeOrigin, System};
+use pallet_deos_actors::{
+  ActorContract, CompletionPolicy, FundingSourcePolicy, Mutability, Step, StepErrorPolicy, Task,
+  Trigger,
+};
+use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok};
 use primitives::AssetKind;
 
 /// Setup test environment with pools and liquidity
@@ -348,6 +352,79 @@ fn assert_native_anchored_market_failure_rolls_back(failure_index: usize) {
       second_observation_before
     );
     assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn router_oracle_capacity_failure_rolls_back_the_exact_composed_state() {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(setup_test_environment());
+    let from = AssetKind::Local(ASSET_A);
+    let to = ASSET_NATIVE;
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(from, to);
+    let producer = deos_router_account();
+    let spot = 10u128.pow(u32::from(feed.scale));
+    assert_ok!(Oracle::publish_from(producer.clone(), feed, spot));
+    let contract_steps = BoundedVec::try_from(vec![Step {
+      precondition: None,
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("one inert step fits");
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      Some(ActorContract {
+        trigger: Trigger::observation_crossing(
+          feed,
+          pallet_deos_actors::CrossingDirection::Rising,
+          u128::MAX,
+          0,
+        ),
+        cooldown_blocks: 0,
+        window: None,
+        steps: contract_steps,
+        funding: FundingSourcePolicy::RuntimePolicy,
+        completion: CompletionPolicy::Persistent,
+        auto_close_at_cycle_nonce: None,
+      }),
+    ));
+    let capacity = <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get();
+    for offset in 1..=capacity {
+      let decrement =
+        spot.saturating_mul(u128::from(offset)) / u128::from(capacity).saturating_mul(100);
+      assert_ok!(Oracle::publish_from(
+        producer.clone(),
+        feed,
+        spot.saturating_sub(decrement),
+      ));
+    }
+    assert_eq!(
+      pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(feed)
+        .expect("full transition queue exists")
+        .len() as u32,
+      capacity
+    );
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert!(
+      DeosRouter::swap(
+        RuntimeOrigin::signed(ALICE),
+        from,
+        to,
+        SWAP_AMOUNT,
+        MIN_AMOUNT_OUT,
+        ALICE,
+        1_000,
+      )
+      .is_err()
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
   });
 }
 
