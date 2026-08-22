@@ -21,12 +21,11 @@
     "check:observation-evidence": "node scripts/generate-observation-runtime-evidence.mjs --check",
     "generate:ingress-evidence": "node scripts/generate-ingress-runtime-evidence.mjs",
     "check:ingress-evidence": "node scripts/generate-ingress-runtime-evidence.mjs --check",
-    "postinstall": "npm run prepare && npm run papi:generate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:automation": "node --test scripts/test-actors-*.mjs",
     "test:wiki-relations": "node --test scripts/test-wiki-relations.mjs",
-    "validate": "npm run format:check && npm run check:actors-abi && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run test:wiki-relations && npm run check && npm run build",
+    "validate": "npm run papi:generate && npm run format:check && npm run check:actors-abi && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run test:wiki-relations && npm run check && npm run build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
   },
