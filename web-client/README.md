@@ -114,14 +114,11 @@ Install dependencies and start the dev server:
 
 ```sh
 npm install
+npm run papi:generate
 npm run dev
 ```
 
-`npm run validate` generates PAPI descriptors once from the committed `.papi/metadata/deos.scale` snapshot before checking client types. Run the same generation explicitly before development after a clean dependency install:
-
-```sh
-npm run papi:generate
-```
+`npm run validate` also generates PAPI descriptors once from the committed `.papi/metadata/deos.scale` snapshot before checking client types.
 
 When runtime query/view surfaces change, refresh metadata with:
 
