@@ -36,10 +36,6 @@ impl crate::OnObservationChanged<u32> for TestObservationHook {
     HOOK_CALLS.with(|calls| calls.borrow_mut().push((feed, revision, previous, current)));
     Ok(())
   }
-
-  fn weight() -> polkadot_sdk::frame_support::weights::Weight {
-    polkadot_sdk::frame_support::weights::Weight::zero()
-  }
 }
 
 pub fn set_hook_failure(fail: bool) {
@@ -98,6 +94,8 @@ impl crate::Config for Test {
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
   type OnObservationChanged = TestObservationHook;
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = ();
   type MaxFeeds = ConstU32<3>;
   type MaxFeedsPerProducer = ConstU32<2>;
   type MaxScale = ConstU8<18>;

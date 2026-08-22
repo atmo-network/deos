@@ -773,6 +773,13 @@ impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128> for DeosRou
     Ok(())
   }
 
+  fn prepare_observation_hook(
+    _: primitives::AssetKind,
+    _: primitives::AssetKind,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Ok(())
+  }
+
   fn create_tmc_curve(
     token_asset: primitives::AssetKind,
     collateral_asset: primitives::AssetKind,

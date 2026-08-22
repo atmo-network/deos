@@ -523,28 +523,40 @@ impl<T: Config> Pallet<T> {
   pub fn fanout_dirty_observations(
     remaining_weight: polkadot_sdk::frame_support::weights::Weight,
   ) -> polkadot_sdk::frame_support::weights::Weight {
+    Self::fanout_dirty_observations_with_pages(remaining_weight, 0).0
+  }
+
+  pub(crate) fn fanout_dirty_observations_with_pages(
+    remaining_weight: polkadot_sdk::frame_support::weights::Weight,
+    pages_already_serviced: u32,
+  ) -> (polkadot_sdk::frame_support::weights::Weight, u32) {
     use polkadot_sdk::frame_support::weights::Weight;
     use polkadot_sdk::sp_weights::WeightMeter;
 
-    let configured = T::ObservationFanoutWeightLimit::get();
-    let limit = Weight::from_parts(
-      remaining_weight.ref_time().min(configured.ref_time()),
-      remaining_weight.proof_size().min(configured.proof_size()),
-    );
-    let mut meter = WeightMeter::with_limit(limit);
+    let mut meter = WeightMeter::with_limit(remaining_weight);
+    let mut pages_serviced = pages_already_serviced;
+    if pages_serviced >= T::MaxObservationFanoutPagesPerBlock::get() {
+      return (Weight::zero(), pages_serviced);
+    }
     let base_weight = T::WeightInfo::observation_fanout_base();
     if !meter.can_consume(base_weight) {
-      return Weight::zero();
+      return (Weight::zero(), pages_serviced);
     }
     meter.consume(base_weight);
+    if ObservationFanoutWorkerFaultState::<T>::exists() {
+      return (meter.consumed(), pages_serviced);
+    }
     if Self::dirty_observation_fanout_base_probe() == 0 {
-      return meter.consumed();
+      return (meter.consumed(), pages_serviced);
     }
     let unit_weight = T::WeightInfo::observation_fanout_page();
-    for _ in 0..T::MaxObservationFanoutPagesPerBlock::get() {
+    for _ in pages_serviced..T::MaxObservationFanoutPagesPerBlock::get() {
       if !meter.can_consume(unit_weight) {
         break;
       }
+      let list = DirtyObservationListState::<T>::get();
+      let fault_feed = list.cursor.or(list.head);
+      let fault_state = fault_feed.and_then(DirtyObservationFeeds::<T>::get);
       let result = polkadot_sdk::frame_support::storage::with_transaction(|| {
         match Self::do_fanout_dirty_observation_page() {
           Ok(has_more) => TransactionOutcome::Commit(Ok(has_more)),
@@ -552,12 +564,34 @@ impl<T: Config> Pallet<T> {
         }
       });
       meter.consume(unit_weight);
+      pages_serviced = pages_serviced.saturating_add(1);
       match result {
         Ok(true) => {}
-        Ok(false) | Err(_) => break,
+        Ok(false) => break,
+        Err(error) => {
+          if let (Some(feed), Some(state)) = (fault_feed, fault_state) {
+            let class = if error == Error::<T>::DirtyObservationInvariant.into()
+              || error == Error::<T>::ActorInvariant.into()
+              || error == Error::<T>::ObservationSubscriptionInvariant.into()
+            {
+              CrossingWorkerFaultClass::Invariant
+            } else if error == Error::<T>::SchedulerIndexExhausted.into() {
+              CrossingWorkerFaultClass::SchedulerExhausted
+            } else {
+              CrossingWorkerFaultClass::Other
+            };
+            ObservationFanoutWorkerFaultState::<T>::put(ObservationFanoutWorkerFault {
+              feed,
+              revision: state.latest_revision,
+              subscriber_page: state.next_subscriber_page,
+              class,
+            });
+          }
+          break;
+        }
       }
     }
-    meter.consumed()
+    (meter.consumed(), pages_serviced)
   }
 
   #[cfg(feature = "try-runtime")]

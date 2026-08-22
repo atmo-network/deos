@@ -13,6 +13,7 @@ Audit lightweight template readiness smells without building the workspace.
 Checks:
   - production XCM config does not use pallet_xcm::TestWeightInfo
   - runtime production configs do not carry unclassified WeightInfo = ()
+  - DEOS Actors binds its runtime-generated Weight implementation, never package fallbacks
   - template workspace docs do not present native binding as live staking truth
   - runtime asset-conversion integration test module/file spelling is canonical
   - framework artifact names do not regress to pre-DEOS tmctol runtime/pallet names
@@ -77,6 +78,17 @@ check_placeholder_weights() {
     fi
     record_finding "runtime configs still contain unclassified WeightInfo = ()"
     echo "$matches"
+}
+
+check_actors_production_weights() {
+    local file="$TEMPLATE_DIR/runtime/src/configs/actor_config.rs"
+    local expected='type WeightInfo = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;'
+    if ! rg -F -x "  $expected" "$file" >/dev/null; then
+        record_finding "DEOS Actors runtime config does not bind its generated production Weight implementation"
+    fi
+    if rg -n 'type WeightInfo = (pallet_deos_actors::weights::SubstrateWeight|\(\))' "$file" >/dev/null; then
+        record_finding "DEOS Actors runtime config binds an unmeasured package fallback Weight implementation"
+    fi
 }
 
 check_staking_aliases() {
@@ -159,6 +171,7 @@ main() {
     FINDINGS=()
     check_xcm_weights
     check_placeholder_weights
+    check_actors_production_weights
     check_staking_aliases
     check_asset_conversion_name
     check_legacy_framework_artifact_names

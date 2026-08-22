@@ -1143,6 +1143,8 @@ impl pallet_deos_actors::Config for Test {
   type WakeupPageSize = ConstU32<32>;
   type ObservationPageSize = ConstU32<16>;
   type MaxCrossingTransitionsPerFeed = ConstU32<4>;
+  type MaxCrossingMembersPerFeed = ConstU32<10_000>;
+  type MaxUserCrossingMembersPerFeed = ConstU32<8>;
   type MaxCrossingTransitionsPerBlock = ConstU32<4>;
   type MaxCrossingLeavesPerBlock = ConstU32<8>;
   type MaxCrossingPagesPerBlock = ConstU32<8>;
@@ -1169,6 +1171,7 @@ impl pallet_deos_actors::Config for Test {
   type WeightToFee = TestWeightToFee;
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
+  type TriggerStateBond = ();
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = TestMinUserBalance;

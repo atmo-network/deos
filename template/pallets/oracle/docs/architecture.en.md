@@ -26,7 +26,7 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 `FeedId` remains the immutable identity key chosen by the host. `FeedConfig` stores the authorized producer, explicit meaning and provenance, scalar scale, aggregation policy, zero policy, and lifecycle. The package never infers semantic equivalence, reverse direction, market meaning, or producer trust.
 
-`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current)` after a changed scalar and declares its independent weight. The hook failure rolls back both the Oracle value and downstream transition admission.
+`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current)` after a changed scalar and exposes no independent numeric Weight. Hook failure rolls back both the Oracle value and downstream transition admission.
 
 ## Storage Topology
 
@@ -60,11 +60,11 @@ No historical revision lookup exists. Archive, charts, search, replay, and unbou
 
 ## Benchmark and Weight Architecture
 
-Package benchmarks construct bounded worst-case registration, lifecycle, LastValue, changed EMA, and equal-refresh branches. Postconditions verify the intended storage topology and whether the change hook ran.
+Package benchmarks construct bounded worst-case registration, lifecycle, LastValue, changed EMA, and equal-refresh branches. Postconditions verify the intended storage topology and whether the change hook ran. Under `runtime-benchmarks`, `PublicationBenchmarkHelper` exposes topology-neutral Primary/Secondary first, existing, combined, and capacity-edge setup cases so a host can materialize its concrete hook indexes without moving downstream semantics into the package.
 
-The package owns only the `WeightInfo` interface and conservative fallback. Every production host must generate runtime-specific weights against its concrete origin, hook, database schedule, bounds, and Wasm. RefTime, measured or estimated ProofSize, reads, and writes remain separate evidence dimensions.
+The package owns only the `WeightInfo` interface and conservative fallback. Every production host must generate runtime-specific publication weights against its concrete origin, composed hook, database schedule, bounds, and Wasm. RefTime, measured or estimated ProofSize, reads, and writes remain separate evidence dimensions.
 
-Registration exposes distinct existing-producer and new-producer measurements because their proof topology differs. Publication includes the host-declared hook bound only on changed output. Equal refresh retains the no-hook path.
+Registration exposes distinct existing-producer and new-producer measurements because their proof topology differs. A changed-publication benchmark executes the host hook inside the measured path, so dispatch charges the generated publication maximum once rather than adding a second hook estimate. Equal refresh retains the no-hook path.
 
 ## Falsification and Validation
 

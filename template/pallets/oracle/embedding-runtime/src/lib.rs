@@ -162,6 +162,8 @@ impl pallet_oracle::Config for Runtime {
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
   type OnObservationChanged = ();
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = ();
   type MaxFeeds = ConstU32<16>;
   type MaxFeedsPerProducer = ConstU32<4>;
   type MaxScale = ConstU8<18>;

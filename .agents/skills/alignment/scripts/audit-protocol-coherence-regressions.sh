@@ -580,7 +580,7 @@ main() {
         "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/router/src/types.rs" \
         "$TEMPLATE_DIR/pallets/oracle/src/lib.rs"
-    require_anchor 'public_reachability_inventory_is_closed_and_canonical' "$TEMPLATE_DIR/pallets/actors/src/tests.rs" \
+    require_anchor 'public_reachability_inventory_is_closed_and_canonical' "$TEMPLATE_DIR/pallets/actors/src/tests" \
         "Actors closed SCALE-surface regression evidence is missing"
     local router_tests="$TEMPLATE_DIR/pallets/router/src/tests.rs"
     require_anchor 'adversarial_corpus_is_complete_unique_and_anchor_bound' "$router_tests" \
@@ -601,7 +601,8 @@ main() {
     require_anchor '`PreparedRoute` remains a public Rust package type solely' \
         "$TEMPLATE_DIR/pallets/router/docs/architecture.en.md" \
         "Router prepared-versus-public representation boundary is missing"
-    local actors_tests="$TEMPLATE_DIR/pallets/actors/src/tests.rs"
+    local actors_tests="$TEMPLATE_DIR/pallets/actors/src/tests"
+    local actors_test_root="$TEMPLATE_DIR/pallets/actors/src/tests.rs"
     local actors_types="$TEMPLATE_DIR/pallets/actors/src/types"
     local actors_contract_types="$actors_types/contract.rs"
     local actors_lifecycle_types="$actors_types/lifecycle.rs"
@@ -829,7 +830,7 @@ main() {
             grep -oE 'ST-[0-9]{2}' | sort -u
     )"
     matrix_step_rows="$(
-        awk '/const STEP_TRANSITION_PARITY_MATRIX:/,/^];/' "$actors_tests" |
+        awk '/const STEP_TRANSITION_PARITY_MATRIX:/,/^];/' "$actors_test_root" |
             grep -oE 'ST-[0-9]{2}' | sort -u
     )"
     if [[ -z "$specification_step_rows" || "$specification_step_rows" != "$matrix_step_rows" ]]; then

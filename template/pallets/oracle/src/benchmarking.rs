@@ -243,6 +243,212 @@ mod benches {
   }
 
   #[benchmark]
+  fn publish_ema_changed_primary_first() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value: 1_000_000_000,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision: 1,
+      },
+    );
+    T::BenchmarkHelper::prepare_changed_hook(feed, ChangedHookBenchmarkTopology::PrimaryFirst)
+      .expect("PrimaryFirst hook topology must be prepared");
+
+    #[extrinsic_call]
+    publish(RawOrigin::Signed(caller), feed, 2_000_000_000);
+
+    assert_eq!(
+      Observations::<T>::get(feed)
+        .expect("observation exists")
+        .revision,
+      2
+    );
+  }
+
+  #[benchmark]
+  fn publish_ema_changed_primary_existing() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value: 1_000_000_000,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision: 1,
+      },
+    );
+    T::BenchmarkHelper::prepare_changed_hook(feed, ChangedHookBenchmarkTopology::PrimaryExisting)
+      .expect("PrimaryExisting hook topology must be prepared");
+
+    #[extrinsic_call]
+    publish(RawOrigin::Signed(caller), feed, 2_000_000_000);
+
+    assert_eq!(
+      Observations::<T>::get(feed)
+        .expect("observation exists")
+        .revision,
+      2
+    );
+  }
+
+  #[benchmark]
+  fn publish_ema_changed_secondary_first() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value: 1_000_000_000,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision: 1,
+      },
+    );
+    T::BenchmarkHelper::prepare_changed_hook(feed, ChangedHookBenchmarkTopology::SecondaryFirst)
+      .expect("SecondaryFirst hook topology must be prepared");
+
+    #[extrinsic_call]
+    publish(RawOrigin::Signed(caller), feed, 2_000_000_000);
+
+    assert_eq!(
+      Observations::<T>::get(feed)
+        .expect("observation exists")
+        .revision,
+      2
+    );
+  }
+
+  #[benchmark]
+  fn publish_ema_changed_secondary_existing() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value: 1_000_000_000,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision: 1,
+      },
+    );
+    T::BenchmarkHelper::prepare_changed_hook(feed, ChangedHookBenchmarkTopology::SecondaryExisting)
+      .expect("SecondaryExisting hook topology must be prepared");
+
+    #[extrinsic_call]
+    publish(RawOrigin::Signed(caller), feed, 2_000_000_000);
+
+    assert_eq!(
+      Observations::<T>::get(feed)
+        .expect("observation exists")
+        .revision,
+      2
+    );
+  }
+
+  #[benchmark]
+  fn publish_ema_changed_combined() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value: 1_000_000_000,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision: 1,
+      },
+    );
+    T::BenchmarkHelper::prepare_changed_hook(feed, ChangedHookBenchmarkTopology::Combined)
+      .expect("Combined hook topology must be prepared");
+
+    #[extrinsic_call]
+    publish(RawOrigin::Signed(caller), feed, 2_000_000_000);
+
+    assert_eq!(
+      Observations::<T>::get(feed)
+        .expect("observation exists")
+        .revision,
+      2
+    );
+  }
+
+  #[benchmark]
+  fn publish_ema_changed_secondary_capacity() {
+    let caller: T::AccountId = whitelisted_caller();
+    let feed = T::FeedId::from(1);
+    seed_feed::<T>(
+      feed,
+      T::ProducerId::from(caller.clone()),
+      Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      FeedLifecycle::Active,
+    );
+    let (revision, value, rejects_at_capacity) =
+      T::BenchmarkHelper::prepare_secondary_capacity_edge(feed)
+        .expect("Secondary capacity-edge topology must be prepared");
+    Observations::<T>::insert(
+      feed,
+      Observation {
+        value,
+        updated_at: polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        revision,
+      },
+    );
+    let before = Observations::<T>::get(feed).expect("observation exists");
+
+    #[block]
+    {
+      let result = Pallet::<T>::publish(RawOrigin::Signed(caller).into(), feed, 2_000_000_000);
+      assert_eq!(result.is_err(), rejects_at_capacity);
+    }
+
+    if rejects_at_capacity {
+      assert_eq!(Observations::<T>::get(feed), Some(before));
+    }
+  }
+
+  #[benchmark]
   fn publish_ema_refresh() {
     let caller: T::AccountId = whitelisted_caller();
     let feed = T::FeedId::from(1);

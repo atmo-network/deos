@@ -1,5 +1,7 @@
 use super::{
-  contract::{CrossingDirection, CrossingPhase, OpeningSurface, PredicateError, ScheduleWindow},
+  contract::{
+    CrossingDirection, CrossingPhase, OpeningSurface, PredicateError, ScheduleWindow, Trigger,
+  },
   scheduler::{WakeupKey, WakeupPointer},
 };
 use frame::prelude::*;
@@ -325,6 +327,7 @@ pub enum ActorTriggerActivation<FeedId> {
     threshold: u128,
     rearm_threshold: u128,
     phase: CrossingPhase,
+    installed_at_revision: u64,
     pending_revisions: u32,
     processing_revision: Option<u64>,
   },
@@ -432,16 +435,58 @@ pub struct ActorIdentity<AccountId, BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum TriggerRuntimeState {
+  Stateless,
+  ObservationCrossing {
+    phase: CrossingPhase,
+    installed_at_revision: u64,
+  },
+  Cadenced {
+    anchor_tick: Option<u64>,
+  },
+}
+
+impl TriggerRuntimeState {
+  pub fn cadence_anchor_tick(&self) -> Option<u64> {
+    match self {
+      Self::Cadenced { anchor_tick } => *anchor_tick,
+      Self::Stateless | Self::ObservationCrossing { .. } => None,
+    }
+  }
+
+  pub fn is_compatible_with<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>(
+    &self,
+    trigger: &Trigger<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>,
+  ) -> bool
+  where
+    MaxWhitelistSize: Get<u32>,
+  {
+    matches!(
+      (self, trigger),
+      (
+        Self::Stateless,
+        Trigger::Manual | Trigger::AddressEvent { .. } | Trigger::ObservationChange { .. }
+      ) | (
+        Self::ObservationCrossing { .. },
+        Trigger::ObservationCrossing { .. }
+      ) | (Self::Cadenced { .. }, Trigger::Cadenced { .. })
+    )
+  }
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub struct ActorHotState<BlockNumber> {
   pub lifecycle: ActiveLifecycle,
   pub cycle_state: CycleState,
+  pub trigger_runtime_state: TriggerRuntimeState,
   pub unsuccessful_attempt_streak: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
   pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub terminal_at: Option<BlockNumber>,
   pub schedule_anchor: BlockNumber,
-  pub cadence_anchor_tick: Option<u64>,
   pub last_cycle_block: Option<BlockNumber>,
 }
 

@@ -15,7 +15,7 @@ use polkadot_sdk::{
   frame_support::{
     BoundedVec, assert_noop, assert_ok,
     dispatch::GetDispatchInfo,
-    traits::{Currency, fungibles::Inspect as FungiblesInspect},
+    traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
     weights::Weight,
   },
   sp_runtime::traits::TransactionExtension,
@@ -29,6 +29,166 @@ struct Schedule {
 
 fn directional_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out)
+}
+
+#[test]
+fn synchronous_ingress_is_independent_of_subscriber_and_member_cardinality() {
+  new_test_ext().execute_with(|| {
+    let sparse_feed = directional_feed(AssetKind::Native, AssetKind::Local(4));
+    let dense_feed = directional_feed(AssetKind::Native, AssetKind::Local(5));
+    for feed in [sparse_feed, dense_feed] {
+      assert_ok!(Oracle::register_feed(
+        RuntimeOrigin::root(),
+        feed,
+        ALICE,
+        feed.meaning(),
+        OracleProvenance::DeosRouterPreExecutionReserves,
+        feed.scale,
+        Aggregation::LastValue,
+        ZeroPolicy::Reject,
+        false,
+      ));
+    }
+    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    pallet_deos_actors::ObservationSubscriberCount::<Runtime>::insert(sparse_feed, 1);
+    pallet_deos_actors::ObservationSubscriberCount::<Runtime>::insert(dense_feed, maximum);
+    pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(sparse_feed, 1);
+    pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(dense_feed, maximum);
+    for feed in [sparse_feed, dense_feed] {
+      assert_ok!(Oracle::publish(RuntimeOrigin::signed(ALICE), feed, 1));
+    }
+
+    let sparse_call = RuntimeCall::Oracle(pallet_oracle::Call::publish {
+      feed: sparse_feed,
+      sample: 2,
+    });
+    let dense_call = RuntimeCall::Oracle(pallet_oracle::Call::publish {
+      feed: dense_feed,
+      sample: 2,
+    });
+    assert_eq!(
+      sparse_call.get_dispatch_info().call_weight,
+      dense_call.get_dispatch_info().call_weight
+    );
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(ALICE),
+      sparse_feed,
+      2
+    ));
+    assert_ok!(Oracle::publish(RuntimeOrigin::signed(ALICE), dense_feed, 2));
+    assert_eq!(
+      pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(sparse_feed)
+        .expect("sparse queue exists")
+        .len(),
+      1
+    );
+    assert_eq!(
+      pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(dense_feed)
+        .expect("dense queue exists")
+        .len(),
+      1
+    );
+    assert_eq!(
+      pallet_deos_actors::ObservationSubscriberCount::<Runtime>::get(dense_feed),
+      maximum
+    );
+    assert_eq!(
+      pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::get(dense_feed),
+      maximum
+    );
+  });
+}
+
+#[test]
+fn full_crossing_transition_queue_rejects_publication_with_exact_error_and_rollback() {
+  new_test_ext().execute_with(|| {
+    let feed = directional_feed(AssetKind::Native, AssetKind::Local(6));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      ALICE,
+      feed.meaning(),
+      OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      Aggregation::LastValue,
+      ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(RuntimeOrigin::signed(ALICE), feed, 1));
+    let contract_steps = BoundedVec::try_from(vec![pallet_deos_actors::Step {
+      precondition: None,
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    }])
+    .expect("one inert step fits");
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      Some(ActorContract {
+        trigger: Trigger::observation_crossing(
+          feed,
+          pallet_deos_actors::CrossingDirection::Rising,
+          u128::MAX,
+          0,
+        ),
+        cooldown_blocks: 0,
+        window: None,
+        steps: contract_steps,
+        completion: pallet_deos_actors::CompletionPolicy::Persistent,
+        funding: FundingSourcePolicy::RuntimePolicy,
+        auto_close_at_cycle_nonce: None,
+      }),
+    ));
+    let capacity = <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed::get();
+    for sample in 2..=u128::from(capacity).saturating_add(1) {
+      assert_ok!(Oracle::publish(RuntimeOrigin::signed(ALICE), feed, sample));
+    }
+    let before = Oracle::observations(feed).expect("full-queue observation exists");
+    let queue = pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(feed)
+      .expect("full Crossing queue exists");
+    assert_eq!(queue.len() as u32, capacity);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert_noop!(
+      Oracle::publish(
+        RuntimeOrigin::signed(ALICE),
+        feed,
+        before.value.saturating_add(1),
+      ),
+      pallet_deos_actors::Error::<Runtime>::CrossingTransitionCapacityExceeded
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    assert_eq!(Oracle::observations(feed), Some(before));
+    assert_eq!(
+      pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(feed),
+      Some(queue)
+    );
+
+    for block in 1..=capacity.saturating_add(1) {
+      System::set_block_number(block);
+      let _ = Actors::on_idle(block, Weight::MAX);
+    }
+    assert!(
+      pallet_deos_actors::CrossingTransitionQueues::<Runtime>::get(feed)
+        .is_none_or(|remaining| remaining.len() < capacity as usize)
+    );
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(ALICE),
+      feed,
+      before.value.saturating_add(1),
+    ));
+    assert_eq!(
+      Oracle::observations(feed)
+        .expect("retry commits after capacity is serviced")
+        .revision,
+      before.revision.saturating_add(1)
+    );
+  });
 }
 
 #[test]
@@ -205,21 +365,29 @@ fn oracle_publish_declares_the_subscriber_independent_actor_hook_weight() {
   });
   let oracle_branch =
     crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed()
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_primary_first(),
+      )
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_primary_existing(),
+      )
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_secondary_first(),
+      )
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_secondary_existing(),
+      )
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_combined(),
+      )
+      .max(
+        crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed_secondary_capacity(),
+      )
       .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_refresh())
       .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_last_value());
-  let hook = crate::Actors::observation_change_ingress_weight();
-  assert!(hook.ref_time() > 0);
-  assert!(hook.proof_size() > 0);
-  assert_eq!(
-    call.get_dispatch_info().call_weight,
-    oracle_branch.saturating_add(hook)
-  );
-  assert_eq!(
-    hook,
-    <crate::configs::oracle_config::ActorObservationChangeIngress as pallet_oracle::OnObservationChanged<
-      OracleFeedId,
-    >>::weight()
-  );
+  assert_eq!(call.get_dispatch_info().call_weight, oracle_branch);
+  assert!(oracle_branch.ref_time() > 0);
+  assert!(oracle_branch.proof_size() > 0);
 }
 
 #[test]

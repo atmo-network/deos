@@ -13,6 +13,8 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     type ActorAuthoringTrigger,
     DEOS_ACTORS_AUTHORING_LIMITS,
   } from '$lib/automation/authoring';
+  import { actorReactiveCapacityFailureMessage } from '$lib/automation/capacity-failure';
+  import { actorTriggerStateBond } from '$lib/automation/trigger-bond-vectors';
   import {
     Badge,
     Button,
@@ -31,6 +33,11 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   };
 
   let { trigger = $bindable(), compact = false }: Props = $props();
+  const triggerStateBond = $derived(actorTriggerStateBond(trigger.type));
+  const crossingCapacityCopy = [
+    actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
+    actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
+  ].join(' ');
 
   function defaultObservationFeed(): ActorAuthoringObservationFeed {
     return {
@@ -233,6 +240,16 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     {/if}
   </div>
 
+  <p
+    class="flex flex-wrap items-center gap-1.5 text-[10px] text-(--mono-muted)"
+  >
+    <Badge variant="info">Refundable bond</Badge>
+    <span class="tabnum"
+      >{triggerStateBond.toLocaleString()} native base units</span
+    >
+    <span>· finalized runtime quote remains authoritative</span>
+  </p>
+
   {#if trigger.type === 'Manual'}
     <p class="rounded-xl bg-(--mono-bg) p-2.5 text-[10px] text-(--mono-muted)">
       Readiness is latched only by the authorized manual trigger call.
@@ -333,12 +350,19 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
       {#if trigger.type === 'ObservationChange'}
         <p class="text-[10px] text-(--mono-muted)">
           Broad semantics: reconsider on every committed change to this feed.
-          High-cardinality feeds fan out to every subscribed Actor.
+          Service cost scales boundedly with subscribed pages, so
+          high-cardinality feeds consume more materialization capacity.
         </p>
       {:else}
         <p class="text-[10px] text-(--mono-muted)">
           Sparse semantics: creation never retrofires, and one directional fire
           must cross the opposite rearm boundary before it can fire again.
+          Repeated fires while already latched coalesce; shared FIFO
+          backpressure may defer service without creating duplicate placement.
+        </p>
+        <p class="text-[10px] text-(--mono-muted)">
+          {crossingCapacityCopy} Query <code>crossing_capacity</code> at the same
+          finalized block before submission.
         </p>
         <div class={compact ? 'grid gap-2' : 'grid grid-cols-3 gap-2'}>
           <SelectField

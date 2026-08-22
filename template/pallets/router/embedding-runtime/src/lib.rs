@@ -249,6 +249,9 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
   fn create_pool(_a: AssetKind, _b: AssetKind) -> DispatchResult {
     Ok(())
   }
+  fn prepare_observation_hook(_a: AssetKind, _b: AssetKind) -> DispatchResult {
+    Ok(())
+  }
   fn create_tmc_curve(_token: AssetKind, _collateral: AssetKind) -> DispatchResult {
     Ok(())
   }

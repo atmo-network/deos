@@ -16,6 +16,8 @@ REQUIRED_HEAVY_PROFILES=(
 )
 PACKAGE_HEAVY_PROFILES=(
     "crossing_scale_10k_zero_match_small_cohort_and_maximum_herd"
+    "breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_execution_loss"
+    "crossing_mixed_dense_sparse_directional_lifecycle_profile"
 )
 OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
 DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
@@ -116,6 +118,7 @@ verify_heavy_profiles_resolve_exactly_once() {
 
 run_gate() {
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
+    run_shell_step "Actors gate: Trigger bond vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example trigger_bond_vectors -- --check ../web-client/src/lib/automation/actors-trigger-bond-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
     run_shell_step "Actors gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"

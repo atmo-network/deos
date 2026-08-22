@@ -31,7 +31,7 @@ The protected outcome is deterministic bounded protocol behavior under malformed
 | Abuse case | Falsifying evidence owner |
 | --- | --- |
 | A signer acquires Root-equivalent Actors, Governance, Router, Staking, TMC, Asset Registry, asset-force, preimage, XCM, XCMP, collator, or upgrade authority. | Runtime authority inventory in `template/runtime/src/tests/integrity_tests.rs` and typed payload coverage in `governance_integration_tests.rs`. |
-| A malformed Actor partition executes, consumes placement, reports ready, or accepts Continuation mutation as though active. | Canonical-loader, partition-mask, scheduler, projection, and try-state tests in `template/pallets/actors/src/tests.rs`. |
+| A malformed Actor partition executes, consumes placement, reports ready, or accepts Continuation mutation as though active. | Canonical-loader, partition-mask, scheduler, projection, and try-state tests under `template/pallets/actors/src/tests/`. |
 | Continuation cancellation re-primes a retained signal behind its old physical wakeup, creating two conflicting pointer claims and a permanent due-head stall. | Exact wakeup invalidation tests in the Actors package and independent DEX embedding fixture, plus the measured `continuation_cancel` branch. |
 | A failed task, certified movement, XCM deposit, Router call, pool index, TMC distribution, staking operation, or Governance terminal action retains a partial root. | Package and runtime exact-root rollback tests owned by the affected subsystem. |
 | Delayed Governance epoch work skips chronology, drops a same-epoch suffix, advances early, or exceeds its measured per-block family cap. | Governance epoch-service unit tests, runtime maximum-composition assertions, and generated Governance weights. |

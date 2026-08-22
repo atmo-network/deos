@@ -19,6 +19,7 @@ import test from 'node:test';
 import {
   ACTORS_ELIGIBILITY_RUNTIME_API,
   ACTORS_ELIGIBILITY_RUNTIME_API_VERSION,
+  ACTORS_TRIGGER_STATE_BOND_RUNTIME_API,
   ACTOR_CLOSE_REASONS,
   projectActorEligibility,
 } from '../src/lib/automation/eligibility.ts';
@@ -72,7 +73,23 @@ function encodeProjection(value) {
 }
 
 test('runtime metadata binds the canonical eligibility API signature', () => {
-  eligibilityMethod();
+  const { metadata } = eligibilityMethod();
+  const api = metadata.apis.find(
+    (candidate) => candidate.name === 'ActorEligibilityApi',
+  );
+  const bondMethod = api.methods.filter(
+    (candidate) => candidate.name === 'trigger_state_bond',
+  );
+  assert.equal(bondMethod.length, 1, 'trigger_state_bond must appear once');
+  assert.deepEqual(
+    bondMethod[0].inputs.map((input) => input.name),
+    ['trigger'],
+    'bond quote must consume exactly one authored Trigger',
+  );
+  assert.equal(
+    ACTORS_TRIGGER_STATE_BOND_RUNTIME_API,
+    'ActorEligibilityApi_trigger_state_bond',
+  );
 });
 
 test('terminal reasons exactly match generated runtime metadata', () => {
@@ -168,6 +185,7 @@ test('projectActorEligibility preserves semantic Crossing activation state', () 
             threshold: 100n,
             rearm_threshold: 80n,
             phase: { type: 'WaitingForRearm', value: undefined },
+            installed_at_revision: 3n,
             pending_revisions: 2,
             processing_revision: 7n,
           },
@@ -193,6 +211,7 @@ test('projectActorEligibility preserves semantic Crossing activation state', () 
       threshold: 100n,
       rearmThreshold: 80n,
       phase: 'WaitingForRearm',
+      installedAtRevision: 3n,
       pendingRevisions: 2,
       processingRevision: 7n,
     },

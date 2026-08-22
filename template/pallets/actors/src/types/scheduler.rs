@@ -48,6 +48,15 @@ pub enum WakeupKey<BlockNumber> {
   Tick(SchedulerTick),
 }
 
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct WakeupWorkerFault<BlockNumber> {
+  pub key: WakeupKey<BlockNumber>,
+  pub page: WakeupPageId,
+  pub class: super::observation::CrossingWorkerFaultClass,
+}
+
 impl<BlockNumber> WakeupKey<BlockNumber> {
   pub fn clock(&self) -> WakeupClock {
     match self {

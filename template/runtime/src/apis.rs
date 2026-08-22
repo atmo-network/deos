@@ -133,7 +133,13 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, BlockNumber> for Runtime {
+    impl pallet_deos_actors::ActorEligibilityApi<
+        Block,
+        primitives::OracleFeedId,
+        BlockNumber,
+        pallet_deos_actors::TriggerOf<Runtime>,
+        Balance,
+    > for Runtime {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
@@ -141,6 +147,35 @@ impl_runtime_apis! {
             pallet_deos_actors::ActorClassificationError,
         > {
             Actors::actor_eligibility(actor_id)
+        }
+
+        fn materialization_faults() -> (
+            Option<pallet_deos_actors::CrossingWorkerFault<primitives::OracleFeedId>>,
+            Option<pallet_deos_actors::ObservationFanoutWorkerFault<primitives::OracleFeedId>>,
+            Option<pallet_deos_actors::WakeupWorkerFault<BlockNumber>>,
+        ) {
+            (
+                Actors::crossing_worker_fault(),
+                Actors::observation_fanout_worker_fault(),
+                Actors::wakeup_worker_fault(),
+            )
+        }
+
+        fn crossing_capacity(feed: primitives::OracleFeedId) -> (u32, u32, u32, u32) {
+            (
+                <crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
+                <crate::configs::actor_config::ActorMaxCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
+                Actors::crossing_user_feed_membership_count(feed),
+                Actors::crossing_feed_membership_count(feed),
+            )
+        }
+
+        fn trigger_state_bond(trigger: pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
+            <crate::configs::actor_config::RuntimeTriggerStateBond as pallet_deos_actors::TriggerStateBond<
+                AccountId,
+                pallet_deos_actors::TriggerOf<Runtime>,
+                Balance,
+            >>::amount(&trigger)
         }
     }
 

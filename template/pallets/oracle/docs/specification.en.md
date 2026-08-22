@@ -130,7 +130,7 @@ The pallet exposes bounded current truth only. Historical revision lookup, chart
 
 The package exposes `OnObservationChanged(feed, revision, previous, current) -> DispatchResult`. It calls the hook exactly once after computing a changed published scalar and before committing the transition. `previous` is absent only for revision `1`; every later changed revision carries the exact previously committed value.
 
-Hook work MUST remain O(1), bounded, and independent of subscriber count. The hook reports its conservative Weight separately, and dispatch publication adds that bound to the measured oracle path. Hook failure rolls back observation state, revision, oracle event, and every mutation enclosed by the producer's outer transaction. Equal-output refreshes do not call the hook.
+Hook work MUST remain O(1), bounded, and independent of subscriber count. The host-generated publication `WeightInfo` MUST measure the concrete changed-publication path with the hook composed and charge that synchronous path exactly once; the hook exposes no parallel numeric Weight authority. Hook failure rolls back observation state, revision, oracle event, and every mutation enclosed by the producer's outer transaction. Equal-output refreshes do not call the hook.
 
 Actors integration may use this hook only for bounded dirty-feed marking. It MUST NOT iterate subscribers or execute actors in producer context.
 
@@ -152,7 +152,7 @@ Errors distinguish duplicate/unknown feed, capacity exhaustion, unauthorized pro
 
 ## 12. Weight and Atomicity
 
-Every dispatch and runtime producer path MUST use generated production `WeightInfo` covering RefTime and ProofSize. Benchmark components cover bounded producer index length where registration cost depends on it. Publication weight distinguishes LastValue, first EMA, changed EMA, equal-output refresh, and hook-bearing worst cases where their storage/proof paths differ.
+Every dispatch and runtime producer path MUST use generated production `WeightInfo` covering RefTime and ProofSize. Benchmark components cover bounded producer index length where registration cost depends on it. Publication weight distinguishes LastValue, first EMA, changed EMA, equal-output refresh, and hook-bearing worst cases where their storage/proof paths differ. A production host with a nontrivial hook MUST generate publication weights in that composed runtime; package fallback values are explicitly unmeasured.
 
 Registration prevalidates every fallible condition before cardinality or reverse-index mutation or executes transactionally. Publication plus producer-side enclosing effects MUST be transactional whenever later producer work can fail. Required hooks fail closed; optional integrations cannot silently weaken revision or rollback semantics.
 

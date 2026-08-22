@@ -43,7 +43,14 @@
         "template/pallets/actors/examples/fee_envelope_vectors\\.rs",
         "template/pallets/actors/src/contract\\.rs",
         "template/pallets/actors/src/execution\\.rs",
-        "template/pallets/actors/src/lib\\.rs",
+        "template/pallets/actors/src/lib\\.rs:.*canonical_clauses.*iter",
+        "template/pallets/actors/src/lib\\.rs:.*clauses\\.iter",
+        "template/pallets/actors/src/lib\\.rs:.*clause\\.iter",
+        "template/pallets/actors/src/lib\\.rs:.*contract\\.steps\\.iter",
+        "template/pallets/actors/src/lib\\.rs:.*legs\\.iter",
+        "template/pallets/actors/src/lib\\.rs:.*ActorIdentities::<T>::iter",
+        "template/pallets/actors/src/lib\\.rs:.*SystemSovereigns::<T>::iter",
+        "template/pallets/actors/src/lib\\.rs:.*SovereignIndex::<T>::iter",
         "template/pallets/actors/src/types\\.rs",
         "template/runtime/src/tmctol_read_model\\.rs:.*program\\.steps\\.iter",
         "template/runtime/src/configs/actor_config\\.rs:.*\\.iter",
@@ -58,7 +65,7 @@
         "template/pallets/oracle/src/lib\\.rs:.*ProducerFeeds::<T>::iter",
         "template/pallets/oracle/src/lib\\.rs:.*Observations::<T>::iter"
       ],
-      "rationale": "The fee-vector example, runtime read models, bounded DNF evaluator, Governance ballot sums, and runtime Actor topology integrity checks iterate only type-bounded, explicit retention-limited, or fixed genesis values. Governance sums consume MaxWinningVoteAccountsPerCall-bounded ballots. Oracle storage iteration is confined to try-state and bounded by MaxFeeds/MaxFeedsPerProducer registries; it never runs in consensus execution.",
+      "rationale": "The fee-vector example, runtime read models, exact bounded DNF and split-leg expressions, Governance ballot sums, named runtime Actor topology integrity checks, and Oracle try-state scans iterate only type-bounded, explicit retention-limited, or fixed genesis values. The Actors pallet root is intentionally not path-wide allowlisted, so new cohort, coordinator, bond, or reconciliation storage iteration remains auditable.",
       "expiry": "Remove a path if its input loses an explicit bound or its iteration moves into consensus execution."
     },
     {
@@ -118,9 +125,11 @@
         "validated plan bound fits u32",
         "configured housekeeping Weight must fit ActorOnIdleReserve",
         "admitted execution plans have a checked fee envelope",
-        "admitted schedule windows have an exact terminal block"
+        "admitted schedule windows have an exact terminal block",
+        "valid cadence arithmetic",
+        "nonzero tick duration"
       ],
-      "rationale": "Genesis assertions fail storage construction before launch, integrity assertions fail runtime admission or upgrade checks, and the terminal-block helper is precluded by schedule admission. Any differently worded site is unowned and fails the full-tree audit.",
+      "rationale": "Genesis assertions fail storage construction before launch, integrity assertions fail runtime admission or upgrade checks, the terminal-block helper is precluded by schedule admission, and the two cadence phrases belong only to fixed-input unit tests. Any differently worded site is unowned and fails the full-tree audit.",
       "expiry": "Replace an entry when the boundary becomes typed failure or its genesis, integrity, or admission owner changes."
     },
     {

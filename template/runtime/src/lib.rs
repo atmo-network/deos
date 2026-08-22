@@ -269,6 +269,23 @@ pub type Executive = frame_executive::Executive<
 
 pub use genesis_config_presets::{PARACHAIN_ID, template_session_keys};
 
+#[doc(hidden)]
+pub fn actors_trigger_state_bond(trigger: &pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
+  <configs::actor_config::RuntimeTriggerStateBond as pallet_deos_actors::TriggerStateBond<
+    AccountId,
+    pallet_deos_actors::TriggerOf<Runtime>,
+    Balance,
+  >>::amount(trigger)
+}
+
+#[doc(hidden)]
+pub fn actors_trigger_bond_vector_feed() -> primitives::OracleFeedId {
+  configs::oracle_config::deos_router_pool_feed(
+    primitives::AssetKind::Native,
+    primitives::AssetKind::Local(9),
+  )
+}
+
 pub type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
   Runtime,
   RELAY_CHAIN_SLOT_DURATION_MILLIS,

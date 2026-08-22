@@ -17,7 +17,7 @@ mod mock;
 mod tests;
 
 use codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
-use polkadot_sdk::frame_support::{pallet_prelude::DispatchResult, weights::Weight};
+use polkadot_sdk::{frame_support::pallet_prelude::DispatchResult, sp_runtime::DispatchError};
 use scale_info::TypeInfo;
 
 pub type OracleValue = u128;
@@ -85,7 +85,6 @@ pub trait OnObservationChanged<FeedId> {
     previous: Option<OracleValue>,
     current: OracleValue,
   ) -> DispatchResult;
-  fn weight() -> Weight;
 }
 
 impl<FeedId> OnObservationChanged<FeedId> for () {
@@ -97,9 +96,37 @@ impl<FeedId> OnObservationChanged<FeedId> for () {
   ) -> DispatchResult {
     Ok(())
   }
+}
 
-  fn weight() -> Weight {
-    Weight::zero()
+#[cfg(feature = "runtime-benchmarks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChangedHookBenchmarkTopology {
+  PrimaryFirst,
+  PrimaryExisting,
+  SecondaryFirst,
+  SecondaryExisting,
+  Combined,
+  SecondaryCapacityEdge,
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub trait PublicationBenchmarkHelper<FeedId> {
+  fn prepare_changed_hook(feed: FeedId, topology: ChangedHookBenchmarkTopology) -> DispatchResult;
+  fn prepare_secondary_capacity_edge(
+    feed: FeedId,
+  ) -> Result<(Revision, OracleValue, bool), DispatchError>;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+impl<FeedId> PublicationBenchmarkHelper<FeedId> for () {
+  fn prepare_changed_hook(_: FeedId, _: ChangedHookBenchmarkTopology) -> DispatchResult {
+    Ok(())
+  }
+
+  fn prepare_secondary_capacity_edge(
+    _: FeedId,
+  ) -> Result<(Revision, OracleValue, bool), DispatchError> {
+    Ok((1, 1_000_000_000, false))
   }
 }
 
@@ -135,6 +162,8 @@ pub mod pallet {
     type RegisterOrigin: EnsureOrigin<Self::RuntimeOrigin>;
     type PublishOrigin: EnsureOrigin<Self::RuntimeOrigin, Success = Self::ProducerId>;
     type OnObservationChanged: super::OnObservationChanged<Self::FeedId>;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper: super::PublicationBenchmarkHelper<Self::FeedId>;
     #[pallet::constant]
     type MaxFeeds: Get<u32>;
     #[pallet::constant]
@@ -360,9 +389,14 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(
       T::WeightInfo::publish_ema_changed()
+        .max(T::WeightInfo::publish_ema_changed_primary_first())
+        .max(T::WeightInfo::publish_ema_changed_primary_existing())
+        .max(T::WeightInfo::publish_ema_changed_secondary_first())
+        .max(T::WeightInfo::publish_ema_changed_secondary_existing())
+        .max(T::WeightInfo::publish_ema_changed_combined())
+        .max(T::WeightInfo::publish_ema_changed_secondary_capacity())
         .max(T::WeightInfo::publish_ema_refresh())
         .max(T::WeightInfo::publish_last_value())
-        .saturating_add(T::OnObservationChanged::weight())
     )]
     pub fn publish(origin: OriginFor<T>, feed: T::FeedId, sample: OracleValue) -> DispatchResult {
       let producer = T::PublishOrigin::ensure_origin(origin)?;

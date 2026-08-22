@@ -23,6 +23,10 @@ The portable actor contract and crate implementation remain in [`template/pallet
 
 The six-second DEOS slot binds block cooldown and window horizons through `ActorMaxExecutionDelayBlocks = 52_596_000`, exactly `ceil(10 × 365.25 days / 6 seconds)`. Cadence uses consensus timestamp through `ActorCadenceTickMillis = 500` and its independent `ActorMaxCadenceDelayTicks = 631_152_000`, exactly `ceil(10 × 365.25 days / 500 milliseconds)`. These typed horizons are never converted or reused across clocks; retry backoff remains separately protocol-capped.
 
+## User Trigger-State Bonds
+
+The DEOS runtime reserves a refundable native bond from the User owner for every Active Trigger: one ED for `Manual`; two ED for `AddressEvent`, `ObservationChange`, and `Cadenced`; and five ED for `ObservationCrossing`. `ActorFunding.trigger_state_bond` stores the exact amount. Active creation and Dormant activation reserve before detector topology commits, semantic replacement adjusts the difference atomically, and deactivation or any terminal close releases it before canonical partition removal. System Actors remain exempt under host-owned hard capacity. This custody is separate from the non-refundable creation fee, sovereign protected execution balance, attempt fees, and task funding; current page, radix, subscriber, or queue occupancy never changes the amount. Runtime integration proves Manual-to-Cadenced adjustment, deactivation and explicit-close refund, fail-before-mutation on insufficient reserve, and exact-root rollback after an injected post-reserve failure; apoptosis and worker closure share the same `finalize_actor` release owner. A two-User Crossing fire profile depletes the first sovereign, closes it during materialization, releases exactly one Crossing bond, removes its physical membership, preserves the moved peer locator/cursor path, and continues the peer without a worker fault.
+
 ## Namespace and Sovereign Accounts
 
 The runtime binds package `pallet-deos-actors`, Rust crate `pallet_deos_actors`, and `ActorsPalletId = *b"actors00"`. The pallet account is `PalletId(*b"actors00").into_account_truncating()` under `AccountId32` and SS58 prefix `42`.
@@ -232,8 +236,11 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 | `MaxQueueEntriesScannedPerBlock` | 10,000 physical inspections |
 | `MaxExecutionsPerBlock` | 1,000 defense-in-depth attempt ceiling |
 | Crossing worker | 10% of maximum block Weight; admits one complete generated worst-case unit |
-| Wakeup worker | 15% of maximum block Weight after the Crossing rebalance |
-| ObservationChange fanout | 20% of maximum block Weight |
+| Wakeup worker | 14% contribution to the shared materialization envelope |
+| ObservationChange fanout | 20% contribution to the shared materialization envelope |
+| `MaxCrossingMembersPerFeed` | 10,000 total memberships |
+| `MaxUserCrossingMembersPerFeed` | 9,000 User memberships; remaining 1,000 positions are System-only |
+| `MaxCrossingActorsPerBlock` | Four candidates through two reachable homogeneous pair cohorts |
 | `MaxContractSteps` | Configurable shared `1..=255` bound; DEOS baseline is 8 for both classes |
 | `MaxRetryAttempts` | 10 cursor-local unsuccessful attempts |
 | `MaxConsecutiveFailures` | 10 |
@@ -241,13 +248,17 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 
 Runtime block policy assigns 50% to dispatch and 50% guaranteed `on_idle` headroom. No dedicated Operational reserve exists while no concrete critical Operational call consumes one. `ActorOnIdleReserve` binds directly to `1,000,000,000,000 / 2,500,000`.
 
+Wakeups, Crossing, and broad fanout contribute `14%`, `10%`, and `20%` of maximum block Weight to one `44%` shared materialization envelope. Generated maximum-unit minima for all three families fit together with positive RefTime and ProofSize remainder. A persisted cursor rotates the first family, reserves every later minimum, lends the remainder to the first family, and may return trailing unused reservations through one counter-preserving second grant. The `25,283,000 / 5,982` coordinator owner includes ten reads and one write for cursor state and bounded remaining-work classification. Fixed scheduler base, coordinator, mandatory cleanup, and the shared envelope are subtracted once; the residual is the exact Actor execution floor.
+
+The runtime stores one refundable Trigger-state bond in `ActorFunding` for every Active User: one ED for Manual, two for AddressEvent, two for ObservationChange, five for ObservationCrossing, and two for Cadenced. The same runtime policy reserves before topology commit, adjusts on replacement, releases on deactivation or every terminal close, reports the benchmark maximum, and quotes prospective amounts through `ActorEligibilityApi` version `4`. System Actors are exempt. Fresh-genesis Actors storage version `9` includes canonical Trigger runtime state, exact User Crossing counts, bond state, and the materialization-family cursor; the pre-`1.0` reference line defines no deployed-state migration.
+
 System and User actors share one paged FIFO with a single global ticket order; no actor class reserves an execution share, weight slice, or service right (spec 8.1.8). Housekeeping, observation fanout, wakeup work, cleanup, and admission bookkeeping remain outside the actor-service pass; within that pass, strict head-of-line order and the shared cutoff alone bound service.
 
 Creation, activation, fresh custody reattachment, and plan replacement reject any actor whose scheduler, complete attempt, and pure cleanup do not fit the guaranteed two-dimensional envelope.
 
 ## Reactive Delivery Evidence
 
-The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanoutWeightLimit = 400,000,000,000 / 1,000,000`, and `WakeupWeightLimit = 400,000,000,000 / 1,000,000` for the overdue-wakeup worker. The complete five-partition actor probe makes production ProofSize admit one worst-case fanout unit after base admission.
+The runtime binds `MaxObservationFanoutPagesPerBlock = 64` with a `400,000,000,000 / 1,000,000` fanout contribution and `MaxWakeupsPerBlock = 512` with a `280,000,000,000 / 700,000` wakeup contribution to the shared envelope. The complete five-partition actor probe makes production ProofSize admit one worst-case fanout unit after base admission.
 
 | Production topology after publication | Fanout service units | Blocks at one unit |
 | --- | ---: | ---: |
@@ -289,9 +300,9 @@ Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorContr
 
 The runtime simulation API executes the same package evaluator and finalizer used by scheduler service. Its bounded records carry canonical `StepOutcome` values, including concrete failure cause plus retry disposition, and its status is the shared `AttemptDisposition`; DEOS adds no adapter-side simulation model.
 
-The read-only `ActorEligibilityApi::actor_eligibility` projection reports `NotRegistered`, `Dormant`, or the canonical Active classification at one finalized block, preserving terminal reason plus exact retry/block/timestamp-tick payloads so the browser never reimplements cadence, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
+Version 4 `ActorEligibilityApi` reports `NotRegistered`, `Dormant`, or the canonical Active classification at one finalized block, preserving terminal reason plus exact retry/block/timestamp-tick payloads; Crossing phase, installation revision, pending/processing revisions, latch, and placement are semantic fields. Its companion `materialization_faults` method projects only the bounded current Crossing, broad-fanout, and wakeup faults without pages, radix geometry, or fault history; `crossing_capacity` returns the runtime's 9,000 User / 10,000 total per-feed policy and exact current semantic counts; `trigger_state_bond` quotes prospective User custody from the exact runtime policy consumed by dispatch. The browser therefore never reimplements cadence, cooldown, schedule window, retry backoff, breaker, latch, or detector topology logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 
-The browser's authoring, artifact, matching-Wasm, simulation, observation, and governance-composition surfaces live under `web-client/src/lib/automation/` and `web-client/src/lib/observation/`. They bind metadata and runtime identity rather than recreating pallet semantics.
+The browser Trigger editor rejects invalid hysteresis, discloses no-retrofire/rearm semantics, distinguishes typed User-capacity versus total-capacity atomic failures, directs authors to same-block `crossing_capacity`, warns that broad-fanout service scales with subscribed pages, explains latched-fire coalescing and FIFO backpressure, and shows the runtime-generated refundable bond vector in native base units and labels the finalized runtime quote as authoritative. The vector binds metadata and production Actors Weight identities, covers every Trigger family, and is freshness-checked by project validation; it contains no browser-owned bond formula. The browser's authoring, artifact, matching-Wasm, simulation, observation, and governance-composition surfaces live under `web-client/src/lib/automation/` and `web-client/src/lib/observation/`. They bind metadata and runtime identity rather than recreating pallet semantics.
 
 Unbounded history, archive search, forecasting records, governance preparation history, and longitudinal telemetry remain materialized-provider work under [`actors-control-plane.contract.en.md`](./actors-control-plane.contract.en.md) and [`read-model.contract.en.md`](./read-model.contract.en.md).
 
@@ -322,14 +333,33 @@ Production-Wasm runs at 50 steps and 20 repeats measure validated-context carry 
 | Production Weight owner | RefTime / ProofSize / DB | Evidence boundary |
 | --- | --- | --- |
 | FIFO cheap actor slope | `94,182,240 / 2,733 / 5r 3w` | Loaded live-head service; generated linear coefficient |
-| Partial wakeup-page drain | `354,451,000 / 47,750 / 83r 18w` | One maximum 32-entry page unit |
-| Broad ObservationChange page | `2,644,513,000 / 718,430 / 332r 72w` | Remains subscriber-proportional; canonical identity joins add one read |
-| Crossing no-match transition | `31,988,000 / 6,060 / 5r 2w` | Fixed radix transition setup; zero Actor partition reads |
-| Crossing terminal actor | `594,359,000 / 162,782 / 91r 83w` | One matched actor closing through scheduler exhaustion and exact source cleanup |
-| Crossing same-threshold page | `426,457,000 / 162,782 / 85r 77w` | One bounded membership-page worker unit; herd completion spans units |
-| Manual activation placement | `84,719,000 / 12,200 / 12r 5w` | Complete call; all detectors share the same loaded activation sink after detection |
+| Partial wakeup-page drain | `354,939,000 / 48,075 / 83r 18w` | One maximum 32-entry page unit |
+| Broad ObservationChange page | `2,651,008,000 / 718,430 / 332r 72w` | Remains subscriber-proportional; canonical identity joins add one read |
+| Crossing no-match transition | `31,918,000 / 6,060 / 5r 2w` | Fixed radix transition setup; zero Actor partition reads |
+| Crossing terminal actor | `631,585,000 / 162,782 / 94r 85w` | One matched actor closing through bond-aware scheduler exhaustion and exact source cleanup |
+| Crossing same-threshold page | `440,426,000 / 162,782 / 87r 78w` | One bounded membership-page worker unit; herd completion spans units |
+| Crossing placed fire | `439,379,000 / 162,782 / 87r 78w` | One admitted candidate through canonical latch and FIFO placement |
 
 These are generated coefficients before the runtime database schedule is added, except that each row states its generated read/write count explicitly. The rows establish bounded unit cost and read ownership, not block throughput or user-facing latency.
+
+## Reactive Capacity Ledger
+
+The current production policy has a `44%` shared materialization envelope, exact generated minima for all three families, four Crossing candidates per block, 9,000 User memberships per feed, 10,000 total memberships per feed, a 10,000-entry FIFO, 512 wakeup scans, and 64 broad-fanout pages. Crossing branch billing selects one mutually exclusive generated execution owner after the common and branch probe; the component rows below are not summed as independent whole-branch maxima.
+
+| Crossing path | Generated owner RefTime / ProofSize | Candidate ceiling | 10,000-candidate reference drain |
+| --- | ---: | ---: | ---: |
+| No-match transition | `31,918,000 / 6,060` transition plus `46,305,000 / 12,200` common probe when candidate classification occurs | 0 | Not a candidate drain |
+| Post-installation skip pair | `46,515,000 / 6,112` probe; `66,210,000 / 6,112` execution | 4/block | 2,500 blocks |
+| Rearm pair | `58,249,000 / 23,410` probe; `423,874,000 / 162,782` execution | 4/block | 2,500 blocks |
+| Coalesced fire pair | `108,884,000 / 23,410` fire-pair probe; `472,973,000 / 162,782` execution | 4/block | 2,500 blocks |
+| Placed fire pair | `108,884,000 / 23,410` fire-pair probe; `519,976,000 / 162,782` execution | 4/block | 2,500 blocks |
+| Terminal fire | `72,427,000 / 12,200` fire probe; `631,585,000 / 162,782` cleanup execution | 4/block component cap | 2,500 blocks |
+| One same-threshold page | Exact two-candidate homogeneous cohorts under `440,426,000 / 162,782` page ownership | 4/block | 2,500 blocks |
+| Maximum homogeneous herd | Placed-pair path under the shared envelope | 4/block | 2,500 blocks, or 4h10m at six-second blocks |
+
+The ledger separates zero-match transition setup, sparse occupied-leaf search, source-page traversal, rearm, coalesced fire, placed fire, and terminal cleanup. The current search owner still couples a newly found sparse threshold to its first candidate; larger candidate-count cohorts and measured sparse-search amortization remain open, so these values must be reselected before final release evidence.
+
+Every drain figure assumes one ready homogeneous branch, solvent Actors, available queue positions and tickets, no materialization fault, production block reserve, and no competing family consumption beyond its protected minimum. Producer rate, queue occupancy, mixed thresholds, paused or already-latched Actors, insolvency, branch changes, and the rotated lending order can change observed completion. These are bounded capacity facts, not a publication-rate, activation-latency, task-success, wall-clock, or economic-success SLA.
 
 The runtime Pool Index extension fault anchor admits a pool-creation call, injects failure only at post-dispatch LP/Oracle indexing, rejects the block candidate, and proves exact storage-root restoration across the pool, LP asset and reverse index, Oracle feeds, balances, events, and signer nonce. Package Router faults separately prove exact-root rollback when the second market leg or second directional Oracle publication fails after earlier pool, fee, and publication work.
 
