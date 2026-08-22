@@ -15,11 +15,11 @@ permissions:
   contents: read
 
 jobs:
-  fast-validation:
+  pull-request-validation:
     name: validation-gate
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 240
     env:
       CARGO_INCREMENTAL: 0
       SKIP_WASM_BUILD: 1
@@ -34,8 +34,8 @@ jobs:
         with:
           node-version-file: web-client/package.json
 
-      - name: Prepare pinned dependencies and run fast validation
-        run: ./scripts/validate-local.sh fast
+      - name: Prepare pinned dependencies and run heavy validation
+        run: ./scripts/validate-local.sh heavy
 
   heavy-validation:
     name: heavy-validation

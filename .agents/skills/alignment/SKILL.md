@@ -126,7 +126,7 @@ The gate runs the smallest meaningful changed-scope set: architecture audit, she
 
 Before checkpointing a release tree, run canonical formatting and the intended direct profile; changed-scope completion does not establish full-profile readiness.
 
-`scripts/validate-local.sh` directly prepares pinned repository dependencies and executes the selected `fast`, `heavy`, or `full` profile. It owns stage order and pass/fail without local evidence records, authority manifests, hidden modes, GitHub provenance discovery, or tag-bound branches. The pull-request `validation-gate` runs `fast` directly; network assurance and release publication remain separate explicit operations.
+`scripts/validate-local.sh` directly prepares pinned repository dependencies and executes the selected `fast`, `heavy`, or `full` profile. It owns stage order and pass/fail without local evidence records, authority manifests, hidden modes, GitHub provenance discovery, or tag-bound branches. The pull-request `validation-gate` runs `heavy` so client, Actors, and benchmark checks fail before merge rather than first appearing on `main`; network assurance and release publication remain separate explicit operations.
 
 `auditor.sh` and `completion-gate.sh` use compact orchestration output by default: successful runs report only the step, duration, and result. Failures retain complete temporary logs and print a bounded tail; `DEOS_VERBOSE=1` restores the full nested protocol for diagnosis.
 
