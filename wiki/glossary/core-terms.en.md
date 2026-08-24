@@ -82,6 +82,30 @@ The complete typed behavior installed for an Active actor: schedule, ordered `Co
 
 One fixed ordered row in `ContractSteps`, containing an optional `Precondition`, one Task, and one error policy.
 
+### Actor Control
+
+The component-wise hard-ceiling resource domain for Actor-specific detection, materialization, current-Step evaluation, FIFO movement, lifecycle bookkeeping, and bounded cleanup. It receives at most one third of schedulable block `Weight`.
+
+### Shared Economic Execution
+
+The component-wise resource domain for ordinary external economic calls and Actor Task effects. It receives the schedulable block `Weight` left after Actor Control.
+
+### Economic Zipper
+
+The work-conserving split of Shared Economic Execution into equal Actor-effect and signed-user base turns. Either side may use the other's idle remainder, but not its guaranteed turn under simultaneous saturation.
+
+### Block-Paced Execution
+
+The causal rule that one Actor commits at most one Step per block and readiness observed in block `N` becomes eligible no earlier than `N + 1`.
+
+### Active Frontier
+
+The bounded set of identities that currently own an active Contract and scheduling topology. Per-block work does not scan dormant identities.
+
+### Hot/Cold Contract
+
+The storage topology that keeps compact scheduling and run authority hot while authored Contract bodies and bounded Step chunks remain cold until their current fragment is needed.
+
 ### Precondition
 
 The optional bounded DNF gate on one Step. Absence is the sole unconditional form.

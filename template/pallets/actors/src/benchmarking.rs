@@ -2,9 +2,10 @@
 
 extern crate alloc;
 
+use crate::scheduler::AttemptTransactionError;
 use crate::types::Task as ActorTask;
 use crate::*;
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 use frame::prelude::*;
 use polkadot_sdk::frame_benchmarking::{account, v2::*};
 use polkadot_sdk::frame_support::traits::Hooks;
@@ -14,6 +15,10 @@ use polkadot_sdk::sp_runtime::Perbill;
 #[benchmarks]
 mod benches {
   use super::*;
+
+  const CROSSING_COHORT_BENCHMARK_MAX: u32 = 128;
+  const CROSSING_NON_TAIL_BENCHMARK_MAX: u32 = 64;
+  const CROSSING_TRIMMED_BENCHMARK_TAIL: u32 = CROSSING_NON_TAIL_BENCHMARK_MAX + 2;
 
   #[derive(Clone)]
   struct Schedule<Trigger> {
@@ -29,11 +34,9 @@ mod benches {
     // account; benchmark setup must establish the same prerequisite explicitly.
     polkadot_sdk::frame_system::Pallet::<T>::inc_providers(owner);
     let creation_fee = T::ActorCreationFee::get();
-    if creation_fee.is_zero() {
-      return;
-    }
+    let hold_capacity: T::Balance = (u64::MAX / 4).saturated_into();
     let amount = creation_fee
-      .saturating_add(T::TriggerStateBond::maximum())
+      .saturating_add(hold_capacity)
       .saturating_add(One::one());
     let _ = T::AssetOps::mint(owner, T::FeeNativeAssetId::get(), amount);
   }
@@ -43,9 +46,8 @@ mod benches {
     slot: u8,
     contract_steps: &ContractSteps<T>,
   ) {
-    let envelope = Pallet::<T>::attempt_fee_envelope(ActorType::User, contract_steps, 0)
-      .expect("benchmark execution plan has a checked fee envelope");
-    let required = T::MinUserBalance::get().saturating_add(envelope.total);
+    let required = Pallet::<T>::user_pipeline_machine_capacity_requirement(contract_steps)
+      .expect("benchmark User Cycle has a checked prefunding requirement");
     let sovereign = Pallet::<T>::sovereign_account_id(owner, slot);
     let _ = T::AssetOps::mint(&sovereign, T::FeeNativeAssetId::get(), required);
   }
@@ -57,20 +59,6 @@ mod benches {
     let slot =
       Pallet::<T>::available_owner_slot(owner, None).expect("benchmark owner has a free User slot");
     prefund_user_sovereign::<T>(owner, slot, contract_steps);
-  }
-
-  fn deplete_user_sovereign<T: Config>(actor_id: ActorId) {
-    let instance =
-      Pallet::<T>::active_actor_view(actor_id).expect("benchmark actor must exist for depletion");
-    let requirement = Pallet::<T>::attempt_fee_envelope(ActorType::User, &instance.steps, 0)
-      .expect("benchmark execution plan has a checked fee envelope");
-    let required = T::MinUserBalance::get().saturating_add(requirement.total);
-    T::AssetOps::burn(
-      &instance.sovereign_account,
-      T::FeeNativeAssetId::get(),
-      required,
-    )
-    .expect("benchmark depletion must not overdraw the sovereign");
   }
 
   fn user_contract<T: Config>(
@@ -127,6 +115,24 @@ mod benches {
     }
   }
 
+  fn opening_all<T: Config>(
+    predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
+  ) -> PreconditionOf<T> {
+    let clause = BoundedVec::try_from(
+      predicates
+        .into_iter()
+        .map(|predicate| TimedPredicate {
+          timing: ObservationTiming::Opening,
+          predicate,
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("benchmark Opening predicates fit");
+    Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![clause]).expect("Opening clause fits"),
+    }
+  }
+
   fn current_any<T: Config>(
     predicates: alloc::vec::Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
   ) -> PreconditionOf<T> {
@@ -156,6 +162,30 @@ mod benches {
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step contract_steps must fit")
+  }
+
+  fn make_max_contract_steps<T: Config>(recipient: T::AccountId) -> ContractSteps<T> {
+    let step = Step {
+      precondition: None,
+      task: ActorTask::Transfer {
+        to: recipient,
+        asset: T::FeeNativeAssetId::get(),
+        amount: AmountResolution::AllAvailable,
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    BoundedVec::try_from(vec![step; T::MaxContractSteps::get() as usize])
+      .expect("maximum Contract Steps must fit")
+  }
+
+  fn assert_max_contract_geometry<T: Config>(actor_id: ActorId) {
+    let expected_tail_chunks = T::MaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(MAX_STEPS_PER_TAIL_CHUNK) as usize;
+    assert_eq!(
+      ActorContractTailChunks::<T>::iter_prefix(actor_id).count(),
+      expected_tail_chunks
+    );
   }
 
   fn make_tracked_funding_contract_steps<T: Config>(recipient: T::AccountId) -> ContractSteps<T> {
@@ -286,11 +316,22 @@ mod benches {
     caller: T::AccountId,
     trigger: TriggerOf<T>,
   ) -> ActorId {
-    ensure_creation_balance::<T>(&caller);
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let contract_steps = make_contract_steps::<T>(recipient);
+    bench_create_user_with_trigger_and_steps::<T>(
+      caller,
+      trigger,
+      make_contract_steps::<T>(recipient),
+    )
+  }
+
+  fn bench_create_user_with_trigger_and_steps<T: Config>(
+    caller: T::AccountId,
+    trigger: TriggerOf<T>,
+    contract_steps: ContractSteps<T>,
+  ) -> ActorId {
+    ensure_creation_balance::<T>(&caller);
     prefund_active_user_creation::<T>(&caller, &contract_steps);
     let schedule = Schedule {
       trigger,
@@ -315,7 +356,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
     let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
@@ -332,6 +373,7 @@ mod benches {
     let inst =
       Pallet::<T>::active_actor_view(actor_id).expect("Actors must exist after create_user_actor");
     assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
+    assert_max_contract_geometry::<T>(actor_id);
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
@@ -344,7 +386,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, requested_slot, &contract_steps);
     let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
@@ -362,6 +404,7 @@ mod benches {
     let inst = Pallet::<T>::active_actor_view(actor_id)
       .expect("Actors must exist after create_user_actor_at_slot");
     assert_eq!(inst.actor_class.owner_slot(), Some(requested_slot));
+    assert_max_contract_geometry::<T>(actor_id);
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
@@ -371,7 +414,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     let feed = observation_feed_pool::<T>(1)[0];
     let schedule = Schedule {
       trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
@@ -393,6 +436,7 @@ mod benches {
         sovereign_id: actor_id,
       }
     );
+    assert_max_contract_geometry::<T>(actor_id);
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
@@ -402,7 +446,7 @@ mod benches {
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
-    let contract_steps = make_contract_steps::<T>(recipient.clone());
+    let contract_steps = make_max_contract_steps::<T>(recipient.clone());
     let schedule = Schedule {
       trigger: Trigger::manual(),
       cooldown_blocks: 100,
@@ -432,6 +476,7 @@ mod benches {
       system_contract::<T>(crossing_schedule, contract_steps),
     );
     assert!(Pallet::<T>::active_actor_exists(fresh_id));
+    assert_max_contract_geometry::<T>(fresh_id);
     assert!(CrossingMemberships::<T>::contains_key(fresh_id));
   }
 
@@ -476,13 +521,13 @@ mod benches {
     ensure_creation_balance::<T>(&caller);
     let feed = observation_feed_pool::<T>(1)[0];
     let threshold = u128::MAX;
-    for index in 0..T::ObservationPageSize::get() {
+    for index in 0..T::CrossingPageSize::get() {
       let guard_owner: T::AccountId = account("crossing-page-guard", index, 0);
       let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
     }
     let expected_slot = prefill_owner_slots_for_worst_case::<T>(&caller);
     let recipient: T::AccountId = account("crossing-page-recipient", 0, 0);
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&caller, expected_slot, &contract_steps);
     let schedule = Schedule {
       trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, threshold, 0),
@@ -500,6 +545,7 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let locator = CrossingMemberships::<T>::get(actor_id).expect("measured membership exists");
     let leaf = CrossingLeafStates::<T>::get(locator.key).expect("Crossing leaf exists");
+    assert_max_contract_geometry::<T>(actor_id);
     assert_eq!(locator.page, 1);
     assert_eq!(locator.offset, 0);
     assert_eq!(leaf.page_count, 2);
@@ -536,7 +582,7 @@ mod benches {
         trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
         cooldown_blocks: 100,
       },
-      make_contract_steps::<T>(recipient),
+      make_max_contract_steps::<T>(recipient),
     );
     #[extrinsic_call]
     activate_actor(
@@ -546,6 +592,7 @@ mod benches {
     );
     assert!(Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
+    assert_max_contract_geometry::<T>(actor_id);
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
@@ -554,7 +601,7 @@ mod benches {
   fn deactivate_actor() {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("deactivate-recipient", 0, 0);
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     let feed = observation_feed_pool::<T>(1)[0];
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
@@ -570,11 +617,16 @@ mod benches {
     )
     .expect("System Actors creation must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[extrinsic_call]
     deactivate_actor(RawOrigin::Signed(owner), actor_id);
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
     assert!(ActorIdentities::<T>::contains_key(actor_id));
+    assert!(
+      ActorContractTailChunks::<T>::iter_prefix(actor_id)
+        .next()
+        .is_none()
+    );
     assert!(!CrossingMemberships::<T>::contains_key(actor_id));
   }
 
@@ -615,6 +667,78 @@ mod benches {
     assert!(inst.pending_signal);
   }
 
+  /// Measures one matched User AddressEvent occurrence without source-publication or funding-state
+  /// work: filter detection, exact Trigger capacity/collection, readiness materialization, and
+  /// canonical placement are the complete disjoint Actor-owned boundary.
+  #[benchmark(pov_mode = Measured)]
+  fn address_event_trigger_occurrence() {
+    let caller: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("address-event-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    ensure_creation_balance::<T>(&caller);
+    prefund_active_user_creation::<T>(&caller, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(caller.clone()).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::address_event(SourceFilter::Any, AssetFilter::Any),
+          cooldown_blocks: 0,
+        },
+        contract_steps,
+      ),
+    )
+    .expect("AddressEvent benchmark Actor exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    #[block]
+    {
+      Pallet::<T>::notify_address_event(actor_id, T::FeeNativeAssetId::get(), One::one(), &caller)
+        .expect("matched AddressEvent occurrence commits");
+    }
+    let hot = ActorHot::<T>::get(actor_id).expect("AddressEvent Actor remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+  }
+
+  /// Measures the exact lifecycle-only cleanup selected when an Idle User cannot admit a paid
+  /// pending Pipeline. The maximum Contract is retained, while Crossing, ObservationChange,
+  /// temporal membership, and Run state are intentionally absent from this apoptosis branch.
+  #[benchmark]
+  fn pipeline_admission_apoptosis() {
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("pipeline-apoptosis-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0u32.into(),
+        },
+        contract_steps,
+      ),
+    )
+    .expect("apoptosis benchmark Actor exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    Pallet::<T>::request_activation(actor_id).expect("apoptosis readiness must latch");
+    let instance = Pallet::<T>::active_actor_view(actor_id).expect("active Actor view exists");
+    assert_eq!(instance.cycle_state, CycleState::Idle);
+    assert!(instance.pending_signal);
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
+    assert!(CrossingMemberships::<T>::get(actor_id).is_none());
+    #[block]
+    {
+      Pallet::<T>::finalize_actor(actor_id, &instance, CloseReason::CycleAdmissionInsufficient)
+        .expect("minimal Pipeline-admission apoptosis must succeed");
+    }
+    assert!(!Pallet::<T>::active_actor_exists(actor_id));
+  }
+
   #[benchmark]
   fn close_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -626,7 +750,7 @@ mod benches {
       trigger: Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX, 0),
       cooldown_blocks: 1,
     };
-    let contract_steps = make_contract_steps::<T>(recipient);
+    let contract_steps = make_max_contract_steps::<T>(recipient);
     prefund_user_sovereign::<T>(&owner, owner_slot, &contract_steps);
     Pallet::<T>::create_user_actor_at_slot(
       RawOrigin::Signed(owner.clone()).into(),
@@ -658,10 +782,15 @@ mod benches {
         exhausted: false,
       },
     );
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[extrinsic_call]
     close_actor(RawOrigin::Signed(owner), actor_id);
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
+    assert!(
+      ActorContractTailChunks::<T>::iter_prefix(actor_id)
+        .next()
+        .is_none()
+    );
     assert!(!CrossingMemberships::<T>::contains_key(actor_id));
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
     assert!(!CrossingTransitionQueues::<T>::contains_key(feed));
@@ -676,7 +805,7 @@ mod benches {
     ensure_creation_balance::<T>(&owner);
     let feed = observation_feed_pool::<T>(1)[0];
     let threshold = u128::MAX;
-    for index in 0..T::ObservationPageSize::get() {
+    for index in 0..T::CrossingPageSize::get() {
       let guard_owner: T::AccountId = account("crossing-remove-page-guard", index, 0);
       let _ = bench_create_system_crossing::<T>(guard_owner, feed, threshold);
     }
@@ -698,7 +827,7 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let removed = CrossingMemberships::<T>::get(actor_id).expect("tail-page membership exists");
     assert_eq!(removed.page, 1);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
@@ -709,7 +838,7 @@ mod benches {
     let leaf = CrossingLeafStates::<T>::get(removed.key).expect("surviving leaf exists");
     assert_eq!(leaf.tail_page, 0);
     assert_eq!(leaf.page_count, 1);
-    assert_eq!(leaf.member_count, T::ObservationPageSize::get());
+    assert_eq!(leaf.member_count, T::CrossingPageSize::get());
   }
 
   // Diagnostic removal branch: remove the tail member while its leaf page survives.
@@ -738,7 +867,7 @@ mod benches {
     .expect("tail-removal User setup must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let removed = CrossingMemberships::<T>::get(actor_id).expect("tail membership exists");
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
@@ -791,7 +920,7 @@ mod benches {
         exhausted: false,
       },
     );
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
@@ -830,7 +959,7 @@ mod benches {
     let tail_owner: T::AccountId = account("crossing-middle-tail", 0, 0);
     let tail_id = bench_create_system_crossing::<T>(tail_owner, feed, threshold);
     let removed = CrossingMemberships::<T>::get(actor_id).expect("middle membership exists");
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       Pallet::<T>::close_actor(RawOrigin::Signed(owner).into(), actor_id)
@@ -868,7 +997,7 @@ mod benches {
     )
     .expect("ObservationChange close benchmark setup must succeed");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     mark_observation_chain_dirty::<T>(&feeds);
     #[block]
     {
@@ -920,7 +1049,7 @@ mod benches {
       bench_create_user_with_trigger::<T>(caller.clone(), observation_trigger::<T>(replaced));
     let dirty_chain = alloc::vec![feeds[1], replaced, guard_high];
     mark_observation_chain_dirty::<T>(&dirty_chain);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -984,11 +1113,13 @@ mod benches {
   fn update_contract() {
     let caller: T::AccountId = whitelisted_caller();
     let feed = observation_feed_pool::<T>(1)[0];
-    let actor_id = bench_create_user_with_trigger::<T>(
+    let old_recipient: T::AccountId = account("crossing-update-old-recipient", 0, 0);
+    let actor_id = bench_create_user_with_trigger_and_steps::<T>(
       caller.clone(),
       Trigger::observation_crossing(feed, CrossingDirection::Rising, u128::MAX - 1, 0),
+      make_max_contract_steps::<T>(old_recipient),
     );
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -1006,7 +1137,7 @@ mod benches {
       }
     });
     let recipient = account("crossing-update-recipient", 0, 0);
-    let replacement = make_contract_steps::<T>(recipient);
+    let replacement = make_max_contract_steps::<T>(recipient);
     let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
       BoundedBTreeSet::default();
     for index in 0..T::MaxWhitelistSize::get() {
@@ -1034,6 +1165,7 @@ mod benches {
     }
     let locator =
       CrossingMemberships::<T>::get(actor_id).expect("Crossing replacement membership must exist");
+    assert_max_contract_geometry::<T>(actor_id);
     assert_eq!(locator.key.threshold, u128::MAX);
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
@@ -1043,6 +1175,66 @@ mod benches {
     #[extrinsic_call]
     set_global_circuit_breaker(RawOrigin::Root, true);
     assert!(GlobalCircuitBreaker::<T>::get());
+  }
+
+  #[benchmark]
+  fn record_crossing_worker_fault() {
+    let fault = CrossingWorkerFault {
+      feed: observation_feed_pool::<T>(1)[0],
+      revision: Some(u64::MAX),
+      threshold: Some(u128::MAX),
+      class: CrossingWorkerFaultClass::Other,
+    };
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      assert!(Pallet::<T>::record_crossing_worker_fault(&mut meter, fault));
+    }
+    assert_eq!(CrossingWorkerFaultState::<T>::get(), Some(fault));
+  }
+
+  #[benchmark]
+  fn record_observation_fanout_worker_fault() {
+    let feed = observation_feed_pool::<T>(1)[0];
+    let owner: T::AccountId = account("observation-fault", 0, 0);
+    let actor_id = bench_create_system_observation::<T>(owner, feed);
+    let fault = ObservationFanoutWorkerFault {
+      feed,
+      revision: u64::MAX,
+      subscriber_page: Some(u32::MAX),
+      subscriber_position: u32::MAX,
+      actor_id: Some(actor_id),
+      semantic_contract_id: Some([u8::MAX; 32]),
+      body_commitment: Some([u8::MAX; 32]),
+      admission_identity: Some([u8::MAX; 32]),
+      branch: ObservationFanoutBranch::Terminal,
+      class: CrossingWorkerFaultClass::Other,
+    };
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      core::hint::black_box(ObservationSubscriberPages::<T>::get(feed, 0));
+      core::hint::black_box(ActorActivationAuthorities::<T>::get(actor_id));
+      assert!(Pallet::<T>::record_observation_fanout_worker_fault(
+        &mut meter, fault
+      ));
+    }
+    assert_eq!(ObservationFanoutWorkerFaultState::<T>::get(), Some(fault));
+  }
+
+  #[benchmark]
+  fn record_wakeup_worker_fault() {
+    let fault = WakeupWorkerFault {
+      key: WakeupKey::Tick(u64::MAX),
+      page: u64::MAX,
+      class: CrossingWorkerFaultClass::Other,
+    };
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      assert!(Pallet::<T>::record_wakeup_worker_fault(&mut meter, fault));
+    }
+    assert_eq!(WakeupWorkerFaultState::<T>::get(), Some(fault));
   }
 
   #[benchmark]
@@ -1064,6 +1256,12 @@ mod benches {
       feed: observation_feed_pool::<T>(1)[0],
       revision: 1,
       subscriber_page: Some(0),
+      subscriber_position: 0,
+      actor_id: None,
+      semantic_contract_id: None,
+      body_commitment: None,
+      admission_identity: None,
+      branch: ObservationFanoutBranch::Ordinary,
       class: CrossingWorkerFaultClass::Invariant,
     });
     #[extrinsic_call]
@@ -1122,9 +1320,14 @@ mod benches {
       )
       .expect("create_user_actor must succeed in permissionless_sweep_many setup");
       let actor_id = NextActorId::<T>::get().saturating_sub(1);
-      // Restore the zombie fixture state: swept actors must be balance-exhausted so the
-      // sweep closes them, keeping the prefunding admission honest but the postcondition real.
-      deplete_user_sovereign::<T>(actor_id);
+      // Permissionless sweep no longer predicts economic affordability. Use the canonical
+      // nonce terminal so every requested live Actor still exercises bounded close cleanup.
+      ActorIdentities::<T>::mutate(actor_id, |maybe| {
+        maybe
+          .as_mut()
+          .expect("benchmark actor identity exists")
+          .cycle_nonce = u64::MAX;
+      });
       actor_ids
         .try_push(actor_id)
         .expect("benchmark n must fit MaxSweepBatch");
@@ -1544,13 +1747,108 @@ mod benches {
     NextActorId::<T>::get().saturating_sub(1)
   }
 
+  fn admitted_contract_geometry<T: Config>(
+    actor_id: ActorId,
+    contract: &ActorContractOf<T>,
+  ) -> (
+    ActorAdmissionCertificateOf<T>,
+    ActorContractHeadOf<T>,
+    Vec<(u32, ActorStepChunkOf<T>)>,
+  ) {
+    let certificate = ActorAdmissionCertificate::new(
+      contract.semantic_contract_id(),
+      contract
+        .body_commitment()
+        .expect("bounded benchmark body commitment"),
+      1,
+      [2u8; 32],
+      1,
+      [3u8; 32],
+      Weight::zero(),
+    );
+    let (head, chunks) = Pallet::<T>::decompose_admitted_contract_geometry(
+      actor_id,
+      ActorType::System,
+      contract,
+      &certificate,
+    )
+    .expect("admitted benchmark Contract decomposes");
+    (certificate, head, chunks)
+  }
+
+  fn benchmark_queue_entry<T: Config>(
+    ticket: u64,
+    actor_id: ActorId,
+  ) -> QueueEntry<BlockNumberFor<T>> {
+    QueueEntry {
+      actor_id,
+      cycle_nonce: 0,
+      cursor: 0,
+      ticket,
+      eligible_at: Zero::zero(),
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: [0; 32],
+        body_commitment: [0; 32],
+      },
+    }
+  }
+
+  fn install_chunked_contract<T: Config>(actor_id: ActorId, contract: &ActorContractOf<T>) {
+    let (certificate, head, chunks) = admitted_contract_geometry::<T>(actor_id, contract);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      if let Some(run) = maybe {
+        run.contract_authority = ActorRunAuthority {
+          semantic_contract_id: certificate.semantic_contract_id,
+          body_commitment: certificate.body_commitment,
+          admission_identity: certificate.admission_identity,
+        };
+      }
+    });
+    ActorAdmissionCertificates::<T>::insert(actor_id, certificate);
+    ActorContractHeads::<T>::insert(actor_id, head);
+    for (chunk_index, chunk) in chunks {
+      ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
+    }
+  }
+
+  fn bench_create_user_observation_with_cooldown<T: Config>(
+    owner: T::AccountId,
+    feed: T::ObservationFeedId,
+    cooldown_blocks: u32,
+  ) -> ActorId {
+    let contract_steps = make_inert_contract_steps::<T>();
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::observation_change(feed),
+          cooldown_blocks,
+        },
+        contract_steps,
+      ),
+    )
+    .expect("User observation benchmark actor creation must succeed");
+    NextActorId::<T>::get().saturating_sub(1)
+  }
+
   fn bench_create_system_observation<T: Config>(
     owner: T::AccountId,
     feed: T::ObservationFeedId,
   ) -> ActorId {
+    bench_create_system_observation_with_cooldown::<T>(owner, feed, 0)
+  }
+
+  fn bench_create_system_observation_with_cooldown<T: Config>(
+    owner: T::AccountId,
+    feed: T::ObservationFeedId,
+    cooldown_blocks: u32,
+  ) -> ActorId {
     let schedule = Schedule {
       trigger: Trigger::observation_change(feed),
-      cooldown_blocks: 0,
+      cooldown_blocks,
     };
     Pallet::<T>::create_system_actor(
       RawOrigin::Root.into(),
@@ -1560,6 +1858,29 @@ mod benches {
     )
     .expect("observation benchmark actor creation must succeed");
     NextActorId::<T>::get().saturating_sub(1)
+  }
+
+  fn bench_create_expiring_system_observation<T: Config>(
+    owner: T::AccountId,
+    feed: T::ObservationFeedId,
+  ) -> (ActorId, BlockNumberFor<T>) {
+    let now = frame_system::Pallet::<T>::block_number();
+    let end = now.saturating_add(T::MinWindowLength::get());
+    let schedule = Schedule {
+      trigger: Trigger::observation_change(feed),
+      cooldown_blocks: 0,
+    };
+    let mut contract = system_contract::<T>(schedule, make_inert_contract_steps::<T>())
+      .expect("system observation contract exists");
+    contract.window = Some(ScheduleWindow { start: now, end });
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      Some(contract),
+    )
+    .expect("expiring observation benchmark actor creation must succeed");
+    (NextActorId::<T>::get().saturating_sub(1), end)
   }
 
   fn bench_create_system_crossing<T: Config>(
@@ -1579,6 +1900,13 @@ mod benches {
     )
     .expect("Crossing benchmark actor creation must succeed");
     NextActorId::<T>::get().saturating_sub(1)
+  }
+
+  fn clear_indexed_detection_disablement<T: Config>() {
+    let actor_ids = IndexedTriggerDetectionDisabled::<T>::iter_keys().collect::<Vec<_>>();
+    for actor_id in actor_ids {
+      IndexedTriggerDetectionDisabled::<T>::remove(actor_id);
+    }
   }
 
   fn prepare_crossing_work<T: Config>(threshold: u128) -> (T::ObservationFeedId, ActorId) {
@@ -1606,7 +1934,7 @@ mod benches {
 
   fn prepare_non_tail_crossing_batch<T: Config>(tail_members: u32) -> alloc::vec::Vec<ActorId> {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
-    let total = T::ObservationPageSize::get().saturating_add(tail_members);
+    let total = T::CrossingPageSize::get().saturating_add(tail_members);
     let mut actors = alloc::vec![first_actor];
     for index in 0..total.saturating_sub(1) {
       let owner: T::AccountId = account("crossing-non-tail-unit", index, tail_members);
@@ -1644,11 +1972,11 @@ mod benches {
     NextActorId::<T>::get().saturating_sub(1)
   }
 
-  fn install_continuation<T: Config>(actor_id: ActorId, snapshot_entries: u32) {
+  fn install_run_state<T: Config>(actor_id: ActorId, snapshot_entries: u32) {
     let bounded = snapshot_entries.min(T::MaxOpeningSnapshotEntries::get());
     let asset_count = bounded.saturating_add(1) / 2;
     let assets = T::BenchmarkHelper::funding_assets(asset_count);
-    let mut opening_snapshot = ContinuationSnapshotOf::<T>::default();
+    let mut opening_snapshot = RunOpeningSnapshotOf::<T>::default();
     for asset in assets {
       if opening_snapshot.len() as u32 >= bounded {
         break;
@@ -1664,15 +1992,13 @@ mod benches {
         .expect("benchmark snapshot staking entry fits");
     }
     assert_eq!(opening_snapshot.len() as u32, bounded);
-    ActorContracts::<T>::mutate(actor_id, |maybe_contract| {
-      maybe_contract
-        .as_mut()
-        .expect("benchmark actor contract exists")
-        .steps[0]
-        .on_error = StepErrorPolicy::RetryLater {
-        max_attempts: T::MaxRetryAttempts::get(),
-      };
-    });
+    let mut admitted_contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("benchmark actor contract exists");
+    admitted_contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    Pallet::<T>::store_actor_contract(actor_id, admitted_contract)
+      .expect("benchmark retry Contract remains admitted");
     ActorHot::<T>::mutate(actor_id, |maybe_hot| {
       let hot = maybe_hot
         .as_mut()
@@ -1682,24 +2008,77 @@ mod benches {
       hot.queue_ticket = None;
       hot.wakeup_pointer = None;
     });
-    ActorIdentities::<T>::mutate(actor_id, |maybe_identity| {
-      maybe_identity
-        .as_mut()
-        .expect("benchmark actor identity exists")
-        .cycle_nonce = 1;
-    });
-    ContinuationStateStore::<T>::insert(
+    let contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Actor Contract exists");
+    let last_attempt_block = 1u32.into();
+    let eligible_at = Pallet::<T>::suspension_eligible_at(
+      contract.cooldown_blocks,
+      contract.window,
+      last_attempt_block,
+      1,
+    )
+    .expect("benchmark retry target is representable");
+    let admission = ActorAdmissionCertificates::<T>::get(actor_id)
+      .expect("benchmark admission certificate exists");
+    ActorRunStateStore::<T>::insert(
       actor_id,
-      ContinuationState {
+      ActorRunState {
+        contract_authority: ActorRunAuthority {
+          semantic_contract_id: admission.semantic_contract_id,
+          body_commitment: admission.body_commitment,
+          admission_identity: admission.admission_identity,
+        },
+        cycle_nonce: 1,
         cursor: 0,
+        opening_predicate_cursor: 0,
         unsuccessful_attempts_at_cursor: 1,
-        last_attempt_block: 1u32.into(),
+        last_attempt_block,
+        last_committed_step_block: None,
+        eligible_at,
         opening_snapshot,
         opening_predicate_results: Default::default(),
         funding_snapshot: Default::default(),
         cumulative_outcomes: OutcomeTotals::default(),
+        last_step_outcome: Some(StepOutcome::FundingUnavailable),
+        suspension: Some(SuspensionReason::FundingUnavailable),
       },
     );
+  }
+
+  fn maximize_run_state_geometry<T: Config>(state: &mut ActorRunStateOf<T>) {
+    let assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    for asset in assets {
+      state
+        .funding_snapshot
+        .try_insert(asset, One::one())
+        .expect("benchmark funding snapshot entry fits");
+    }
+    assert_eq!(
+      state.funding_snapshot.len() as u32,
+      T::MaxFundingTrackedAssets::get()
+    );
+    for index in 0..T::MaxOpeningPredicateResults::get() {
+      state
+        .opening_predicate_results
+        .try_push(if index % 2 == 0 {
+          Ok(true)
+        } else {
+          Err(PredicateError::InvalidObservation)
+        })
+        .expect("benchmark Opening predicate result fits");
+    }
+    state.cumulative_outcomes = OutcomeTotals {
+      executed_steps: u32::MAX,
+      committed_effectful_tasks: u32::MAX,
+      precondition_skips: u32::MAX,
+      skipped_resolution: u32::MAX,
+      skipped_funding_unavailable: u32::MAX,
+      failed_steps: u32::MAX,
+    };
+    state.last_step_outcome = Some(StepOutcome::Failed(TaskFailure::temporary(
+      Error::<T>::ActorInvariant,
+    )));
+    state.suspension = Some(SuspensionReason::Temporary);
   }
 
   fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
@@ -1729,14 +2108,23 @@ mod benches {
   }
 
   fn clear_host_genesis_wakeup_placements<T: Config>() {
-    let actor_ids = ActorHot::<T>::iter()
+    let block_actor_ids = ActorHot::<T>::iter()
       .filter_map(|(actor_id, hot)| hot.wakeup_pointer.map(|_| actor_id))
       .collect::<alloc::vec::Vec<_>>();
-    for actor_id in actor_ids {
+    for actor_id in block_actor_ids {
       Pallet::<T>::wakeup_substrate_invalidate(actor_id)
-        .expect("host genesis wakeup placement must be removable");
+        .expect("host genesis Pipeline wakeup placement must be removable");
+    }
+    let trigger_actor_ids = ActorHot::<T>::iter()
+      .filter_map(|(actor_id, hot)| hot.trigger_wakeup_pointer.map(|_| actor_id))
+      .collect::<alloc::vec::Vec<_>>();
+    for actor_id in trigger_actor_ids {
+      Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
+        .expect("host genesis Trigger wakeup placement is coherent")
+        .expect("host genesis Trigger wakeup placement must be removable");
     }
     assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Block), 0);
+    assert_eq!(WakeupCursorLen::<T>::get(WakeupClock::Tick), 0);
   }
 
   fn add_wakeup_cursor_page(page_ids: &mut alloc::vec::Vec<WakeupPageId>, index: u32, size: u32) {
@@ -1791,9 +2179,11 @@ mod benches {
       let first = page_id.saturating_mul(page_size);
       let len = page_size.min(capacity.saturating_sub(first));
       let entries = (0..len)
-        .map(|offset| QueueEntry {
-          ticket: u64::from(first.saturating_add(offset)),
-          actor_id: u64::MAX.saturating_sub(u64::from(first.saturating_add(offset))),
+        .map(|offset| {
+          benchmark_queue_entry::<T>(
+            u64::from(first.saturating_add(offset)),
+            u64::MAX.saturating_sub(u64::from(first.saturating_add(offset))),
+          )
         })
         .collect::<alloc::vec::Vec<_>>();
       QueuePages::<T>::insert(
@@ -1845,12 +2235,11 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let recipient = Pallet::<T>::sovereign_account_id_system(actor_id);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    ActorContracts::<T>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("benchmark Actor Contract exists")
-        .funding = FundingSourcePolicy::AnyVerifiedIngress;
-    });
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Actor Contract exists");
+    contract.funding = FundingSourcePolicy::AnyVerifiedIngress;
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("benchmark ingress Contract remains admitted");
     ActorFunding::<T>::mutate(actor_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
       funding
@@ -1863,6 +2252,43 @@ mod benches {
   }
 
   #[benchmark]
+  fn scheduler_on_initialize_cutoff() {
+    NextQueueTicket::<T>::put(7);
+    CurrentBlockResourceState::<T>::kill();
+    #[block]
+    {
+      let now = frame_system::Pallet::<T>::block_number();
+      assert!(CurrentBlockResourceState::<T>::get().is_none());
+      let budget = T::BlockResourceBudget::get();
+      let mut state = BlockResourceState::new(now);
+      state.begin_prepass().expect("benchmark prepass opens");
+      let mut reservation = state
+        .reserve(
+          budget.limits(),
+          BlockResourceDomain::ActorControl,
+          Weight::zero(),
+        )
+        .expect("zero cutoff owner reserves");
+      PrepassExecutionCutoff::<T>::put((now, NextQueueTicket::<T>::get()));
+      state
+        .settle(&mut reservation, Weight::zero())
+        .expect("zero cutoff owner settles");
+      state
+        .open_external_phase()
+        .expect("empty benchmark prepass closes");
+      CurrentBlockResourceState::<T>::put(state);
+    }
+    assert_eq!(
+      PrepassExecutionCutoff::<T>::get(),
+      Some((frame_system::Pallet::<T>::block_number(), 7))
+    );
+    assert_eq!(
+      CurrentBlockResourceState::<T>::get().map(|state| state.phase()),
+      Some(BlockResourcePhase::ExternalPhase)
+    );
+  }
+
+  #[benchmark]
   fn scheduler_on_idle_base() {
     let threshold = T::MaxIdleStarvationBlocks::get().max(1);
     let now: BlockNumberFor<T> = threshold.into();
@@ -1871,8 +2297,28 @@ mod benches {
     IdleStarvationState::<T>::put(IdleStarvationPhase::Starving {
       consecutive_blocks: 1,
     });
+    let mut state = BlockResourceState::new(now);
+    state.begin_prepass().expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
+    state
+      .open_external_phase()
+      .expect("benchmark prepass closes"); // deos-bypass: panic-owner — preceding transition establishes empty PrepassExecuting.
+    CurrentBlockResourceState::<T>::put(state);
     #[block]
     {
+      let mut resource_state =
+        CurrentBlockResourceState::<T>::get().expect("benchmark resource state exists"); // deos-bypass: panic-owner — setup writes this exact storage value.
+      let limits = T::BlockResourceBudget::get().limits();
+      let mut reservation = resource_state
+        .reserve(
+          limits,
+          BlockResourceDomain::ActorControl,
+          limits.actor_control(),
+        )
+        .expect("benchmark Actor Control reservation fits"); // deos-bypass: panic-owner — maximum equals the configured empty Actor Control limit.
+      resource_state
+        .settle(&mut reservation, Weight::zero())
+        .expect("benchmark reservation settles"); // deos-bypass: panic-owner — zero actual is component-wise within the reserved maximum.
+      CurrentBlockResourceState::<T>::put(resource_state);
       let _breaker_active = GlobalCircuitBreaker::<T>::get();
       core::hint::black_box(QueueHead::<T>::get());
       core::hint::black_box(QueueTail::<T>::get());
@@ -1915,10 +2361,513 @@ mod benches {
     assert!(!IdleStarvationState::<T>::exists());
   }
 
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_create(n: Linear<1, 8>) {
+    let actor_id = 2_940;
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      inert_contract_steps_of_len::<T>(n),
+    )
+    .expect("active benchmark Contract");
+    #[block]
+    {
+      Pallet::<T>::store_actor_contract(actor_id, contract)
+        .expect("benchmark Contract remains admitted");
+    }
+    assert!(ActorContractHeads::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_chunked_create(c: Linear<0, 2>) {
+    let actor_id = 2_951;
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(7));
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      inert_contract_steps_of_len::<T>(n),
+    )
+    .expect("active benchmark Contract");
+    let (certificate, head, chunks) = admitted_contract_geometry::<T>(actor_id, &contract);
+    let chunk_count = u32::try_from(chunks.len()).expect("bounded chunk count fits u32");
+    assert_eq!(chunk_count, c);
+    core::hint::black_box((head, chunks));
+    #[block]
+    {
+      assert!(Pallet::<T>::insert_admitted_contract_geometry(
+        actor_id,
+        &contract,
+        &certificate,
+      ));
+    }
+    assert!(ActorAdmissionCertificates::<T>::contains_key(actor_id));
+    assert!(ActorContractHeads::<T>::contains_key(actor_id));
+    for chunk_index in 0..chunk_count {
+      assert!(ActorContractTailChunks::<T>::contains_key(
+        actor_id,
+        chunk_index
+      ));
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_close(n: Linear<1, 8>) {
+    let actor_id = bench_create_system_with_plan::<T>(2_960, inert_contract_steps_of_len::<T>(n));
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::remove_actor_contract(actor_id)
+          .expect("benchmark Contract removes coherently"),
+      );
+    }
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_chunked_close(c: Linear<0, 2>) {
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(7));
+    let actor_id = bench_create_system_with_plan::<T>(2_971, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    let chunk_count = c;
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::remove_admitted_contract_geometry(actor_id)
+          .expect("benchmark geometry removes coherently"),
+      );
+    }
+    assert!(!ActorAdmissionCertificates::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+    for chunk_index in 0..chunk_count {
+      assert!(!ActorContractTailChunks::<T>::contains_key(
+        actor_id,
+        chunk_index
+      ));
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_update(n: Linear<1, 8>) {
+    let actor_id = bench_create_system_with_plan::<T>(2_975, inert_contract_steps_of_len::<T>(n));
+    let mut replacement =
+      Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    replacement.cooldown_blocks = 1;
+    #[block]
+    {
+      Pallet::<T>::store_actor_contract(actor_id, replacement)
+        .expect("benchmark replacement remains admitted");
+    }
+    assert_eq!(
+      Pallet::<T>::load_actor_contract(actor_id).map(|contract| contract.cooldown_blocks),
+      Some(1)
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_reconstruct(n: Linear<1, 8>) {
+    let actor_id = bench_create_system_with_plan::<T>(2_977, inert_contract_steps_of_len::<T>(n));
+    #[block]
+    {
+      let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+      let semantic_contract_id = contract.semantic_contract_id();
+      let body_commitment = contract
+        .body_commitment()
+        .expect("bounded benchmark body commitment");
+      core::hint::black_box((contract, semantic_contract_id, body_commitment));
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_chunked_reconstruct(c: Linear<0, 2>) {
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(7));
+    let actor_id = bench_create_system_with_plan::<T>(2_979, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    assert_eq!(
+      u32::try_from(n.saturating_sub(1).div_ceil(4)).expect("chunk count fits"),
+      c
+    );
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_admitted_contract_geometry(actor_id)
+          .expect("benchmark geometry reconstructs coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_load_first() {
+    let actor_id = bench_create_system_with_plan::<T>(2_980, inert_contract_steps_of_len::<T>(1));
+    #[block]
+    {
+      let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+      core::hint::black_box(contract.steps.first().expect("benchmark Step 0 exists"));
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_monolithic_load_tail(n: Linear<2, 8>) {
+    let actor_id = bench_create_system_with_plan::<T>(2_991, inert_contract_steps_of_len::<T>(n));
+    let current = n.saturating_sub(1);
+    #[block]
+    {
+      let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+      core::hint::black_box(
+        contract
+          .steps
+          .get(current as usize)
+          .expect("benchmark tail Step exists"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_chunked_load_first() {
+    let actor_id = bench_create_system_with_plan::<T>(2_992, inert_contract_steps_of_len::<T>(1));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_from_storage(actor_id, 0)
+          .expect("benchmark head Step loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn benchmark_chunked_load_tail(s: Linear<1, 4>) {
+    let n = 1u32.saturating_add(s);
+    let actor_id = bench_create_system_with_plan::<T>(2_993, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    let current = s;
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_from_storage(actor_id, current)
+          .expect("benchmark tail Step loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn contract_geometry_create(c: Linear<0, 8>) {
+    let c = c.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let actor_id = 2_994;
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(31));
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      inert_contract_steps_of_len::<T>(n),
+    )
+    .expect("active benchmark Contract");
+    let (certificate, _, chunks) = admitted_contract_geometry::<T>(actor_id, &contract);
+    assert_eq!(u32::try_from(chunks.len()).expect("chunk count fits"), c);
+    #[block]
+    {
+      assert!(Pallet::<T>::insert_admitted_contract_geometry(
+        actor_id,
+        &contract,
+        &certificate,
+      ));
+    }
+    assert!(ActorAdmissionCertificates::<T>::contains_key(actor_id));
+    assert!(ActorContractHeads::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn contract_geometry_close(c: Linear<0, 8>) {
+    let c = c.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(31));
+    let actor_id = bench_create_system_with_plan::<T>(2_995, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::remove_admitted_contract_geometry(actor_id)
+          .expect("benchmark geometry removes coherently"),
+      );
+    }
+    assert!(!ActorAdmissionCertificates::<T>::contains_key(actor_id));
+    assert!(!ActorContractHeads::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn contract_geometry_reconstruct(c: Linear<0, 8>) {
+    let c = c.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let n = 1u32.saturating_add(c.saturating_mul(4).min(31));
+    let actor_id = bench_create_system_with_plan::<T>(2_996, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_admitted_contract_geometry(actor_id)
+          .expect("benchmark geometry reconstructs coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn current_step_load_head() {
+    let actor_id = bench_create_system_with_plan::<T>(2_997, inert_contract_steps_of_len::<T>(1));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_from_storage(actor_id, 0)
+          .expect("benchmark head Step loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn current_step_load_tail(s: Linear<1, 4>) {
+    let n = 1u32.saturating_add(s);
+    let actor_id = bench_create_system_with_plan::<T>(2_998, inert_contract_steps_of_len::<T>(n));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_from_storage(actor_id, s)
+          .expect("benchmark tail Step loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn current_step_plan_opening_head() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id = bench_create_system_with_plan::<T>(2_999, inert_contract_steps_of_len::<T>(1));
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("benchmark hot state exists")
+        .queue_ticket = Some(9);
+    });
+    let identity = ActorIdentities::<T>::get(actor_id).expect("benchmark identity exists");
+    let certificate = ActorAdmissionCertificates::<T>::get(actor_id)
+      .expect("benchmark admission certificate exists");
+    let ticket = ActorStepTicket {
+      actor_id,
+      cycle_nonce: identity.cycle_nonce.saturating_add(1),
+      cursor: 0,
+      ticket: 9,
+      eligible_at: now,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: certificate.semantic_contract_id,
+        body_commitment: certificate.body_commitment,
+      },
+    };
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_plan_from_storage(ticket)
+          .expect("benchmark Opening plan loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn current_step_plan_suspended_head() {
+    let actor_id = bench_create_system_with_plan::<T>(3_000, inert_contract_steps_of_len::<T>(1));
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      maximize_run_state_geometry::<T>(maybe.as_mut().expect("benchmark run state exists"));
+    });
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("benchmark hot state exists")
+        .queue_ticket = Some(9);
+    });
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("benchmark run state exists");
+    frame_system::Pallet::<T>::set_block_number(run.eligible_at);
+    let certificate = ActorAdmissionCertificates::<T>::get(actor_id)
+      .expect("benchmark admission certificate exists");
+    let ticket = ActorStepTicket {
+      actor_id,
+      cycle_nonce: run.cycle_nonce,
+      cursor: 0,
+      ticket: 9,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: certificate.semantic_contract_id,
+        body_commitment: certificate.body_commitment,
+      },
+    };
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_plan_from_storage(ticket)
+          .expect("benchmark Suspended head plan loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn current_step_plan_running_tail(s: Linear<1, 4>) {
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(3_000, inert_contract_steps_of_len::<T>(1 + s));
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("benchmark run state exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = s;
+      run.last_committed_step_block = Some(1u32.into());
+      run.eligible_at = now;
+      run.suspension = None;
+    });
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("benchmark Contract exists");
+    install_chunked_contract::<T>(actor_id, &contract);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("benchmark hot state exists");
+      hot.cycle_state = CycleState::Running;
+      hot.queue_ticket = Some(9);
+    });
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("benchmark run state exists");
+    let certificate = ActorAdmissionCertificates::<T>::get(actor_id)
+      .expect("benchmark admission certificate exists");
+    let ticket = ActorStepTicket {
+      actor_id,
+      cycle_nonce: run.cycle_nonce,
+      cursor: run.cursor,
+      ticket: 9,
+      eligible_at: run.eligible_at,
+      contract_commitment: ActorContractCommitment {
+        semantic_contract_id: certificate.semantic_contract_id,
+        body_commitment: certificate.body_commitment,
+      },
+    };
+    #[block]
+    {
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_plan_from_storage(ticket)
+          .expect("benchmark Running plan loads coherently"),
+      );
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn opening_snapshot_capture(e: Linear<1, 16>) {
+    let actor: T::AccountId = account("opening_snapshot_actor", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, e)
+      .expect("benchmark Opening assets exist");
+    assert_eq!(u32::try_from(assets.len()).expect("asset count fits"), e);
+    for asset in &assets {
+      let _ = T::AssetOps::mint(&actor, *asset, One::one());
+    }
+    let mut steps = ContractSteps::<T>::default();
+    for pair in assets.chunks(2) {
+      let asset_a = pair[0];
+      let asset_b = pair.get(1).copied().unwrap_or(asset_a);
+      steps
+        .try_push(Step {
+          precondition: None,
+          task: ActorTask::AddLiquidity {
+            asset_a,
+            asset_b,
+            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_b: if pair.len() == 2 {
+              AmountResolution::PercentageAtOpening(Perbill::one())
+            } else {
+              AmountResolution::Fixed(Zero::zero())
+            },
+            min_lp_out: Zero::zero(),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("benchmark Opening Step fits");
+    }
+    #[block]
+    {
+      let snapshot =
+        Pallet::<T>::capture_opening_snapshot(ActorType::System, &actor, &steps, Zero::zero());
+      assert_eq!(
+        u32::try_from(snapshot.len()).expect("snapshot count fits"),
+        e
+      );
+      core::hint::black_box(snapshot);
+    }
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn opening_predicate_capture(p: Linear<1, 32>) {
+    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, p)
+      .expect("benchmark predicate assets exist");
+    assert_eq!(u32::try_from(assets.len()).expect("asset count fits"), p);
+    for asset in &assets {
+      let _ = T::AssetOps::mint(&actor, *asset, One::one());
+    }
+    let mut steps = ContractSteps::<T>::default();
+    for chunk in assets.chunks(T::MaxPredicatesPerClause::get() as usize) {
+      let predicates = BoundedVec::try_from(
+        chunk
+          .iter()
+          .map(|asset| TimedPredicate {
+            timing: ObservationTiming::Opening,
+            predicate: Predicate::BalanceAbove {
+              asset: *asset,
+              threshold: Zero::zero(),
+            },
+          })
+          .collect::<Vec<_>>(),
+      )
+      .expect("benchmark predicate clause fits");
+      steps
+        .try_push(Step {
+          precondition: Some(Precondition {
+            clauses: BoundedVec::try_from(vec![predicates]).expect("benchmark predicate set fits"),
+          }),
+          task: ActorTask::StopCycle,
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("benchmark predicate Step fits");
+    }
+    #[block]
+    {
+      let results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
+      assert_eq!(u32::try_from(results.len()).expect("result count fits"), p);
+      core::hint::black_box(results);
+    }
+  }
+
   #[benchmark]
   fn scheduler_actor_state_probe() {
     let actor_id = bench_create_system_manual::<T>(3_000);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     let assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
     ActorFunding::<T>::mutate(actor_id, |maybe_funding| {
       let funding = maybe_funding
@@ -1937,7 +2886,10 @@ mod benches {
     });
     #[block]
     {
-      core::hint::black_box(Pallet::<T>::load_actor_state(actor_id));
+      core::hint::black_box(
+        Pallet::<T>::load_current_step_service_state(actor_id)
+          .expect("benchmark current-Step service state loads coherently"),
+      );
     }
     assert!(matches!(
       Pallet::<T>::load_actor_state(actor_id),
@@ -2346,12 +3298,11 @@ mod benches {
     let first = bench_create_system_manual::<T>(34_100_000);
     let second = bench_create_system_manual::<T>(34_100_001);
     for actor_id in [first, second] {
-      ActorContracts::<T>::mutate(actor_id, |maybe_contract| {
-        maybe_contract
-          .as_mut()
-          .expect("benchmark actor contract exists")
-          .trigger = Trigger::Cadenced { every_ticks: 1 };
-      });
+      let mut contract =
+        Pallet::<T>::load_actor_contract(actor_id).expect("benchmark actor contract exists");
+      contract.trigger = Trigger::Cadenced { every_ticks: 1 };
+      Pallet::<T>::store_actor_contract(actor_id, contract)
+        .expect("benchmark cadence Contract remains admitted");
       ActorHot::<T>::mutate(actor_id, |maybe_hot| {
         maybe_hot
           .as_mut()
@@ -2376,13 +3327,122 @@ mod benches {
       Some(1)
     );
     let rearmed_tick = ActorHot::<T>::get(first)
-      .and_then(|hot| hot.trigger_runtime_state.cadence_anchor_tick())
+      .and_then(|hot| hot.trigger_runtime_state.temporal_anchor_tick())
       .and_then(|anchor| anchor.checked_add(1))
       .expect("benchmark cadence re-anchors");
     assert_eq!(
       WakeupBuckets::<T>::get(WakeupKey::Tick(rearmed_tick)).map(|bucket| bucket.live_entries),
       Some(1)
     );
+  }
+
+  /// Measures one due User AtTime occurrence independently from timestamp inherent work:
+  /// one-shot consumption, exact Trigger collection, and canonical readiness placement.
+  #[benchmark(pov_mode = Measured)]
+  fn at_time_trigger_occurrence() {
+    clear_host_genesis_wakeup_placements::<T>();
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("at-time-occurrence-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::at_time(1),
+          cooldown_blocks: 0,
+        },
+        contract_steps,
+      ),
+    )
+    .expect("AtTime benchmark Actor exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    seed_actor_for_cycle::<T>(actor_id);
+    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
+      .expect("initial AtTime pointer is coherent")
+      .expect("initial AtTime pointer exists");
+    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("AtTime Actor hot state exists")
+        .trigger_runtime_state = TriggerRuntimeState::AtTime {
+        anchor_tick: Some(0),
+        consumed: false,
+      };
+    });
+    Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 1).expect("due AtTime occurrence fits");
+    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
+      .expect("due AtTime pointer is coherent")
+      .expect("due AtTime pointer exists");
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_occurrence(actor_id, 1),
+        Ok(false)
+      );
+    }
+    let hot = ActorHot::<T>::get(actor_id).expect("AtTime Actor remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some());
+    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(matches!(
+      hot.trigger_runtime_state,
+      TriggerRuntimeState::AtTime { consumed: true, .. }
+    ));
+  }
+
+  /// Measures one due User Cadenced occurrence independently from timestamp inherent work:
+  /// trigger-deadline advancement, exact Trigger collection, and canonical readiness placement.
+  #[benchmark(pov_mode = Measured)]
+  fn cadenced_trigger_occurrence() {
+    clear_host_genesis_wakeup_placements::<T>();
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("cadenced-occurrence-recipient", 0, 0);
+    let contract_steps = make_contract_steps::<T>(recipient);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: Trigger::cadenced(1),
+          cooldown_blocks: 0,
+        },
+        contract_steps,
+      ),
+    )
+    .expect("Cadenced benchmark Actor exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    seed_actor_for_cycle::<T>(actor_id);
+    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
+      .expect("initial Cadenced pointer is coherent")
+      .expect("initial Cadenced pointer exists");
+    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("Cadenced Actor hot state exists")
+        .trigger_runtime_state = TriggerRuntimeState::Cadenced {
+        anchor_tick: Some(0),
+      };
+    });
+    Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 0).expect("due Cadenced occurrence fits");
+    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
+      .expect("due Cadenced pointer is coherent")
+      .expect("due Cadenced pointer exists");
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::process_due_temporal_occurrence(actor_id, 0),
+        Ok(false)
+      );
+    }
+    let hot = ActorHot::<T>::get(actor_id).expect("Cadenced Actor remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some());
+    assert!(hot.trigger_wakeup_pointer.is_none());
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -2498,14 +3558,16 @@ mod benches {
       let remaining = u64::from(bounded).saturating_sub(ticket);
       let entries = remaining.min(u64::from(page_size));
       let page = (0..entries)
-        .map(|offset| QueueEntry {
-          ticket: ticket.saturating_add(offset),
-          actor_id: 37_000_000u64.saturating_add(ticket).saturating_add(offset),
+        .map(|offset| {
+          benchmark_queue_entry::<T>(
+            ticket.saturating_add(offset),
+            37_000_000u64.saturating_add(ticket).saturating_add(offset),
+          )
         })
         .collect::<alloc::vec::Vec<_>>();
       QueuePages::<T>::insert(
         page_id,
-        BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
+        BoundedVec::<QueueEntry<BlockNumberFor<T>>, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
       );
       ticket = ticket.saturating_add(entries);
@@ -2533,7 +3595,7 @@ mod benches {
     let template_id = bench_create_system_manual::<T>(38_000_000);
     let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
     let contract_template =
-      ActorContracts::<T>::get(template_id).expect("benchmark contract template");
+      Pallet::<T>::load_actor_contract(template_id).expect("benchmark contract template");
     let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
     let mut identity_template =
       ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
@@ -2552,25 +3614,23 @@ mod benches {
             hot.queue_ticket = Some(logical_ticket);
             ActorIdentities::<T>::insert(actor_id, identity_template.clone());
             ActorHot::<T>::insert(actor_id, hot);
-            ActorContracts::<T>::insert(actor_id, contract_template.clone());
+            Pallet::<T>::store_actor_contract(actor_id, contract_template.clone())
+              .expect("benchmark mixed Contract remains admitted");
             ActorFunding::<T>::insert(actor_id, funding_template.clone());
           }
-          QueueEntry {
-            ticket: logical_ticket,
-            actor_id,
-          }
+          benchmark_queue_entry::<T>(logical_ticket, actor_id)
         })
         .collect::<alloc::vec::Vec<_>>();
       QueuePages::<T>::insert(
         page_id,
-        BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
+        BoundedVec::<QueueEntry<BlockNumberFor<T>>, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
       );
       ticket = ticket.saturating_add(entries);
     }
     ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
-    ActorContracts::<T>::remove(template_id);
+    Pallet::<T>::remove_actor_contract(template_id).expect("benchmark template Contract removes");
     ActorFunding::<T>::remove(template_id);
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(u64::from(bounded));
@@ -2592,6 +3652,3597 @@ mod benches {
     assert!(QueueHead::<T>::get() >= cutoff);
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
     assert_eq!(QueueOccupancy::<T>::get(), 0);
+  }
+
+  /// Measures one persistent zero-Step Opening after FIFO head consumption. The branch charges no
+  /// Action, creates no Run state, commits the Cycle nonce and summary, and leaves no successor
+  /// Pipeline placement for a Manual Contract.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_zero_step_complete() {
+    let owner: T::AccountId = account("zero_step_opening_owner", 0, 0);
+    let schedule = Schedule {
+      trigger: Trigger::manual(),
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_contract::<T>(schedule, ContractSteps::<T>::default()),
+    )
+    .expect("zero-Step System Contract exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("zero-Step actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let LoadedActorStateOf::Active(state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("zero-Step actor state exists");
+    };
+    let instance = Pallet::<T>::derive_active_actor_view(state.identity, state.hot, state.contract);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("zero-Step actor remains active")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_zero_step_opening_and_place(actor_id, instance, now) {
+          Ok(()) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("zero-Step inner atom commits");
+    }
+    let identity = ActorIdentities::<T>::get(actor_id).expect("zero-Step actor remains registered");
+    assert_eq!(identity.cycle_nonce, 1);
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      !hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures one complete fresh-Opening control path at maximum configured Contract geometry.
+  /// Every Step references one zero-balance Opening amount, so resolution skips and no Task effect
+  /// executes. The measured branch owns queue service, exact current-Step planning, maximum Contract
+  /// and funding geometry, immutable Opening capture, Running persistence, and causal successor
+  /// placement without effect-Weight contamination. Parameterized inner benchmarks separately own
+  /// maximum snapshot, predicate, and heavier Task envelopes.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_execute_opening_max() {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let step_count = T::MaxContractSteps::get();
+    let asset_count = step_count
+      .checked_mul(2)
+      .expect("maximum Opening asset count fits")
+      .min(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_atomic_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, asset_count)
+      .expect("maximum Opening assets exist");
+    assert_eq!(assets.len(), asset_count as usize);
+    let asset = assets[0];
+    let destination: T::AccountId = account("opening_atomic_destination", 0, 0);
+    let mut steps = ContractSteps::<T>::default();
+    for _ in 0..step_count {
+      steps
+        .try_push(Step {
+          precondition: None,
+          task: ActorTask::Transfer {
+            to: destination.clone(),
+            asset,
+            amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("maximum Opening Contract fits");
+    }
+    assert_eq!(steps.len(), step_count as usize);
+    let admission = Pallet::<T>::contract_steps_admission_weight_upper(ActorType::User, &steps);
+    let service = Pallet::<T>::guaranteed_actor_service_weight()
+      .expect("Opening benchmark service floor exists");
+    assert!(
+      admission.all_lte(service),
+      "maximum public Opening fixture must fit admission: admission={admission:?}, service={service:?}"
+    );
+    let owner: T::AccountId = account("opening_atomic_owner", 0, 0);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &steps);
+    let schedule = Schedule {
+      trigger: Trigger::manual(),
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(schedule, steps),
+    )
+    .expect("maximum User Opening Contract exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("maximum Opening actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("maximum Opening tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("maximum Opening funding snapshot fits");
+      }
+    });
+    assert_eq!(
+      ActorFunding::<T>::get(actor_id)
+        .expect("maximum Opening funding exists")
+        .funding_accumulated
+        .len(),
+      T::MaxFundingTrackedAssets::get() as usize,
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("maximum Opening actor is active")
+        .pending_signal = true;
+    });
+    assert!(Pallet::<T>::paged_enqueue(actor_id));
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("maximum Opening run persists");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.opening_snapshot.len(), 1);
+    assert_eq!(
+      run.funding_snapshot.len(),
+      T::MaxFundingTrackedAssets::get() as usize,
+    );
+    assert!(run.opening_predicate_results.is_empty());
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(run.eligible_at, now.saturating_add(One::one()));
+    assert_eq!(
+      QueueHead::<T>::get().saturating_add(1),
+      QueueTail::<T>::get()
+    );
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+  }
+
+  /// Measures direct minimal-geometry fresh-Opening Actor close at every C6 tail count. StopCycle
+  /// reaches auto-close nonce one and removes the complete authored geometry without an effect.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_close_min(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let mut steps = inert_contract_steps_of_len::<T>(step_count);
+    steps[0].task = ActorTask::StopCycle;
+    let actor_id = bench_create_system_manual::<T>(41_607_812);
+    let mut contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("minimal Opening-close Contract exists");
+    contract.auto_close_at_cycle_nonce = Some(1);
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("minimal Opening-close geometry stores");
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("minimal Opening-close funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("minimal Opening-close tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("minimal Opening-close funding value fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("minimal Opening-close actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("minimal Opening-close service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("minimal Opening-close full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("minimal Opening-close control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(control_context.opening_snapshot_entries, 0);
+    assert_eq!(control_context.opening_predicate_results, 0);
+    assert_eq!(control_context.predicate_evaluation_units, 0);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("minimal Opening-close hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("minimal Opening-close Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("minimal Opening-close maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("minimal Opening-close plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            assert!(!evidence.closed_for_exhaustion);
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("minimal Opening-close inner atom commits");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_none());
+    assert!(ActorIdentities::<T>::get(actor_id).is_none());
+    assert!(ActorContractHeads::<T>::get(actor_id).is_none());
+    assert_eq!(
+      ActorContractTailChunks::<T>::iter_prefix(actor_id).count(),
+      0,
+    );
+  }
+
+  /// Measures direct minimal-geometry fresh-Opening failure at every C6 tail count. An unfunded
+  /// fixed Transfer aborts the cycle without effect invocation, run persistence, or placement.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_failed_min(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let mut steps = inert_contract_steps_of_len::<T>(step_count);
+    let actor_id = bench_create_system_manual::<T>(41_609_375);
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    let invalid_legs = SplitTransferLegsOf::<T>::try_from(alloc::vec![
+      SplitLeg {
+        to: account("opening_failure_leg", 0, 0),
+        share: Perbill::from_percent(50),
+      },
+      SplitLeg {
+        to: account("opening_failure_leg", 0, 0),
+        share: Perbill::from_percent(50),
+      },
+    ])
+    .expect("minimal Opening-failure split legs fit");
+    steps[0].task = ActorTask::SplitTransfer {
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(One::one()),
+      legs: invalid_legs,
+    };
+    steps[0].on_error = StepErrorPolicy::AbortCycle;
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("minimal Opening-failure Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("minimal Opening-failure geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("minimal Opening-failure funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("minimal Opening-failure tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("minimal Opening-failure funding value fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("minimal Opening-failure actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("minimal Opening-failure service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("minimal Opening-failure full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("minimal Opening-failure control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(control_context.opening_snapshot_entries, 0);
+    assert_eq!(control_context.opening_predicate_results, 0);
+    assert_eq!(control_context.predicate_evaluation_units, 0);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("minimal Opening-failure hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("minimal Opening-failure Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("minimal Opening-failure maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("minimal Opening-failure plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("minimal Opening-failure inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    let hot = ActorHot::<T>::get(actor_id).expect("minimal Opening-failure hot state persists");
+    assert_eq!(hot.cycle_state, CycleState::Idle);
+    assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
+    assert_eq!(hot.unsuccessful_attempt_streak, 1);
+  }
+
+  /// Measures direct minimal-geometry fresh-Opening retry at every C6 tail count. An unfunded
+  /// fixed Transfer suspends at cursor zero and installs one wakeup without Opening capture.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_retry_min(t: Linear<0, 8>) {
+    let _ = WakeupBuckets::<T>::clear(u32::MAX, None);
+    let _ = WakeupPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorLen::<T>::clear(u32::MAX, None);
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let mut steps = inert_contract_steps_of_len::<T>(step_count);
+    let actor_id = bench_create_system_manual::<T>(41_612_500);
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    let retry_asset = *funding_assets
+      .first()
+      .expect("minimal Opening-retry funding asset exists");
+    steps[0].task = ActorTask::Transfer {
+      to: account("opening_retry_to", 0, 0),
+      asset: retry_asset,
+      amount: AmountResolution::Fixed(One::one()),
+    };
+    steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      steps,
+    )
+    .expect("minimal Opening-retry Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("minimal Opening-retry geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("minimal Opening-retry funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("minimal Opening-retry tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("minimal Opening-retry funding value fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("minimal Opening-retry actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("minimal Opening-retry service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("minimal Opening-retry full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("minimal Opening-retry control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(control_context.opening_snapshot_entries, 0);
+    assert_eq!(control_context.opening_predicate_results, 0);
+    assert_eq!(control_context.predicate_evaluation_units, 0);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("minimal Opening-retry hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("minimal Opening-retry Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("minimal Opening-retry maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("minimal Opening-retry plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("minimal Opening-retry inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("minimal Opening-retry run persists");
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.suspension, Some(SuspensionReason::FundingUnavailable));
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Suspended && hot.wakeup_pointer.is_some()
+    }));
+  }
+
+  /// Measures direct maximum-realizable fresh-Opening failure at every C6 tail count. Opening
+  /// dependencies are fully captured before an invalid split plan fails pre-effect and aborts.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_failed_max(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let opening_asset_count = step_count
+      .checked_mul(2)
+      .expect("Opening-failure asset count fits");
+    let setup_asset_count = opening_asset_count.max(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_failure_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, setup_asset_count)
+      .expect("Opening-failure assets exist");
+    let invalid_legs = SplitTransferLegsOf::<T>::try_from(alloc::vec![
+      SplitLeg {
+        to: account("opening_failure_max_leg", 0, 0),
+        share: Perbill::from_percent(50),
+      },
+      SplitLeg {
+        to: account("opening_failure_max_leg", 0, 0),
+        share: Perbill::from_percent(50),
+      },
+    ])
+    .expect("Opening-failure split legs fit");
+    let mut steps = ContractSteps::<T>::default();
+    for (step_index, pair) in assets
+      .iter(/* deos-bypass: bounded-iter */)
+      .take(opening_asset_count as usize)
+      .copied()
+      .collect::<alloc::vec::Vec<_>>()
+      .chunks_exact(2)
+      .enumerate()
+    {
+      let asset_a = pair[0];
+      let asset_b = pair[1];
+      let predicates = alloc::vec![
+        Predicate::BalanceEquals {
+          asset: asset_a,
+          threshold: Zero::zero(),
+        },
+        Predicate::BalanceBelow {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceNotEquals {
+          asset: asset_b,
+          threshold: One::one(),
+        },
+        Predicate::BalanceEquals {
+          asset: asset_b,
+          threshold: Zero::zero(),
+        },
+      ];
+      let task = if step_index == 0 {
+        ActorTask::SplitTransfer {
+          asset: T::FeeNativeAssetId::get(),
+          amount: AmountResolution::Fixed(One::one()),
+          legs: invalid_legs.clone(),
+        }
+      } else {
+        ActorTask::AddLiquidity {
+          asset_a,
+          asset_b,
+          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+          min_lp_out: One::one(),
+        }
+      };
+      steps
+        .try_push(Step {
+          precondition: Some(opening_all::<T>(predicates)),
+          task,
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("Opening-failure Contract fits");
+    }
+    let actor_id = bench_create_system_manual::<T>(41_615_625);
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("Opening-failure Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract).expect("Opening-failure geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("Opening-failure actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("Opening-failure tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("Opening-failure funding snapshot fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Opening-failure actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-failure service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("Opening-failure full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("Opening-failure control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(
+      control_context.opening_snapshot_entries,
+      step_count.saturating_sub(1).saturating_mul(2),
+    );
+    assert_eq!(
+      control_context.opening_predicate_results,
+      step_count.saturating_mul(T::MaxPredicatesPerStep::get()),
+    );
+    assert_eq!(control_context.predicate_evaluation_units, 8);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-failure hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-failure Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-failure maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-failure plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-failure inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    let hot = ActorHot::<T>::get(actor_id).expect("Opening-failure hot state persists");
+    assert_eq!(hot.cycle_state, CycleState::Idle);
+    assert_eq!(hot.unsuccessful_attempt_streak, 1);
+  }
+
+  /// Measures direct maximum-realizable fresh-Opening retry at every C6 tail count. Four true
+  /// Opening predicates per Step and two tail-Step Opening surfaces are captured before an
+  /// unfunded PercentageOfLastFunding Transfer suspends cursor zero into one wakeup.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_retry_max(t: Linear<0, 8>) {
+    let _ = WakeupBuckets::<T>::clear(u32::MAX, None);
+    let _ = WakeupPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorLen::<T>::clear(u32::MAX, None);
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let opening_asset_count = step_count
+      .checked_mul(2)
+      .expect("Opening-retry asset count fits");
+    let setup_asset_count = opening_asset_count.max(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_retry_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, setup_asset_count)
+      .expect("Opening-retry assets exist");
+    assert_eq!(assets.len(), setup_asset_count as usize);
+    let recipient: T::AccountId = account("opening_retry_recipient", 0, 0);
+    let mut steps = ContractSteps::<T>::default();
+    for (step_index, pair) in assets
+      .iter(/* deos-bypass: bounded-iter */)
+      .take(opening_asset_count as usize)
+      .copied()
+      .collect::<alloc::vec::Vec<_>>()
+      .chunks_exact(2)
+      .enumerate()
+    {
+      let asset_a = pair[0];
+      let asset_b = pair[1];
+      let predicates = alloc::vec![
+        Predicate::BalanceEquals {
+          asset: asset_a,
+          threshold: Zero::zero(),
+        },
+        Predicate::BalanceBelow {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceNotEquals {
+          asset: asset_b,
+          threshold: One::one(),
+        },
+        Predicate::BalanceEquals {
+          asset: asset_b,
+          threshold: Zero::zero(),
+        },
+      ];
+      let task = if step_index == 0 {
+        ActorTask::Transfer {
+          to: recipient.clone(),
+          asset: asset_a,
+          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        }
+      } else {
+        ActorTask::AddLiquidity {
+          asset_a,
+          asset_b,
+          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+          min_lp_out: One::one(),
+        }
+      };
+      steps
+        .try_push(Step {
+          precondition: Some(opening_all::<T>(predicates)),
+          task,
+          on_error: if step_index == 0 {
+            StepErrorPolicy::RetryLater {
+              max_attempts: T::MaxRetryAttempts::get(),
+            }
+          } else {
+            StepErrorPolicy::AbortCycle
+          },
+        })
+        .expect("Opening-retry Contract fits");
+    }
+    let actor_id = bench_create_system_manual::<T>(41_618_750);
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      steps,
+    )
+    .expect("Opening-retry Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract).expect("Opening-retry geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe.as_mut().expect("Opening-retry actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("Opening-retry tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("Opening-retry funding snapshot fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Opening-retry actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-retry service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("Opening-retry full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("Opening-retry control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(
+      control_context.opening_snapshot_entries,
+      step_count.saturating_sub(1).saturating_mul(2),
+    );
+    assert_eq!(
+      control_context.opening_predicate_results,
+      step_count
+        .checked_mul(T::MaxPredicatesPerStep::get())
+        .expect("Opening-retry predicate count fits"),
+    );
+    assert_eq!(control_context.predicate_evaluation_units, 8);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-retry hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-retry Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-retry maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-retry plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-retry inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Opening-retry run persists");
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.suspension, Some(SuspensionReason::FundingUnavailable));
+    assert_eq!(
+      run.opening_snapshot.len(),
+      step_count.saturating_sub(1).saturating_mul(2) as usize,
+    );
+    assert_eq!(
+      run.opening_predicate_results.len(),
+      step_count.saturating_mul(T::MaxPredicatesPerStep::get()) as usize,
+    );
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Suspended && hot.wakeup_pointer.is_some()
+    }));
+  }
+
+  /// Measures direct minimal-geometry fresh-Opening completion at every C6 tail count. StopCycle
+  /// terminates the cycle without an effect, Opening capture, run persistence, or placement.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_complete_min(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let mut steps = inert_contract_steps_of_len::<T>(step_count);
+    steps[0].task = ActorTask::StopCycle;
+    let actor_id = bench_create_system_manual::<T>(41_625_000);
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("minimal Opening-completion Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("minimal Opening-completion geometry stores");
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("minimal Opening-completion funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("minimal Opening-completion tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("minimal Opening-completion funding value fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("minimal Opening-completion actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("minimal Opening-completion service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("minimal Opening-completion full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("minimal Opening-completion control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(control_context.opening_snapshot_entries, 0);
+    assert_eq!(control_context.opening_predicate_results, 0);
+    assert_eq!(control_context.predicate_evaluation_units, 0);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("minimal Opening-completion hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("minimal Opening-completion Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("minimal Opening-completion maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("minimal Opening-completion plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("minimal Opening-completion inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert_eq!(QueueOccupancy::<T>::get(), 0);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Idle
+        && hot.queue_ticket.is_none()
+        && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures the direct minimal-geometry fresh-Opening progress path at every C6 tail count.
+  /// The current fixed-zero Transfer resolves to an effect-free skip; no Step contributes Opening
+  /// surfaces or predicates, while the conservative funding payload is fully materialized.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_progress_min(t: Linear<1, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let mut steps = inert_contract_steps_of_len::<T>(step_count);
+    let actor_id = bench_create_system_manual::<T>(41_650_000);
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    steps[0].task = ActorTask::Transfer {
+      to: actor,
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("minimal Opening-progress Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("minimal Opening-progress geometry stores");
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("minimal Opening-progress funding exists");
+      for asset in funding_assets {
+        funding
+          .funding_tracked_assets
+          .try_insert(asset)
+          .expect("minimal Opening-progress tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("minimal Opening-progress funding value fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("minimal Opening-progress actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("minimal Opening-progress service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("minimal Opening-progress full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("minimal Opening-progress control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(control_context.opening_snapshot_entries, 0);
+    assert_eq!(control_context.opening_predicate_results, 0);
+    assert_eq!(control_context.predicate_evaluation_units, 0);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("minimal Opening-progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("minimal Opening-progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("minimal Opening-progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("minimal Opening-progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("minimal Opening-progress inner atom commits");
+    }
+    let run =
+      ActorRunStateStore::<T>::get(actor_id).expect("minimal Opening-progress run persists");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.opening_snapshot.len(), 0);
+    assert_eq!(run.opening_predicate_results.len(), 0);
+    assert_eq!(
+      run.funding_snapshot.len(),
+      T::MaxFundingTrackedAssets::get() as usize,
+    );
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+  }
+
+  /// Measures direct maximum-realizable fresh-Opening Actor close at every C6 tail count. Opening
+  /// dependencies are captured before StopCycle reaches auto-close nonce one and removes the Actor.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_close_max(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let opening_asset_count = step_count
+      .checked_mul(2)
+      .expect("Opening-close asset count fits");
+    let setup_asset_count = opening_asset_count.max(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_close_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, setup_asset_count)
+      .expect("Opening-close assets exist");
+    let mut steps = ContractSteps::<T>::default();
+    for (step_index, pair) in assets
+      .iter(/* deos-bypass: bounded-iter */)
+      .take(opening_asset_count as usize)
+      .copied()
+      .collect::<alloc::vec::Vec<_>>()
+      .chunks_exact(2)
+      .enumerate()
+    {
+      let asset_a = pair[0];
+      let asset_b = pair[1];
+      let predicates = alloc::vec![
+        Predicate::BalanceEquals {
+          asset: asset_a,
+          threshold: Zero::zero(),
+        },
+        Predicate::BalanceBelow {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceNotEquals {
+          asset: asset_b,
+          threshold: One::one(),
+        },
+        Predicate::BalanceEquals {
+          asset: asset_b,
+          threshold: Zero::zero(),
+        },
+      ];
+      let task = if step_index == 0 {
+        ActorTask::StopCycle
+      } else {
+        ActorTask::AddLiquidity {
+          asset_a,
+          asset_b,
+          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+          min_lp_out: One::one(),
+        }
+      };
+      steps
+        .try_push(Step {
+          precondition: Some(opening_all::<T>(predicates)),
+          task,
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("Opening-close Contract fits");
+    }
+    let actor_id = bench_create_system_manual::<T>(41_671_875);
+    let mut contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("Opening-close Contract exists");
+    contract.auto_close_at_cycle_nonce = Some(1);
+    Pallet::<T>::store_actor_contract(actor_id, contract).expect("Opening-close geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe.as_mut().expect("Opening-close actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("Opening-close tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("Opening-close funding snapshot fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Opening-close actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-close service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("Opening-close full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("Opening-close control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(
+      control_context.opening_snapshot_entries,
+      step_count.saturating_sub(1).saturating_mul(2),
+    );
+    assert_eq!(
+      control_context.opening_predicate_results,
+      step_count.saturating_mul(T::MaxPredicatesPerStep::get()),
+    );
+    assert_eq!(control_context.predicate_evaluation_units, 8);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-close hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-close Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-close maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-close plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-close inner atom commits");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_none());
+    assert!(ActorIdentities::<T>::get(actor_id).is_none());
+    assert!(ActorContractHeads::<T>::get(actor_id).is_none());
+    assert_eq!(
+      ActorContractTailChunks::<T>::iter_prefix(actor_id).count(),
+      0,
+    );
+  }
+
+  /// Measures direct maximum-geometry fresh-Opening completion at every C6 tail count. Every
+  /// authored Step contributes two Opening surfaces and four true Opening predicates; Step 0
+  /// executes effect-free StopCycle and leaves no run or placement.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_complete_max(t: Linear<0, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let opening_asset_count = step_count
+      .checked_mul(2)
+      .expect("Opening-completion asset count fits");
+    let setup_asset_count = opening_asset_count.max(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_complete_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, setup_asset_count)
+      .expect("Opening-completion assets exist");
+    assert_eq!(assets.len(), setup_asset_count as usize);
+    let mut steps = ContractSteps::<T>::default();
+    for (step_index, pair) in assets
+      .iter(/* deos-bypass: bounded-iter */)
+      .take(opening_asset_count as usize)
+      .copied()
+      .collect::<alloc::vec::Vec<_>>()
+      .chunks_exact(2)
+      .enumerate()
+    {
+      let asset_a = pair[0];
+      let asset_b = pair[1];
+      let predicates = alloc::vec![
+        Predicate::BalanceEquals {
+          asset: asset_a,
+          threshold: Zero::zero(),
+        },
+        Predicate::BalanceBelow {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceNotEquals {
+          asset: asset_b,
+          threshold: One::one(),
+        },
+        Predicate::BalanceEquals {
+          asset: asset_b,
+          threshold: Zero::zero(),
+        },
+      ];
+      let task = if step_index == 0 {
+        ActorTask::StopCycle
+      } else {
+        ActorTask::AddLiquidity {
+          asset_a,
+          asset_b,
+          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+          min_lp_out: One::one(),
+        }
+      };
+      steps
+        .try_push(Step {
+          precondition: Some(opening_all::<T>(predicates)),
+          task,
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("Opening-completion Contract fits");
+    }
+    assert_eq!(steps.len(), step_count as usize);
+    let actor_id = bench_create_system_manual::<T>(41_675_000);
+    let contract = system_contract::<T>(
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 0,
+      },
+      steps,
+    )
+    .expect("Opening-completion Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Opening-completion geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("Opening-completion actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("Opening-completion tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("Opening-completion funding snapshot fits");
+      }
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Opening-completion actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-completion service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("Opening-completion full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("Opening-completion control context exists");
+    assert_eq!(control_context.opening_tail_chunks, tail_chunks);
+    assert_eq!(
+      control_context.opening_snapshot_entries,
+      step_count.saturating_sub(1).saturating_mul(2),
+    );
+    assert_eq!(
+      control_context.opening_predicate_results,
+      step_count
+        .checked_mul(T::MaxPredicatesPerStep::get())
+        .expect("Opening-completion predicate count fits"),
+    );
+    assert_eq!(control_context.predicate_evaluation_units, 8);
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+    );
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-completion hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-completion Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-completion maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-completion plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-completion inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert_eq!(QueueOccupancy::<T>::get(), 0);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Idle
+        && hot.queue_ticket.is_none()
+        && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures direct maximum-geometry fresh-Opening progress after queue discovery, complete state
+  /// loading, and physical head consumption. Each tail geometry materializes the maximum realizable Contract
+  /// for that chunk count, maximum funding payload, four Opening predicates and two Opening amount
+  /// surfaces per Step, and effect-free false evaluation before causal FIFO successor placement.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_opening_progress_max(t: Linear<1, 8>) {
+    let tail_chunks = t.min(
+      T::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+    );
+    let step_count = 1u32
+      .saturating_add(tail_chunks.saturating_mul(MAX_STEPS_PER_TAIL_CHUNK))
+      .min(T::MaxContractSteps::get());
+    let opening_asset_count = step_count
+      .checked_mul(2)
+      .expect("Opening-progress asset count fits");
+    let setup_asset_count = opening_asset_count.max(T::MaxFundingTrackedAssets::get());
+    let asset_owner: T::AccountId = account("opening_inner_assets", 0, 0);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&asset_owner, setup_asset_count)
+      .expect("Opening-progress assets exist");
+    assert_eq!(assets.len(), setup_asset_count as usize);
+    let mut steps = ContractSteps::<T>::default();
+    for pair in assets
+      .iter(/* deos-bypass: bounded-iter */)
+      .take(opening_asset_count as usize)
+      .copied()
+      .collect::<alloc::vec::Vec<_>>()
+      .chunks_exact(2)
+    {
+      let asset_a = pair[0];
+      let asset_b = pair[1];
+      let predicates = alloc::vec![
+        Predicate::BalanceAbove {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceBelow {
+          asset: asset_a,
+          threshold: One::one(),
+        },
+        Predicate::BalanceEquals {
+          asset: asset_b,
+          threshold: Zero::zero(),
+        },
+        Predicate::BalanceNotEquals {
+          asset: asset_b,
+          threshold: One::one(),
+        },
+      ];
+      steps
+        .try_push(Step {
+          precondition: Some(opening_all::<T>(predicates)),
+          task: ActorTask::AddLiquidity {
+            asset_a,
+            asset_b,
+            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+            min_lp_out: One::one(),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        })
+        .expect("Opening-progress Contract fits");
+    }
+    assert_eq!(steps.len(), step_count as usize);
+    let actor_id = bench_create_system_manual::<T>(41_700_000);
+    let schedule = Schedule {
+      trigger: Trigger::manual(),
+      cooldown_blocks: 0,
+    };
+    let contract = system_contract::<T>(schedule, steps).expect("Opening-progress Contract exists");
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Opening-progress geometry stores");
+    ActorFunding::<T>::mutate(actor_id, |maybe| {
+      let funding = maybe
+        .as_mut()
+        .expect("Opening-progress actor funding exists");
+      for asset in assets
+        .iter(/* deos-bypass: bounded-iter */)
+        .take(T::MaxFundingTrackedAssets::get() as usize)
+      {
+        funding
+          .funding_tracked_assets
+          .try_insert(*asset)
+          .expect("Opening-progress tracked asset fits");
+        funding
+          .funding_accumulated
+          .try_insert(*asset, One::one())
+          .expect("Opening-progress funding snapshot fits");
+      }
+    });
+    assert_eq!(
+      ActorFunding::<T>::get(actor_id)
+        .expect("Opening-progress funding exists")
+        .funding_accumulated
+        .len(),
+      T::MaxFundingTrackedAssets::get() as usize,
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Opening-progress actor is active");
+      hot.pending_signal = true;
+      hot.queue_ticket = Some(9);
+    });
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-progress service state is coherent");
+    let LoadedActorStateOf::Active(full_state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("Opening-progress full state exists");
+    };
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      full_state.identity,
+      full_state.hot,
+      full_state.contract,
+    );
+    let control_context = Pallet::<T>::execution_step_control_weight_context(
+      &execution_instance,
+      state.run_state.as_ref(),
+      &loaded_step,
+    )
+    .expect("Opening-progress control context exists");
+    assert_eq!(
+      control_context.opening_tail_chunks, tail_chunks,
+      "Opening-progress context carries authored tail geometry",
+    );
+    assert_eq!(
+      T::StepControlWeight::maximum_control_weight(control_context, &loaded_step.step),
+      Some(loaded_step.resources.control),
+      "Opening-progress execution context matches admission",
+    );
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-progress inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Opening-progress run persists");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.opening_snapshot.len(), opening_asset_count as usize);
+    assert_eq!(
+      run.funding_snapshot.len(),
+      T::MaxFundingTrackedAssets::get() as usize,
+    );
+    assert_eq!(
+      run.opening_predicate_results.len(),
+      step_count
+        .checked_mul(T::MaxPredicatesPerStep::get())
+        .expect("Opening-progress predicate count fits") as usize,
+    );
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+  }
+
+  /// Measures the direct inner Running-final control owner after queue discovery, current-state
+  /// loading, and physical head consumption. The measured atom builds the exact carried plan,
+  /// evaluates one current Step, commits completion, validates actual evidence, and performs
+  /// post-placement. Task effect Weight is zero for StopCycle and false-predicate branches.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_running_complete(s: Linear<1, 4>, p: Linear<0, 4>) {
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(40_600_000, inert_contract_steps_of_len::<T>(1 + s));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let predicate_count = p.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Running predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Running benchmark Contract exists");
+    if predicate_count > 0 {
+      let predicates = assets
+        .into_iter()
+        .map(|asset| Predicate::BalanceAbove {
+          asset,
+          threshold: One::one(),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[s as usize].precondition = Some(current_any::<T>(predicates));
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Running benchmark Contract remains admitted");
+    install_run_state::<T>(actor_id, 0);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Running benchmark run exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = s;
+      run.opening_predicate_cursor = 0;
+      run.unsuccessful_attempts_at_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = None;
+      run.last_committed_step_block = Some(1u32.into());
+      run.eligible_at = now;
+      run.suspension = None;
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Running benchmark hot state exists");
+      hot.cycle_state = CycleState::Running;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Running benchmark service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Running benchmark hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Running benchmark Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Running benchmark maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Running benchmark plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Running benchmark inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert_eq!(
+      ActorIdentities::<T>::get(actor_id)
+        .expect("Running benchmark identity remains")
+        .cycle_nonce,
+      1,
+    );
+  }
+
+  /// Measures the direct inner Running-progress owner through causal FIFO successor placement.
+  /// A fixed-zero Transfer or false current predicates skip without Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_running_progress(s: Linear<2, 4>, p: Linear<0, 4>) {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(40_700_000, inert_contract_steps_of_len::<T>(1 + s));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let predicate_count = p.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Running-progress predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Running-progress Contract exists");
+    contract.steps[1].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    if predicate_count > 0 {
+      let predicates = assets
+        .into_iter()
+        .map(|asset| Predicate::BalanceAbove {
+          asset,
+          threshold: One::one(),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[1].precondition = Some(current_any::<T>(predicates));
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Running-progress Contract remains admitted");
+    install_run_state::<T>(actor_id, 0);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Running-progress run exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = 1;
+      run.opening_predicate_cursor = 0;
+      run.unsuccessful_attempts_at_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = None;
+      run.last_committed_step_block = Some(1u32.into());
+      run.eligible_at = now;
+      run.suspension = None;
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Running-progress hot state exists");
+      hot.cycle_state = CycleState::Running;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Running-progress service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Running-progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Running-progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Running-progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Running-progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Running-progress inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Running-progress run remains");
+    assert_eq!(run.cursor, 2);
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+  }
+
+  /// Measures the direct inner Suspended-tail retry owner through durable wakeup placement.
+  /// Current predicates are true and an unfunded fixed Transfer yields FundingUnavailable before
+  /// Task effect invocation, preserving retry classification without effect contamination.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_tail_retry(s: Linear<1, 4>, p: Linear<0, 4>) {
+    let _ = WakeupBuckets::<T>::clear(u32::MAX, None);
+    let _ = WakeupPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorLen::<T>::clear(u32::MAX, None);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(40_800_000, inert_contract_steps_of_len::<T>(1 + s));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let predicate_count = p.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-tail predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Suspended-tail Contract exists");
+    contract.steps[s as usize].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(One::one()),
+    };
+    contract.steps[s as usize].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let predicates = assets
+        .into_iter()
+        .map(|asset| Predicate::BalanceBelow {
+          asset,
+          threshold: One::one(),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[s as usize].precondition = Some(current_any::<T>(predicates));
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-tail Contract remains admitted");
+    install_run_state::<T>(actor_id, 0);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Suspended-tail run exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = s;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = Some(0u32.into());
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Suspended-tail hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-tail service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-tail hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-tail Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-tail maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-tail plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-tail inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Suspended-tail run remains");
+    assert_eq!(run.cursor, s);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 2);
+    assert_eq!(run.last_attempt_block, now);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+  }
+
+  /// Measures the direct inner Suspended-tail successful-completion owner.
+  /// A fixed-zero Transfer or false current predicates skips without Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_tail_complete(s: Linear<1, 4>, p: Linear<0, 4>) {
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(40_900_000, inert_contract_steps_of_len::<T>(1 + s));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let predicate_count = p.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-complete predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Suspended-complete Contract exists");
+    contract.steps[s as usize].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[s as usize].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let predicates = assets
+        .into_iter()
+        .map(|asset| Predicate::BalanceAbove {
+          asset,
+          threshold: One::one(),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[s as usize].precondition = Some(current_any::<T>(predicates));
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-complete Contract remains admitted");
+    install_run_state::<T>(actor_id, 0);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Suspended-complete run exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = s;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = Some(0u32.into());
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Suspended-complete hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-complete service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-complete hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-complete Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-complete maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-complete plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-complete inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Idle
+        && hot.queue_ticket.is_none()
+        && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures the direct inner Suspended-tail successful-progress owner through causal FIFO
+  /// successor placement. A fixed-zero Transfer or false current predicates skips without Task
+  /// effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_tail_progress(s: Linear<2, 4>, p: Linear<0, 4>) {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_000_000, inert_contract_steps_of_len::<T>(1 + s));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let predicate_count = p.min(T::MaxPredicatesPerStep::get());
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-progress predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Suspended-progress Contract exists");
+    contract.steps[1].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[1].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let predicates = assets
+        .into_iter()
+        .map(|asset| Predicate::BalanceAbove {
+          asset,
+          threshold: One::one(),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[1].precondition = Some(current_any::<T>(predicates));
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-progress Contract remains admitted");
+    install_run_state::<T>(actor_id, 0);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Suspended-progress run exists");
+      maximize_run_state_geometry::<T>(run);
+      run.cursor = 1;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = Some(0u32.into());
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Suspended-progress hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-progress service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-progress inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Suspended-progress run remains");
+    assert_eq!(run.cursor, 2);
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+    assert!(
+      ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.cycle_state == CycleState::Running && hot.queue_ticket.is_some()
+      })
+    );
+  }
+
+  /// Measures the direct inner Suspended-head retry owner across retained immutable payload
+  /// geometry and current predicates. An unfunded fixed Transfer yields FundingUnavailable before
+  /// Task effect invocation.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_retry(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+    p: Linear<0, 4>,
+  ) {
+    let _ = WakeupBuckets::<T>::clear(u32::MAX, None);
+    let _ = WakeupPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorLen::<T>::clear(u32::MAX, None);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_100_000, inert_contract_steps_of_len::<T>(1));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let evaluation_units = p.min(T::MaxPredicatesPerStep::get().saturating_mul(2));
+    let opening_count = evaluation_units.saturating_sub(T::MaxPredicatesPerStep::get());
+    let current_count = evaluation_units.saturating_sub(opening_count.saturating_mul(2));
+    let predicate_count = opening_count.saturating_add(current_count);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-head predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Suspended-head Contract exists");
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(One::one()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let clause = assets
+        .into_iter()
+        .enumerate()
+        .map(|(index, asset)| TimedPredicate {
+          timing: if index < opening_count as usize {
+            ObservationTiming::Opening
+          } else {
+            ObservationTiming::Current
+          },
+          predicate: Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
+          },
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[0].precondition = Some(Precondition {
+        clauses: BoundedVec::try_from(alloc::vec![
+          BoundedVec::try_from(clause).expect("Suspended-head predicates fit"),
+        ])
+        .expect("Suspended-head clause fits"),
+      });
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-head Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r
+      .min(T::MaxOpeningPredicateResults::get())
+      .max(opening_count);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Suspended-head run exists");
+      for index in 0..result_count {
+        run
+          .opening_predicate_results
+          .try_push(if index < opening_count {
+            Ok(true)
+          } else if index % 2 == 0 {
+            Ok(true)
+          } else {
+            Err(PredicateError::InvalidObservation)
+          })
+          .expect("Suspended-head Opening result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Suspended-head funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe.as_mut().expect("Suspended-head hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-head service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-head hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-head Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-head maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-head plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-head inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Suspended-head run remains");
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 2);
+    assert_eq!(run.last_attempt_block, now);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+  }
+
+  /// Measures the direct inner current-predicate Suspended-head completion owner across retained
+  /// immutable payload geometry. A fixed-zero Transfer or false current predicates skips without
+  /// Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_complete(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+    p: Linear<0, 4>,
+  ) {
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_200_000, inert_contract_steps_of_len::<T>(1));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let evaluation_units = p.min(T::MaxPredicatesPerStep::get().saturating_mul(2));
+    let opening_count = evaluation_units.saturating_sub(T::MaxPredicatesPerStep::get());
+    let current_count = evaluation_units.saturating_sub(opening_count.saturating_mul(2));
+    let predicate_count = opening_count.saturating_add(current_count);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-head completion predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract = Pallet::<T>::load_actor_contract(actor_id)
+      .expect("Suspended-head completion Contract exists");
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let clause = assets
+        .into_iter()
+        .enumerate()
+        .map(|(index, asset)| TimedPredicate {
+          timing: if index < opening_count as usize {
+            ObservationTiming::Opening
+          } else {
+            ObservationTiming::Current
+          },
+          predicate: if index + 1 == predicate_count as usize && current_count > 0 {
+            Predicate::BalanceAbove {
+              asset,
+              threshold: One::one(),
+            }
+          } else {
+            Predicate::BalanceBelow {
+              asset,
+              threshold: One::one(),
+            }
+          },
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[0].precondition = Some(Precondition {
+        clauses: BoundedVec::try_from(alloc::vec![
+          BoundedVec::try_from(clause).expect("Suspended-head completion predicates fit"),
+        ])
+        .expect("Suspended-head completion clause fits"),
+      });
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-head completion Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r
+      .min(T::MaxOpeningPredicateResults::get())
+      .max(opening_count);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe
+        .as_mut()
+        .expect("Suspended-head completion run exists");
+      for index in 0..result_count {
+        let frozen = if current_count == 0 && index + 1 == opening_count {
+          Ok(false)
+        } else if index < opening_count || index % 2 == 0 {
+          Ok(true)
+        } else {
+          Err(PredicateError::InvalidObservation)
+        };
+        run
+          .opening_predicate_results
+          .try_push(frozen)
+          .expect("Suspended-head completion Opening result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Suspended-head completion funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("Suspended-head completion hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-head completion service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-head completion hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-head completion Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-head completion maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-head completion plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-head completion inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Idle
+        && hot.queue_ticket.is_none()
+        && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures the direct inner current-predicate Suspended-head progress owner across retained
+  /// immutable payload geometry and causal FIFO successor placement. A fixed-zero Transfer or
+  /// false current predicates skips without Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_progress(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+    p: Linear<0, 4>,
+  ) {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_300_000, inert_contract_steps_of_len::<T>(2));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let evaluation_units = p.min(T::MaxPredicatesPerStep::get().saturating_mul(2));
+    let opening_count = evaluation_units.saturating_sub(T::MaxPredicatesPerStep::get());
+    let current_count = evaluation_units.saturating_sub(opening_count.saturating_mul(2));
+    let predicate_count = opening_count.saturating_add(current_count);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, predicate_count)
+      .expect("Suspended-head progress predicate assets exist");
+    assert_eq!(assets.len(), predicate_count as usize);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Suspended-head progress Contract exists");
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    if predicate_count > 0 {
+      let clause = assets
+        .into_iter()
+        .enumerate()
+        .map(|(index, asset)| TimedPredicate {
+          timing: if index < opening_count as usize {
+            ObservationTiming::Opening
+          } else {
+            ObservationTiming::Current
+          },
+          predicate: if index + 1 == predicate_count as usize && current_count > 0 {
+            Predicate::BalanceAbove {
+              asset,
+              threshold: One::one(),
+            }
+          } else {
+            Predicate::BalanceBelow {
+              asset,
+              threshold: One::one(),
+            }
+          },
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      contract.steps[0].precondition = Some(Precondition {
+        clauses: BoundedVec::try_from(alloc::vec![
+          BoundedVec::try_from(clause).expect("Suspended-head progress predicates fit"),
+        ])
+        .expect("Suspended-head progress clause fits"),
+      });
+    }
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Suspended-head progress Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r
+      .min(T::MaxOpeningPredicateResults::get())
+      .max(opening_count);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Suspended-head progress run exists");
+      for index in 0..result_count {
+        let frozen = if current_count == 0 && index + 1 == opening_count {
+          Ok(false)
+        } else if index < opening_count || index % 2 == 0 {
+          Ok(true)
+        } else {
+          Err(PredicateError::InvalidObservation)
+        };
+        run
+          .opening_predicate_results
+          .try_push(frozen)
+          .expect("Suspended-head progress Opening result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Suspended-head progress funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("Suspended-head progress hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Suspended-head progress service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Suspended-head progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Suspended-head progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Suspended-head progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Suspended-head progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Suspended-head progress inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Suspended-head progress run remains");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+    assert!(
+      ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.cycle_state == CycleState::Running && hot.queue_ticket.is_some()
+      })
+    );
+  }
+
+  /// Measures the direct inner Opening-heavy Suspended-head retry owner. The fixed worst
+  /// realizable mixed composition is one frozen Opening predicate plus three Current predicates;
+  /// all evaluate true before an unfunded Transfer yields FundingUnavailable without Task effect.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_opening_retry(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+  ) {
+    let _ = WakeupBuckets::<T>::clear(u32::MAX, None);
+    let _ = WakeupPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorPages::<T>::clear(u32::MAX, None);
+    let _ = WakeupCursorLen::<T>::clear(u32::MAX, None);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_400_000, inert_contract_steps_of_len::<T>(1));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, 4)
+      .expect("Opening-heavy retry predicate assets exist");
+    assert_eq!(assets.len(), 4);
+    let clause = assets
+      .into_iter()
+      .enumerate()
+      .map(|(index, asset)| TimedPredicate {
+        timing: if index == 0 {
+          ObservationTiming::Opening
+        } else {
+          ObservationTiming::Current
+        },
+        predicate: Predicate::BalanceBelow {
+          asset,
+          threshold: One::one(),
+        },
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let precondition = Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![
+        BoundedVec::try_from(clause).expect("Opening-heavy retry predicates fit"),
+      ])
+      .expect("Opening-heavy retry clause fits"),
+    };
+    assert_eq!(precondition.evaluation_units(), 5);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Opening-heavy retry Contract exists");
+    contract.steps[0].precondition = Some(precondition);
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(One::one()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Opening-heavy retry Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r.min(T::MaxOpeningPredicateResults::get()).max(1);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Opening-heavy retry run exists");
+      for index in 0..result_count {
+        run
+          .opening_predicate_results
+          .try_push(if index == 0 {
+            Ok(true)
+          } else if index % 2 == 0 {
+            Ok(true)
+          } else {
+            Err(PredicateError::InvalidObservation)
+          })
+          .expect("Opening-heavy retry result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Opening-heavy retry funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("Opening-heavy retry hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-heavy retry service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-heavy retry hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-heavy retry Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-heavy retry maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-heavy retry plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-heavy retry inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Opening-heavy retry run remains");
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 2);
+    assert_eq!(run.last_attempt_block, now);
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+  }
+
+  /// Measures the direct inner Opening-heavy Suspended-head completion owner. The fixed worst
+  /// mixed composition is one frozen Opening predicate plus three Current predicates; the final
+  /// Current predicate is false so completion commits without Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_opening_complete(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+  ) {
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_500_000, inert_contract_steps_of_len::<T>(1));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, 4)
+      .expect("Opening-heavy completion predicate assets exist");
+    assert_eq!(assets.len(), 4);
+    let clause = assets
+      .into_iter()
+      .enumerate()
+      .map(|(index, asset)| TimedPredicate {
+        timing: if index == 0 {
+          ObservationTiming::Opening
+        } else {
+          ObservationTiming::Current
+        },
+        predicate: if index == 3 {
+          Predicate::BalanceAbove {
+            asset,
+            threshold: One::one(),
+          }
+        } else {
+          Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
+          }
+        },
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let precondition = Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![
+        BoundedVec::try_from(clause).expect("Opening-heavy completion predicates fit"),
+      ])
+      .expect("Opening-heavy completion clause fits"),
+    };
+    assert_eq!(precondition.evaluation_units(), 5);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Opening-heavy completion Contract exists");
+    contract.steps[0].precondition = Some(precondition);
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Opening-heavy completion Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r.min(T::MaxOpeningPredicateResults::get()).max(1);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Opening-heavy completion run exists");
+      for index in 0..result_count {
+        run
+          .opening_predicate_results
+          .try_push(if index == 0 {
+            Ok(true)
+          } else if index % 2 == 0 {
+            Ok(true)
+          } else {
+            Err(PredicateError::InvalidObservation)
+          })
+          .expect("Opening-heavy completion result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Opening-heavy completion funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("Opening-heavy completion hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-heavy completion service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-heavy completion hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-heavy completion Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-heavy completion maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-heavy completion plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-heavy completion inner atom commits");
+    }
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+      hot.cycle_state == CycleState::Idle
+        && hot.queue_ticket.is_none()
+        && hot.wakeup_pointer.is_none()
+    }));
+  }
+
+  /// Measures the direct inner Opening-heavy Suspended-head progress owner. The fixed worst mixed
+  /// composition is one frozen Opening predicate plus three Current predicates; the final Current
+  /// predicate is false before causal FIFO successor placement, without Task effect execution.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_inner_suspended_head_opening_progress(
+    n: Linear<0, 64>,
+    r: Linear<0, 128>,
+    f: Linear<0, 40>,
+  ) {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let actor_id =
+      bench_create_system_with_plan::<T>(41_600_000, inert_contract_steps_of_len::<T>(2));
+    let actor = Pallet::<T>::sovereign_account_id_system(actor_id);
+    let assets = T::BenchmarkHelper::setup_predicate_assets(&actor, 4)
+      .expect("Opening-heavy progress predicate assets exist");
+    assert_eq!(assets.len(), 4);
+    let clause = assets
+      .into_iter()
+      .enumerate()
+      .map(|(index, asset)| TimedPredicate {
+        timing: if index == 0 {
+          ObservationTiming::Opening
+        } else {
+          ObservationTiming::Current
+        },
+        predicate: if index == 3 {
+          Predicate::BalanceAbove {
+            asset,
+            threshold: One::one(),
+          }
+        } else {
+          Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
+          }
+        },
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let precondition = Precondition {
+      clauses: BoundedVec::try_from(alloc::vec![
+        BoundedVec::try_from(clause).expect("Opening-heavy progress predicates fit"),
+      ])
+      .expect("Opening-heavy progress clause fits"),
+    };
+    assert_eq!(precondition.evaluation_units(), 5);
+    let mut contract =
+      Pallet::<T>::load_actor_contract(actor_id).expect("Opening-heavy progress Contract exists");
+    contract.steps[0].precondition = Some(precondition);
+    contract.steps[0].task = ActorTask::Transfer {
+      to: actor.clone(),
+      asset: T::FeeNativeAssetId::get(),
+      amount: AmountResolution::Fixed(Zero::zero()),
+    };
+    contract.steps[0].on_error = StepErrorPolicy::RetryLater {
+      max_attempts: T::MaxRetryAttempts::get(),
+    };
+    Pallet::<T>::store_actor_contract(actor_id, contract)
+      .expect("Opening-heavy progress Contract remains admitted");
+    let snapshot_count = n.min(T::MaxOpeningSnapshotEntries::get());
+    let result_count = r.min(T::MaxOpeningPredicateResults::get()).max(1);
+    let funding_count = f.min(T::MaxFundingTrackedAssets::get());
+    install_run_state::<T>(actor_id, snapshot_count);
+    ActorRunStateStore::<T>::mutate(actor_id, |maybe| {
+      let run = maybe.as_mut().expect("Opening-heavy progress run exists");
+      for index in 0..result_count {
+        run
+          .opening_predicate_results
+          .try_push(if index == 0 {
+            Ok(true)
+          } else if index % 2 == 0 {
+            Ok(true)
+          } else {
+            Err(PredicateError::InvalidObservation)
+          })
+          .expect("Opening-heavy progress result fits");
+      }
+      for asset in T::BenchmarkHelper::funding_assets(funding_count) {
+        run
+          .funding_snapshot
+          .try_insert(asset, One::one())
+          .expect("Opening-heavy progress funding entry fits");
+      }
+      assert_eq!(run.opening_snapshot.len() as u32, snapshot_count);
+      assert_eq!(run.opening_predicate_results.len() as u32, result_count);
+      assert_eq!(run.funding_snapshot.len() as u32, funding_count);
+      run.cursor = 0;
+      run.opening_predicate_cursor = 0;
+      run.cumulative_outcomes = OutcomeTotals::default();
+      run.last_step_outcome = Some(StepOutcome::FundingUnavailable);
+      run.last_attempt_block = 1u32.into();
+      run.last_committed_step_block = None;
+      run.eligible_at = now;
+      run.suspension = Some(SuspensionReason::FundingUnavailable);
+    });
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      let hot = maybe
+        .as_mut()
+        .expect("Opening-heavy progress hot state exists");
+      hot.cycle_state = CycleState::Suspended;
+      hot.queue_ticket = Some(9);
+      hot.wakeup_pointer = None;
+    });
+    let (state, admission, loaded_step) = Pallet::<T>::load_current_step_service_state(actor_id)
+      .expect("Opening-heavy progress service state is coherent");
+    let execution_instance = Pallet::<T>::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    ActorHot::<T>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Opening-heavy progress hot state remains")
+        .queue_ticket = None;
+    });
+    #[block]
+    {
+      let ticket = Pallet::<T>::build_actor_step_ticket(
+        actor_id,
+        9,
+        now,
+        &state.identity,
+        &state.hot,
+        state.run_state.as_ref(),
+        &admission,
+      )
+      .expect("Opening-heavy progress Step ticket builds");
+      let maximum_fee = Pallet::<T>::maximum_current_step_fee(
+        state.identity.actor_class.actor_type(),
+        loaded_step.resources,
+      )
+      .expect("Opening-heavy progress maximum fee exists");
+      let plan = Pallet::<T>::build_current_step_plan(
+        actor_id,
+        state.identity,
+        state.hot,
+        state.run_state,
+        state.funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+      .expect("Opening-heavy progress plan builds");
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Pallet::<T>::execute_current_step_and_place(actor_id, execution_instance, plan, now) {
+          Ok(evidence) => {
+            core::hint::black_box(evidence);
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+              (),
+              AttemptTransactionError,
+            >(()))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+      .expect("Opening-heavy progress inner atom commits");
+    }
+    let run = ActorRunStateStore::<T>::get(actor_id).expect("Opening-heavy progress run remains");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.last_committed_step_block, Some(now));
+    assert_eq!(QueueOccupancy::<T>::get(), 1);
+    assert!(
+      ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.cycle_state == CycleState::Running && hot.queue_ticket.is_some()
+      })
+    );
   }
 
   /// Measures actual scheduler admission and complete execution for up to 1,000
@@ -2618,11 +7269,11 @@ mod benches {
     let identity_template =
       ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
     let contract_template =
-      ActorContracts::<T>::get(template_id).expect("benchmark contract template");
+      Pallet::<T>::load_actor_contract(template_id).expect("benchmark contract template");
     let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
     ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
-    ActorContracts::<T>::remove(template_id);
+    Pallet::<T>::remove_actor_contract(template_id).expect("benchmark template Contract removes");
     ActorFunding::<T>::remove(template_id);
 
     let first_id = 41_000_000u64;
@@ -2636,7 +7287,8 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorContracts::<T>::insert(actor_id, contract_template.clone());
+      Pallet::<T>::store_actor_contract(actor_id, contract_template.clone())
+        .expect("benchmark queued Contract remains admitted");
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2683,7 +7335,9 @@ mod benches {
       ActorIdentities::<T>::take(system_template_id).expect("System identity template");
     let system_hot = ActorHot::<T>::take(system_template_id).expect("System hot template");
     let contract_template =
-      ActorContracts::<T>::take(system_template_id).expect("System contract template");
+      Pallet::<T>::load_actor_contract(system_template_id).expect("System contract template");
+    Pallet::<T>::remove_actor_contract(system_template_id)
+      .expect("System template Contract removes");
     let funding_template =
       ActorFunding::<T>::take(system_template_id).expect("System funding template");
     let first_id = 43_000_000u64;
@@ -2695,7 +7349,7 @@ mod benches {
         let template_id = bench_create_user::<T>(owner);
         let identity = ActorIdentities::<T>::take(template_id).expect("User identity template");
         ActorHot::<T>::remove(template_id);
-        ActorContracts::<T>::remove(template_id);
+        Pallet::<T>::remove_actor_contract(template_id).expect("User template Contract removes");
         ActorFunding::<T>::remove(template_id);
         identity
       } else {
@@ -2708,7 +7362,8 @@ mod benches {
       hot.queue_ticket = None;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorContracts::<T>::insert(actor_id, contract_template.clone());
+      Pallet::<T>::store_actor_contract(actor_id, contract_template.clone())
+        .expect("benchmark mixed-class Contract remains admitted");
       ActorFunding::<T>::insert(actor_id, funding_template.clone());
       assert!(Pallet::<T>::paged_enqueue(actor_id));
     }
@@ -2746,59 +7401,76 @@ mod benches {
   }
 
   #[benchmark(pov_mode = Measured)]
-  fn continuation_suspend(s: Linear<0, 20>) {
-    let actor_id = bench_create_system_manual::<T>(50_000_000);
-    install_continuation::<T>(actor_id, s);
-    let state = ContinuationStateStore::<T>::take(actor_id).expect("benchmark continuation exists");
-    ActorHot::<T>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("benchmark actor hot state exists")
-        .cycle_state = CycleState::Idle;
-    });
+  fn run_progress() {
+    let actor_id =
+      bench_create_system_with_plan::<T>(49_999_999, inert_contract_steps_of_len::<T>(2));
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    let mut maximum = ActorRunStateStore::<T>::take(actor_id).expect("benchmark Actor run exists");
+    maximize_run_state_geometry::<T>(&mut maximum);
+    ActorRunStateStore::<T>::insert(actor_id, maximum);
+    let mut state = ActorRunStateStore::<T>::get(actor_id).expect("maximum Actor run exists");
+    state.cursor = 1;
+    state.unsuccessful_attempts_at_cursor = 0;
+    state.last_attempt_block = 1u32.into();
+    state.last_committed_step_block = Some(1u32.into());
+    state.eligible_at = 2u32.into();
+    state.suspension = None;
     #[block]
     {
-      Pallet::<T>::persist_continuation_suspension(actor_id, 1, state, SuspensionReason::Temporary)
-        .expect("benchmark suspension must persist");
+      Pallet::<T>::persist_run_progress(actor_id, state)
+        .expect("benchmark Running progress must persist");
     }
-    assert!(ContinuationStateStore::<T>::contains_key(actor_id));
+    assert!(ActorRunStateStore::<T>::contains_key(actor_id));
+    assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.cycle_state == CycleState::Running));
   }
 
   #[benchmark(pov_mode = Measured)]
-  fn continuation_retry() {
-    let actor_id = bench_create_system_manual::<T>(50_000_001);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+  fn run_suspend() {
+    let actor_id = bench_create_system_manual::<T>(50_000_000);
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    let mut maximum = ActorRunStateStore::<T>::take(actor_id).expect("benchmark Actor run exists");
+    maximize_run_state_geometry::<T>(&mut maximum);
+    ActorRunStateStore::<T>::insert(actor_id, maximum);
+    let state = ActorRunStateStore::<T>::get(actor_id).expect("maximum Actor run exists");
     #[block]
     {
-      core::hint::black_box(Pallet::<T>::begin_continuation_attempt(
-        actor_id,
-        1,
-        2u32.into(),
-      ));
+      Pallet::<T>::persist_run_suspension(actor_id, state)
+        .expect("benchmark suspension must persist");
+    }
+    assert!(ActorRunStateStore::<T>::contains_key(actor_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn run_retry() {
+    let actor_id = bench_create_system_manual::<T>(50_000_001);
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::begin_run_attempt(actor_id, 2u32.into()));
     }
     assert_eq!(
-      ContinuationStateStore::<T>::get(actor_id)
-        .expect("benchmark continuation remains")
+      ActorRunStateStore::<T>::get(actor_id)
+        .expect("benchmark Actor run remains")
         .last_attempt_block,
       2u32.into()
     );
   }
 
   #[benchmark(pov_mode = Measured)]
-  fn continuation_complete() {
+  fn run_complete() {
     let actor_id = bench_create_system_manual::<T>(50_000_002);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
-      Pallet::<T>::write_continuation_state(actor_id, None)
-        .expect("benchmark completion must clear continuation");
+      Pallet::<T>::write_run_state(actor_id, None)
+        .expect("benchmark completion must clear Actor run");
     }
-    assert!(ContinuationStateStore::<T>::get(actor_id).is_none());
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
     assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.cycle_state == CycleState::Idle));
   }
 
   #[benchmark]
-  fn continuation_cancel() {
+  fn run_cancel() {
     let page_size = T::WakeupPageSize::get();
     let wakeup_block = 100u32.into();
     for i in 0..page_size {
@@ -2812,7 +7484,7 @@ mod benches {
       middle_fillers.push(filler);
     }
     let actor_id = bench_create_system_manual::<T>(52_000_003);
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     assert!(Pallet::<T>::wakeup_substrate_schedule(
       actor_id,
       wakeup_block
@@ -2832,8 +7504,8 @@ mod benches {
         .pending_signal = true;
     });
     #[extrinsic_call]
-    cancel_continuation(RawOrigin::Root, actor_id);
-    assert!(ContinuationStateStore::<T>::get(actor_id).is_none());
+    cancel_run(RawOrigin::Root, actor_id);
+    assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
     assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
       hot.cycle_state == CycleState::Idle && hot.pending_signal && hot.queue_ticket.is_some()
     }));
@@ -2844,9 +7516,9 @@ mod benches {
   }
 
   #[benchmark]
-  fn continuation_suffix_admission(n: Linear<1, 10>) {
+  fn run_suffix_admission(n: Linear<1, 10>) {
     let bounded = n.min(T::MaxContractSteps::get());
-    let recipient: T::AccountId = account("continuation_suffix_recipient", 0, 0);
+    let recipient: T::AccountId = account("run_suffix_recipient", 0, 0);
     let mut plan = ContractSteps::<T>::default();
     for _ in 0..bounded {
       plan
@@ -2878,6 +7550,48 @@ mod benches {
       }
       core::hint::black_box(total);
     }
+  }
+
+  /// Measures one affected User ObservationChange occurrence independently from publisher ingress
+  /// and fanout traversal: exact Trigger collection, readiness materialization, and canonical
+  /// placement are the complete Actor-owned boundary.
+  #[benchmark(pov_mode = Measured)]
+  fn observation_change_trigger_occurrence() {
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("observation-occurrence-recipient", 0, 0);
+    let feed = observation_feed_pool::<T>(1)[0];
+    let contract_steps = make_contract_steps::<T>(recipient);
+    ensure_creation_balance::<T>(&owner);
+    prefund_active_user_creation::<T>(&owner, &contract_steps);
+    Pallet::<T>::create_user_actor(
+      RawOrigin::Signed(owner).into(),
+      Mutability::Mutable,
+      user_contract::<T>(
+        Schedule {
+          trigger: observation_trigger::<T>(feed),
+          cooldown_blocks: 0,
+        },
+        contract_steps,
+      ),
+    )
+    .expect("ObservationChange benchmark Actor exists");
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    #[block]
+    {
+      assert!(
+        Pallet::<T>::signal_observation_subscriber(
+          actor_id,
+          feed,
+          TriggerCauseProvenance::Deferred,
+          0,
+        )
+        .expect("ObservationChange occurrence commits")
+      );
+    }
+    let hot = ActorHot::<T>::get(actor_id).expect("ObservationChange Actor remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
   }
 
   #[benchmark]
@@ -2913,6 +7627,23 @@ mod benches {
   }
 
   #[benchmark]
+  fn observation_fanout_branch_probe() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let owner: T::AccountId = account("observation-branch-probe", 0, 0);
+    let _ = bench_create_system_observation::<T>(owner, feed);
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("observation change ingress must succeed");
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::observation_fanout_branch_probe());
+    }
+  }
+
+  #[benchmark]
   fn observation_fanout_page() {
     let mut feeds = T::BenchmarkHelper::setup_observation_feeds(3)
       .expect("observation benchmark feeds must be available")
@@ -2923,7 +7654,9 @@ mod benches {
     let mut actors = alloc::vec::Vec::new();
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-fanout", index, 0);
-      actors.push(bench_create_system_observation::<T>(owner, feed));
+      actors.push(bench_create_user_observation_with_cooldown::<T>(
+        owner, feed, 0,
+      ));
     }
     let previous_owner: T::AccountId = account("observation-fanout-previous", 0, 0);
     let next_owner: T::AccountId = account("observation-fanout-next", 0, 0);
@@ -2949,6 +7682,98 @@ mod benches {
   }
 
   #[benchmark]
+  fn observation_fanout_wakeup_page() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..T::ObservationPageSize::get() {
+      let owner: T::AccountId = account("observation-wakeup", index, 0);
+      let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 100);
+      ActorHot::<T>::mutate(actor_id, |maybe| {
+        maybe
+          .as_mut()
+          .expect("observation wakeup actor")
+          .last_cycle_block = Some(One::one());
+      });
+      actors.push(actor_id);
+    }
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("observation change ingress must succeed");
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("observation wakeup page must succeed");
+    }
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    for actor_id in actors {
+      assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
+        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
+      }));
+    }
+  }
+
+  #[benchmark]
+  fn observation_fanout_coalesced_page() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..T::ObservationPageSize::get() {
+      let owner: T::AccountId = account("observation-coalesced", index, 0);
+      let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 0);
+      Pallet::<T>::request_observation_activation_compact(actor_id, feed)
+        .expect("initial observation activation must succeed");
+      actors.push(actor_id);
+    }
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("observation change ingress must succeed");
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("coalesced observation page must succeed");
+    }
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    for actor_id in actors {
+      assert!(
+        ActorHot::<T>::get(actor_id)
+          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+      );
+    }
+  }
+
+  #[benchmark]
+  fn observation_fanout_terminal() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let owner: T::AccountId = account("observation-terminal", 0, 0);
+    let (actor_id, end) = bench_create_expiring_system_observation::<T>(owner, feed);
+    frame_system::Pallet::<T>::set_block_number(end.saturating_add(One::one()));
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("observation change ingress must succeed");
+    Pallet::<T>::do_fanout_dirty_observation_page()
+      .expect("ordinary turn must persist terminal branch");
+    assert!(
+      DirtyObservationFeeds::<T>::get(feed)
+        .is_some_and(|state| { state.next_subscriber_branch == ObservationFanoutBranch::Terminal })
+    );
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("terminal observation fanout must succeed");
+    }
+    assert!(ActorHot::<T>::get(actor_id).is_none());
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+  }
+
+  #[benchmark]
   fn observation_fanout_blocked_page() {
     let feed = T::BenchmarkHelper::setup_observation_feeds(1)
       .expect("observation benchmark feed must be available")
@@ -2958,7 +7783,9 @@ mod benches {
     let mut actors = alloc::vec::Vec::new();
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-fanout-blocked", index, 0);
-      actors.push(bench_create_system_observation::<T>(owner, feed));
+      actors.push(bench_create_user_observation_with_cooldown::<T>(
+        owner, feed, 0,
+      ));
     }
     install_saturated_tombstone_queue::<T>();
     Pallet::<T>::note_observation_changed(feed, 1)
@@ -2991,6 +7818,7 @@ mod benches {
     while CrossingPendingFeedListState::<T>::get().count > 0 {
       Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
     }
+    clear_indexed_detection_disablement::<T>();
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -3019,6 +7847,33 @@ mod benches {
         CrossingWorkPlan::RearmCohort
       );
     }
+  }
+
+  /// Measures one affected User ObservationCrossing fire independently from observation
+  /// publication: threshold traversal, phase movement, exact Trigger collection, and canonical
+  /// readiness placement are the complete Actor-owned occurrence boundary.
+  #[benchmark(pov_mode = Measured)]
+  fn observation_crossing_trigger_occurrence() {
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    #[block]
+    {
+      Pallet::<T>::crossing_work_unit().expect("Crossing occurrence commits");
+    }
+    let hot = ActorHot::<T>::get(actor_id).expect("Crossing Actor remains active");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
   }
 
   #[benchmark]
@@ -3104,7 +7959,7 @@ mod benches {
         Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
       );
     }
-    let system_count = T::ObservationPageSize::get()
+    let system_count = T::CrossingPageSize::get()
       .saturating_add(4)
       .saturating_sub(8);
     for index in 0..system_count {
@@ -3133,7 +7988,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn crossing_fire_cohort_preflight(c: Linear<1, 4>) {
+  fn crossing_fire_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     for index in 1..c {
       let owner: T::AccountId = account("crossing-cohort-preflight", index, 0);
@@ -3149,6 +8004,8 @@ mod benches {
       revision: 2,
       previous: 0,
       current: 2,
+      cause_provenance: TriggerCauseProvenance::Deferred,
+      cause_block: 0,
     };
     #[block]
     {
@@ -3168,7 +8025,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn crossing_coalesced_cohort_preflight(c: Linear<1, 4>) {
+  fn crossing_coalesced_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     let mut actors = alloc::vec![first];
     for index in 1..c {
@@ -3188,6 +8045,8 @@ mod benches {
       revision: 2,
       previous: 0,
       current: 2,
+      cause_provenance: TriggerCauseProvenance::Deferred,
+      cause_block: 0,
     };
     #[block]
     {
@@ -3212,7 +8071,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn crossing_terminal_cohort_preflight(c: Linear<1, 4>) {
+  fn crossing_terminal_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     for index in 1..c {
       let owner: T::AccountId = account("crossing-terminal-cohort", index, 0);
@@ -3229,6 +8088,8 @@ mod benches {
       revision: 2,
       previous: 0,
       current: 2,
+      cause_provenance: TriggerCauseProvenance::Deferred,
+      cause_block: 0,
     };
     #[block]
     {
@@ -3253,7 +8114,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn crossing_skip_cohort_preflight(c: Linear<1, 4>) {
+  fn crossing_skip_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     let mut actors = alloc::vec![first];
     for index in 1..c {
@@ -3283,6 +8144,8 @@ mod benches {
       revision: 2,
       previous: 0,
       current: 2,
+      cause_provenance: TriggerCauseProvenance::Deferred,
+      cause_block: 0,
     };
     #[block]
     {
@@ -3310,7 +8173,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn crossing_rearm_cohort_preflight(c: Linear<1, 4>) {
+  fn crossing_rearm_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
     let (feed, first) = prepare_crossing_work::<T>(2);
     for index in 1..c {
       let owner: T::AccountId = account("crossing-rearm-cohort", index, 0);
@@ -3322,6 +8185,7 @@ mod benches {
     while CrossingPendingFeedListState::<T>::get().count > 0 {
       Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
     }
+    clear_indexed_detection_disablement::<T>();
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -3338,6 +8202,8 @@ mod benches {
       revision: 3,
       previous: 2,
       current: 0,
+      cause_provenance: TriggerCauseProvenance::Deferred,
+      cause_block: 0,
     };
     #[block]
     {
@@ -3372,6 +8238,7 @@ mod benches {
     while CrossingPendingFeedListState::<T>::get().count > 0 {
       Pallet::<T>::crossing_work_unit().expect("initial pair fire must drain");
     }
+    clear_indexed_detection_disablement::<T>();
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -3486,6 +8353,7 @@ mod benches {
     while CrossingPendingFeedListState::<T>::get().count > 0 {
       Pallet::<T>::crossing_work_unit().expect("initial Crossing fire must drain");
     }
+    clear_indexed_detection_disablement::<T>();
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -3519,6 +8387,7 @@ mod benches {
     while CrossingPendingFeedListState::<T>::get().count > 0 {
       Pallet::<T>::crossing_work_unit().expect("initial pair fire must drain");
     }
+    clear_indexed_detection_disablement::<T>();
     Pallet::<T>::note_observation_transition(
       feed,
       ObservationTransition {
@@ -3684,7 +8553,7 @@ mod benches {
   fn crossing_placed_maximum_unit() {
     let (feed, first_actor) = prepare_crossing_work::<T>(2);
     let mut actors = alloc::vec![first_actor];
-    for index in 0..T::ObservationPageSize::get().saturating_sub(1) {
+    for index in 0..T::CrossingPageSize::get().saturating_sub(1) {
       let owner: T::AccountId = account("crossing-maximum-unit", index, 0);
       actors.push(if index < 3 {
         bench_create_user_with_trigger::<T>(
@@ -3709,10 +8578,13 @@ mod benches {
     );
     #[block]
     {
-      Pallet::<T>::crossing_placed_batch_work_unit(4)
+      Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("placed Crossing maximum batch must succeed");
     }
-    for actor_id in actors.into_iter().take(4) {
+    for actor_id in actors
+      .into_iter()
+      .take(CROSSING_COHORT_BENCHMARK_MAX as usize)
+    {
       assert!(ActorHot::<T>::get(actor_id).is_some_and(|hot| {
         hot.pending_signal
           && hot.queue_ticket.is_some()
@@ -3729,13 +8601,16 @@ mod benches {
 
   #[benchmark]
   fn crossing_placed_non_tail_emptied_unit() {
-    let actors = prepare_non_tail_crossing_batch::<T>(4);
+    let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_NON_TAIL_BENCHMARK_MAX);
     #[block]
     {
-      Pallet::<T>::crossing_placed_batch_work_unit(4)
+      Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("non-tail Crossing batch with emptied tail must succeed");
     }
-    for actor_id in actors.into_iter().take(4) {
+    for actor_id in actors
+      .into_iter()
+      .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
+    {
       assert!(
         ActorHot::<T>::get(actor_id)
           .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
@@ -3745,13 +8620,16 @@ mod benches {
 
   #[benchmark]
   fn crossing_placed_non_tail_trimmed_unit() {
-    let actors = prepare_non_tail_crossing_batch::<T>(6);
+    let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_TRIMMED_BENCHMARK_TAIL);
     #[block]
     {
-      Pallet::<T>::crossing_placed_batch_work_unit(4)
+      Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
         .expect("non-tail Crossing batch with trimmed tail must succeed");
     }
-    for actor_id in actors.into_iter().take(4) {
+    for actor_id in actors
+      .into_iter()
+      .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
+    {
       assert!(
         ActorHot::<T>::get(actor_id)
           .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
@@ -3886,7 +8764,7 @@ mod benches {
   fn transaction_extension_ingress_notify() {
     let source: T::AccountId = account("ingress_source", 0, 0);
     let (actor_id, recipient) = prepare_saturated_address_actor::<T>(0, Some(source.clone()));
-    install_continuation::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
+    install_run_state::<T>(actor_id, T::MaxOpeningSnapshotEntries::get());
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
     #[block]
@@ -3989,7 +8867,7 @@ mod benches {
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("transfer contract_steps fits");
-      let contract = ActorContracts::<T>::get(*actor_id).expect("Actor Contract exists");
+      let contract = Pallet::<T>::load_actor_contract(*actor_id).expect("Actor Contract exists");
       Pallet::<T>::update_contract(
         RawOrigin::Root.into(),
         *actor_id,
@@ -4072,6 +8950,69 @@ mod benches {
     {
       setup_and_run_circular_chain::<T>(10_000);
     }
+  }
+
+  #[benchmark]
+  fn maximum_context_inherent() {
+    let inherent = T::BenchmarkHelper::prepare_maximum_context_inherent();
+    #[block]
+    {
+      T::BenchmarkHelper::execute_maximum_context_inherent(inherent)
+        .expect("maximum context inherent execution must succeed");
+    }
+    T::BenchmarkHelper::verify_maximum_context_inherent();
+  }
+
+  #[benchmark]
+  fn block_resource_finalize() {
+    let now = frame_system::Pallet::<T>::block_number();
+    let budget = T::BlockResourceBudget::get();
+    let mut state = BlockResourceState::new(now);
+    state.begin_prepass().expect("benchmark state opens"); // deos-bypass: panic-owner — fresh benchmark state has no reservations.
+    state
+      .open_external_phase()
+      .expect("benchmark prepass closes"); // deos-bypass: panic-owner — preceding transition establishes empty PrepassExecuting.
+    state.begin_drain().expect("benchmark drain opens"); // deos-bypass: panic-owner — preceding transition establishes ExternalPhase.
+    state
+      .finish_drain(budget, budget.fixed_envelope())
+      .expect("benchmark state reconciles"); // deos-bypass: panic-owner — empty usage plus the configured fixed envelope exactly satisfies the budget.
+    CurrentBlockResourceState::<T>::put(state);
+    #[block]
+    {
+      let current =
+        CurrentBlockResourceState::<T>::take().expect("finalized benchmark state exists"); // deos-bypass: panic-owner — setup writes this exact storage value.
+      FinalizedBlockResourceTelemetry::<T>::put(
+        current
+          .finalized_snapshot()
+          .expect("finalized snapshot exists"), // deos-bypass: panic-owner — successful finish_drain establishes Finalizable and fixed actual.
+      );
+      let valid = current.ensure_block(now).is_ok()
+        && current.phase() == BlockResourcePhase::Finalizable
+        && current.outstanding_reservations() == 0
+        && FinalizedBlockResourceTelemetry::<T>::get()
+          .is_some_and(|snapshot| snapshot.block_number() == now);
+      assert!(valid);
+    }
+  }
+
+  #[benchmark]
+  fn block_resource_meter_extension() {
+    T::BenchmarkHelper::prepare_block_resource_meter_extension();
+    #[block]
+    {
+      T::BenchmarkHelper::execute_block_resource_meter_extension();
+    }
+    T::BenchmarkHelper::verify_block_resource_meter_extension();
+  }
+
+  #[benchmark]
+  fn maximum_xcm_version_discovery() {
+    T::BenchmarkHelper::prepare_maximum_xcm_version_discovery();
+    #[block]
+    {
+      T::BenchmarkHelper::execute_maximum_xcm_version_discovery();
+    }
+    T::BenchmarkHelper::verify_maximum_xcm_version_discovery();
   }
 
   #[cfg(test)]

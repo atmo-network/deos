@@ -47,7 +47,7 @@ export type ActorMatchingWasmProvider = {
   simulate(request: {
     pin: ActorMatchingWasmPin;
     actorId: bigint;
-    mode: 'FreshCurrentPlan' | 'CurrentContinuation';
+    mode: 'FreshCurrentPlan' | 'CurrentRun';
     contractScale: ActorContractHex;
     actorType: ActorContractArtifact['actorType'];
     mutability: ActorContractArtifact['mutability'];
@@ -78,7 +78,7 @@ function samePin(left: ActorMatchingWasmPin, right: ActorMatchingWasmPin) {
 export async function runActorMatchingWasmSimulation(input: {
   artifact: ActorContractArtifact;
   actorId: bigint;
-  mode: 'FreshCurrentPlan' | 'CurrentContinuation';
+  mode: 'FreshCurrentPlan' | 'CurrentRun';
   metadataBytes: Uint8Array;
   runtime: ActorContractRuntimeIdentity;
   runtimeCodeBytes: Uint8Array;
@@ -106,7 +106,7 @@ export async function runActorMatchingWasmSimulation(input: {
   if (input.actorId < 0n) {
     throw new Error('actorId must be non-negative');
   }
-  if (!['FreshCurrentPlan', 'CurrentContinuation'].includes(input.mode)) {
+  if (!['FreshCurrentPlan', 'CurrentRun'].includes(input.mode)) {
     throw new Error('mode must identify one runtime simulation path');
   }
   validateHash(input.snapshot.blockHash, 'blockHash');
@@ -185,8 +185,8 @@ function contractStepsLength(runtimeValue: unknown) {
     throw new Error('Runtime simulation requires an ActorContract');
   }
   const value = runtimeValue as Record<string, unknown>;
-  if (!Array.isArray(value.steps) || value.steps.length === 0) {
-    throw new Error('Runtime simulation requires non-empty Contract Steps');
+  if (!Array.isArray(value.steps)) {
+    throw new Error('Runtime simulation requires bounded Contract Steps');
   }
   return value.steps.length;
 }
@@ -242,23 +242,19 @@ function validateOutcome(
     previousStep = step.stepIndex;
   }
   if (outcome.status === 'Suspended') {
-    if (outcome.continuationCursor == null) {
-      throw new Error(
-        'Suspended runtime outcomes require a Continuation cursor',
-      );
+    if (outcome.runCursor == null) {
+      throw new Error('Suspended runtime outcomes require an Actor run cursor');
     }
-    validateIndex(outcome.continuationCursor, 'outcome.continuationCursor');
-    if (outcome.continuationCursor >= maxSteps) {
-      throw new Error('Continuation cursor exceeds admitted Contract Steps');
+    validateIndex(outcome.runCursor, 'outcome.runCursor');
+    if (outcome.runCursor >= maxSteps) {
+      throw new Error('Actor run cursor exceeds admitted Contract Steps');
     }
-    if (outcome.continuationCursor < outcome.startCursor) {
-      throw new Error(
-        'Continuation cursor cannot precede the attempted suffix',
-      );
+    if (outcome.runCursor < outcome.startCursor) {
+      throw new Error('Actor run cursor cannot precede the attempted suffix');
     }
-  } else if (outcome.continuationCursor != null) {
+  } else if (outcome.runCursor != null) {
     throw new Error(
-      'Only Suspended runtime outcomes may expose a Continuation cursor',
+      'Only Suspended runtime outcomes may expose an Actor run cursor',
     );
   }
 }

@@ -31,9 +31,7 @@ const METADATA_VERSION = 16;
 const HEX_PATTERN = /^0x(?:[0-9a-fA-F]{2})+$/;
 const PLAN_HEX_PATTERN = /^0x(?:[0-9a-f]{2})+$/;
 
-export type ActorFinalizedSimulationMode =
-  | 'FreshCurrentPlan'
-  | 'CurrentContinuation';
+export type ActorFinalizedSimulationMode = 'FreshCurrentPlan' | 'CurrentRun';
 
 export type ActorFinalizedSimulationInput = {
   artifact: ActorContractArtifact;

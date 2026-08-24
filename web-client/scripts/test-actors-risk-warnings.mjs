@@ -120,10 +120,10 @@ function activeContract(steps) {
   };
 }
 
-function artifactFor({ steps, mutability = 'Mutable' } = {}) {
+function artifactFor({ steps, mutability = 'Mutable', contract } = {}) {
   const contractScale = encodeActorContractValue(
     metadataBytes,
-    activeContract(steps),
+    contract ?? activeContract(steps),
   );
   return createActorContractArtifact({
     metadataBytes,
@@ -157,6 +157,21 @@ test('Immutable actor without a terminal step produces a critical warning', () =
   assert.ok(hit, 'immutable-without-terminal warning expected');
   assert.equal(hit.severity, 'critical');
   assert.match(hit.message, /custody permanently/);
+});
+
+test('Immutable zero-Step AtTime with auto-close nonce has an authored terminal', () => {
+  const contract = activeContract([]);
+  contract.trigger = { type: 'AtTime', value: { after_ticks: 20n } };
+  contract.cooldown_blocks = 0;
+  contract.auto_close_at_cycle_nonce = 1n;
+  const artifact = artifactFor({ contract, mutability: 'Immutable' });
+  const analysis = analyze(artifact);
+  const warnings = projectActorCompositionWarnings({ artifact, analysis });
+  assert.equal(analysis.autoCloseAtCycleNonce, 1n);
+  assert.ok(
+    !warnings.some((w) => w.kind === 'ImmutableWithoutReachableTerminal'),
+    'authored auto-close nonce is a reachable immutable terminal',
+  );
 });
 
 test('Mutable actor with a terminal step does not warn about permanence', () => {

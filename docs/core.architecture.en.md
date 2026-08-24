@@ -176,7 +176,7 @@ Block N:
 - `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
 - `Deterministic FIFO fairness`: Monotonic tickets preserve bounded FIFO carry-over without class-weight knobs or queue reconstruction; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
 - `Starvation observability`: After the fixed hook base is admitted, a live FIFO head stalled by Weight, fee collection, or an invariant advances sparse `IdleStarvationState`; detection and recovery remain observability-only and never dispatch emergency work in `on_initialize`.
-- `Deferred service`: Weight blockage and rolled-back fee-infrastructure failure retain the same FIFO head for later service; User fee-budget insufficiency remains terminal (`FeeBudgetExhausted`).
+- `Deferred service`: Weight blockage and rolled-back fee-infrastructure failure retain the same FIFO head for later service; only Idle consumption of paid readiness tests complete User Pipeline capacity, and shortfall selects `CycleAdmissionInsufficient` without refunding prior Trigger fees.
 
 ### 4.2 Resilience: Backpressure via Cooldown
 

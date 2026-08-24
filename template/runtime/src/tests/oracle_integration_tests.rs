@@ -11,14 +11,11 @@ use pallet_deos_actors::{
   ActorContract, FundingSourcePolicy, Mutability, StepErrorPolicy, Task, Trigger,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
-use polkadot_sdk::{
-  frame_support::{
-    BoundedVec, assert_noop, assert_ok,
-    dispatch::GetDispatchInfo,
-    traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
-    weights::Weight,
-  },
-  sp_runtime::traits::TransactionExtension,
+use polkadot_sdk::frame_support::{
+  BoundedVec, assert_noop, assert_ok,
+  dispatch::GetDispatchInfo,
+  traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
+  weights::Weight,
 };
 use primitives::{AssetKind, OracleAggregationId, OracleFeedId, OracleMeaning, OracleProvenance};
 
@@ -498,22 +495,6 @@ fn pool_feed_cardinality_is_explicitly_bounded() {
     maximum.saturating_add(1).saturating_mul(2)
       > crate::configs::oracle_config::OracleMaxFeedsPerProducer::get()
   );
-}
-
-#[test]
-fn pool_index_extension_declares_two_worst_case_feed_registrations() {
-  let call = RuntimeCall::AssetConversion(crate::pallet_asset_conversion::Call::create_pool {
-    asset1: Box::new(AssetKind::Native),
-    asset2: Box::new(AssetKind::Local(7)),
-  });
-  let declared = crate::configs::pool_index::PoolIndexExtension.weight(&call);
-  let registration =
-    crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_existing_producer()
-      .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_new_producer())
-      .saturating_mul(2);
-  let index_work =
-    <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(13, 1);
-  assert_eq!(declared, registration.saturating_add(index_work));
 }
 
 #[test]

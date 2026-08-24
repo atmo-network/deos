@@ -4,8 +4,8 @@
 //! ensuring consistent test environment initialization and reducing code duplication.
 
 use crate::{
-  AccountId, AssetConversion, Assets, Balance, Balances, EXISTENTIAL_DEPOSIT, Oracle, Runtime,
-  RuntimeOrigin, SLOT_DURATION, Staking, System, Timestamp, configs::AssetKind,
+  AccountId, Assets, Balance, Balances, EXISTENTIAL_DEPOSIT, Oracle, Runtime, RuntimeOrigin,
+  SLOT_DURATION, Staking, System, Timestamp, configs::AssetKind,
 };
 use alloc::vec;
 use polkadot_sdk::frame_support::{
@@ -34,7 +34,7 @@ pub fn update_actor_contract_partial(
   actor_id: pallet_deos_actors::ActorId,
   replacement: impl ActorContractReplacement,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
-  let mut contract = pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id)
+  let mut contract = crate::Actors::actor_contract(actor_id)
     .ok_or(pallet_deos_actors::Error::<Runtime>::ActorNotFound)?;
   replacement.apply(&mut contract);
   crate::Actors::update_contract(origin, actor_id, contract)
@@ -401,51 +401,27 @@ pub fn add_liquidity(
   )
 }
 
-/// Ensure an AssetConversion pool exists, ignoring `PoolExists` and Assets `InUse` errors.
+/// Ensure one complete canonical pool topology exists through its sole lifecycle owner.
 pub fn ensure_asset_conversion_pool(asset1: AssetKind, asset2: AssetKind) {
   let (canonical_asset1, canonical_asset2) = canonical_asset_pair(&asset1, &asset2);
-  let result = AssetConversion::create_pool(
+  let result = crate::DeosRouter::create_pool(
     RuntimeOrigin::signed(ALICE),
-    Box::new(canonical_asset1),
-    Box::new(canonical_asset2),
+    canonical_asset1,
+    canonical_asset2,
   );
   if let Err(error) = result {
-    // Handle Assets pallet "InUse" error (index 12) - asset already in use
     if let DispatchError::Module(ModuleError {
-      index: 12,
-      error: [3, 0, 0, 0],
-      ..
-    }) = &error
-    {
-      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
-        .expect("existing pool must be indexed");
-      return;
-    }
-    if let DispatchError::Module(ModuleError {
-      index: 12,
-      message: Some("InUse"),
-      ..
-    }) = &error
-    {
-      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
-        .expect("existing pool must be indexed");
-      return;
-    }
-    // Handle AssetConversion pallet "PoolExists" error (index 13)
-    if let DispatchError::Module(ModuleError {
-      index: 13,
       message: Some("PoolExists"),
       ..
     }) = &error
     {
-      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
-        .expect("existing pool must be indexed");
       return;
     }
-    panic!("Unexpected AssetConversion pool creation error: {error:?}");
+    if matches!(error, DispatchError::Other("Pool already exists")) {
+      return;
+    }
+    panic!("Unexpected canonical pool creation error: {error:?}");
   }
-  crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
-    .expect("created pool must be indexed");
 }
 
 /// Creates the BLDR protocol token; runtime-topology sovereigns already hold native ED anchors.

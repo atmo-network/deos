@@ -584,13 +584,15 @@ Current runtime policy values:
 - `ProposalVetoMinimumVetoTurnout = 1%` of eligible protection supply
 - `ProposalMinimumTurnout = 200` weighted units
 - `MaxEpochCatchUpPerBlock = 1`
-- `MaxMaturingProposalsPerBlock = 3`
+- `MaxMaturingProposalsPerBlock = 2`
 - `MaxPendingEnactmentsPerBlock = 4`
 - `MaxFinalizedProposalOutcomesPerBlock = 1024`
 - `MaxExpiringAccountsPerBlock = 512`
 - `FinalizedProposalOutcomeRetentionEpochs = 16`
 - `MaxFinalizedProposalOutcomesPerEpoch = 1024`
 - `MaxExpiringAccountsPerEpoch = 1024`
+
+The two-proposal maturity bound keeps the generated worst-case hook ProofSize compatible with the runtime fixed envelope while preserving bounded continuation across later blocks; increasing it requires recomputing `FixedBlockWeight` and maximum signed-call fit.
 
 Ordinary and invoice-family resolution consume exactly the fixed `ProposalApprovalThreshold` and `ProposalMinimumTurnout`. No adaptive ceiling, progress, or decay policy is reconstructed in views or resolution.
 

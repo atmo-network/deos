@@ -57,14 +57,16 @@ export function projectActorCompositionWarnings(
   const { artifact, analysis } = input;
 
   if (artifact.mutability === 'Immutable') {
-    const reachableTerminal = analysis.steps.some(isTerminalStep);
+    const reachableTerminal =
+      analysis.autoCloseAtCycleNonce !== null ||
+      analysis.steps.some(isTerminalStep);
     if (!reachableTerminal) {
       warnings.push({
         kind: 'ImmutableWithoutReachableTerminal',
         severity: 'critical',
         message:
           'Immutable actor has no reachable terminal condition and will keep custody permanently.',
-        evidence: `mutability=Immutable, ${analysis.steps.length} step(s), no AbortCycle/zero-retry terminal step`,
+        evidence: `mutability=Immutable, ${analysis.steps.length} step(s), no auto-close nonce or AbortCycle/zero-retry terminal step`,
       });
     }
   }

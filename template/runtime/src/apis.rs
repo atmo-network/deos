@@ -1,5 +1,5 @@
 // External crates imports
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use polkadot_sdk::*;
 
@@ -24,7 +24,91 @@ use super::{
   InherentDataExt, Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall,
   RuntimeGenesisConfig, SLOT_DURATION, SessionKeys, System, TransactionPayment, VERSION,
 };
-use crate::configs::AssetKind;
+use crate::configs::{
+  AssetKind, MaxInboundDownwardMessagesPerContext, MaxInboundHorizontalChannelsPerContext,
+  MaxInboundHorizontalMessagesPerContext,
+};
+
+pub(crate) const CONTEXT_GEOMETRY_INHERENT_IDENTIFIER: sp_inherents::InherentIdentifier =
+  *b"deosctx0";
+
+pub(crate) fn context_geometry_fatal_result() -> sp_inherents::CheckInherentsResult {
+  let mut result = sp_inherents::CheckInherentsResult::new();
+  result
+    .put_error(
+      CONTEXT_GEOMETRY_INHERENT_IDENTIFIER,
+      &sp_inherents::MakeFatalError::from(()),
+    )
+    .expect("a fresh fixed-size context-geometry error must encode"); // deos-bypass: panic-owner — CheckInherentsResult is fresh and unit MakeFatalError has fixed infallible SCALE encoding.
+  result
+}
+
+pub(crate) fn validate_context_inherent_geometry(
+  data: &sp_inherents::InherentData,
+) -> Result<(), pallet_deos_actors::BlockResourceError> {
+  use frame_support::inherent::ProvideInherent;
+
+  let Some(cumulus_pallet_parachain_system::Call::set_validation_data {
+    inbound_messages_data,
+    ..
+  }) = <ParachainSystem as ProvideInherent>::create_inherent(data)
+  else {
+    return Ok(());
+  };
+  validate_inbound_messages_geometry(&inbound_messages_data)
+}
+
+pub(crate) fn validate_inbound_messages_geometry(
+  inbound_messages_data: &cumulus_pallet_parachain_system::parachain_inherent::InboundMessagesData,
+) -> Result<(), pallet_deos_actors::BlockResourceError> {
+  use pallet_deos_actors::{ContextMessageGeometry, ContextMessageLimits};
+
+  let (downward_full, downward_hashed) = inbound_messages_data.downward_messages.messages();
+  let (horizontal_full, horizontal_hashed) = inbound_messages_data.horizontal_messages.messages();
+  let downward_full = u32::try_from(downward_full.len())
+    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
+  let downward_hashed = u32::try_from(downward_hashed.len())
+    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
+  let horizontal_full_count = u32::try_from(horizontal_full.len())
+    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
+  let horizontal_hashed_count = u32::try_from(horizontal_hashed.len())
+    .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?;
+  let limits = ContextMessageLimits::new(
+    MaxInboundDownwardMessagesPerContext::get(),
+    MaxInboundHorizontalMessagesPerContext::get(),
+    MaxInboundHorizontalChannelsPerContext::get(),
+  );
+  limits.validate(ContextMessageGeometry::new(
+    downward_full,
+    downward_hashed,
+    horizontal_full_count,
+    horizontal_hashed_count,
+    0,
+  ))?;
+  let mut horizontal_channels = BTreeSet::new();
+  for sender in horizontal_full
+    .iter() // deos-bypass: bounded-iter — aggregate HRMP geometry is validated above and the channel set rejects at runtime maximum plus one.
+    .map(|(sender, _)| *sender)
+    .chain(
+      horizontal_hashed
+        .iter() // deos-bypass: bounded-iter — the same admitted full-plus-hashed HRMP bound owns this traversal.
+        .map(|(sender, _)| *sender),
+    )
+  {
+    horizontal_channels.insert(sender);
+    if horizontal_channels.len() > MaxInboundHorizontalChannelsPerContext::get() as usize {
+      return Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded);
+    }
+  }
+  limits.validate(ContextMessageGeometry::new(
+    downward_full,
+    downward_hashed,
+    horizontal_full_count,
+    horizontal_hashed_count,
+    u32::try_from(horizontal_channels.len())
+      .map_err(|_| pallet_deos_actors::BlockResourceError::ArithmeticOverflow)?,
+  ))
+}
 
 impl Runtime {
   #[docify::export]
@@ -133,13 +217,34 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_deos_actors::ActorEligibilityApi<
-        Block,
-        primitives::OracleFeedId,
-        BlockNumber,
-        pallet_deos_actors::TriggerOf<Runtime>,
-        Balance,
-    > for Runtime {
+    impl pallet_deos_actors::ActorCostApi<Block, Balance> for Runtime {
+        fn actor_cost_quote(
+            actor_id: pallet_deos_actors::ActorId,
+        ) -> Result<
+            pallet_deos_actors::ActorCostQuote<Balance>,
+            pallet_deos_actors::ActorCostQuoteError,
+        > {
+            Actors::actor_cost_quote(actor_id)
+        }
+    }
+
+    impl pallet_deos_actors::ActorResourceApi<Block, BlockNumber> for Runtime {
+  fn block_resource_budget() -> pallet_deos_actors::BlockResourceBudget {
+    crate::configs::BlockResourceBudgetValue::get()
+  }
+
+  fn current_block_resource_state() -> Option<pallet_deos_actors::BlockResourceState<BlockNumber>> {
+    Actors::block_resource_state()
+  }
+
+  fn finalized_block_resource_snapshot(
+  ) -> Option<pallet_deos_actors::FinalizedBlockResourceSnapshot<BlockNumber>> {
+    Actors::finalized_block_resource_telemetry()
+  }
+}
+
+impl pallet_deos_actors::ActorEligibilityApi<Block, primitives::OracleFeedId, BlockNumber>
+        for Runtime {
         fn actor_eligibility(
             actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
@@ -149,34 +254,23 @@ impl_runtime_apis! {
             Actors::actor_eligibility(actor_id)
         }
 
-        fn materialization_faults() -> (
-            Option<pallet_deos_actors::CrossingWorkerFault<primitives::OracleFeedId>>,
-            Option<pallet_deos_actors::ObservationFanoutWorkerFault<primitives::OracleFeedId>>,
-            Option<pallet_deos_actors::WakeupWorkerFault<BlockNumber>>,
-        ) {
-            (
-                Actors::crossing_worker_fault(),
-                Actors::observation_fanout_worker_fault(),
-                Actors::wakeup_worker_fault(),
-            )
+        fn materialization_faults() -> pallet_deos_actors::MaterializationFaults<primitives::OracleFeedId, BlockNumber> {
+            pallet_deos_actors::MaterializationFaults {
+                crossing: Actors::crossing_worker_fault(),
+                fanout: Actors::observation_fanout_worker_fault(),
+                wakeup: Actors::wakeup_worker_fault(),
+            }
         }
 
-        fn crossing_capacity(feed: primitives::OracleFeedId) -> (u32, u32, u32, u32) {
-            (
-                <crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                <crate::configs::actor_config::ActorMaxCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
-                Actors::crossing_user_feed_membership_count(feed),
-                Actors::crossing_feed_membership_count(feed),
-            )
+        fn crossing_capacity(feed: primitives::OracleFeedId) -> pallet_deos_actors::CrossingCapacity {
+            pallet_deos_actors::CrossingCapacity {
+                user_limit: <crate::configs::actor_config::ActorMaxUserCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
+                total_limit: <crate::configs::actor_config::ActorMaxCrossingMembersPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get(),
+                user_memberships: Actors::crossing_user_feed_membership_count(feed),
+                total_memberships: Actors::crossing_feed_membership_count(feed),
+            }
         }
 
-        fn trigger_state_bond(trigger: pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
-            <crate::configs::actor_config::RuntimeTriggerStateBond as pallet_deos_actors::TriggerStateBond<
-                AccountId,
-                pallet_deos_actors::TriggerOf<Runtime>,
-                Balance,
-            >>::amount(&trigger)
-        }
     }
 
     impl primitives::TmctolReadModelApi<Block, AccountId, Balance> for Runtime {
@@ -202,6 +296,9 @@ impl_runtime_apis! {
             block: <Block as BlockT>::LazyBlock,
             data: sp_inherents::InherentData,
         ) -> sp_inherents::CheckInherentsResult {
+            if validate_context_inherent_geometry(&data).is_err() {
+                return context_geometry_fatal_result();
+            }
             data.check_extrinsics(&block)
         }
     }

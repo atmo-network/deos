@@ -19,7 +19,6 @@ import test from 'node:test';
 import {
   ACTORS_ELIGIBILITY_RUNTIME_API,
   ACTORS_ELIGIBILITY_RUNTIME_API_VERSION,
-  ACTORS_TRIGGER_STATE_BOND_RUNTIME_API,
   ACTOR_CLOSE_REASONS,
   projectActorEligibility,
 } from '../src/lib/automation/eligibility.ts';
@@ -72,23 +71,14 @@ function encodeProjection(value) {
   return decoded;
 }
 
-test('runtime metadata binds the canonical eligibility API signature', () => {
+test('runtime metadata omits the retired Trigger-state bond quote', () => {
   const { metadata } = eligibilityMethod();
   const api = metadata.apis.find(
     (candidate) => candidate.name === 'ActorEligibilityApi',
   );
-  const bondMethod = api.methods.filter(
-    (candidate) => candidate.name === 'trigger_state_bond',
-  );
-  assert.equal(bondMethod.length, 1, 'trigger_state_bond must appear once');
-  assert.deepEqual(
-    bondMethod[0].inputs.map((input) => input.name),
-    ['trigger'],
-    'bond quote must consume exactly one authored Trigger',
-  );
   assert.equal(
-    ACTORS_TRIGGER_STATE_BOND_RUNTIME_API,
-    'ActorEligibilityApi_trigger_state_bond',
+    api.methods.some((candidate) => candidate.name === 'trigger_state_bond'),
+    false,
   );
 });
 
@@ -128,6 +118,35 @@ test('projectActorEligibility projects canonical active classification', () => {
     placement: { type: 'Queue', ticket: 9n },
     terminalReason: null,
     executionPhase: { type: 'WaitingCadenceTick', tick: 42 },
+  });
+});
+
+test('projectActorEligibility preserves AtTime one-shot consumption', () => {
+  const decoded = encodeProjection({
+    success: true,
+    value: {
+      type: 'Active',
+      value: {
+        trigger: {
+          type: 'AtTime',
+          value: { after_ticks: 20n, consumed: true },
+        },
+        pending_signal: false,
+        placement: { type: 'Unplaced', value: undefined },
+        eligibility: {
+          terminal_reason: undefined,
+          execution_phase: { type: 'WaitingSignal', value: undefined },
+        },
+      },
+    },
+  });
+  assert.deepEqual(projectActorEligibility(decoded), {
+    type: 'Active',
+    trigger: { type: 'AtTime', afterTicks: 20n, consumed: true },
+    pendingSignal: false,
+    placement: { type: 'Unplaced' },
+    terminalReason: null,
+    executionPhase: { type: 'WaitingSignal' },
   });
 });
 
@@ -225,12 +244,9 @@ test('projectActorEligibility preserves semantic Crossing activation state', () 
 test('projectActorEligibility rejects a typed runtime failure honestly', () => {
   const decoded = encodeProjection({
     success: false,
-    value: { type: 'ContinuationInvariant' },
+    value: { type: 'RunInvariant' },
   });
-  assert.throws(
-    () => projectActorEligibility(decoded),
-    /ContinuationInvariant/,
-  );
+  assert.throws(() => projectActorEligibility(decoded), /RunInvariant/);
 });
 
 test('projectActorEligibility rejects unknown runtime variants and malformed results', () => {

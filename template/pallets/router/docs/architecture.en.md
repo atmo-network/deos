@@ -49,7 +49,7 @@ graph TD
 The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point for both user and system swaps:
 
 1. `Extrinsic Validation`: `amount_in >= MinSwapForeign`, `block <= deadline`.
-2. `Core Validation`: `from != to`, `amount_in > 0`.
+2. `Core Validation`: Both endpoints are canonical, their `LedgerAssetKey`s differ, and `amount_in > 0`.
 3. `Fee Calculation`: Zero for fee-exempt system accounts (Burn Actor, liquidity actors, Router); `Perbill`-based for users.
 4. `Gross-Debit Preflight`: Users must be able to pay the full `amount_in` under the selected preservation policy before any state-mutating swap path begins.
 5. `Route Selection`: `find_optimal_route()` evaluates all candidates and selects the route with the highest `expected_output` (pure mechanism: best price to the user).
@@ -59,11 +59,13 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
 10. `Outcome`: Execution constructs `RouterOutcome` from committed actual facts. `SwapExecuted` carries caller, request endpoints, and that complete outcome directly, so route family, prepared legs, amounts, fee, and Weight class retain one meaning.
 
-`Public API`: `execute_swap_for(...)` and `execute_exact_out_for(...)` return `RouterOutcome` on success and typed `ExecutionError` on failure. The outcome carries selected family, prepared legs, actual total/routed input, fee, recipient output, and route Weight class.
+`Public API`: Signed calls expose exact input at index `0` and exact output at index `2`; both delegate to `execute_swap_for(...)` or `execute_exact_out_for(...)` and emit one `RouterOutcome`. Exact output applies `max_amount_in` to Router fee plus routed XYK input. The outcome carries selected family, prepared legs, actual total/routed input, fee, recipient output, and route Weight class.
 
 `PreparedRoute` remains a public Rust package type solely for the deterministic conformance-vector example and independent consumer tooling. No call, event, storage item, or runtime API exposes it, so it does not form part of runtime metadata ABI; execution constructs it only inside the transaction.
 
 System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation. The guard first reads its independent Fresh Oracle observation and lazily reads direct reserves only when that observation is absent, stale, uninitialized, or zero; it never treats the selected execution quote as its own reference.
+
+Router owns economic execution Weight and returns the committed route class and actual outcome; it does not own Actor Control, FIFO service, or block-share policy. A host Actors adapter reserves the Router maximum from Shared Economic capacity before dispatch, then reports the canonical generated Router effect Weight as valid actual evidence for transactional reclaim. Failed or inconsistent actual evidence rolls back the Actor attempt. The DEOS equal-thirds split is runtime composition in `docs/actors.integration.en.md`, not Router package semantics.
 
 `Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes and execution returning `ExactOutputExecution { amount_in, recipient_amount_out }` from measured caller and recipient deltas.
 
@@ -266,7 +268,7 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
 | `LpPairByTokenId<T>` | `StorageValue<BoundedBTreeMap<..., MaxLpPairs>>` | Bounded reverse index from LP token ID to canonical pool pair |
 
-LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `preflight_register_lp_pair` exposes the same read-only admission contract so a host can reject before an independently dispatched pool mutation. Package `try_state` verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Optional `LpPairIntegrity` host reconciliation additionally validates every binding against concrete pool/LP-asset truth and compares complete pool/index cardinality; `()` retains internal-only checks for independent hosts without that cross-pallet topology.
+LP registration canonicalizes pair order through canonical physical-ledger admission and rejects aliases, duplicate LP ownership in either direction, and capacity overflow at `MAX_ROUTER_LP_PAIRS`. `PoolLifecycleApi` owns preflight, underlying creation, actual LP verification, reverse binding, required observation topology, and rollback. Package `try_state` verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Optional `LpPairIntegrity` host reconciliation additionally validates both pool/index directions, LP assets, physical-pair uniqueness, observation topology, and complete cardinality; `()` retains internal-only checks for independent hosts.
 
 ## Extrinsics
 
@@ -274,6 +276,8 @@ LP registration canonicalizes pair order, rejects repeated endpoints, duplicate 
 | --- | --- | --- | --- |
 | `0` | `swap(from, to, amount_in, min_amount_out, recipient, deadline)` | Signed | Benchmarked |
 | `1` | `update_router_fee(new_fee)` | AdminOrigin (Root) | Benchmarked |
+| `2` | `swap_exact_output(from, to, amount_out, max_amount_in, recipient, deadline)` | Signed | Component-wise Router swap maximum |
+| `3` | `create_pool(asset_a, asset_b)` | Signed, permissionless | `144,923,000 / 34,255`, 13 reads, 10 writes |
 
 ## Events
 
@@ -424,7 +428,7 @@ Located in `runtime/src/tests/deos_router_integration_tests.rs`:
 
 ### Benchmarks
 
-`swap` and `update_router_fee` use generated V2 runtime weights. Each XYK route seeds a nearby valid safety reference, then measures changed Oracle publication with combined broad and Crossing ingress on every committed directional pool feed. Exact-output fixtures use a non-dust amount so the reference guard and measured route remain representative.
+Router calls use generated V2 runtime weights. The public swap envelope takes the component-wise maximum across exact-input and exact-output route classes. Each XYK route seeds a nearby valid safety reference, then measures changed Oracle publication with combined broad and Crossing ingress on every committed directional pool feed. Canonical `create_pool` measures the complete host pool, LP reverse identity, and two-feed Oracle topology at 50 steps × 20 repeats.
 
 Production `50 × 20` generation measures every semantic route class independently:
 

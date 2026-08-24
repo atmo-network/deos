@@ -10,11 +10,11 @@ use alloc::vec::Vec;
 #[cfg(feature = "std")]
 use std::vec::Vec;
 
-/// This enum serves as the single source of truth for asset types across all pallets,
-/// enabling type-safe interactions between DEOS Router, TMC, Burn Actor, and other actors.
+/// Semantic asset identity shared by DEOS domains.
 ///
-/// - `Native`: The system's native token (managed by pallet-balances).
-/// - `Local(u32)`: Local synthetic assets (managed by pallet-assets).
+/// `Local(id)` and `Foreign(id)` are both physically held by `pallet-assets`; their semantic
+/// distinction is canonical only when the ID namespace agrees with the variant. Use
+/// [`AssetKind::ledger_key`] for physical-ledger comparisons.
 #[derive(
   Clone,
   Copy,
@@ -42,10 +42,28 @@ pub enum AssetKind {
   Foreign(u32),
 }
 
-impl From<u32> for AssetKind {
-  fn from(asset_id: u32) -> Self {
-    AssetKind::Local(asset_id)
-  }
+/// Physical ledger identity used wherever economic distinctness matters.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  Eq,
+  MaxEncodedLen,
+  Ord,
+  PartialEq,
+  PartialOrd,
+  TypeInfo,
+  Serialize,
+  Deserialize,
+)]
+pub enum LedgerAssetKey {
+  /// The native balance ledger.
+  Native,
+  /// One `pallet-assets` ledger keyed by its exact asset ID.
+  Assets(u32),
 }
 
 // Bitmask Architecture for Asset Classification
@@ -80,6 +98,35 @@ pub trait AssetInspector {
 }
 
 impl AssetKind {
+  /// Return the physical ledger that owns balances for this semantic asset.
+  pub const fn ledger_key(self) -> LedgerAssetKey {
+    match self {
+      Self::Native => LedgerAssetKey::Native,
+      Self::Local(id) | Self::Foreign(id) => LedgerAssetKey::Assets(id),
+    }
+  }
+
+  /// Whether this is the unique semantic representation admitted for its physical ledger.
+  pub const fn is_canonical(self) -> bool {
+    match self {
+      Self::Native => true,
+      Self::Local(id) => id & MASK_TYPE != TYPE_FOREIGN,
+      Self::Foreign(id) => id & MASK_TYPE == TYPE_FOREIGN,
+    }
+  }
+
+  /// Validate two distinct canonical physical ledgers for market topology.
+  pub const fn is_valid_market_pair(self, other: Self) -> bool {
+    self.is_canonical()
+      && other.is_canonical()
+      && match (self.ledger_key(), other.ledger_key()) {
+        (LedgerAssetKey::Assets(a), LedgerAssetKey::Assets(b)) => a != b,
+        (LedgerAssetKey::Native, LedgerAssetKey::Assets(_))
+        | (LedgerAssetKey::Assets(_), LedgerAssetKey::Native) => true,
+        (LedgerAssetKey::Native, LedgerAssetKey::Native) => false,
+      }
+  }
+
   /// Deterministically derive the local staking-receipt asset ID for a given base asset.
   ///
   /// Native and local assets use the `0x5...` receipt namespace. Foreign assets use the dedicated
@@ -139,11 +186,7 @@ impl AssetInspector for AssetKind {
   }
 
   fn is_foreign(&self) -> bool {
-    match self {
-      AssetKind::Foreign(_) => true,
-      AssetKind::Local(id) => (id & MASK_TYPE) == TYPE_FOREIGN,
-      _ => false,
-    }
+    matches!(self, AssetKind::Foreign(_))
   }
 }
 
@@ -255,6 +298,47 @@ mod tests {
 
     let not_lp = AssetKind::Local(TYPE_PROTOCOL | 12345);
     assert!(!not_lp.is_lp());
+  }
+
+  #[test]
+  fn local_and_foreign_same_id_share_ledger_identity() {
+    let id = TYPE_FOREIGN | 42;
+    assert_eq!(
+      AssetKind::Local(id).ledger_key(),
+      AssetKind::Foreign(id).ledger_key()
+    );
+    assert!(!AssetKind::Local(id).is_valid_market_pair(AssetKind::Foreign(id)));
+  }
+
+  #[test]
+  fn canonical_asset_representation_is_unique() {
+    let local_id = TYPE_PROTOCOL | 7;
+    let foreign_id = TYPE_FOREIGN | 7;
+    assert!(AssetKind::Local(local_id).is_canonical());
+    assert!(!AssetKind::Foreign(local_id).is_canonical());
+    assert!(AssetKind::Foreign(foreign_id).is_canonical());
+    assert!(!AssetKind::Local(foreign_id).is_canonical());
+  }
+
+  #[test]
+  fn accepted_distinct_assets_have_distinct_ledger_keys() {
+    let accepted = [
+      AssetKind::Native,
+      AssetKind::Local(TYPE_PROTOCOL | 1),
+      AssetKind::Foreign(TYPE_FOREIGN | 1),
+    ];
+    assert!(accepted[0].is_valid_market_pair(accepted[1]));
+    assert!(accepted[0].is_valid_market_pair(accepted[2]));
+    assert!(accepted[1].is_valid_market_pair(accepted[2]));
+    assert_ne!(accepted[0].ledger_key(), accepted[1].ledger_key());
+    assert_ne!(accepted[0].ledger_key(), accepted[2].ledger_key());
+    assert_ne!(accepted[1].ledger_key(), accepted[2].ledger_key());
+  }
+
+  #[test]
+  fn noncanonical_asset_representations_are_rejected() {
+    assert!(!AssetKind::Foreign(TYPE_PROTOCOL | 9).is_canonical());
+    assert!(!AssetKind::Local(TYPE_FOREIGN | 9).is_canonical());
   }
 
   #[test]

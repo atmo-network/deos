@@ -716,6 +716,7 @@ impl pallet_deos_router::Config for Test {
   type Assets = Assets;
   type TmcPallet = MockTmcPallet;
   type AssetConversion = MockAssetConversionAdapter;
+  type PoolLifecycle = ();
   type PalletId = PalletIdStub;
   type NativeAsset = NativeAsset;
   type DefaultRouterFee = RouterFeeStub;

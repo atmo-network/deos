@@ -613,6 +613,16 @@ mod tests {
         ),
         crate::Error::<crate::mock::Test>::InvalidParameters
       );
+      assert_noop!(
+        TokenMintingCurve::create_curve(
+          RuntimeOrigin::root(),
+          AssetKind::Local(2),
+          AssetKind::Local(primitives::TYPE_FOREIGN | 1),
+          1_000_000_000u128,
+          1_000_000_000u128,
+        ),
+        crate::Error::<crate::mock::Test>::InvalidParameters
+      );
     });
   }
 

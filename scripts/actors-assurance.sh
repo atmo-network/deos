@@ -6,6 +6,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 CARGO_PROFILE="${CARGO_PROFILE:-release}"
 INCLUDE_OCCUPANCY_PROFILE="${INCLUDE_OCCUPANCY_PROFILE:-1}"
 QUICK_MODE="${QUICK_MODE:-0}"
+REQUIRE_WASM_IDENTITY="${REQUIRE_WASM_IDENTITY:-1}"
+EVIDENCE_SOURCE_IDENTITY=""
+EVIDENCE_WEIGHT_IDENTITY=""
+EVIDENCE_WASM_IDENTITY=""
+EVIDENCE_METADATA_IDENTITY=""
 
 REQUIRED_HEAVY_PROFILES=(
     "scheduler_stress_fifo_over_capacity_fairness_matrix"
@@ -13,11 +18,15 @@ REQUIRED_HEAVY_PROFILES=(
     "scheduler_stress_fifo_sparse_topology_long_run_liveness"
     "stress_10k_actors_queue_scheduler"
     "checkpoint_a_s6_dense_10k_wakeups_converge_without_drops"
+    "transfer_10k_manual_and_reactive_first_traversal"
+    "transfer_10k_first_traversal_with_continuous_user_dispatch"
+    "mixed_9500_transfer_400_swapout_100_control_first_traversal"
 )
 PACKAGE_HEAVY_PROFILES=(
     "crossing_scale_10k_zero_match_small_cohort_and_maximum_herd"
     "breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_execution_loss"
     "crossing_mixed_dense_sparse_directional_lifecycle_profile"
+    "maximum_dormant_identity_population_adds_no_idle_scan"
 )
 OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
 DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
@@ -39,6 +48,7 @@ Environment:
   CARGO_PROFILE=release|dev
   INCLUDE_OCCUPANCY_PROFILE=0|1
   QUICK_MODE=0|1
+  REQUIRE_WASM_IDENTITY=0|1  Require and preserve production Wasm (default: 1)
   DEOS_VERBOSE=0|1
   DEOS_FAILURE_TAIL_LINES=N
 EOF
@@ -71,8 +81,81 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands cargo npm
+    require_commands cargo npm git sha256sum
+    [[ -f "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" ]] || {
+        log_error "Actors production Weight not found"
+        return 1
+    }
+    if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
+        [[ -f "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" ]] || {
+            log_error "Production runtime Wasm not found"
+            return 1
+        }
+    else
+        log_warning "Production Wasm identity disabled by the caller; source, Weight, metadata, and behavioral assurance remain required"
+    fi
+    [[ -f "$PROJECT_ROOT/web-client/.papi/metadata/deos.scale" ]] || {
+        log_error "Runtime metadata not found"
+        return 1
+    }
     log_success "Release gate prerequisites checked"
+}
+
+worktree_evidence_identity() {
+    {
+        git -C "$PROJECT_ROOT" diff --binary --no-ext-diff
+        while IFS= read -r -d '' path; do
+            sha256sum "$PROJECT_ROOT/$path"
+        done < <(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -z | sort -z)
+    } | sha256sum | awk '{print $1}'
+}
+
+capture_evidence_identity() {
+    EVIDENCE_SOURCE_IDENTITY="$(worktree_evidence_identity)"
+    EVIDENCE_WEIGHT_IDENTITY="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
+    if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
+        EVIDENCE_WASM_IDENTITY="$(sha256sum "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" | awk '{print $1}')"
+    else
+        EVIDENCE_WASM_IDENTITY="not-required"
+    fi
+    EVIDENCE_METADATA_IDENTITY="$(sha256sum "$PROJECT_ROOT/web-client/.papi/metadata/deos.scale" | awk '{print $1}')"
+    log_info "Evidence source:   $EVIDENCE_SOURCE_IDENTITY"
+    log_info "Evidence Weight:   $EVIDENCE_WEIGHT_IDENTITY"
+    log_info "Evidence Wasm:     $EVIDENCE_WASM_IDENTITY"
+    log_info "Evidence metadata: $EVIDENCE_METADATA_IDENTITY"
+}
+
+verify_evidence_identity_unchanged() {
+    local source_identity weight_identity wasm_identity metadata_identity
+    source_identity="$(worktree_evidence_identity)"
+    weight_identity="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
+    if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
+        wasm_identity="$(sha256sum "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" | awk '{print $1}')"
+    else
+        wasm_identity="not-required"
+    fi
+    metadata_identity="$(sha256sum "$PROJECT_ROOT/web-client/.papi/metadata/deos.scale" | awk '{print $1}')"
+    if [[ "$source_identity" != "$EVIDENCE_SOURCE_IDENTITY" ]]; then
+        log_error "Actors assurance changed the source identity"
+        return 1
+    fi
+    if [[ "$weight_identity" != "$EVIDENCE_WEIGHT_IDENTITY" ]]; then
+        log_error "Actors assurance changed the Weight identity"
+        return 1
+    fi
+    if [[ "$wasm_identity" != "$EVIDENCE_WASM_IDENTITY" ]]; then
+        log_error "Actors assurance changed the Wasm identity"
+        return 1
+    fi
+    if [[ "$metadata_identity" != "$EVIDENCE_METADATA_IDENTITY" ]]; then
+        log_error "Actors assurance changed the metadata identity"
+        return 1
+    fi
+    if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
+        log_success "Actors assurance retained exact source, Weight, Wasm, and metadata identities"
+    else
+        log_success "Actors assurance retained exact source, Weight, and metadata identities; caller explicitly omitted Wasm identity"
+    fi
 }
 
 required_heavy_profiles() {
@@ -118,7 +201,7 @@ verify_heavy_profiles_resolve_exactly_once() {
 
 run_gate() {
     run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
-    run_shell_step "Actors gate: Trigger bond vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example trigger_bond_vectors -- --check ../web-client/src/lib/automation/actors-trigger-bond-vectors.json"
+    run_shell_step "Actors gate: runtime cost vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
     run_shell_step "Actors gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
@@ -187,8 +270,10 @@ main() {
     parse_args "$@"
     phase_banner "DEOS Actors assurance"
     check_prerequisites
+    capture_evidence_identity
     log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | occupancy: $INCLUDE_OCCUPANCY_PROFILE"
     run_gate
+    verify_evidence_identity_unchanged
     phase_banner "Summary"
     log_success "Actors scheduler assurance completed successfully"
 }

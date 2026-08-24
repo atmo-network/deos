@@ -4,8 +4,8 @@ pub(crate) mod assets_config;
 pub mod deos_router_config;
 pub mod governance_config;
 pub mod oracle_config;
-pub mod pool_index;
 pub mod preimage_config;
+pub mod resource_meter;
 pub mod staking_config;
 pub(crate) mod tmc_config;
 mod xcm_config;
@@ -47,6 +47,7 @@ use std::cell::Cell;
 use xcm::latest::prelude::{AssetId, BodyId};
 
 // Local module imports
+use self::governance_config::GovernanceFixedWeight;
 use super::{
   AVERAGE_ON_INITIALIZE_RATIO, AccountId, Aura, Balance, Balances, Block, BlockNumber,
   CollatorSelection, EXISTENTIAL_DEPOSIT, HOURS, Hash, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT,
@@ -102,11 +103,33 @@ parameter_types! {
   pub const SS58Prefix: u16 = 42;
 }
 
+/// Fail-closed public Asset Conversion surface.
+///
+/// DEOS Router owns every user-initiated XYK swap and its protocol fee. Direct runtime calls keep
+/// only reviewed liquidity maintenance operations. Canonical permissionless creation is owned by
+/// the DEOS Router lifecycle. New upstream Asset Conversion calls are denied by default.
+pub struct RuntimeCallFilter;
+
+impl frame_support::traits::Contains<RuntimeCall> for RuntimeCallFilter {
+  fn contains(call: &RuntimeCall) -> bool {
+    match call {
+      RuntimeCall::AssetConversion(call) => matches!(
+        call,
+        pallet_asset_conversion::Call::add_liquidity { .. }
+          | pallet_asset_conversion::Call::remove_liquidity { .. }
+          | pallet_asset_conversion::Call::touch { .. }
+      ),
+      _ => true,
+    }
+  }
+}
+
 /// The default types are being injected by [`derive_impl`](`frame_support::derive_impl`) from
 /// [`ParaChainDefaultConfig`](`struct@frame_system::config_preludes::ParaChainDefaultConfig`),
 /// but overridden as needed.
 #[derive_impl(frame_system::config_preludes::ParaChainDefaultConfig)]
 impl frame_system::Config for Runtime {
+  type BaseCallFilter = RuntimeCallFilter;
   /// The identifier used to distinguish between accounts.
   type AccountId = AccountId;
   /// The index type for storing how many extrinsics an account has signed.
@@ -207,8 +230,33 @@ impl pallet_transaction_payment::Config for Runtime {
 }
 
 parameter_types! {
-    pub const ReservedXcmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
-    pub const ReservedDmpWeight: Weight = MAXIMUM_BLOCK_WEIGHT.saturating_div(4);
+    pub MaximumContextMeasuredWeight: Weight =
+      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::maximum_context_inherent();
+    /// Relay DMP storage is capped by 32 MiB divided by the sanitized 64 KiB minimum
+    /// `max_downward_message_size`; this is the declared cap for Prepass inherent checking.
+    pub const MaxInboundDownwardMessagesPerContext: u32 = 512;
+    /// Relay configuration admits at most 128 inbound HRMP channels per parachain.
+    pub const MaxInboundHorizontalChannelsPerContext: u32 = 128;
+    /// DEOS fail-closed cap across full and hashed HRMP messages in one context inherent.
+    /// It covers 1,000 messages on every maximally admitted inbound channel.
+    pub const MaxInboundHorizontalMessagesPerContext: u32 = 131_072;
+    pub DmpFixedWeight: Weight =
+      <cumulus_pallet_parachain_system::weights::SubstrateWeight<Runtime> as
+        cumulus_pallet_parachain_system::WeightInfo>::enqueue_inbound_downward_messages(
+          MaxInboundDownwardMessagesPerContext::get(),
+        );
+    /// Current SDK enqueue adapters do not consume this value directly; keep the compatibility
+    /// surface equal to the measured finite owner rather than a fictitious block percentage.
+    pub ReservedDmpWeight: Weight = DmpFixedWeight::get();
+    /// Smallest component-wise XCMP residual whose sum with DMP dominates the complete measured
+    /// maximum-context inherent. Outer enqueue bookkeeping is added by the fixed owner below.
+    pub ReservedXcmpWeight: Weight =
+      MaximumContextMeasuredWeight::get().saturating_sub(DmpFixedWeight::get());
+    /// Maximum currently registered by the XCMP enqueue path: handler meter plus its outer
+    /// two-read/three-write bookkeeping. Metadata traversal remains a separate evidence owner.
+    pub XcmpRegisteredFixedWeight: Weight = ReservedXcmpWeight::get().saturating_add(
+      <Runtime as frame_system::Config>::DbWeight::get().reads_writes(2, 3),
+    );
     pub const RelayOrigin: AggregateMessageOrigin = AggregateMessageOrigin::Parent;
 }
 
@@ -294,9 +342,123 @@ impl cumulus_pallet_xcmp_queue::Config for Runtime {
   type PriceForSiblingDelivery = PriceForSiblingParachainDelivery;
 }
 
+#[allow(dead_code)] // Referenced by FixedBlockWeightComponentsValue's lazy getter.
+pub fn frame_and_other_fixed_weight() -> Weight {
+  let block_weights = RuntimeBlockWeights::get();
+  let mandatory_base = block_weights.get(DispatchClass::Mandatory).base_extrinsic;
+  block_weights
+    .base_block
+    .checked_add(&mandatory_base)
+    .and_then(|weight| weight.checked_add(&mandatory_base))
+    .and_then(|weight| weight.checked_add(&mandatory_base))
+    .and_then(|weight| weight.checked_add(&MessageQueueServiceWeight::get()))
+    .and_then(|weight| weight.checked_add(&XcmpQueue::on_idle_weight()))
+    .and_then(|weight| weight.checked_add(&GovernanceFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&SessionRotationFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuthorshipFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuraFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuraExtFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&XcmVersionDiscoveryFixedWeight::get()))
+    .unwrap_or(Weight::MAX)
+}
+
+const ACTOR_CONTROL_RATIO: (u64, u64) = (1, 3);
+
 parameter_types! {
-    pub const Period: u32 = 6 * HOURS;
-    pub const Offset: u32 = 0;
+  pub AuthorshipFixedWeight: Weight =
+    <<Runtime as pallet_collator_selection::Config>::WeightInfo as pallet_collator_selection::weights::WeightInfo>::note_author();
+  pub AuraFixedWeight: Weight = <Runtime as frame_system::Config>::DbWeight::get().reads_writes(2, 1);
+  pub AuraExtFixedWeight: Weight = <Runtime as frame_system::Config>::DbWeight::get().reads_writes(2, 1);
+  /// Upstream XCM lazy migration is explicitly capped at one tenth of max block Weight.
+  pub XcmMigrationMaximumWeight: Weight = RuntimeBlockWeights::get().max_block / 10;
+  pub XcmVersionDiscoveryFixedWeight: Weight =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::maximum_xcm_version_discovery();
+  pub FixedBlockWeightComponentsValue: pallet_deos_actors::FixedBlockWeightComponents =
+    pallet_deos_actors::FixedBlockWeightComponents::new(
+      frame_and_other_fixed_weight(),
+      <pallet_timestamp::weights::SubstrateWeight<Runtime> as pallet_timestamp::WeightInfo>::set()
+        .saturating_add(<pallet_timestamp::weights::SubstrateWeight<Runtime> as pallet_timestamp::WeightInfo>::on_finalize()),
+      Weight::zero(),
+      DmpFixedWeight::get(),
+      XcmpRegisteredFixedWeight::get(),
+    );
+  pub FixedBlockWeight: Weight =
+    FixedBlockWeightComponentsValue::get().total().unwrap_or(Weight::MAX);
+  pub BlockResourceBudgetValue: pallet_deos_actors::BlockResourceBudget =
+    pallet_deos_actors::BlockResourceBudget::new_with_control_ratio(
+      MAXIMUM_BLOCK_WEIGHT,
+      FixedBlockWeight::get(),
+      ACTOR_CONTROL_RATIO.0,
+      ACTOR_CONTROL_RATIO.1,
+    )
+    .unwrap_or_else(|_| pallet_deos_actors::BlockResourceBudget::fail_closed(MAXIMUM_BLOCK_WEIGHT));
+  pub const Period: u32 = 6 * HOURS;
+  pub const Offset: u32 = 0;
+  pub SessionRotationFixedWeight: Weight =
+    <crate::weights::pallet_session_rotation::SubstrateWeight<Runtime> as pallet_session_rotation::WeightInfo>::rotate_session();
+}
+
+pub struct NeverEndSession;
+impl pallet_session::ShouldEndSession<BlockNumber> for NeverEndSession {
+  fn should_end_session(_: BlockNumber) -> bool {
+    false
+  }
+}
+
+pub struct RuntimeSessionRotation;
+impl pallet_session_rotation::SessionRotation<BlockNumber> for RuntimeSessionRotation {
+  fn should_rotate(now: BlockNumber) -> bool {
+    <pallet_session::PeriodicSessions<Period, Offset> as pallet_session::ShouldEndSession<
+      BlockNumber,
+    >>::should_end_session(now)
+  }
+
+  fn rotate() {
+    pallet_session::Pallet::<Runtime>::rotate_session();
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_session_rotation::BenchmarkHelper for RuntimeSessionRotation {
+  fn prepare_rotation() {
+    use polkadot_sdk::frame_support::traits::Get;
+
+    let max_candidates: u32 = <Runtime as pallet_collator_selection::Config>::MaxCandidates::get();
+    let max_invulnerables: u32 =
+      <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
+    let active_bound = max_candidates.saturating_add(max_invulnerables);
+    let mut queued = Vec::with_capacity(active_bound as usize);
+    for index in 0..active_bound {
+      let mut raw = [0u8; 32];
+      raw[..4].copy_from_slice(&index.to_le_bytes());
+      raw[31] = 1;
+      let account = AccountId::new(raw);
+      let keys = crate::SessionKeys {
+        aura: AuraId::from(sp_core::sr25519::Public::from_raw(raw)),
+      };
+      pallet_session::NextKeys::<Runtime>::insert(&account, &keys);
+      queued.push((account, keys));
+    }
+    pallet_session::QueuedKeys::<Runtime>::put(queued);
+  }
+
+  fn verify_rotation() {
+    let max_candidates: u32 = <Runtime as pallet_collator_selection::Config>::MaxCandidates::get();
+    let max_invulnerables: u32 =
+      <Runtime as pallet_collator_selection::Config>::MaxInvulnerables::get();
+    assert_eq!(
+      pallet_session::QueuedKeys::<Runtime>::decode_len(),
+      Some(max_candidates.saturating_add(max_invulnerables) as usize)
+    );
+    assert_eq!(pallet_session::CurrentIndex::<Runtime>::get(), 1);
+  }
+}
+
+impl pallet_session_rotation::Config for Runtime {
+  type SessionRotation = RuntimeSessionRotation;
+  type WeightInfo = crate::weights::pallet_session_rotation::SubstrateWeight<Runtime>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = RuntimeSessionRotation;
 }
 
 #[cfg(test)]
@@ -609,7 +771,7 @@ impl pallet_session::Config for Runtime {
   type KeyDeposit = ();
   // We don't have stash and controller, thus we don't need the convert as well.
   type ValidatorIdOf = pallet_collator_selection::IdentityCollator;
-  type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
+  type ShouldEndSession = NeverEndSession;
   type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
   type SessionManager = DelegationWeightedCollatorSessionManager;
   // Essentially just Aura, but let's be pedantic.

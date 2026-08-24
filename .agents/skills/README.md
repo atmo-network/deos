@@ -5,7 +5,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | Skill | Owns | Explicitly excludes | Public route |
 | --- | --- | --- | --- |
 | `alignment` | Changed-scope DEOS audits, completion judgement, and durable failure memory | Project CI/release validation; subsystem implementation policy | `alignment/SKILL.md`; `alignment/scripts/completion-gate.sh` |
-| `benchmarking` | Benchmark design, evidence classification, interpretation, and integration | Runtime semantics; shared command execution; release publication | `benchmarking/SKILL.md`; project-owned benchmark/build scripts |
+| `architecture-experiments` | Physical architecture hypotheses, controlled benchmark design, production-Weight evidence, durable rejected alternatives, artifact-bound lineage, invalidation, and optimization gradients | Protocol semantics; benchmark command execution; open-work and architecture truth | `architecture-experiments/SKILL.md` |
 | `domain-dag` | Independent generic ownership/DAG review and validator | DEOS subsystem policy; project acceptance | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
 | `release-assurance` | Agent-led dependency provenance, Weight delta, threat-boundary, artifact-identity, and attestation review | Project validation, CI, runtime semantics, publication, signing, and history mutation | `release-assurance/SKILL.md` and its private evidence scripts |
 | `wiki-sync` | Independent generated Wiki projection, provenance, trust, localization, and consolidation | Source specification ownership; browser implementation; project acceptance | `wiki-sync/SKILL.md` and its private scripts |

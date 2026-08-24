@@ -4,6 +4,7 @@ use frame::prelude::*;
 use polkadot_sdk::{
   frame_support::PalletId,
   sp_runtime::{DispatchResult, Perbill},
+  sp_weights::Weight,
 };
 
 use crate::types::AddressEvent;
@@ -41,8 +42,11 @@ pub struct ObservationTransition {
 
 /// Certified bounded ingress for one externally owned observation transition.
 pub trait ObservationTransitionIngress<FeedId> {
-  fn note_observation_transition(feed: FeedId, transition: ObservationTransition)
-  -> DispatchResult;
+  fn note_observation_transition(
+    feed: FeedId,
+    transition: ObservationTransition,
+    cause_provenance: crate::TriggerCauseProvenance,
+  ) -> DispatchResult;
 }
 
 /// Minimal authoritative actor context for adapter operations whose policy depends on Actors type.
@@ -284,6 +288,156 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
     asset: AssetId,
     amount: Balance,
   ) -> Result<(), TaskFailure>;
+}
+
+/// Runtime-owned non-semantic authority committed by an Actor admission certificate.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct AdmissionCertificateAuthority {
+  pub runtime_actor_semantics_version: u32,
+  pub production_weight_identity: [u8; 32],
+  pub body_geometry_version: u32,
+  pub configured_bounds_commitment: [u8; 32],
+  pub maximum_lifecycle_weight: Weight,
+}
+
+impl AdmissionCertificateAuthority {
+  pub fn compose_production_weight_identity(
+    control_identity: [u8; 32],
+    effect_identity: [u8; 32],
+  ) -> [u8; 32] {
+    (
+      *b"DEOS_ACTOR_PRODUCTION_WEIGHT",
+      control_identity,
+      effect_identity,
+    )
+      .using_encoded(frame::hashing::blake2_256)
+  }
+}
+
+/// Fail-closed host boundary for the exact runtime authority used to admit Actor Contracts.
+pub trait AdmissionCertificateAuthorityProvider {
+  fn current() -> Option<AdmissionCertificateAuthority>;
+}
+
+impl AdmissionCertificateAuthorityProvider for () {
+  fn current() -> Option<AdmissionCertificateAuthority> {
+    None
+  }
+}
+
+/// Exact physical location facts needed to price one lazy current-Step load.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct StepControlWeightContext {
+  pub cursor: u32,
+  pub steps_in_fragment: u32,
+  pub opening_tail_chunks: u32,
+  pub predicate_evaluation_units: u32,
+  pub opening_snapshot_entries: u32,
+  pub opening_predicate_results: u32,
+  pub funding_snapshot_entries: u32,
+}
+
+/// Runtime-owned maximum Actor-control Weight used by admission before semantic evaluation.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum StepControlPhase {
+  Opening,
+  Running,
+  Suspended,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum StepControlOutcome {
+  Continued,
+  Suspended,
+  Completed,
+  Failed,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum StepControlPlacement {
+  None,
+  Queue,
+  Wakeup,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct StepControlExecution {
+  pub phase: StepControlPhase,
+  pub outcome: StepControlOutcome,
+  pub placement: StepControlPlacement,
+}
+
+pub trait StepControlWeightProvider<Step> {
+  fn production_weight_identity() -> Option<[u8; 32]>;
+  fn maximum_control_weight(context: StepControlWeightContext, step: &Step) -> Option<Weight>;
+  fn actual_control_weight(
+    context: StepControlWeightContext,
+    step: &Step,
+    maximum: Weight,
+    execution: StepControlExecution,
+  ) -> Option<Weight>;
+}
+
+impl<Step> StepControlWeightProvider<Step> for () {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    None
+  }
+
+  fn maximum_control_weight(_: StepControlWeightContext, _: &Step) -> Option<Weight> {
+    None
+  }
+
+  fn actual_control_weight(
+    _: StepControlWeightContext,
+    _: &Step,
+    _: Weight,
+    _: StepControlExecution,
+  ) -> Option<Weight> {
+    None
+  }
+}
+
+/// Exact post-dispatch branch owned by one current-Step Task effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskEffectExecution {
+  /// Predicate evaluation, amount resolution, or funding classification ended before the Task
+  /// operation was invoked. The exact effect Weight is zero.
+  NotInvoked,
+  /// The canonical Task operation was invoked, whether it committed or returned a typed failure.
+  Invoked,
+}
+
+/// Runtime-owned maximum and valid-actual Task-effect Weight authority.
+pub trait TaskEffectWeightProvider<Task> {
+  fn production_weight_identity() -> Option<[u8; 32]>;
+  fn maximum_effect_weight(task: &Task) -> Option<Weight>;
+  fn actual_effect_weight(task: &Task, execution: TaskEffectExecution) -> Option<Weight>;
+}
+
+impl<Task> TaskEffectWeightProvider<Task> for () {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    None
+  }
+
+  fn maximum_effect_weight(_: &Task) -> Option<Weight> {
+    None
+  }
+
+  fn actual_effect_weight(_: &Task, _: TaskEffectExecution) -> Option<Weight> {
+    None
+  }
 }
 
 /// Runtime staking operations. Required only when Stake or Unstake appears in a plan.

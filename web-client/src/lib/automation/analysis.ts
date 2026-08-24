@@ -235,7 +235,9 @@ export type ActorStaticTriggerAnalysis = {
     | 'AddressEvent'
     | 'ObservationChange'
     | 'ObservationCrossing'
+    | 'AtTime'
     | 'Cadenced';
+  afterTicks: number | null;
   everyTicks: number | null;
   sourceKinds: Array<
     'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
@@ -255,6 +257,7 @@ export type ActorStaticFinding =
         'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
       >;
     }
+  | { kind: 'OneShotTemporalAdmission'; afterTicks: number }
   | { kind: 'PeriodicAdmission'; everyTicks: number }
   | {
       kind: 'TriggerAmountCompatibilityViolation';
@@ -352,6 +355,7 @@ export type ActorContractStaticAnalysis = {
   actorType: ActorContractArtifact['actorType'];
   mutability: ActorContractArtifact['mutability'];
   completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle';
+  autoCloseAtCycleNonce: bigint | null;
   cooldownBlocks: number;
   trigger: ActorStaticTriggerAnalysis;
   steps: ActorStaticStepAnalysis[];
@@ -1158,6 +1162,7 @@ function parseTrigger(
     case 'Manual':
       return {
         kind: 'Manual',
+        afterTicks: null,
         everyTicks: null,
         sourceKinds: ['Manual'],
         observationFeeds: [],
@@ -1165,6 +1170,7 @@ function parseTrigger(
     case 'AddressEvent':
       return {
         kind: 'AddressEvent',
+        afterTicks: null,
         everyTicks: null,
         sourceKinds: ['AddressEvent'],
         observationFeeds: [],
@@ -1172,6 +1178,7 @@ function parseTrigger(
     case 'ObservationChange':
       return {
         kind: 'ObservationChange',
+        afterTicks: null,
         everyTicks: null,
         sourceKinds: ['ObservationChange'],
         observationFeeds: [
@@ -1204,11 +1211,28 @@ function parseTrigger(
       }
       return {
         kind: 'ObservationCrossing',
+        afterTicks: null,
         everyTicks: null,
         sourceKinds: ['ObservationCrossing'],
         observationFeeds: [
           member(trigger.value, 'feed', 'Trigger.ObservationCrossing'),
         ],
+      };
+    }
+    case 'AtTime': {
+      const afterTicks = safeInteger(
+        member(trigger.value, 'after_ticks', 'Trigger.AtTime'),
+        'Trigger.AtTime.after_ticks',
+      );
+      if (afterTicks < 1) {
+        throw new Error('Trigger.AtTime.after_ticks must be positive');
+      }
+      return {
+        kind: 'AtTime',
+        afterTicks,
+        everyTicks: null,
+        sourceKinds: [],
+        observationFeeds: [],
       };
     }
     case 'Cadenced': {
@@ -1221,6 +1245,7 @@ function parseTrigger(
       }
       return {
         kind: 'Cadenced',
+        afterTicks: null,
         everyTicks,
         sourceKinds: [],
         observationFeeds: [],
@@ -1260,7 +1285,12 @@ function findings(
       reason: 'AddressEventOnlyRequired',
     });
   }
-  if (trigger?.kind === 'Cadenced') {
+  if (trigger?.kind === 'AtTime') {
+    results.push({
+      kind: 'OneShotTemporalAdmission',
+      afterTicks: trigger.afterTicks as number,
+    });
+  } else if (trigger?.kind === 'Cadenced') {
     results.push({
       kind: 'PeriodicAdmission',
       everyTicks: trigger.everyTicks as number,
@@ -1499,6 +1529,18 @@ export function analyzeActorContract(input: {
     member(contract, 'cooldown_blocks', 'ActorContract'),
     'ActorContract.cooldown_blocks',
   );
+  const projectedAutoClose = member(
+    contract,
+    'auto_close_at_cycle_nonce',
+    'ActorContract',
+  );
+  const autoCloseAtCycleNonce =
+    projectedAutoClose == null || isNoneProjection(projectedAutoClose)
+      ? null
+      : unsignedBigInt(
+          projectedAutoClose,
+          'ActorContract.auto_close_at_cycle_nonce',
+        );
   let steps: ActorStaticStepAnalysis[] = [];
   let forecastInputs: ActorStepCostInput[] = [];
   const projectedPolicy = variant(
@@ -1546,6 +1588,7 @@ export function analyzeActorContract(input: {
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
     completionPolicy,
+    autoCloseAtCycleNonce,
     cooldownBlocks,
     trigger,
     steps,

@@ -101,7 +101,7 @@ async function chainSnapshot(client, api) {
     lpPairs,
     observation,
     actorHot,
-    actorContract,
+    actorContractHead,
     actorFunding,
   ] = await Promise.all([
     api.query.System.Account.getValue(burnAccount, { at: block.hash }),
@@ -114,7 +114,9 @@ async function chainSnapshot(client, api) {
     api.query.DeosRouter.LpPairByTokenId.getValue({ at: block.hash }),
     api.query.Oracle.Observations.getValue(feed, { at: block.hash }),
     api.query.Actors.ActorHot.getValue(burnActorId, { at: block.hash }),
-    api.query.Actors.ActorContract.getValue(burnActorId, { at: block.hash }),
+    api.query.Actors.ActorContractHead.getValue(burnActorId, {
+      at: block.hash,
+    }),
     api.query.Actors.ActorFunding.getValue(burnActorId, { at: block.hash }),
   ]);
   if (!assetDetails)
@@ -122,7 +124,7 @@ async function chainSnapshot(client, api) {
   if (!pool || !reserves.success)
     throw new Error('Native/foreign pool state is unavailable');
   if (!observation) throw new Error('Oracle observation is unavailable');
-  if (!actorHot || !actorContract || !actorFunding)
+  if (!actorHot || !actorContractHead || !actorFunding)
     throw new Error('Burn Actor state is incomplete');
 
   return jsonValue({
@@ -154,7 +156,7 @@ async function chainSnapshot(client, api) {
       oracle_observation: observation,
       actor_identity: actorIdentity,
       actor_hot: actorHot,
-      actor_contract: actorContract,
+      actor_contract_head: actorContractHead,
       actor_funding: actorFunding,
     },
   });

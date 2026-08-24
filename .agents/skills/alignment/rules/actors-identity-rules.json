@@ -49,6 +49,7 @@
         "template/pallets/actors/src/lib\\.rs:.*contract\\.steps\\.iter",
         "template/pallets/actors/src/lib\\.rs:.*legs\\.iter",
         "template/pallets/actors/src/lib\\.rs:.*ActorIdentities::<T>::iter",
+        "template/pallets/actors/src/lib\\.rs:.*ActorStateHolds::<T>::iter",
         "template/pallets/actors/src/lib\\.rs:.*SystemSovereigns::<T>::iter",
         "template/pallets/actors/src/lib\\.rs:.*SovereignIndex::<T>::iter",
         "template/pallets/actors/src/types\\.rs",
@@ -81,7 +82,8 @@
         "admitted cursor-local retry counter remains below its u32 bound",
         "suspension requires bounded RetryLater",
         "admitted mutable RetryLater plan has a valid unresolved cursor",
-        "terminal Continuation can be cleared atomically",
+        "terminal Actor run can be cleared atomically",
+        "fresh terminal cycle nonce was checked before Opening",
         "failure bound \\(MaxConsecutiveFailures\\) is precluded by admission",
         "fresh productive execution snapshot satisfies terminal preconditions",
         "handled above",
@@ -95,7 +97,7 @@
         "one predicate fits",
         "one clause fits"
       ],
-      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, integrity checks, or transactional finalization; the four compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
+      "rationale": "These exact execution assertions are mechanically precluded by the canonical actor loader, admission bounds, exhaustive StepOutcome control mapping, checked Opening nonce derivation, integrity checks, or transactional finalization; the four compact fit messages belong to the file-local test module. Any differently worded site is unowned and fails the full-tree audit.",
       "expiry": "Replace an entry when its assertion becomes typed failure or when its preclusion owner changes."
     },
     {

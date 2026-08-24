@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn frozen_cycle_snapshot_dependency_is_closed_over_amounts_tasks_and_preconditions() {
+  assert!(!AmountResolution::Fixed(1u64).requires_frozen_cycle_snapshot());
+  assert!(
+    !AmountResolution::<u64>::PercentageOfCurrent(Perbill::one()).requires_frozen_cycle_snapshot()
+  );
+  assert!(!AmountResolution::<u64>::AllAvailable.requires_frozen_cycle_snapshot());
+  assert!(
+    AmountResolution::<u64>::PercentageAtOpening(Perbill::one()).requires_frozen_cycle_snapshot()
+  );
+  assert!(
+    AmountResolution::<u64>::PercentageOfLastFunding(Perbill::one())
+      .requires_frozen_cycle_snapshot()
+  );
+
+  let mut step = make_step(Task::StopCycle);
+  assert!(!step.requires_frozen_cycle_snapshot());
+  step.precondition = timed_all_conditions(
+    ObservationTiming::Opening,
+    vec![Predicate::BlockNumberAbove { threshold: 0 }],
+  );
+  assert!(step.requires_frozen_cycle_snapshot());
+
+  let current = StepOf::<Test> {
+    precondition: timed_all_conditions(
+      ObservationTiming::Current,
+      vec![Predicate::BlockNumberAbove { threshold: 0 }],
+    ),
+    task: Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+    },
+    on_error: StepErrorPolicy::AbortCycle,
+  };
+  assert!(!current.requires_frozen_cycle_snapshot());
+
+  let opening_amount = make_step(Task::Transfer {
+    to: BOB,
+    asset: TestAsset::Native,
+    amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+  });
+  assert!(opening_amount.requires_frozen_cycle_snapshot());
+}
+
+#[test]
 fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
   new_test_ext().execute_with(|| {
     set_observation(
@@ -61,7 +106,7 @@ fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
         LoadedActorStateOf::Dormant(_)
       ));
       assert!(Actors::actor_hot(actor_id).is_none());
-      assert!(ActorContracts::<Test>::get(actor_id).is_none());
+      assert!(Actors::load_actor_contract(actor_id).is_none());
       assert!(ActorFunding::<Test>::get(actor_id).is_none());
       assert!(Actors::crossing_membership(actor_id).is_none());
       assert!(Actors::actor_observation_feeds(actor_id).is_none());
@@ -107,7 +152,7 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 }
 
 #[test]
-fn continuation_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
+fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
   new_test_ext().execute_with(|| {
     let mut contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
@@ -134,37 +179,52 @@ fn continuation_schema_round_trips_retry_position_and_typed_snapshot_surfaces() 
     opening_snapshot
       .try_insert(OpeningSurface::StakingShares(TestAsset::Local(1)), 40)
       .expect("staking snapshot fits");
-    let continuation = RuntimeContinuationState {
+    let run_state = RuntimeActorRunState {
+      contract_authority: run_contract_authority(actor_id),
+      cycle_nonce: 1,
       cursor: 0,
+      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
+      last_committed_step_block: None,
+      eligible_at: 2,
       opening_snapshot,
       opening_predicate_results: Default::default(),
       funding_snapshot: Default::default(),
-      cumulative_outcomes: OutcomeTotals {
-        executed_steps: 1,
-        ..Default::default()
-      },
+      cumulative_outcomes: OutcomeTotals::default(),
+      last_step_outcome: Some(StepOutcome::FundingUnavailable),
+      suspension: Some(SuspensionReason::FundingUnavailable),
     };
-    let encoded = continuation.encode();
-    let decoded =
-      RuntimeContinuationState::decode(&mut &encoded[..]).expect("continuation decodes");
+    let encoded = run_state.encode();
+    let decoded = RuntimeActorRunState::decode(&mut &encoded[..]).expect("Actor run decodes");
+    assert_eq!(decoded.cycle_nonce, 1);
     assert_eq!(decoded.cursor, 0);
     assert_eq!(decoded.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(decoded.last_attempt_block, 1);
+    assert_eq!(decoded.eligible_at, 2);
     assert_eq!(decoded.opening_snapshot.len(), 2);
-    assert_eq!(decoded.cumulative_outcomes.executed_steps, 1);
+    assert_eq!(
+      decoded.last_step_outcome,
+      Some(StepOutcome::FundingUnavailable)
+    );
+    assert_eq!(
+      decoded.suspension,
+      Some(SuspensionReason::FundingUnavailable)
+    );
 
-    ContinuationStateStore::<Test>::insert(actor_id, continuation);
+    ActorRunStateStore::<Test>::insert(actor_id, run_state);
     ActorHot::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("active actor").cycle_state = CycleState::Suspended;
     });
-    ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("actor identity").cycle_nonce = 1;
-    });
     assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("continuation exists")
+      ActorIdentities::<Test>::get(actor_id)
+        .expect("actor identity")
+        .cycle_nonce,
+      0
+    );
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("Actor run exists")
         .unsuccessful_attempts_at_cursor,
       1
     );
@@ -174,7 +234,7 @@ fn continuation_schema_round_trips_retry_position_and_typed_snapshot_surfaces() 
 }
 
 #[test]
-fn ordinary_one_attempt_run_keeps_continuation_sparse() {
+fn ordinary_one_attempt_run_keeps_run_state_sparse() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -189,7 +249,7 @@ fn ordinary_one_attempt_run_keeps_continuation_sparse() {
         .cycle_state,
       CycleState::Idle
     );
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     fund_native(actor_id, 10);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -202,36 +262,222 @@ fn ordinary_one_attempt_run_keeps_continuation_sparse() {
         .cycle_state,
       CycleState::Idle
     );
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
   });
 }
 
 #[test]
-fn continuation_attempt_missing_state_fails_without_panicking_or_mutating() {
+fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![make_step(Task::StopCycle), make_step(Task::StopCycle)])
+        .expect("two Steps fit"),
+    );
+    let running = RuntimeActorRunState {
+      contract_authority: run_contract_authority(actor_id),
+      cycle_nonce: 1,
+      cursor: 1,
+      opening_predicate_cursor: 0,
+      unsuccessful_attempts_at_cursor: 0,
+      last_attempt_block: 1,
+      last_committed_step_block: Some(1),
+      eligible_at: 2,
+      opening_snapshot: Default::default(),
+      opening_predicate_results: Default::default(),
+      funding_snapshot: Default::default(),
+      cumulative_outcomes: OutcomeTotals {
+        executed_steps: 1,
+        committed_effectful_tasks: 0,
+        ..Default::default()
+      },
+      last_step_outcome: Some(StepOutcome::Stopped),
+      suspension: None,
+    };
+    assert_ok!(Actors::persist_run_progress(actor_id, running.clone()));
+    let stored = ActorRunStateStore::<Test>::get(actor_id).expect("Running state persists");
+    assert_eq!(stored.cycle_nonce, running.cycle_nonce);
+    assert_eq!(stored.cursor, running.cursor);
+    assert_eq!(
+      stored.last_committed_step_block,
+      running.last_committed_step_block
+    );
+    assert_eq!(stored.eligible_at, running.eligible_at);
+    assert_eq!(stored.cumulative_outcomes, running.cumulative_outcomes);
+    assert_eq!(
+      ActorHot::<Test>::get(actor_id).map(|hot| hot.cycle_state),
+      Some(CycleState::Running)
+    );
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      crate::LoadedActorStateOf::Active(_)
+    ));
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Running state exists")
+        .contract_authority
+        .admission_identity[0] ^= 1;
+    });
+    assert!(matches!(
+      Actors::load_actor_state(actor_id),
+      crate::LoadedActorStateOf::Corrupt
+    ));
+  });
+}
+
+#[test]
+fn running_state_carries_the_exact_opening_predicate_cursor() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![
+        StepOf::<Test> {
+          precondition: timed_all_conditions(
+            ObservationTiming::Opening,
+            vec![Predicate::BlockNumberAbove { threshold: 10 }],
+          ),
+          task: Task::StopCycle,
+          on_error: StepErrorPolicy::AbortCycle,
+        },
+        StepOf::<Test> {
+          precondition: timed_all_conditions(
+            ObservationTiming::Opening,
+            vec![Predicate::BlockNumberAbove { threshold: 0 }],
+          ),
+          task: Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(5),
+          },
+          on_error: StepErrorPolicy::AbortCycle,
+        },
+      ])
+      .expect("two Steps fit"),
+    );
+    fund_native(actor_id, 10);
+    let before = asset_balance(&BOB, TestAsset::Native);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    let run = Actors::actor_run_state(actor_id).expect("Running state persists");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.opening_predicate_cursor, 1);
+    assert_eq!(
+      run.opening_predicate_results.as_slice(),
+      [Ok(false), Ok(true)]
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::on_initialize(2);
+    Actors::on_idle(2, Weight::MAX);
+    assert_eq!(asset_balance(&BOB, TestAsset::Native), before + 5);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
+      Some(1)
+    );
+  });
+}
+
+#[test]
+fn signal_during_running_is_retained_for_a_later_cycle() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut steps = inert_contract_steps();
+    steps
+      .try_push(make_step(Task::StopCycle))
+      .expect("second Step fits");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    assert_eq!(
+      ActorHot::<Test>::get(actor_id).map(|hot| hot.cycle_state),
+      Some(CycleState::Running)
+    );
+    assert!(!Actors::pending_signal(actor_id));
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert!(Actors::pending_signal(actor_id));
+    Actors::on_idle(1, Weight::MAX);
+    assert_eq!(
+      ActorHot::<Test>::get(actor_id).map(|hot| hot.cycle_state),
+      Some(CycleState::Running),
+      "the successor cannot execute in the commit block"
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::on_initialize(2);
+    Actors::on_idle(2, Weight::MAX);
+    let after_first_cycle = Actors::active_actor_view(actor_id).expect("Actor remains active");
+    assert_eq!(after_first_cycle.cycle_nonce, 1);
+    assert_eq!(after_first_cycle.cycle_state, CycleState::Idle);
+    assert!(after_first_cycle.pending_signal);
+
+    Actors::on_idle(2, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
+      Some(1),
+      "the retained signal cannot open another cycle in the completion block"
+    );
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
+    Actors::on_idle(3, Weight::MAX);
+    let next_cycle = Actors::active_actor_view(actor_id).expect("next Cycle remains active");
+    assert_eq!(next_cycle.cycle_nonce, 1);
+    assert_eq!(next_cycle.cycle_state, CycleState::Running);
+    assert!(!next_cycle.pending_signal);
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.cycle_nonce),
+      Some(2)
+    );
+  });
+}
+
+#[test]
+fn run_attempt_missing_state_fails_without_panicking_or_mutating() {
   new_test_ext().execute_with(|| {
     let mut plan = transfer_contract_steps(BOB, 1);
     plan[0].on_error = RETRY_LATER;
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-    ContinuationStateStore::<Test>::insert(
+    ActorRunStateStore::<Test>::insert(
       actor_id,
-      RuntimeContinuationState {
+      RuntimeActorRunState {
+        contract_authority: run_contract_authority(actor_id),
+        cycle_nonce: 1,
         cursor: 0,
+        opening_predicate_cursor: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
+        last_committed_step_block: None,
+        eligible_at: 2,
         opening_snapshot: Default::default(),
         opening_predicate_results: Default::default(),
         funding_snapshot: Default::default(),
         cumulative_outcomes: Default::default(),
+        last_step_outcome: Some(StepOutcome::FundingUnavailable),
+        suspension: Some(SuspensionReason::FundingUnavailable),
       },
     );
     ActorHot::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("actor exists").cycle_state = CycleState::Suspended;
     });
-    ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("identity exists").cycle_nonce = 1;
-    });
-    let instance = Actors::active_actor_view(actor_id).expect("coherent continuation exists");
-    ContinuationStateStore::<Test>::remove(actor_id);
+    let instance = Actors::active_actor_view(actor_id).expect("coherent Actor run exists");
+    ActorRunStateStore::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id).expect("hot state remains");
     System::reset_events();
 
@@ -244,118 +490,142 @@ fn continuation_attempt_missing_state_fails_without_panicking_or_mutating() {
 
 #[cfg(feature = "try-runtime")]
 #[test]
-fn continuation_try_state_rejects_marker_and_cursor_drift() {
+fn actor_run_try_state_rejects_marker_and_cursor_drift() {
   new_test_ext().execute_with(|| {
     let mut plan = transfer_contract_steps(BOB, 1);
     plan[0].on_error = RETRY_LATER;
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-    ContinuationStateStore::<Test>::insert(
+    ActorRunStateStore::<Test>::insert(
       actor_id,
-      RuntimeContinuationState {
+      RuntimeActorRunState {
+        contract_authority: run_contract_authority(actor_id),
+        cycle_nonce: 1,
         cursor: 0,
+        opening_predicate_cursor: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
+        last_committed_step_block: None,
+        eligible_at: 2,
         opening_snapshot: Default::default(),
         opening_predicate_results: Default::default(),
         funding_snapshot: Default::default(),
         cumulative_outcomes: Default::default(),
+        last_step_outcome: Some(StepOutcome::FundingUnavailable),
+        suspension: Some(SuspensionReason::FundingUnavailable),
       },
     );
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
     ActorHot::<Test>::mutate(actor_id, |maybe| {
       maybe.as_mut().expect("actor exists").cycle_state = CycleState::Suspended;
     });
-    ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("identity exists").cycle_nonce = 1;
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      maybe.as_mut().expect("Actor run exists").suspension = Some(SuspensionReason::Temporary);
+    });
+    assert!(crate::Pallet::<Test>::do_try_state().is_err());
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      let run_state = maybe.as_mut().expect("Actor run exists");
+      run_state.suspension = Some(SuspensionReason::FundingUnavailable);
+      run_state.eligible_at = 3;
+    });
+    assert!(crate::Pallet::<Test>::do_try_state().is_err());
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      maybe.as_mut().expect("Actor run exists").eligible_at = 2;
     });
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-    ContinuationStateStore::<Test>::mutate(actor_id, |maybe| {
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("continuation exists")
+        .expect("Actor run exists")
         .opening_snapshot
         .try_insert(OpeningSurface::PreservableAsset(TestAsset::Native), 10)
         .expect("snapshot entry fits");
     });
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ContinuationStateStore::<Test>::mutate(actor_id, |maybe| {
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("continuation exists")
+        .expect("Actor run exists")
         .opening_snapshot
         .clear();
     });
-    ContinuationStateStore::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("continuation exists").cursor = 1;
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      maybe.as_mut().expect("Actor run exists").cursor = 1;
     });
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ContinuationStateStore::<Test>::remove(actor_id);
+    ActorRunStateStore::<Test>::remove(actor_id);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
   });
 }
 
 #[test]
-fn user_dormant_fund_then_activate_is_the_unfunded_lifecycle() {
+fn user_dormant_activation_installs_process_without_service_prefunding() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    // The unfunded lifecycle is create Dormant -> fund the deterministic sovereign ->
-    // activate; activation of an unfunded sovereign fails InsufficientBalance.
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
       None,
     ));
     let actor_id = Actors::next_actor_id() - 1;
-    let plan = transfer_contract_steps(BOB, 1);
+    let sovereign = Actors::sovereign_account_id(&ALICE, 0);
+    assert_eq!(native_balance(&sovereign), 0);
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_noop!(
-      Actors::activate_actor(
-        RuntimeOrigin::signed(ALICE),
-        actor_id,
-        user_active_contract(manual_schedule(), None, plan.clone()).expect("direct Actor Contract"),
-      ),
-      Error::<Test>::InsufficientBalance
-    );
-    assert!(Actors::actor_identities(actor_id).is_some());
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert_eq!(Actors::active_actor_count(), 0);
 
-    // Funding the deterministic sovereign account admits activation.
-    fund_native_raw(
-      &Actors::sovereign_account_id(&ALICE, 0),
-      user_prefunding_requirement(&plan),
-    );
     assert_ok!(Actors::activate_actor(
       RuntimeOrigin::signed(ALICE),
       actor_id,
-      user_active_contract(manual_schedule(), None, plan).expect("direct Actor Contract"),
+      user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1))
+        .expect("direct Actor Contract"),
     ));
+
+    assert_eq!(native_balance(&sovereign), 0);
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert_eq!(Actors::active_actor_count(), 1);
   });
 }
 
 #[test]
-fn generated_continuation_weights_cover_distinct_storage_paths() {
+fn suspension_admission_uses_the_complete_persisted_run_weight_at_a_later_cursor() {
   new_test_ext().execute_with(|| {
-    let suspend_min = <TestWeightInfo as crate::WeightInfo>::continuation_suspend(0);
-    let suspend_max = <TestWeightInfo as crate::WeightInfo>::continuation_suspend(20);
-    assert_eq!(suspend_min, Weight::from_parts(27_920_348, 4_178));
-    assert_eq!(suspend_max, Weight::from_parts(28_668_868, 4_178));
+    let mut retry_step = make_step(Task::StopCycle);
+    retry_step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
+    let steps = BoundedVec::try_from(vec![make_step(Task::StopCycle), retry_step])
+      .expect("two steps fit the test Contract");
+    let transition = <TestWeightInfo as crate::WeightInfo>::run_suspend()
+      .max(<TestWeightInfo as crate::WeightInfo>::run_complete())
+      .max(<TestWeightInfo as crate::WeightInfo>::run_cancel());
+    let expected = <TestWeightInfo as crate::WeightInfo>::step_orchestration(2)
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::task_stop_cycle())
+      .saturating_add(transition);
+
     assert_eq!(
-      <TestWeightInfo as crate::WeightInfo>::continuation_retry(),
+      Actors::compute_cycle_weight_upper_from(ActorType::System, &steps, 1),
+      expected,
+      "later-cursor admission must retain the full persisted run-state envelope"
+    );
+  });
+}
+
+#[test]
+fn generated_run_weights_cover_distinct_storage_paths() {
+  new_test_ext().execute_with(|| {
+    let suspend = <TestWeightInfo as crate::WeightInfo>::run_suspend();
+    assert_eq!(suspend, Weight::from_parts(28_668_868, 4_178));
+    assert_eq!(
+      <TestWeightInfo as crate::WeightInfo>::run_retry(),
       Weight::from_parts(22_070_000, 4_266)
     );
     assert_eq!(
-      <TestWeightInfo as crate::WeightInfo>::continuation_complete(),
+      <TestWeightInfo as crate::WeightInfo>::run_complete(),
       Weight::from_parts(18_019_000, 4_030)
     );
     assert_eq!(
-      <TestWeightInfo as crate::WeightInfo>::continuation_cancel(),
+      <TestWeightInfo as crate::WeightInfo>::run_cancel(),
       Weight::from_parts(56_782_000, 8_120)
     );
-    let suffix_min = <TestWeightInfo as crate::WeightInfo>::continuation_suffix_admission(1);
-    let suffix_max = <TestWeightInfo as crate::WeightInfo>::continuation_suffix_admission(10);
+    let suffix_min = <TestWeightInfo as crate::WeightInfo>::run_suffix_admission(1);
+    let suffix_max = <TestWeightInfo as crate::WeightInfo>::run_suffix_admission(10);
     assert_eq!(suffix_min, Weight::from_parts(1_439_006, 0));
     assert_eq!(suffix_max, Weight::from_parts(1_442_894, 0));
     assert!(suffix_min.ref_time() < suffix_max.ref_time());
@@ -495,7 +765,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
 }
 
 #[test]
-fn continuation_control_placement_failures_roll_back_exactly() {
+fn run_control_placement_failures_roll_back_exactly() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     assert_ok!(Actors::manual_trigger(
@@ -514,7 +784,7 @@ fn continuation_control_placement_failures_roll_back_exactly() {
       ),
       Error::<Test>::QueueTicketExhausted
     );
-    assert!(Actors::continuation_state(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
     assert_eq!(System::events(), events_before);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
@@ -541,7 +811,7 @@ fn continuation_control_placement_failures_roll_back_exactly() {
       ),
       Error::<Test>::QueueTicketExhausted
     );
-    assert!(Actors::continuation_state(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
     assert_eq!(System::events(), events_before);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
@@ -560,10 +830,10 @@ fn continuation_control_placement_failures_roll_back_exactly() {
     let events_before = System::events();
 
     assert_noop!(
-      Actors::cancel_continuation(RuntimeOrigin::root(), actor_id),
+      Actors::cancel_run(RuntimeOrigin::root(), actor_id),
       Error::<Test>::QueueTicketExhausted
     );
-    assert!(Actors::continuation_state(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
     assert_eq!(System::events(), events_before);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
@@ -989,7 +1259,7 @@ fn retry_later_aborts_permanent_failure_without_executing_suffix() {
     assert_eq!(instance.cycle_nonce, 1);
     assert_eq!(instance.unsuccessful_attempt_streak, 1);
     assert_eq!(instance.cycle_state, CycleState::Idle);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert!(has_actor_event(|event| {
       matches!(
@@ -1047,12 +1317,26 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     run_idle(Weight::MAX);
 
     let first = Actors::active_actor_view(actor_id).expect("suspended actor remains");
-    let first_continuation = Actors::continuation_state(actor_id).expect("continuation exists");
+    let first_continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
     assert_eq!(first.cycle_state, CycleState::Suspended);
-    assert_eq!(first.cycle_nonce, 1);
+    assert_eq!(first.cycle_nonce, 0);
     assert_eq!(first.unsuccessful_attempt_streak, 1);
+    assert_eq!(first_continuation.cycle_nonce, 1);
     assert_eq!(first_continuation.cursor, 1);
     assert_eq!(first_continuation.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(first_continuation.last_attempt_block, 2);
+    assert_eq!(first_continuation.eligible_at, 3);
+    assert!(matches!(
+      first_continuation.last_step_outcome,
+      Some(StepOutcome::Failed(TaskFailure {
+        retry: RetryClass::Temporary,
+        ..
+      }))
+    ));
+    assert_eq!(
+      first_continuation.suspension,
+      Some(SuspensionReason::Temporary)
+    );
     assert_eq!(first_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(first_continuation.cumulative_outcomes.failed_steps, 1);
     assert_eq!(native_balance(&BOB), bob_before + 10);
@@ -1064,25 +1348,32 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       matches!(event, Event::CycleSummary { actor_id: id, .. } if *id == actor_id)
     }));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(first_continuation.eligible_at);
     run_idle(Weight::MAX);
-    let second_continuation = Actors::continuation_state(actor_id).expect("continuation remains");
+    run_next_idle(Weight::MAX);
+    let second_continuation = Actors::actor_run_state(actor_id).expect("Actor run remains");
+    assert_eq!(second_continuation.cycle_nonce, 1);
     assert_eq!(second_continuation.cursor, 1);
     assert_eq!(second_continuation.unsuccessful_attempts_at_cursor, 2);
+    assert_eq!(second_continuation.last_attempt_block, 4);
+    assert_eq!(second_continuation.eligible_at, 6);
     assert_eq!(second_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(second_continuation.cumulative_outcomes.failed_steps, 2);
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(4);
+    frame_system::Pallet::<Test>::set_block_number(second_continuation.eligible_at);
+    Actors::on_initialize(second_continuation.eligible_at);
+    run_prepass();
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let completed = Actors::active_actor_view(actor_id).expect("completed actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.unsuccessful_attempt_streak, 0);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 5);
     let starts = frame_system::Pallet::<Test>::events()
@@ -1146,7 +1437,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
     assert_eq!(actor.cycle_state, CycleState::Idle);
     assert_eq!(actor.cycle_nonce, 1);
     assert_eq!(actor.unsuccessful_attempt_streak, 0);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert!(has_actor_event(|event| matches!(
@@ -1352,7 +1643,7 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
 
-    assert!(Actors::continuation_state(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
     assert!(Actors::active_actor_view(actor_id).is_some());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -1366,7 +1657,7 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1412,7 +1703,7 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
 
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
@@ -1476,6 +1767,11 @@ fn stop_cycle_runs_normal_auto_close_after_the_summary() {
       .position(|event| matches!(event, Event::ActorClosed { actor_id: id, reason: CloseReason::AutoCloseNonceReached } if *id == actor_id))
       .expect("auto-close event");
     assert!(stopped < summary && summary < closed);
+    assert_eq!(
+      last_step_control_execution().map(|execution| execution.outcome),
+      Some(crate::StepControlOutcome::Completed),
+      "auto-close retains completed control ownership while cleanup is metered separately",
+    );
   });
 }
 
@@ -1521,21 +1817,25 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
     ));
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("suspended")
-        .cursor,
+      Actors::actor_run_state(actor_id).expect("suspended").cursor,
       1
     );
     assert_eq!(native_balance(&BOB), bob_before + 10);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
+    let eligible_at = Actors::actor_run_state(actor_id)
+      .expect("suspension remains")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(eligible_at);
+    Actors::on_initialize(eligible_at);
+    run_prepass();
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
     assert_eq!(actor.cycle_state, CycleState::Idle);
     assert_eq!(actor.unsuccessful_attempt_streak, 0);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert!(has_actor_event(|event| matches!(
@@ -1600,7 +1900,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
     let completed = Actors::active_actor_view(actor_id).expect("actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
     assert_eq!(completed.unsuccessful_attempt_streak, 0);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&CHARLIE), charlie_before + 1);
     assert!(has_actor_event(|event| {
       matches!(
@@ -1655,16 +1955,20 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     ));
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("first unsuccessful attempt persists")
         .unsuccessful_attempts_at_cursor,
       1
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    let first_eligible_at = Actors::actor_run_state(actor_id)
+      .expect("first unsuccessful attempt persists")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(first_eligible_at);
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("second unsuccessful attempt persists")
         .unsuccessful_attempts_at_cursor,
       2
@@ -1679,11 +1983,17 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
         .pending_signal
     );
 
-    frame_system::Pallet::<Test>::set_block_number(4);
+    let second_eligible_at = Actors::actor_run_state(actor_id)
+      .expect("second unsuccessful attempt persists")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(second_eligible_at);
+    Actors::on_initialize(second_eligible_at);
+    run_prepass();
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 1);
     assert!(has_actor_event(|event| {
       matches!(
@@ -1738,7 +2048,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    let first = Actors::continuation_state(actor_id).expect("first cursor suspends");
+    let first = Actors::actor_run_state(actor_id).expect("first cursor suspends");
     assert_eq!(
       (first.cursor, first.unsuccessful_attempts_at_cursor),
       (0, 1)
@@ -1746,9 +2056,9 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
 
     set_temporary_dex_failure(false);
     set_temporary_add_liquidity_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(first.eligible_at);
     run_idle(Weight::MAX);
-    let advanced = Actors::continuation_state(actor_id).expect("later cursor suspends");
+    let advanced = Actors::actor_run_state(actor_id).expect("later cursor suspends");
     assert_eq!(advanced.cursor, 1);
     assert_eq!(advanced.unsuccessful_attempts_at_cursor, 1);
   });
@@ -1781,7 +2091,7 @@ fn global_failure_limit_can_close_before_retry_later_local_limit() {
     run_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleCancelled { actor_id: id, .. } if *id == actor_id
@@ -1797,6 +2107,11 @@ fn global_failure_limit_can_close_before_retry_later_local_limit() {
         reason: CloseReason::ConsecutiveFailures,
       } if *id == actor_id
     )));
+    assert_eq!(
+      last_step_control_execution().map(|execution| execution.outcome),
+      Some(crate::StepControlOutcome::Failed),
+      "failure close retains failed control ownership while cleanup is metered separately",
+    );
   });
 }
 
@@ -1897,7 +2212,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
     assert!(initial_hot.queue_ticket.is_some());
     assert!(initial_hot.wakeup_pointer.is_none());
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("attempt zero")
         .cursor,
       0
@@ -1908,15 +2223,14 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       frame_system::Pallet::<Test>::set_block_number(due - 1);
       run_idle(Weight::MAX);
       assert_eq!(
-        Actors::continuation_state(actor_id)
+        Actors::actor_run_state(actor_id)
           .expect("not eligible before due block")
           .unsuccessful_attempts_at_cursor,
         expected_attempt
       );
       frame_system::Pallet::<Test>::set_block_number(due);
       run_idle(Weight::MAX);
-      let continuation =
-        Actors::continuation_state(actor_id).expect("temporary failure resuspends");
+      let continuation = Actors::actor_run_state(actor_id).expect("temporary failure resuspends");
       assert_eq!(
         continuation.unsuccessful_attempts_at_cursor,
         expected_attempt + 1
@@ -1929,7 +2243,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
     frame_system::Pallet::<Test>::set_block_number(23);
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("capped delay holds")
         .unsuccessful_attempts_at_cursor,
       5
@@ -1937,7 +2251,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(24);
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&actor), balance_before - 10);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -1949,7 +2263,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
 }
 
 #[test]
-fn continuation_weight_deferral_does_not_admit_attempt() {
+fn run_weight_deferral_does_not_admit_attempt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -1963,7 +2277,7 @@ fn continuation_weight_deferral_does_not_admit_attempt() {
     set_temporary_dex_failure(true);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     run_idle(Weight::MAX);
-    let before = Actors::continuation_state(actor_id).expect("suspended");
+    let before = Actors::actor_run_state(actor_id).expect("suspended");
     let ticket_before = Actors::actor_hot(actor_id)
       .expect("suspended actor")
       .queue_ticket;
@@ -1982,7 +2296,7 @@ fn continuation_weight_deferral_does_not_admit_attempt() {
       .saturating_sub(1);
     Actors::execute_cycle(Weight::from_parts(u64::MAX, proof_limit));
 
-    let after = Actors::continuation_state(actor_id).expect("deferral preserves continuation");
+    let after = Actors::actor_run_state(actor_id).expect("deferral preserves Actor run");
     assert_eq!(
       after.unsuccessful_attempts_at_cursor,
       before.unsuccessful_attempts_at_cursor
@@ -2035,7 +2349,7 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
     frame_system::Pallet::<Test>::set_block_number(102);
     run_idle(Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -2049,7 +2363,7 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
 }
 
 #[test]
-fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
+fn user_retry_admits_and_charges_only_each_current_step() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -2079,10 +2393,10 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
     let prefix_fee = user_step_fee(&plan[0]);
     let retry_fee = user_step_fee(&plan[1]);
     let tail_fee = user_step_fee(&plan[2]);
+    let pipeline_fee = pipeline_opening_fee(&plan);
     let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, plan);
     fund_native(actor_id, 1_000_000_000_000_000_000);
     let sink = TestFeeSink::get();
-    let sink_before = native_balance(&sink);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
     set_temporary_dex_failure(true);
@@ -2091,13 +2405,15 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let sink_before = native_balance(&sink);
     run_idle(Weight::MAX);
-    assert_eq!(native_balance(&sink) - sink_before, prefix_fee + retry_fee);
+    assert_eq!(
+      native_balance(&sink) - sink_before,
+      pipeline_fee + prefix_fee + retry_fee
+    );
     let suspended = Actors::active_actor_view(actor_id).expect("suspended User actor");
     assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("continuation")
-        .cursor,
+      Actors::actor_run_state(actor_id).expect("Actor run").cursor,
       1
     );
     let retry_weight = Actors::attempt_weight_upper_bound(&suspended, 1);
@@ -2105,7 +2421,12 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
     assert!(retry_weight.ref_time() < full_weight.ref_time());
     assert!(retry_weight.proof_size() < full_weight.proof_size());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    let first_eligible_at = Actors::actor_run_state(actor_id)
+      .expect("first retry remains")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(first_eligible_at);
+    Actors::on_initialize(first_eligible_at);
+    run_prepass();
     let retry_budget = Actors::scheduler_admission_overhead()
       .saturating_add(retry_weight)
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_on_idle_base())
@@ -2115,34 +2436,92 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
           .saturating_mul(2),
       )
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base());
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize());
     run_idle(retry_budget);
+    run_next_idle(retry_budget);
     assert_eq!(
       native_balance(&sink) - sink_before,
-      prefix_fee + retry_fee.saturating_mul(2)
+      pipeline_fee + prefix_fee + retry_fee.saturating_mul(2)
     );
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("retry remains")
         .unsuccessful_attempts_at_cursor,
       2
     );
 
-    frame_system::Pallet::<Test>::set_block_number(4);
+    let second_eligible_at = Actors::actor_run_state(actor_id)
+      .expect("second retry remains")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(second_eligible_at);
     set_temporary_dex_failure(false);
+    Actors::on_initialize(second_eligible_at);
+    run_prepass();
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       native_balance(&sink) - sink_before,
-      prefix_fee + retry_fee.saturating_mul(3) + tail_fee
+      pipeline_fee + prefix_fee + retry_fee.saturating_mul(3) + tail_fee
     );
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 10);
   });
 }
 
 #[test]
-fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
+fn underfunded_retry_liability_selects_fee_free_minimal_apoptosis() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let plan = BoundedVec::try_from(vec![StepOf::<Test> {
+      precondition: None,
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: RETRY_LATER,
+    }])
+    .expect("one retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, plan);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    let run = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
+    let sovereign = sovereign_account(actor_id);
+    let balance = native_balance(&sovereign);
+    deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
+    let custody_before = native_balance(&sovereign);
+    clear_fee_collections();
+
+    frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
+    Actors::on_initialize(run.eligible_at);
+    run_prepass();
+    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+
+    assert!(!Actors::active_actor_exists(actor_id));
+    assert_eq!(native_balance(&sovereign), custody_before);
+    assert!(fee_collections().is_empty());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed {
+        actor_id: id,
+        reason: CloseReason::CycleAdmissionInsufficient,
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(1);
@@ -2183,18 +2562,19 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
     signal_percentage_trigger(actor_id, asset_b);
     run_idle(Weight::MAX);
 
-    let continuation = Actors::continuation_state(actor_id).expect("suspended");
+    let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert_eq!(continuation.cursor, 1);
-    assert_eq!(continuation.opening_snapshot.len(), 2);
+    assert_eq!(continuation.opening_snapshot.len(), 3);
     let suspended = Actors::active_actor_view(actor_id).expect("suspended actor");
     let retry_weight = Actors::attempt_weight_upper_bound(&suspended, continuation.cursor as usize);
     let full_weight = Actors::attempt_weight_upper_bound(&suspended, 0);
     assert!(retry_weight.ref_time() < full_weight.ref_time());
     assert!(retry_weight.proof_size() < full_weight.proof_size());
-    assert!(
-      !continuation
+    assert_eq!(
+      continuation
         .opening_snapshot
-        .contains_key(&OpeningSurface::PreservableAsset(asset_a))
+        .get(&OpeningSurface::PreservableAsset(asset_a)),
+      Some(&99)
     );
     assert_eq!(
       continuation
@@ -2202,13 +2582,27 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
         .get(&OpeningSurface::PreservableAsset(asset_b)),
       Some(&99)
     );
+    let mut mutated_snapshot = continuation.clone();
+    *mutated_snapshot
+      .opening_snapshot
+      .get_mut(&OpeningSurface::PreservableAsset(asset_a))
+      .expect("Opening asset remains present") = 98;
+    assert_noop!(
+      Actors::write_run_state(actor_id, Some(mutated_snapshot)),
+      Error::<Test>::ActorRunInvariant
+    );
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|state| state.encode()),
+      Some(continuation.encode())
+    );
     assert_eq!(asset_balance(&BOB, asset_a), 9);
 
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, asset_b, 20));
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(continuation.eligible_at);
     run_idle(Weight::MAX);
-    let after_capacity_failure = Actors::continuation_state(actor_id).expect("still suspended");
+    run_next_idle(Weight::MAX);
+    let after_capacity_failure = Actors::actor_run_state(actor_id).expect("still suspended");
     assert_eq!(after_capacity_failure.cursor, 1);
     assert_eq!(after_capacity_failure.unsuccessful_attempts_at_cursor, 2);
     assert_eq!(
@@ -2219,9 +2613,12 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
     );
 
     set_asset_balance(&actor, asset_b, 100);
-    frame_system::Pallet::<Test>::set_block_number(4);
+    frame_system::Pallet::<Test>::set_block_number(after_capacity_failure.eligible_at);
+    Actors::on_initialize(after_capacity_failure.eligible_at);
+    run_prepass();
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    run_next_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(asset_balance(&actor, asset_b), 82);
     assert_eq!(asset_balance(&CHARLIE, asset_c), 9);
     assert_eq!(asset_balance(&BOB, asset_a), 9);
@@ -2229,7 +2626,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
 }
 
 #[test]
-fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
+fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut steps = Vec::new();
@@ -2260,7 +2657,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
     signal_percentage_trigger(actor_id, TestAsset::Local(100));
     run_idle(Weight::MAX);
 
-    let continuation = Actors::continuation_state(actor_id).expect("maximal continuation");
+    let continuation = Actors::actor_run_state(actor_id).expect("maximal Actor run");
     assert_eq!(continuation.cursor, 0);
     assert_eq!(
       continuation.opening_snapshot.len() as u32,
@@ -2270,12 +2667,12 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
     set_temporary_add_liquidity_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
   });
 }
 
 #[test]
-fn continuation_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
+fn run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -2301,9 +2698,12 @@ fn continuation_attempts_have_unique_chain_coordinates_without_the_stored_ordina
         _ => None,
       })
       .collect();
-    assert!(matches!(opening[1], Event::CycleStarted { actor_id: id, cycle_nonce: 1 } if id == actor_id));
-    assert!(matches!(opening[2], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
-    assert!(matches!(opening[3], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
+    let cycle_started = opening
+      .iter()
+      .position(|event| matches!(event, Event::CycleStarted { actor_id: id, cycle_nonce: 1 } if *id == actor_id))
+      .expect("Opening emits CycleStarted");
+    assert!(matches!(opening[cycle_started + 1], Event::StepFailed { actor_id: id, cycle_nonce: 1, step_index: 0, .. } if id == actor_id));
+    assert!(matches!(opening[cycle_started + 2], Event::CycleSuspended { actor_id: id, cycle_nonce: 1, cursor: 0, reason: SuspensionReason::Temporary, .. } if id == actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
@@ -2356,11 +2756,11 @@ fn continuation_attempts_have_unique_chain_coordinates_without_the_stored_ordina
 }
 
 #[test]
-fn completion_policy_only_replacement_preserves_continuation() {
+fn completion_policy_only_replacement_cancels_contract_bound_run() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let before = Actors::active_actor_view(actor_id).expect("suspended actor");
-    let continuation_before = Actors::continuation_state(actor_id).expect("suspended continuation");
+    let continuation_before = Actors::actor_run_state(actor_id).expect("suspended Actor run");
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
@@ -2374,11 +2774,9 @@ fn completion_policy_only_replacement_preserves_continuation() {
       after.completion,
       crate::CompletionPolicy::CloseAfterProductiveCycle
     );
-    assert_eq!(after.cycle_state, CycleState::Suspended);
-    assert_eq!(
-      Actors::continuation_state(actor_id).map(|state| state.encode()),
-      Some(continuation_before.encode())
-    );
+    assert_eq!(after.cycle_state, CycleState::Idle);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(after.cycle_nonce, continuation_before.cycle_nonce);
     let events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -2386,9 +2784,26 @@ fn completion_policy_only_replacement_preserves_continuation() {
         _ => None,
       })
       .collect();
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 3);
     assert!(matches!(
       events.first(),
+      Some(Event::CycleCancelled {
+        actor_id: id,
+        cycle_nonce,
+        reason: CancellationReason::ContractReplaced,
+      }) if *id == actor_id && *cycle_nonce == continuation_before.cycle_nonce
+    ));
+    assert!(matches!(
+      events.get(1),
+      Some(Event::CycleSummary {
+        actor_id: id,
+        cycle_nonce,
+        result: CycleResult::Cancelled,
+        ..
+      }) if *id == actor_id && *cycle_nonce == continuation_before.cycle_nonce
+    ));
+    assert!(matches!(
+      events.get(2),
       Some(Event::ContractUpdated { actor_id: id, .. }) if *id == actor_id
     ));
   });
@@ -2533,17 +2948,32 @@ fn cycle_summary_tracks_step_outcomes() {
         } if *id == actor_id
       )
     }));
-    let last_actor_event = frame_system::Pallet::<Test>::events()
+    let actor_events = frame_system::Pallet::<Test>::events()
       .into_iter()
-      .rev()
-      .find_map(|record| match record.event {
+      .filter_map(|record| match record.event {
         RuntimeEvent::Actors(event) => Some(event),
         _ => None,
       })
-      .expect("Actors event stream must not be empty");
+      .collect::<Vec<_>>();
+    let summary_index = actor_events
+      .iter()
+      .position(|event| {
+        matches!(
+          event,
+          Event::CycleSummary { actor_id: id, cycle_nonce: 1, .. } if *id == actor_id
+        )
+      })
+      .expect("Cycle summary exists");
+    assert!(summary_index < actor_events.len() - 1);
     assert!(matches!(
-      last_actor_event,
-      Event::CycleSummary { actor_id: id, cycle_nonce: 1, .. } if id == actor_id
+      actor_events.last(),
+      Some(Event::ActionFeeCharged {
+        actor_id: id,
+        cycle_nonce: 1,
+        step_index: 3,
+        fee: 0,
+        ..
+      }) if *id == actor_id
     ));
   });
 }
@@ -2590,12 +3020,18 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     let after_first = Actors::active_actor_view(continue_id).expect("successful actor remains active");
     assert_eq!(after_first.cycle_nonce, 1);
     assert_eq!(after_first.unsuccessful_attempt_streak, 0);
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
+    run_prepass();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       continue_id
     ));
     frame_system::Pallet::<Test>::reset_events();
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    Actors::on_initialize(4);
+    run_prepass();
     run_idle(Weight::MAX);
     assert!(Actors::active_actor_view(continue_id).is_none());
     let continue_events: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -2605,12 +3041,14 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(continue_events.len(), 5);
+    assert_eq!(continue_events.len(), 7);
     assert!(matches!(continue_events[0], Event::CycleStarted { actor_id, .. } if actor_id == continue_id));
     assert!(matches!(continue_events[1], Event::StepFailed { actor_id, step_index: 0, .. } if actor_id == continue_id));
-    assert!(matches!(continue_events[2], Event::StepFailed { actor_id, step_index: 1, .. } if actor_id == continue_id));
-    assert!(matches!(continue_events[3], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if actor_id == continue_id));
-    assert!(matches!(continue_events[4], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == continue_id));
+    assert!(matches!(continue_events[2], Event::ActionFeeCharged { actor_id, step_index: 0, fee: 0, .. } if actor_id == continue_id));
+    assert!(matches!(continue_events[3], Event::StepFailed { actor_id, step_index: 1, .. } if actor_id == continue_id));
+    assert!(matches!(continue_events[4], Event::CycleSummary { actor_id, result: CycleResult::Completed, outcomes: OutcomeTotals { failed_steps: 2, .. }, .. } if actor_id == continue_id));
+    assert!(matches!(continue_events[5], Event::ActorClosed { actor_id, reason: CloseReason::AutoCloseNonceReached } if actor_id == continue_id));
+    assert!(matches!(continue_events[6], Event::ActionFeeCharged { actor_id, step_index: 1, fee: 0, .. } if actor_id == continue_id));
     let skip_step = StepOf::<Test> {
       precondition: all_conditions(vec![Predicate::BalanceAbove {
         asset: TestAsset::Native,
@@ -2635,7 +3073,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     ));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), skip_id));
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert!(Actors::active_actor_view(skip_id).is_none());
     let skip_events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -2670,7 +3108,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     ));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), abort_id));
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     let abort_instance = Actors::active_actor_view(abort_id).expect("aborted actor remains active");
     assert_eq!(abort_instance.unsuccessful_attempt_streak, 1);
     let abort_events: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -2680,10 +3118,11 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(abort_events.len(), 3);
+    assert_eq!(abort_events.len(), 4);
     assert!(matches!(abort_events[0], Event::CycleStarted { actor_id, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[1], Event::StepFailed { actor_id, step_index: 0, .. } if actor_id == abort_id));
     assert!(matches!(abort_events[2], Event::CycleSummary { actor_id, result: CycleResult::Failed, outcomes: OutcomeTotals { executed_steps: 0, failed_steps: 1, .. }, .. } if actor_id == abort_id));
+    assert!(matches!(abort_events[3], Event::ActionFeeCharged { actor_id, step_index: 0, fee: 0, .. } if actor_id == abort_id));
     let close_only_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), close_only_id));
@@ -2782,15 +3221,23 @@ fn notify_address_event_accumulates_without_pause_resume_cycle() {
 }
 
 #[test]
-fn empty_contract_steps_rejected() {
+fn zero_step_user_contract_is_first_class_geometry() {
   new_test_ext().execute_with(|| {
-    assert_noop!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(ALICE),
-        Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, BoundedVec::default()),
-      ),
-      Error::<Test>::EmptyContractSteps
+    assert_ok!(Actors::create_user_actor(
+      RuntimeOrigin::signed(ALICE),
+      Mutability::Mutable,
+      user_active_contract(manual_schedule(), None, BoundedVec::default()),
+    ));
+    let head = crate::ActorContractHeads::<Test>::get(0).expect("zero-Step head exists");
+    assert_eq!(head.header.step_count, 0);
+    assert!(head.first_step.is_none());
+    assert!(head.first_step_resources.is_none());
+    assert_eq!(
+      Actors::actor_contract(0)
+        .expect("zero-Step Contract reconstructs")
+        .steps
+        .len(),
+      0
     );
   });
 }
@@ -2896,7 +3343,7 @@ fn cycle_nonce_exhaustion_closes_user_actor() {
         .expect("user Actors identity exists")
         .cycle_nonce = u64::MAX;
     });
-    let expected_contract = ActorContracts::<Test>::get(actor_id).expect("contract exists");
+    let expected_contract = Actors::load_actor_contract(actor_id).expect("contract exists");
     let simulation = Actors::simulate_current_contract(
       actor_id,
       ActorType::User,
@@ -3003,19 +3450,26 @@ fn retry_target_uses_only_cursor_local_count_and_last_attempt_block() {
   new_test_ext().execute_with(|| {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let instance = Actors::active_actor_view(actor_id).expect("actor");
-    let continuation = |last_attempt_block| RuntimeContinuationState {
+    let run_state = |last_attempt_block, eligible_at| RuntimeActorRunState {
+      contract_authority: run_contract_authority(actor_id),
+      cycle_nonce: 1,
       cursor: 0,
+      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block,
+      last_committed_step_block: None,
+      eligible_at,
       opening_snapshot: Default::default(),
       opening_predicate_results: Default::default(),
       funding_snapshot: Default::default(),
       cumulative_outcomes: Default::default(),
+      last_step_outcome: Some(StepOutcome::FundingUnavailable),
+      suspension: Some(SuspensionReason::FundingUnavailable),
     };
-    ContinuationStateStore::<Test>::insert(actor_id, continuation(u64::MAX - 1));
+    ActorRunStateStore::<Test>::insert(actor_id, run_state(u64::MAX - 1, u64::MAX));
     assert_eq!(Actors::retry_eligible_at(actor_id, &instance), Ok(u64::MAX));
 
-    ContinuationStateStore::<Test>::insert(actor_id, continuation(u64::MAX));
+    ActorRunStateStore::<Test>::insert(actor_id, run_state(u64::MAX, u64::MAX));
     assert_eq!(
       Actors::retry_eligible_at(actor_id, &instance),
       Err(crate::EnqueueOutcome::SchedulerIndexExhausted)
@@ -3103,7 +3557,7 @@ fn opening_and_current_predicates_observe_distinct_step_state() {
 }
 
 #[test]
-fn opening_predicate_result_is_reused_by_continuation() {
+fn opening_predicate_result_is_reused_by_run_state() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -3132,7 +3586,7 @@ fn opening_predicate_result_is_reused_by_continuation() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    let continuation = Actors::continuation_state(actor_id).expect("continuation exists");
+    let continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
     assert_eq!(
       continuation.opening_predicate_results.as_slice(),
       &[Ok(true)]
@@ -3141,7 +3595,7 @@ fn opening_predicate_result_is_reused_by_continuation() {
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::SwapExecuted { actor_id: id, .. } if *id == actor_id
@@ -3249,7 +3703,7 @@ fn any_skip_cannot_create_continuation() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("actor remains")
@@ -3291,16 +3745,14 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
     ));
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("suspended")
-        .cursor,
+      Actors::actor_run_state(actor_id).expect("suspended").cursor,
       0
     );
 
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleSummary {
@@ -3482,7 +3934,7 @@ fn user_dca_complete_lifecycle() {
     set_asset_balance(&actor, foreign, 500);
     fund_native(actor_id, 500); // For fees
     // Step 3-4: Advance blocks and verify execution
-    for block in 2..7 {
+    for block in 2..8 {
       frame_system::Pallet::<Test>::set_block_number(block);
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::MAX);
@@ -3503,7 +3955,7 @@ fn user_dca_complete_lifecycle() {
     }
     let bob_after = asset_balance(&BOB, foreign);
     assert!(bob_after > bob_before, "Bob should receive transfers");
-    // Step 6-7: Drain native below MinUserBalance to trigger sweep close
+    // Step 6-7: Drain native below MinUserBalance; automatic cadence underfunding preserves process authority
     let actor_native = native_balance(&actor);
     let min_user = <Test as crate::Config>::MinUserBalance::get();
     let slash_amount = actor_native.saturating_sub(min_user / 2);
@@ -3512,7 +3964,7 @@ fn user_dca_complete_lifecycle() {
       native_balance(&actor) < min_user,
       "Actor balance must be below MinUserBalance after slash"
     );
-    // Sweep cursor iterates MaxSweepBatch=3 IDs per block; run enough blocks
+    // Later due occurrences advance without fee/readiness/apoptosis; lifecycle touchpoints do not predict solvency
     for block in 30..50 {
       frame_system::Pallet::<Test>::set_block_number(block);
       Actors::on_initialize(block);
@@ -3521,10 +3973,10 @@ fn user_dca_complete_lifecycle() {
         break;
       }
     }
-    assert!(
-      Actors::active_actor_view(actor_id).is_none(),
-      "User Actors must be destroyed by sweep when native < MinUserBalance"
-    );
+    let retained = Actors::active_actor_view(actor_id)
+      .expect("underfunded Cadenced User process remains active");
+    assert!(!retained.pending_signal);
+    assert!(retained.trigger_wakeup_pointer.is_some());
   });
 }
 
@@ -3661,7 +4113,7 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         1,
         crate::ScalarObservationState::Fresh {
           value: 50,
-          observed_at: 11,
+          observed_at: u64::MAX,
         },
       );
       setup_temporary_retry_pool();
@@ -3688,7 +4140,9 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
       };
       fund_native(
         actor_id,
-        if case.stimulus == StepParityStimulus::FundingUnavailable {
+        if case.actor_type == ActorType::User {
+          1_000
+        } else if case.stimulus == StepParityStimulus::FundingUnavailable {
           8
         } else {
           100
@@ -3718,15 +4172,29 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         ));
       }
       if case.bound == StepParityBound::LocalReached {
-        run_idle(Weight::MAX);
+        let mut now = frame_system::Pallet::<Test>::block_number();
+        Actors::on_idle(now, Weight::MAX);
+        for _ in 0..2 {
+          if Actors::actor_hot(actor_id).is_some_and(|hot| hot.cycle_state == CycleState::Suspended)
+          {
+            break;
+          }
+          now = now.checked_add(1).expect("matrix block advances");
+          frame_system::Pallet::<Test>::set_block_number(now);
+          Actors::on_initialize(now);
+          Actors::on_idle(now, Weight::MAX);
+        }
         assert_eq!(
-          Actors::continuation_state(actor_id).map(|state| state.cursor),
+          Actors::actor_run_state(actor_id).map(|state| state.cursor),
           Some(1)
         );
-        frame_system::Pallet::<Test>::set_block_number(11);
+        let eligible_at = Actors::actor_run_state(actor_id)
+          .expect("matrix suspension persists")
+          .eligible_at;
+        frame_system::Pallet::<Test>::set_block_number(eligible_at);
       }
       let mode = if case.bound == StepParityBound::LocalReached {
-        SimulationMode::CurrentContinuation
+        SimulationMode::CurrentRun
       } else {
         SimulationMode::FreshCurrentPlan
       };
@@ -3737,7 +4205,7 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         .unsuccessful_attempt_streak;
       let before = (
         Actors::active_actor_view(actor_id).map(|view| view.encode()),
-        Actors::continuation_state(actor_id).map(|state| state.encode()),
+        Actors::actor_run_state(actor_id).map(|state| state.encode()),
         native_balance(&actor),
         native_balance(&BOB),
         native_balance(&CHARLIE),
@@ -3757,7 +4225,7 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
       .unwrap_or_else(|error| panic!("{} simulation failed: {error:?}", case.name));
       let after_simulation = (
         Actors::active_actor_view(actor_id).map(|view| view.encode()),
-        Actors::continuation_state(actor_id).map(|state| state.encode()),
+        Actors::actor_run_state(actor_id).map(|state| state.encode()),
         native_balance(&actor),
         native_balance(&BOB),
         native_balance(&CHARLIE),
@@ -3794,18 +4262,14 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         "{} outcomes",
         case.name
       );
-      assert_eq!(
-        cursor, simulation.continuation_cursor,
-        "{} cursor",
-        case.name
-      );
+      assert_eq!(cursor, simulation.run_cursor, "{} cursor", case.name);
       assert_eq!(
         attempts, simulation.unsuccessful_attempts_at_cursor,
         "{} local attempts",
         case.name
       );
       match status {
-        AttemptDisposition::Completed => assert_eq!(
+        AttemptDisposition::Completed | AttemptDisposition::Continued => assert_eq!(
           Actors::active_actor_view(actor_id)
             .expect("completed persistent matrix actor remains active")
             .unsuccessful_attempt_streak,
@@ -3917,13 +4381,13 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
 }
 
 #[test]
-fn continuation_simulation_preserves_retry_position_and_committed_state() {
+fn run_simulation_preserves_retry_position_and_committed_state() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let expected_contract =
       system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
         .expect("direct Actor Contract");
-    let continuation_before = Actors::continuation_state(actor_id).expect("continuation exists");
+    let continuation_before = Actors::actor_run_state(actor_id).expect("Actor run exists");
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -3933,14 +4397,14 @@ fn continuation_simulation_preserves_retry_position_and_committed_state() {
       ActorType::System,
       Mutability::Mutable,
       expected_contract,
-      SimulationMode::CurrentContinuation,
+      SimulationMode::CurrentRun,
     )
-    .expect("eligible continuation simulates");
+    .expect("eligible Actor run simulates");
 
     assert_eq!(result.status, AttemptDisposition::Suspended);
-    assert_eq!(result.cycle_nonce, actor_before.cycle_nonce);
+    assert_eq!(result.cycle_nonce, continuation_before.cycle_nonce);
     assert_eq!(result.start_cursor, continuation_before.cursor);
-    assert_eq!(result.continuation_cursor, Some(continuation_before.cursor));
+    assert_eq!(result.run_cursor, Some(continuation_before.cursor));
     assert_eq!(
       result.unsuccessful_attempts_at_cursor,
       Some(
@@ -3960,7 +4424,7 @@ fn continuation_simulation_preserves_retry_position_and_committed_state() {
       }]
     );
     assert_eq!(
-      Actors::continuation_state(actor_id).map(|state| state.encode()),
+      Actors::actor_run_state(actor_id).map(|state| state.encode()),
       Some(continuation_before.encode())
     );
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
@@ -4005,7 +4469,7 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
     .expect("retry exhaustion simulates");
 
     assert_eq!(result.status, AttemptDisposition::Suspended);
-    assert_eq!(result.continuation_cursor, Some(0));
+    assert_eq!(result.run_cursor, Some(0));
     assert_eq!(result.unsuccessful_attempts_at_cursor, Some(1));
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
     assert_eq!(frame_system::Pallet::<Test>::event_count(), events_before);
@@ -4075,7 +4539,7 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
         Mutability::Mutable,
         system_active_contract(manual_schedule(), None, contract_steps)
           .expect("direct Actor Contract"),
-        SimulationMode::CurrentContinuation,
+        SimulationMode::CurrentRun,
       )
       .err(),
       Some(SimulationError::ModeCycleStateMismatch)
@@ -4091,23 +4555,30 @@ fn simulation_rejects_contract_and_mode_mismatch_without_execution() {
 }
 
 #[test]
-fn canonical_loader_requires_continuation_exactly_for_suspended_state() {
+fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut plan = inert_contract_steps();
     plan[0].on_error = RETRY_LATER;
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-    let continuation = RuntimeContinuationState {
+    let run_state = RuntimeActorRunState {
+      contract_authority: run_contract_authority(actor_id),
+      cycle_nonce: 1,
       cursor: 0,
+      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
+      last_committed_step_block: None,
+      eligible_at: 2,
       opening_snapshot: Default::default(),
       opening_predicate_results: Default::default(),
       funding_snapshot: Default::default(),
       cumulative_outcomes: Default::default(),
+      last_step_outcome: Some(StepOutcome::FundingUnavailable),
+      suspension: Some(SuspensionReason::FundingUnavailable),
     };
 
-    ContinuationStateStore::<Test>::insert(actor_id, continuation.clone());
+    ActorRunStateStore::<Test>::insert(actor_id, run_state.clone());
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
@@ -4119,29 +4590,30 @@ fn canonical_loader_requires_continuation_exactly_for_suspended_state() {
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Active(_)
     ));
-    ContinuationStateStore::<Test>::remove(actor_id);
+    ActorRunStateStore::<Test>::remove(actor_id);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
     ));
 
-    ContinuationStateStore::<Test>::insert(actor_id, continuation);
+    ActorRunStateStore::<Test>::insert(actor_id, run_state);
     for remove_partition in 0u8..4 {
-      let identity = ActorIdentities::<Test>::take(actor_id);
-      let hot = ActorHot::<Test>::take(actor_id);
-      let contract = ActorContracts::<Test>::take(actor_id);
-      let funding = ActorFunding::<Test>::take(actor_id);
+      let identity = ActorIdentities::<Test>::take(actor_id).expect("identity exists");
+      let hot = ActorHot::<Test>::take(actor_id).expect("hot state exists");
+      let contract = Actors::load_actor_contract(actor_id).expect("Contract exists");
+      assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
+      let funding = ActorFunding::<Test>::take(actor_id).expect("funding exists");
       if remove_partition != 0 {
-        ActorIdentities::<Test>::insert(actor_id, identity.clone().unwrap());
+        ActorIdentities::<Test>::insert(actor_id, identity.clone());
       }
       if remove_partition != 1 {
-        ActorHot::<Test>::insert(actor_id, hot.clone().unwrap());
+        ActorHot::<Test>::insert(actor_id, hot.clone());
       }
       if remove_partition != 2 {
-        ActorContracts::<Test>::insert(actor_id, contract.clone().unwrap());
+        assert_ok!(Actors::store_actor_contract(actor_id, contract.clone()));
       }
       if remove_partition != 3 {
-        ActorFunding::<Test>::insert(actor_id, funding.clone().unwrap());
+        ActorFunding::<Test>::insert(actor_id, funding.clone());
       }
       assert!(matches!(
         Actors::load_actor_state(actor_id),
@@ -4149,12 +4621,12 @@ fn canonical_loader_requires_continuation_exactly_for_suspended_state() {
       ));
       ActorIdentities::<Test>::remove(actor_id);
       ActorHot::<Test>::remove(actor_id);
-      ActorContracts::<Test>::remove(actor_id);
+      let _ = Actors::remove_admitted_contract_geometry(actor_id);
       ActorFunding::<Test>::remove(actor_id);
-      ActorIdentities::<Test>::insert(actor_id, identity.unwrap());
-      ActorHot::<Test>::insert(actor_id, hot.unwrap());
-      ActorContracts::<Test>::insert(actor_id, contract.unwrap());
-      ActorFunding::<Test>::insert(actor_id, funding.unwrap());
+      ActorIdentities::<Test>::insert(actor_id, identity);
+      ActorHot::<Test>::insert(actor_id, hot);
+      assert_ok!(Actors::store_actor_contract(actor_id, contract));
+      ActorFunding::<Test>::insert(actor_id, funding);
     }
   });
 }

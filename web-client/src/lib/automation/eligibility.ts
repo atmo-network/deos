@@ -7,22 +7,20 @@ cooldown, window, retry backoff, breaker, or latch arithmetic.
 */
 export const ACTORS_ELIGIBILITY_RUNTIME_API =
   'ActorEligibilityApi_actor_eligibility' as const;
-export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 4 as const;
-export const ACTORS_TRIGGER_STATE_BOND_RUNTIME_API =
-  'ActorEligibilityApi_trigger_state_bond' as const;
+export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 6 as const;
 
 export type ActorEligibilityFailure =
   | 'ActorInvariant'
-  | 'ContinuationInvariant'
+  | 'RunInvariant'
   | 'ComputationOverflow';
 
 export const ACTOR_CLOSE_REASONS = [
   'OwnerInitiated',
-  'BalanceExhausted',
+  'CycleAdmissionInsufficient',
+  'TriggerAdmissionInsufficient',
   'ConsecutiveFailures',
   'WindowExpired',
   'CycleNonceExhausted',
-  'FeeBudgetExhausted',
   'AutoCloseNonceReached',
   'RetryAttemptsExhausted',
   'ProductiveCycleCompleted',
@@ -66,6 +64,7 @@ export type ActorTriggerActivation =
       pendingRevisions: number;
       processingRevision: bigint | null;
     }
+  | { type: 'AtTime'; afterTicks: bigint; consumed: boolean }
   | { type: 'Cadenced'; everyTicks: bigint };
 
 export type ActorEligibilityView =
@@ -82,7 +81,7 @@ export type ActorEligibilityView =
 
 const ELIGIBILITY_FAILURES: ReadonlySet<string> = new Set([
   'ActorInvariant',
-  'ContinuationInvariant',
+  'RunInvariant',
   'ComputationOverflow',
 ]);
 
@@ -220,6 +219,16 @@ function projectTriggerActivation(value: unknown): ActorTriggerActivation {
         fields.processing_revision,
         'processing Crossing revision',
       ),
+    };
+  }
+  if (trigger.type === 'AtTime') {
+    if (typeof fields.consumed !== 'boolean') {
+      throw new Error('AtTime consumed state must be boolean');
+    }
+    return {
+      type: trigger.type,
+      afterTicks: asU64(fields.after_ticks, 'AtTime delay ticks'),
+      consumed: fields.consumed,
     };
   }
   if (trigger.type === 'Cadenced') {

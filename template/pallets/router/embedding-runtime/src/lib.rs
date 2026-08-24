@@ -213,6 +213,7 @@ impl pallet_deos_router::Config for Runtime {
   type Assets = Assets;
   type TmcPallet = HostTmc;
   type AssetConversion = HostXyk;
+  type PoolLifecycle = ();
   type AdminOrigin = frame_system::EnsureRoot<AccountId>;
   type PalletId = RouterPalletId;
   type NativeAsset = NativeAsset;

@@ -409,6 +409,9 @@ pub mod pallet {
     /// Asset conversion API for XYK pools
     type AssetConversion: crate::types::AssetConversionApi<Self::AccountId, Balance>;
 
+    /// Atomic host owner for permissionless pool, LP identity, and Oracle topology creation.
+    type PoolLifecycle: crate::types::PoolLifecycleApi<Self::AccountId>;
+
     /// Origin that can perform governance operations
     type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
 
@@ -644,6 +647,45 @@ pub mod pallet {
       Ok(())
     }
 
+    /// Execute an exact-output token swap through the router under a total input cap.
+    #[pallet::call_index(2)]
+    #[pallet::weight(T::WeightInfo::swap())]
+    pub fn swap_exact_output(
+      origin: OriginFor<T>,
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+      max_amount_in: Balance,
+      recipient: T::AccountId,
+      deadline: BlockNumberFor<T>,
+    ) -> DispatchResult {
+      let who = ensure_signed(origin)?;
+      ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmount);
+      ensure!(
+        frame_system::Pallet::<T>::block_number() <= deadline,
+        Error::<T>::DeadlinePassed
+      );
+      Self::execute_exact_out_for(&who, from, to, amount_out, max_amount_in, &recipient)
+        .map_err(DispatchError::from)?;
+      Ok(())
+    }
+
+    /// Permissionlessly create one complete canonical XYK pool topology.
+    #[pallet::call_index(3)]
+    #[pallet::weight(T::WeightInfo::create_pool())]
+    pub fn create_pool(
+      origin: OriginFor<T>,
+      asset_a: AssetKind,
+      asset_b: AssetKind,
+    ) -> DispatchResult {
+      let who = ensure_signed(origin)?;
+      ensure!(
+        asset_a.is_valid_market_pair(asset_b),
+        Error::<T>::InvalidPoolPair
+      );
+      T::PoolLifecycle::create_pool(&who, asset_a, asset_b)
+    }
+
     /// Update router fee (governance only)
     #[pallet::call_index(1)]
     #[pallet::weight(T::WeightInfo::update_router_fee())]
@@ -659,7 +701,7 @@ pub mod pallet {
     }
 
     fn canonical_lp_pair(pair: (AssetKind, AssetKind)) -> Option<(AssetKind, AssetKind)> {
-      if pair.0 == pair.1 {
+      if !pair.0.is_valid_market_pair(pair.1) {
         None
       } else if pair.0 < pair.1 {
         Some(pair)
@@ -1050,7 +1092,7 @@ pub mod pallet {
       min_amount_out: Balance,
       recipient: &T::AccountId,
     ) -> Result<RouterOutcome, ExecutionError<T>> {
-      ensure!(from != to, Error::<T>::IdenticalAssets);
+      ensure!(from.is_valid_market_pair(to), Error::<T>::InvalidPoolPair);
       ensure!(amount_in > 0, Error::<T>::ZeroAmount);
       let system_account = Self::is_fee_exempt(who);
       let fee = if system_account {
@@ -1344,7 +1386,7 @@ pub mod pallet {
       to: AssetKind,
       amount_out: Balance,
     ) -> Result<(PreparedRoute, Balance, Balance), Error<T>> {
-      ensure!(from != to, Error::<T>::IdenticalAssets);
+      ensure!(from.is_valid_market_pair(to), Error::<T>::InvalidPoolPair);
       ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmount);
       let route = Self::find_optimal_exact_output_route(from, to, amount_out)
         .ok_or(Error::<T>::NoRouteFound)?;
@@ -1504,7 +1546,7 @@ pub mod pallet {
           "LP reverse-index cardinality disagrees with host pool storage",
         ));
       }
-      Ok(())
+      T::LpPairIntegrity::validate_complete_topology().map_err(TryRuntimeError::Other)
     }
   }
 
@@ -1517,8 +1559,8 @@ pub mod pallet {
       to: AssetKind,
       amount_in: Balance,
     ) -> Result<RouterQuote, Error<T>> {
-      if from == to {
-        return Err(Error::<T>::IdenticalAssets);
+      if !from.is_valid_market_pair(to) {
+        return Err(Error::<T>::InvalidPoolPair);
       }
       if amount_in.is_zero() {
         return Err(Error::<T>::ZeroAmount);
@@ -1572,6 +1614,9 @@ pub mod pallet {
     fn build(&self) {
       // Ensure pallet account survives zero native balance (ED-free)
       frame_system::Pallet::<T>::inc_providers(&Pallet::<T>::account_id());
+      T::LpPairIntegrity::validate_genesis_topology().unwrap_or_else(|error| {
+        panic!("DEOS pool genesis topology is invalid: {error}") // deos-bypass: panic-owner — invalid fresh genesis must fail hard before block production
+      });
     }
   }
 }

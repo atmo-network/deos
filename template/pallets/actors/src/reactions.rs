@@ -1,10 +1,18 @@
 use crate::pallet::*;
-use crate::scheduler::{ActivationFailure, ActivationOutcome};
-use crate::types::{DirtyObservationList, DirtyObservationState, ObservationRevision};
+use crate::scheduler::{
+  ActivationFailure, ActivationOutcome, ObservationActivationOutcome, ObservationPlacementCandidate,
+};
+use crate::types::{
+  DirtyObservationList, DirtyObservationState, ObservationFanoutBranch, ObservationRevision,
+};
 use crate::weights::WeightInfo as _;
+use alloc::vec;
 use polkadot_sdk::frame_support::{ensure, storage::TransactionOutcome, traits::Get};
 use polkadot_sdk::frame_system::{Pallet as System, pallet_prelude::BlockNumberFor};
-use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult};
+use polkadot_sdk::sp_runtime::{
+  DispatchError, DispatchResult,
+  traits::{One, SaturatedConversion, Saturating},
+};
 
 impl<T: Config> Pallet<T> {
   fn append_crossing_pending_feed(feed: T::ObservationFeedId) -> DispatchResult {
@@ -190,6 +198,8 @@ impl<T: Config> Pallet<T> {
   fn append_dirty_observation_feed(
     feed: T::ObservationFeedId,
     revision: ObservationRevision,
+    cause_provenance: crate::TriggerCauseProvenance,
+    cause_block: u64,
   ) -> DispatchResult {
     ensure!(
       !DirtyObservationFeeds::<T>::contains_key(feed),
@@ -224,9 +234,16 @@ impl<T: Config> Pallet<T> {
       feed,
       DirtyObservationState {
         latest_revision: revision,
+        latest_cause_provenance: cause_provenance,
+        latest_cause_block: cause_block,
         fanout_revision: 0,
+        fanout_cause_provenance: crate::TriggerCauseProvenance::Deferred,
+        fanout_cause_block: 0,
         dirty_since: System::<T>::block_number(),
         next_subscriber_page: None,
+        next_subscriber_position: 0,
+        next_subscriber_branch: ObservationFanoutBranch::Ordinary,
+        retry_after: None,
         previous_dirty_feed: list.tail,
         next_dirty_feed: None,
       },
@@ -243,8 +260,10 @@ impl<T: Config> Pallet<T> {
   fn do_note_observation_changed(
     feed: T::ObservationFeedId,
     revision: ObservationRevision,
+    cause_provenance: crate::TriggerCauseProvenance,
   ) -> DispatchResult {
     ensure!(revision > 0, Error::<T>::InvalidObservationRevision);
+    let cause_block = System::<T>::block_number().saturated_into::<u64>();
     if ObservationSubscriberCount::<T>::get(feed) == 0 {
       ensure!(
         !ObservationIngressRevisions::<T>::contains_key(feed)
@@ -272,10 +291,12 @@ impl<T: Config> Pallet<T> {
     ObservationIngressRevisions::<T>::insert(feed, revision);
     if let Some(mut state) = dirty {
       state.latest_revision = revision;
+      state.latest_cause_provenance = cause_provenance;
+      state.latest_cause_block = cause_block;
       DirtyObservationFeeds::<T>::insert(feed, state);
       return Ok(());
     }
-    Self::append_dirty_observation_feed(feed, revision)
+    Self::append_dirty_observation_feed(feed, revision, cause_provenance, cause_block)
   }
 
   pub fn observation_change_ingress_weight() -> polkadot_sdk::frame_support::weights::Weight {
@@ -287,12 +308,15 @@ impl<T: Config> Pallet<T> {
     feed: T::ObservationFeedId,
     revision: ObservationRevision,
   ) -> DispatchResult {
-    Self::with_reused_transaction(|| Self::do_note_observation_changed(feed, revision))
+    Self::with_reused_transaction(|| {
+      Self::do_note_observation_changed(feed, revision, crate::TriggerCauseProvenance::Deferred)
+    })
   }
 
   fn do_note_observation_transition(
     feed: T::ObservationFeedId,
     transition: crate::ObservationTransition,
+    cause_provenance: crate::TriggerCauseProvenance,
   ) -> DispatchResult {
     ensure!(
       transition.revision > 0,
@@ -309,7 +333,8 @@ impl<T: Config> Pallet<T> {
         Error::<T>::CrossingTransitionInvariant
       );
     }
-    Self::do_note_observation_changed(feed, transition.revision)?;
+    let cause_block = System::<T>::block_number().saturated_into::<u64>();
+    Self::do_note_observation_changed(feed, transition.revision, cause_provenance)?;
     if CrossingFeedMembershipCount::<T>::get(feed) == 0 || transition.previous.is_none() {
       return Ok(());
     }
@@ -334,6 +359,8 @@ impl<T: Config> Pallet<T> {
             .previous
             .ok_or(Error::<T>::CrossingTransitionInvariant)?,
           current: transition.current,
+          cause_provenance,
+          cause_block,
         })
         .map_err(|_| Error::<T>::CrossingTransitionCapacityExceeded)?;
       Ok(())
@@ -348,7 +375,21 @@ impl<T: Config> Pallet<T> {
     feed: T::ObservationFeedId,
     transition: crate::ObservationTransition,
   ) -> DispatchResult {
-    Self::with_reused_transaction(|| Self::do_note_observation_transition(feed, transition))
+    Self::note_observation_transition_with_provenance(
+      feed,
+      transition,
+      crate::TriggerCauseProvenance::Deferred,
+    )
+  }
+
+  pub fn note_observation_transition_with_provenance(
+    feed: T::ObservationFeedId,
+    transition: crate::ObservationTransition,
+    cause_provenance: crate::TriggerCauseProvenance,
+  ) -> DispatchResult {
+    Self::with_reused_transaction(|| {
+      Self::do_note_observation_transition(feed, transition, cause_provenance)
+    })
   }
 
   pub(crate) fn preflight_clear_dirty_observation_feeds(
@@ -425,15 +466,171 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
-  pub(crate) fn signal_observation_subscriber(actor_id: ActorId) -> Result<bool, DispatchError> {
-    match Self::request_activation(actor_id) {
-      Ok(
+  fn process_observation_change_occurrence(
+    actor_id: ActorId,
+    feed: T::ObservationFeedId,
+    execute_terminal: bool,
+    cause_provenance: crate::TriggerCauseProvenance,
+    cause_block: u64,
+  ) -> Result<ObservationActivationOutcome, ActivationFailure> {
+    if IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id) {
+      return Ok(ObservationActivationOutcome::Ordinary(
+        ActivationOutcome::IgnoredStale,
+      ));
+    }
+    let Some(state) = Self::load_observation_activation_state(actor_id, feed) else {
+      return if execute_terminal {
+        Self::request_observation_activation_compact_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+        .map(ObservationActivationOutcome::Ordinary)
+      } else {
+        Self::request_observation_activation_ordinary_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+      };
+    };
+    if state.hot.pending_signal {
+      return Ok(ObservationActivationOutcome::Ordinary(
+        ActivationOutcome::IgnoredStale,
+      ));
+    }
+    let classification =
+      Self::classify_observation_activation_compact(&state).map_err(|error| {
+        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
+      })?;
+    if classification.terminal_reason.is_some() {
+      return if execute_terminal {
+        Self::request_observation_activation_compact_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+        .map(ObservationActivationOutcome::Ordinary)
+      } else {
+        Self::request_observation_activation_ordinary_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+      };
+    }
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let actor_type = state.identity.actor_class.actor_type();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationChange,
+        T::WeightInfo::observation_change_trigger_occurrence(),
+      );
+      let charged = match Self::try_charge_automatic_trigger_occurrence(
+        actor_type,
+        &state.identity.sovereign_account,
+        breakdown,
+      ) {
+        Ok(charged) => charged,
+        Err(error) => {
+          return TransactionOutcome::Rollback(Err(ActivationFailure::Permanent(error)));
+        }
+      };
+      if !charged {
+        return TransactionOutcome::Commit(Ok(ObservationActivationOutcome::Ordinary(
+          ActivationOutcome::IgnoredStale,
+        )));
+      }
+      let outcome = if execute_terminal {
+        Self::request_observation_activation_compact_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+        .map(ObservationActivationOutcome::Ordinary)
+      } else {
+        Self::request_observation_activation_ordinary_with_cause(
+          actor_id,
+          feed,
+          cause_provenance,
+          cause_block,
+        )
+      };
+      let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => return TransactionOutcome::Rollback(Err(error)),
+      };
+      let ObservationActivationOutcome::Ordinary(activation) = outcome else {
+        return TransactionOutcome::Rollback(Ok(outcome));
+      };
+      if matches!(
+        activation,
+        ActivationOutcome::Latched | ActivationOutcome::Coalesced
+      ) {
+        IndexedTriggerDetectionDisabled::<T>::insert(actor_id, ());
+        Self::deposit_event(Event::TriggerOccurrenceProcessed {
+          actor_id,
+          trigger_family: breakdown.trigger_family,
+          fee: breakdown.trigger_fee,
+        });
+        TransactionOutcome::Commit(Ok(outcome))
+      } else {
+        TransactionOutcome::Rollback(Ok(outcome))
+      }
+    })
+  }
+
+  pub(crate) fn signal_observation_subscriber(
+    actor_id: ActorId,
+    feed: T::ObservationFeedId,
+    cause_provenance: crate::TriggerCauseProvenance,
+    cause_block: u64,
+  ) -> Result<bool, DispatchError> {
+    match Self::process_observation_change_occurrence(
+      actor_id,
+      feed,
+      true,
+      cause_provenance,
+      cause_block,
+    ) {
+      Ok(ObservationActivationOutcome::Ordinary(
         ActivationOutcome::IgnoredStale
         | ActivationOutcome::Coalesced
         | ActivationOutcome::Latched
         | ActivationOutcome::Closed,
-      ) => Ok(true),
+      )) => Ok(true),
+      Ok(ObservationActivationOutcome::TerminalDeferred) => Err(Error::<T>::ActorInvariant.into()),
       Err(ActivationFailure::Temporary(_)) => Ok(false),
+      Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
+    }
+  }
+
+  fn signal_observation_subscriber_ordinary(
+    actor_id: ActorId,
+    feed: T::ObservationFeedId,
+    cause_provenance: crate::TriggerCauseProvenance,
+    cause_block: u64,
+  ) -> Result<Option<bool>, DispatchError> {
+    match Self::process_observation_change_occurrence(
+      actor_id,
+      feed,
+      false,
+      cause_provenance,
+      cause_block,
+    ) {
+      Ok(ObservationActivationOutcome::Ordinary(
+        ActivationOutcome::IgnoredStale
+        | ActivationOutcome::Coalesced
+        | ActivationOutcome::Latched
+        | ActivationOutcome::Closed,
+      )) => Ok(Some(true)),
+      Ok(ObservationActivationOutcome::TerminalDeferred) => Ok(None),
+      Err(ActivationFailure::Temporary(_)) => Ok(Some(false)),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
   }
@@ -444,6 +641,22 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn dirty_observation_fanout_base_probe() -> u32 {
     Self::dirty_observation_feed_count()
+  }
+
+  pub(crate) fn observation_fanout_branch_probe() -> Option<ObservationFanoutBranch> {
+    let list = DirtyObservationListState::<T>::get();
+    if list.count == 0 {
+      return None;
+    }
+    let feed = list.cursor.or(list.head)?;
+    let state = DirtyObservationFeeds::<T>::get(feed)?;
+    if state
+      .retry_after
+      .is_some_and(|retry_after| retry_after > System::<T>::block_number())
+    {
+      return None;
+    }
+    Some(state.next_subscriber_branch)
   }
 
   fn advance_dirty_observation_cursor(
@@ -465,6 +678,14 @@ impl<T: Config> Pallet<T> {
     let feed = list.cursor.ok_or(Error::<T>::DirtyObservationInvariant)?;
     let mut state =
       DirtyObservationFeeds::<T>::get(feed).ok_or(Error::<T>::DirtyObservationInvariant)?;
+    if let Some(retry_after) = state.retry_after {
+      if retry_after > System::<T>::block_number() {
+        Self::advance_dirty_observation_cursor(&mut list, &state);
+        DirtyObservationListState::<T>::put(list);
+        return Ok(true);
+      }
+      state.retry_after = None;
+    }
     ensure!(
       Self::dirty_observation_links_are_valid(feed, &state, &list),
       Error::<T>::DirtyObservationInvariant
@@ -474,13 +695,25 @@ impl<T: Config> Pallet<T> {
     ensure!(page_list.count > 0, Error::<T>::DirtyObservationInvariant);
     if state.fanout_revision == 0 {
       state.fanout_revision = state.latest_revision;
+      state.fanout_cause_provenance = state.latest_cause_provenance;
+      state.fanout_cause_block = state.latest_cause_block;
       state.next_subscriber_page = Some(page_list.head);
+      state.next_subscriber_position = 0;
+      state.next_subscriber_branch = ObservationFanoutBranch::Ordinary;
     }
     let Some(page_id) = state.next_subscriber_page else {
+      ensure!(
+        state.next_subscriber_position == 0
+          && state.next_subscriber_branch == ObservationFanoutBranch::Ordinary
+          && state.retry_after.is_none(),
+        Error::<T>::DirtyObservationInvariant
+      );
       if state.latest_revision == state.fanout_revision {
         Self::clear_dirty_observation_feed(feed)?;
       } else {
         state.fanout_revision = state.latest_revision;
+        state.fanout_cause_provenance = state.latest_cause_provenance;
+        state.fanout_cause_block = state.latest_cause_block;
         state.next_subscriber_page = Some(page_list.head);
         Self::advance_dirty_observation_cursor(&mut list, &state);
         DirtyObservationFeeds::<T>::insert(feed, state);
@@ -491,9 +724,149 @@ impl<T: Config> Pallet<T> {
     let page = ObservationSubscriberPages::<T>::get(feed, page_id)
       .ok_or(Error::<T>::DirtyObservationInvariant)?;
     let next_page = page.next;
+    let page_len =
+      u32::try_from(page.entries.len()).map_err(|_| Error::<T>::DirtyObservationInvariant)?;
+    ensure!(
+      state.next_subscriber_position < page_len,
+      Error::<T>::DirtyObservationInvariant
+    );
     let mut page_complete = true;
-    for actor_id in page.entries.into_iter().flatten() {
-      page_complete &= Self::signal_observation_subscriber(actor_id)?;
+    'page: while state.next_subscriber_position < page_len {
+      if state.next_subscriber_branch == ObservationFanoutBranch::Ordinary {
+        let cohort_start = state.next_subscriber_position as usize;
+        if let Some(actor_id) = page.entries[cohort_start]
+          && let Some(first) = Self::prepare_observation_placement_candidate(
+            actor_id,
+            feed,
+            state.fanout_cause_provenance,
+            state.fanout_cause_block,
+          )
+          .map_err(Self::activation_failure_error)?
+        {
+          let wakeup_key = first.wakeup_key();
+          let mut cohort_end = cohort_start.saturating_add(1);
+          let committed = match first {
+            ObservationPlacementCandidate::Queue(first) => {
+              let mut candidates = vec![first];
+              while cohort_end < page.entries.len() {
+                let Some(actor_id) = page.entries[cohort_end] else {
+                  break;
+                };
+                let Some(ObservationPlacementCandidate::Queue(candidate)) =
+                  Self::prepare_observation_placement_candidate(
+                    actor_id,
+                    feed,
+                    state.fanout_cause_provenance,
+                    state.fanout_cause_block,
+                  )
+                  .map_err(Self::activation_failure_error)?
+                else {
+                  break;
+                };
+                candidates.push(candidate);
+                cohort_end = cohort_end.saturating_add(1);
+              }
+              Self::commit_observation_queue_cohort(candidates).is_ok()
+            }
+            ObservationPlacementCandidate::Wakeup(first) => {
+              let mut candidates = vec![first];
+              while cohort_end < page.entries.len() {
+                let Some(actor_id) = page.entries[cohort_end] else {
+                  break;
+                };
+                let Some(candidate) = Self::prepare_observation_placement_candidate(
+                  actor_id,
+                  feed,
+                  state.fanout_cause_provenance,
+                  state.fanout_cause_block,
+                )
+                .map_err(Self::activation_failure_error)?
+                else {
+                  break;
+                };
+                if candidate.wakeup_key() != wakeup_key {
+                  break;
+                }
+                let ObservationPlacementCandidate::Wakeup(candidate) = candidate else {
+                  break;
+                };
+                candidates.push(candidate);
+                cohort_end = cohort_end.saturating_add(1);
+              }
+              match Self::commit_observation_wakeup_cohort(candidates) {
+                Ok(()) => true,
+                Err(
+                  crate::scheduler::EnqueueOutcome::CapacityUnavailable
+                  | crate::scheduler::EnqueueOutcome::WakeupCapacityExhausted,
+                ) => {
+                  state.retry_after = Some(System::<T>::block_number().saturating_add(One::one()));
+                  page_complete = false;
+                  break 'page;
+                }
+                Err(_) => return Err(Error::<T>::SchedulerIndexExhausted.into()),
+              }
+            }
+          };
+          if committed {
+            state.next_subscriber_position =
+              u32::try_from(cohort_end).map_err(|_| Error::<T>::DirtyObservationInvariant)?;
+            continue;
+          }
+        }
+      }
+
+      let position = state.next_subscriber_position as usize;
+      let maybe_actor_id = page.entries[position];
+      let next_position = state
+        .next_subscriber_position
+        .checked_add(1)
+        .ok_or(Error::<T>::DirtyObservationInvariant)?;
+      match state.next_subscriber_branch {
+        ObservationFanoutBranch::Ordinary => {
+          let Some(actor_id) = maybe_actor_id else {
+            state.next_subscriber_position = next_position;
+            continue;
+          };
+          match Self::signal_observation_subscriber_ordinary(
+            actor_id,
+            feed,
+            state.fanout_cause_provenance,
+            state.fanout_cause_block,
+          )? {
+            Some(true) => state.next_subscriber_position = next_position,
+            Some(false) => {
+              state.retry_after = Some(System::<T>::block_number().saturating_add(One::one()));
+              page_complete = false;
+              break;
+            }
+            None => {
+              state.next_subscriber_branch = ObservationFanoutBranch::Terminal;
+              page_complete = false;
+              break;
+            }
+          }
+        }
+        ObservationFanoutBranch::Terminal => {
+          let actor_id = maybe_actor_id.ok_or(Error::<T>::DirtyObservationInvariant)?;
+          if !Self::signal_observation_subscriber(
+            actor_id,
+            feed,
+            state.fanout_cause_provenance,
+            state.fanout_cause_block,
+          )? {
+            state.retry_after = Some(System::<T>::block_number().saturating_add(One::one()));
+            page_complete = false;
+            break;
+          }
+          if !DirtyObservationFeeds::<T>::contains_key(feed) {
+            return Ok(Self::dirty_observation_feed_count() > 0);
+          }
+          state.next_subscriber_position = next_position;
+          state.next_subscriber_branch = ObservationFanoutBranch::Ordinary;
+          page_complete = next_position == page_len;
+          break;
+        }
+      }
     }
     if !page_complete {
       Self::advance_dirty_observation_cursor(&mut list, &state);
@@ -501,12 +874,21 @@ impl<T: Config> Pallet<T> {
       DirtyObservationListState::<T>::put(list);
       return Ok(true);
     }
+    ensure!(
+      state.next_subscriber_position == page_len,
+      Error::<T>::DirtyObservationInvariant
+    );
     state.next_subscriber_page = next_page;
+    state.next_subscriber_position = 0;
+    state.next_subscriber_branch = ObservationFanoutBranch::Ordinary;
+    state.retry_after = None;
     if next_page.is_none() {
       if state.latest_revision == state.fanout_revision {
         Self::clear_dirty_observation_feed(feed)?;
       } else {
         state.fanout_revision = state.latest_revision;
+        state.fanout_cause_provenance = state.latest_cause_provenance;
+        state.fanout_cause_block = state.latest_cause_block;
         state.next_subscriber_page = Some(page_list.head);
         Self::advance_dirty_observation_cursor(&mut list, &state);
         DirtyObservationFeeds::<T>::insert(feed, state);
@@ -549,9 +931,21 @@ impl<T: Config> Pallet<T> {
     if Self::dirty_observation_fanout_base_probe() == 0 {
       return (meter.consumed(), pages_serviced);
     }
-    let unit_weight = T::WeightInfo::observation_fanout_page();
+    let branch_probe_weight = T::WeightInfo::observation_fanout_branch_probe();
+    let fault_weight = T::WeightInfo::record_observation_fanout_worker_fault();
     for _ in pages_serviced..T::MaxObservationFanoutPagesPerBlock::get() {
-      if !meter.can_consume(unit_weight) {
+      if !meter.can_consume(branch_probe_weight) {
+        break;
+      }
+      meter.consume(branch_probe_weight);
+      let Some(branch) = Self::observation_fanout_branch_probe() else {
+        break;
+      };
+      let unit_weight = match branch {
+        ObservationFanoutBranch::Ordinary => Self::observation_fanout_ordinary_weight_upper(),
+        ObservationFanoutBranch::Terminal => T::WeightInfo::observation_fanout_terminal(),
+      };
+      if !meter.can_consume(unit_weight.saturating_add(fault_weight)) {
         break;
       }
       let list = DirtyObservationListState::<T>::get();
@@ -580,12 +974,36 @@ impl<T: Config> Pallet<T> {
             } else {
               CrossingWorkerFaultClass::Other
             };
-            ObservationFanoutWorkerFaultState::<T>::put(ObservationFanoutWorkerFault {
-              feed,
-              revision: state.latest_revision,
-              subscriber_page: state.next_subscriber_page,
-              class,
+            let actor_id = state.next_subscriber_page.and_then(|page_id| {
+              ObservationSubscriberPages::<T>::get(feed, page_id).and_then(|page| {
+                page
+                  .entries
+                  .get(state.next_subscriber_position as usize)
+                  .copied()
+                  .flatten()
+              })
             });
+            let authority = actor_id.and_then(ActorActivationAuthorities::<T>::get);
+            let recorded = Self::record_observation_fanout_worker_fault(
+              &mut meter,
+              ObservationFanoutWorkerFault {
+                feed,
+                revision: state.latest_revision,
+                subscriber_page: state.next_subscriber_page,
+                subscriber_position: state.next_subscriber_position,
+                actor_id,
+                semantic_contract_id: authority
+                  .as_ref()
+                  .map(|authority| authority.semantic_contract_id),
+                body_commitment: authority
+                  .as_ref()
+                  .map(|authority| authority.body_commitment),
+                admission_identity: authority.map(|authority| authority.admission_identity),
+                branch: state.next_subscriber_branch,
+                class,
+              },
+            );
+            debug_assert!(recorded, "fault Weight was reserved before fanout mutation");
           }
           break;
         }
@@ -642,10 +1060,25 @@ impl<T: Config> Pallet<T> {
         .ok_or(TryRuntimeError::Other("dirty observation key has no state"))?;
       if state.latest_revision == 0
         || state.fanout_revision > state.latest_revision
-        || (state.fanout_revision == 0 && state.next_subscriber_page.is_some())
-        || state
-          .next_subscriber_page
-          .is_some_and(|page_id| ObservationSubscriberPages::<T>::get(feed, page_id).is_none())
+        || (state.fanout_revision == 0
+          && (state.fanout_cause_provenance != crate::TriggerCauseProvenance::Deferred
+            || state.fanout_cause_block != 0
+            || state.next_subscriber_page.is_some()
+            || state.next_subscriber_position != 0
+            || state.next_subscriber_branch != ObservationFanoutBranch::Ordinary
+            || state.retry_after.is_some()))
+        || state.next_subscriber_page.map_or(
+          state.next_subscriber_position != 0
+            || state.next_subscriber_branch != ObservationFanoutBranch::Ordinary
+            || state.retry_after.is_some(),
+          |page_id| {
+            ObservationSubscriberPages::<T>::get(feed, page_id).is_none_or(|page| {
+              state.next_subscriber_position >= page.entries.len() as u32
+                || (state.next_subscriber_branch == ObservationFanoutBranch::Terminal
+                  && page.entries[state.next_subscriber_position as usize].is_none())
+            })
+          },
+        )
         || ObservationSubscriberCount::<T>::get(feed) == 0
         || ObservationSubscriberPageLists::<T>::get(feed).is_none()
         || ObservationIngressRevisions::<T>::get(feed) != Some(state.latest_revision)
@@ -681,7 +1114,8 @@ impl<T: Config> crate::ObservationTransitionIngress<T::ObservationFeedId> for Pa
   fn note_observation_transition(
     feed: T::ObservationFeedId,
     transition: crate::ObservationTransition,
+    cause_provenance: crate::TriggerCauseProvenance,
   ) -> DispatchResult {
-    Pallet::<T>::note_observation_transition(feed, transition)
+    Pallet::<T>::note_observation_transition_with_provenance(feed, transition, cause_provenance)
   }
 }

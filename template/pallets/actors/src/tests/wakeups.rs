@@ -816,7 +816,7 @@ fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
     }
     let limit =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-        .saturating_add(Actors::wakeup_cursor_drain_unit_weight_upper(false));
+        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(false));
     let mut one_slot = WeightMeter::with_limit(limit);
     let first = Actors::drain_overdue_wakeups_cursor(10, &mut one_slot);
     assert_eq!(first.entries_scanned, 1);
@@ -857,7 +857,7 @@ fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     let required =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-        .saturating_add(Actors::wakeup_cursor_drain_unit_weight_upper(true));
+        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(true));
 
     let mut reftime_short = WeightMeter::with_limit(Weight::from_parts(
       required.ref_time().saturating_sub(1),
@@ -891,7 +891,7 @@ fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
 fn on_idle_wakeup_worker_respects_remaining_weight_in_each_dimension() {
   let required =
     <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-      .saturating_add(Actors::wakeup_cursor_drain_unit_weight_upper(true));
+      .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(true));
   assert_on_idle_wakeup_insufficiency_preserves_state(Weight::from_parts(
     required.ref_time().saturating_sub(1),
     u64::MAX,
@@ -968,31 +968,52 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
     assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
     QueueTail::<Test>::put(1);
     QueueOccupancy::<Test>::put(0);
-    let events_before = System::events();
+    let events_before = System::events().len();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
 
     let stats = Actors::drain_overdue_wakeups_cursor(10, &mut meter);
 
     assert_eq!(stats.entries_scanned, 0);
-    assert_eq!(System::events(), events_before);
+    assert_eq!(System::events().len(), events_before + 1);
     assert_ne!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       root_before
     );
     assert_eq!(scheduled_wakeup_block(actor_id), Some(10));
+    let fault = crate::WakeupWorkerFault {
+      key: WakeupKey::Block(10),
+      page: 0,
+      class: crate::CrossingWorkerFaultClass::Invariant,
+    };
+    assert_eq!(Actors::wakeup_worker_fault(), Some(fault));
     assert_eq!(
-      Actors::wakeup_worker_fault(),
-      Some(crate::WakeupWorkerFault {
-        key: WakeupKey::Block(10),
-        page: 0,
-        class: crate::CrossingWorkerFaultClass::Invariant,
-      })
+      actor_event_count(|event| matches!(
+        event,
+        Event::ActorFaultRecorded {
+          fault_id: crate::FaultId::WakeupWorker,
+          kind: crate::ActorFaultKind::Wakeup,
+          first_recorded_block: 1,
+          context: crate::FaultContext::Wakeup(recorded),
+        } if recorded == &fault
+      )),
+      1
     );
     let mut halted = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
       Actors::drain_overdue_wakeups_cursor(10, &mut halted).entries_scanned,
       0
+    );
+    assert_eq!(
+      actor_event_count(|event| matches!(
+        event,
+        Event::ActorFaultRecorded {
+          fault_id: crate::FaultId::WakeupWorker,
+          ..
+        }
+      )),
+      1,
+      "an uncleared wakeup fault emits only its first-recorded event"
     );
     assert_noop!(
       Actors::clear_wakeup_worker_fault(RuntimeOrigin::signed(ALICE)),
@@ -1000,6 +1021,22 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
     );
     QueueTail::<Test>::put(0);
     assert_ok!(Actors::clear_wakeup_worker_fault(RuntimeOrigin::root()));
+    let actor_events: Vec<_> = System::events()
+      .into_iter()
+      .filter_map(|record| match record.event {
+        RuntimeEvent::Actors(event) => Some(event),
+        _ => None,
+      })
+      .collect();
+    let recorded_index = actor_events
+      .iter()
+      .position(|event| matches!(event, Event::ActorFaultRecorded { .. }))
+      .expect("first-recorded event exists");
+    let cleared_index = actor_events
+      .iter()
+      .position(|event| matches!(event, Event::WakeupWorkerFaultCleared { .. }))
+      .expect("clear event exists");
+    assert!(recorded_index < cleared_index);
     let mut repaired = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
       Actors::drain_overdue_wakeups_cursor(10, &mut repaired).ready_entries,
@@ -1007,6 +1044,55 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
     );
     assert!(Actors::wakeup_worker_fault().is_none());
     assert_eq!(scheduled_wakeup_block(actor_id), None);
+  });
+}
+
+#[test]
+fn wakeup_fault_recording_admits_both_weight_dimensions_and_is_idempotent() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let fault = crate::WakeupWorkerFault {
+      key: WakeupKey::Block(10),
+      page: 0,
+      class: crate::CrossingWorkerFaultClass::Invariant,
+    };
+    let required = <TestWeightInfo as crate::WeightInfo>::record_wakeup_worker_fault();
+
+    let mut ref_time_short = WeightMeter::with_limit(Weight::from_parts(
+      required.ref_time().saturating_sub(1),
+      u64::MAX,
+    ));
+    assert!(!Actors::record_wakeup_worker_fault(
+      &mut ref_time_short,
+      fault
+    ));
+    assert!(crate::WakeupWorkerFaultState::<Test>::get().is_none());
+    assert_eq!(System::events().len(), 0);
+
+    let mut proof_short = WeightMeter::with_limit(Weight::from_parts(
+      u64::MAX,
+      required.proof_size().saturating_sub(1),
+    ));
+    assert!(!Actors::record_wakeup_worker_fault(&mut proof_short, fault));
+    assert!(crate::WakeupWorkerFaultState::<Test>::get().is_none());
+    assert_eq!(System::events().len(), 0);
+
+    let mut admitted = WeightMeter::with_limit(required);
+    assert!(Actors::record_wakeup_worker_fault(&mut admitted, fault));
+    assert_eq!(admitted.consumed(), required);
+    let events_after_first = System::events();
+
+    let mut duplicate = WeightMeter::with_limit(Weight::MAX);
+    assert!(!Actors::record_wakeup_worker_fault(
+      &mut duplicate,
+      crate::WakeupWorkerFault {
+        class: crate::CrossingWorkerFaultClass::Other,
+        ..fault
+      },
+    ));
+    assert_eq!(duplicate.consumed(), Weight::zero());
+    assert_eq!(crate::WakeupWorkerFaultState::<Test>::get(), Some(fault));
+    assert_eq!(System::events(), events_after_first);
   });
 }
 
@@ -1161,7 +1247,7 @@ fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
 }
 
 #[test]
-fn post_attempt_wakeup_index_exhaustion_commits_then_closes() {
+fn trigger_rearm_index_exhaustion_closes_before_the_due_attempt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -1187,7 +1273,7 @@ fn post_attempt_wakeup_index_exhaustion_commits_then_closes() {
 
     run_idle(Weight::MAX);
 
-    assert_eq!(native_balance(&BOB), bob_before + 10);
+    assert_eq!(native_balance(&BOB), bob_before);
     assert!(Actors::actor_identities(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
     assert_eq!(Actors::combined_queue_occupancy(), 0);
@@ -1267,7 +1353,7 @@ fn wakeup_worker_stops_at_its_own_weight_envelope_without_lending() {
     // The shared on_idle meter has far more than the wakeup worker's dedicated envelope; the
     // worker must stop at its own ceiling and leave the surplus for actor service (spec 8.4.5).
     let cursor_probe = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future();
-    let worker_unit = Actors::wakeup_cursor_drain_unit_weight_upper(true);
+    let worker_unit = Actors::block_wakeup_cursor_drain_unit_weight_upper(true);
     let worker_envelope = cursor_probe.saturating_add(worker_unit);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(
       worker_envelope.saturating_sub(Weight::from_parts(1, 0)),
@@ -1524,19 +1610,19 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(50);
       });
-      ActorContracts::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("contract").window = Some(ScheduleWindow { start: 1, end: 49 });
-      });
+      let mut contract = Actors::load_actor_contract(actor_id).expect("contract");
+      contract.window = Some(ScheduleWindow { start: 1, end: 49 });
+      assert_ok!(Actors::store_actor_contract(actor_id, contract));
       assert_eq!(
         crate::Pallet::<Test>::do_try_state().map_err(|error| format!("{error:?}")),
-        Err("Other(\"ActorHot wakeup pointer exceeds its terminal membership\")".into())
+        Err("Other(\"ActorHot Pipeline wakeup pointer exceeds its terminal membership\")".into())
       );
       ActorHot::<Test>::mutate(actor_id, |maybe| {
         maybe.as_mut().expect("hot").terminal_at = Some(102);
       });
-      ActorContracts::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("contract").window = Some(ScheduleWindow { start: 1, end: 101 });
-      });
+      let mut contract = Actors::load_actor_contract(actor_id).expect("contract");
+      contract.window = Some(ScheduleWindow { start: 1, end: 101 });
+      assert_ok!(Actors::store_actor_contract(actor_id, contract));
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     }
   });
@@ -1707,7 +1793,7 @@ fn terminal_window_wakeup_survives_queue_saturation_and_continuation() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
     run_idle(Weight::MAX);
     assert!(
-      Actors::continuation_state(actor_id).is_some(),
+      Actors::actor_run_state(actor_id).is_some(),
       "retryable step leaves a Continuation"
     );
     assert_eq!(
@@ -1727,14 +1813,14 @@ fn terminal_window_wakeup_survives_queue_saturation_and_continuation() {
       let entries = (0..len)
         .map(|offset| {
           let ticket = u64::from(first.saturating_add(offset));
-          QueueEntry {
+          queue_entry(
             ticket,
-            actor_id: if ticket == existing_ticket {
+            if ticket == existing_ticket {
               actor_id
             } else {
               30_000_000u64.saturating_add(ticket)
             },
-          }
+          )
         })
         .collect::<Vec<_>>();
       QueuePages::<Test>::insert(
@@ -1758,7 +1844,7 @@ fn terminal_window_wakeup_survives_queue_saturation_and_continuation() {
       scheduled_wakeup_block(actor_id),
       Actors::actor_hot(actor_id).and_then(|hot| hot.queue_ticket),
     );
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::ActorClosed {
@@ -1817,7 +1903,7 @@ fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
       },
     );
     let actor_before = Actors::active_actor_view(actor_id).expect("queued continuation");
-    let continuation_before = Actors::continuation_state(actor_id)
+    let continuation_before = Actors::actor_run_state(actor_id)
       .expect("continuation before corrupt retry placement")
       .encode();
     let events_before = System::events();
@@ -1827,8 +1913,8 @@ fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
 
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
     assert_eq!(
-      Actors::continuation_state(actor_id)
-        .expect("continuation survives failed placement")
+      Actors::actor_run_state(actor_id)
+        .expect("Actor run survives failed placement")
         .encode(),
       continuation_before,
     );
@@ -1870,7 +1956,7 @@ fn cancelled_continuation_exactly_invalidates_its_wakeup_before_reprime() {
     assert_eq!(scheduled_wakeup_block(actor_id), Some(11));
     assert!(Actors::wakeup_buckets(11).is_some());
 
-    assert_ok!(Actors::cancel_continuation(RuntimeOrigin::root(), actor_id));
+    assert_ok!(Actors::cancel_run(RuntimeOrigin::root(), actor_id));
     assert!(scheduled_wakeup_block(actor_id).is_none());
     assert!(Actors::wakeup_buckets(11).is_none());
     frame_system::Pallet::<Test>::set_block_number(11);
@@ -1909,6 +1995,32 @@ fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
         .wakeup_pointer
         .is_none()
     );
+  });
+}
+
+#[test]
+fn pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, timer_schedule(100), None, inert_contract_steps());
+    let trigger_pointer = Actors::actor_hot(actor_id)
+      .and_then(|hot| hot.trigger_wakeup_pointer)
+      .expect("Cadenced trigger pointer exists");
+    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    let hot = Actors::actor_hot(actor_id).expect("Actor owns both temporal memberships");
+    assert!(hot.wakeup_pointer.is_some());
+    assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+    let (ready, stats) = Actors::wakeup_substrate_drain_block(10, 1);
+    assert_eq!(ready.as_slice(), &[actor_id]);
+    assert_eq!(stats.ready_entries, 1);
+    let hot = Actors::actor_hot(actor_id).expect("Actor remains active");
+    assert!(hot.wakeup_pointer.is_none());
+    assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 

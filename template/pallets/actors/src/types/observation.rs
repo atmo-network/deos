@@ -1,5 +1,5 @@
-use super::ObservationValue;
 use super::lifecycle::ActorId;
+use super::{ObservationValue, WakeupWorkerFault};
 use frame::prelude::*;
 
 pub type ObservationRevision = u64;
@@ -98,6 +98,10 @@ pub struct CrossingLeafState {
 pub struct CrossingMember {
   pub actor_id: ActorId,
   pub generation: u64,
+  /// Detector-local destination for the paired fire/re-arm leaf.
+  pub counterpart_threshold: ObservationValue,
+  /// Binds page-local routing to the admitted Contract authority without loading its cold head.
+  pub admission_identity: [u8; 32],
 }
 
 #[derive(
@@ -141,6 +145,8 @@ pub struct CrossingTransitionObligation {
   pub revision: ObservationRevision,
   pub previous: ObservationValue,
   pub current: ObservationValue,
+  pub cause_provenance: crate::TriggerCauseProvenance,
+  pub cause_block: u64,
 }
 
 #[derive(
@@ -188,6 +194,25 @@ pub struct CrossingRangeCursor {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
+pub struct CrossingCapacity {
+  pub user_limit: u32,
+  pub total_limit: u32,
+  pub user_memberships: u32,
+  pub total_memberships: u32,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct MaterializationFaults<FeedId, BlockNumber> {
+  pub crossing: Option<CrossingWorkerFault<FeedId>>,
+  pub fanout: Option<ObservationFanoutWorkerFault<FeedId>>,
+  pub wakeup: Option<WakeupWorkerFault<BlockNumber>>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
 pub enum CrossingWorkerFaultClass {
   Invariant,
   Capacity,
@@ -212,6 +237,12 @@ pub struct ObservationFanoutWorkerFault<FeedId> {
   pub feed: FeedId,
   pub revision: ObservationRevision,
   pub subscriber_page: Option<u32>,
+  pub subscriber_position: u32,
+  pub actor_id: Option<ActorId>,
+  pub semantic_contract_id: Option<[u8; 32]>,
+  pub body_commitment: Option<[u8; 32]>,
+  pub admission_identity: Option<[u8; 32]>,
+  pub branch: ObservationFanoutBranch,
   pub class: CrossingWorkerFaultClass,
 }
 
@@ -295,11 +326,26 @@ impl<MaxEntries: Get<u32>> core::ops::DerefMut for ObservationSubscriberPage<Max
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum ObservationFanoutBranch {
+  Ordinary,
+  Terminal,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub struct DirtyObservationState<FeedId, BlockNumber> {
   pub latest_revision: ObservationRevision,
+  pub latest_cause_provenance: crate::TriggerCauseProvenance,
+  pub latest_cause_block: u64,
   pub fanout_revision: ObservationRevision,
+  pub fanout_cause_provenance: crate::TriggerCauseProvenance,
+  pub fanout_cause_block: u64,
   pub dirty_since: BlockNumber,
   pub next_subscriber_page: Option<u32>,
+  pub next_subscriber_position: u32,
+  pub next_subscriber_branch: ObservationFanoutBranch,
+  pub retry_after: Option<BlockNumber>,
   pub previous_dirty_feed: Option<FeedId>,
   pub next_dirty_feed: Option<FeedId>,
 }

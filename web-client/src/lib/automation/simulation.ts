@@ -73,7 +73,7 @@ export type ActorLocalSimulationResult<State> = {
   closeReason: 'RetryAttemptsExhausted' | 'ProductiveCycleCompleted' | null;
   cycleNonce: bigint;
   startCursor: number;
-  continuationCursor: number | null;
+  runCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
   state: State;
   cumulative: ActorLocalSimulationCounts;
@@ -287,7 +287,7 @@ export function simulateActorLocally<State, Predicate>(input: {
         closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
         cycleNonce: input.cycleNonce,
         startCursor: input.startCursor,
-        continuationCursor: null,
+        runCursor: null,
         unsuccessfulAttemptsAtCursor: null,
         state,
         cumulative,
@@ -310,7 +310,7 @@ export function simulateActorLocally<State, Predicate>(input: {
         closeReason: exhausted ? 'RetryAttemptsExhausted' : null,
         cycleNonce: input.cycleNonce,
         startCursor: input.startCursor,
-        continuationCursor: exhausted ? null : index,
+        runCursor: exhausted ? null : index,
         unsuccessfulAttemptsAtCursor: exhausted
           ? null
           : nextUnsuccessfulAttempts,
@@ -326,7 +326,7 @@ export function simulateActorLocally<State, Predicate>(input: {
         closeReason: null,
         cycleNonce: input.cycleNonce,
         startCursor: input.startCursor,
-        continuationCursor: null,
+        runCursor: null,
         unsuccessfulAttemptsAtCursor: null,
         state,
         cumulative,
@@ -344,7 +344,7 @@ export function simulateActorLocally<State, Predicate>(input: {
     closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
     cycleNonce: input.cycleNonce,
     startCursor: input.startCursor,
-    continuationCursor: null,
+    runCursor: null,
     unsuccessfulAttemptsAtCursor: null,
     state,
     cumulative,

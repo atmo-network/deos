@@ -1,5 +1,4 @@
 use crate::AdapterFailure;
-#[cfg(feature = "runtime-benchmarks")]
 use polkadot_sdk::frame_support::pallet_prelude::DispatchResult;
 
 // Re-export AssetKind from primitives as the single source of truth
@@ -60,6 +59,18 @@ pub trait TmcInterface<AccountId, Balance> {
   ) -> Result<Balance, AdapterFailure>;
 }
 
+/// Atomic host lifecycle for canonical XYK pool, LP identity, and Oracle topology creation.
+pub trait PoolLifecycleApi<AccountId> {
+  /// Create one permissionless canonical pool as a single transactional state transition.
+  fn create_pool(who: &AccountId, asset_a: AssetKind, asset_b: AssetKind) -> DispatchResult;
+}
+
+impl<AccountId> PoolLifecycleApi<AccountId> for () {
+  fn create_pool(_: &AccountId, _: AssetKind, _: AssetKind) -> DispatchResult {
+    Ok(())
+  }
+}
+
 /// Asset conversion API for XYK pools
 pub trait AssetConversionApi<AccountId, Balance> {
   /// Get pool ID for asset pair
@@ -118,6 +129,16 @@ pub trait LpPairIntegrity {
   /// `None` keeps independently embedded Router instances limited to internal index checks.
   fn expected_pool_count() -> Result<Option<u32>, &'static str> {
     Ok(None)
+  }
+
+  /// Validate host-owned pool, LP, and observation topology in both directions.
+  fn validate_complete_topology() -> Result<(), &'static str> {
+    Ok(())
+  }
+
+  /// Validate host topology after all earlier pallet genesis builders have run.
+  fn validate_genesis_topology() -> Result<(), &'static str> {
+    Ok(())
   }
 }
 

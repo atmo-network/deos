@@ -83,7 +83,11 @@ run_fast_checks() {
 run_heavy_checks() {
     phase_banner "Step 4: Heavy profile"
     run_shell_step "Clean web-client validation" "" "cd '$PROJECT_ROOT/web-client' && npm run validate"
+    if [[ "${SKIP_WASM_BUILD:-0}" == "1" ]]; then
+    REQUIRE_WASM_IDENTITY=0 run_script_step "Actors assurance without Wasm identity" "actors-assurance.sh"
+  else
     run_script_step "Actors assurance" "actors-assurance.sh"
+  fi
     run_script_step "Benchmark compilation" "benchmarks.sh" --check
 }
 
@@ -105,7 +109,8 @@ regenerate_full_artifacts() {
     run_script_step "Deterministic production runtime" "03-build-runtime.sh"
     run_script_step "Runtime metadata and descriptors" "export-papi-metadata.sh"
     run_shell_step "Runtime-derived client evidence" "" "cd '$PROJECT_ROOT/web-client' && npm run generate:actors-abi && npm run generate:ingress-evidence && npm run generate:observation-evidence"
-    run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json && cargo run -q --locked -p deos-runtime --example trigger_bond_vectors -- --check ../web-client/src/lib/automation/actors-trigger-bond-vectors.json"
+    run_shell_step "Package-derived Actors evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
+    run_shell_step "Runtime-derived Actors cost evidence" "" "cd '$TEMPLATE_DIR' && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     fingerprint_after="$(worktree_fingerprint)"
     if [[ "$fingerprint_after" != "$fingerprint_before" ]]; then
         log_error "Full artifact regeneration changed the candidate worktree"

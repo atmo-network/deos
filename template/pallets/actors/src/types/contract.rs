@@ -1,6 +1,7 @@
 use super::lifecycle::{CompletionPolicy, StepErrorPolicy};
+use alloc::vec::Vec;
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::Perbill;
+use polkadot_sdk::{sp_runtime::Perbill, sp_weights::Weight};
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -11,6 +12,15 @@ pub enum AmountResolution<Balance> {
   PercentageAtOpening(Perbill),
   PercentageOfLastFunding(Perbill),
   AllAvailable,
+}
+
+impl<Balance> AmountResolution<Balance> {
+  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
+    matches!(
+      self,
+      Self::PercentageAtOpening(_) | Self::PercentageOfLastFunding(_)
+    )
+  }
 }
 
 #[derive(
@@ -93,6 +103,29 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     shares: AmountResolution<Balance>,
   },
   StopCycle,
+}
+
+impl<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>>
+  Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>
+{
+  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
+    match self {
+      Self::Transfer { amount, .. }
+      | Self::SplitTransfer { amount, .. }
+      | Self::Burn { amount, .. }
+      | Self::Mint { amount, .. }
+      | Self::Stake { amount, .. } => amount.requires_frozen_cycle_snapshot(),
+      Self::SwapIn { amount_in, .. } => amount_in.requires_frozen_cycle_snapshot(),
+      Self::SwapOut { amount_out, .. } => amount_out.requires_frozen_cycle_snapshot(),
+      Self::AddLiquidity {
+        amount_a, amount_b, ..
+      } => amount_a.requires_frozen_cycle_snapshot() || amount_b.requires_frozen_cycle_snapshot(),
+      Self::RemoveLiquidity { lp_amount, .. } => lp_amount.requires_frozen_cycle_snapshot(),
+      Self::DonateLiquidity { max_amount_a, .. } => max_amount_a.requires_frozen_cycle_snapshot(),
+      Self::Unstake { shares, .. } => shares.requires_frozen_cycle_snapshot(),
+      Self::StopCycle => false,
+    }
+  }
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -701,6 +734,18 @@ impl<ObservationFeedId> ObservationCrossing<ObservationFeedId> {
   }
 }
 
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum TriggerFamily {
+  Manual,
+  AddressEvent,
+  ObservationChange,
+  ObservationCrossing,
+  AtTime,
+  Cadenced,
+}
+
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
 pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId = AssetId> {
@@ -717,6 +762,9 @@ pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeed
     direction: CrossingDirection,
     threshold: ObservationValue,
     rearm_threshold: ObservationValue,
+  },
+  AtTime {
+    after_ticks: u64,
   },
   Cadenced {
     every_ticks: u64,
@@ -747,6 +795,9 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFe
         direction: *direction,
         threshold: *threshold,
         rearm_threshold: *rearm_threshold,
+      },
+      Self::AtTime { after_ticks } => Self::AtTime {
+        after_ticks: *after_ticks,
       },
       Self::Cadenced { every_ticks } => Self::Cadenced {
         every_ticks: *every_ticks,
@@ -788,6 +839,10 @@ impl<
         .field("direction", direction)
         .field("threshold", threshold)
         .field("rearm_threshold", rearm_threshold)
+        .finish(),
+      Self::AtTime { after_ticks } => f
+        .debug_struct("AtTime")
+        .field("after_ticks", after_ticks)
         .finish(),
       Self::Cadenced { every_ticks } => f
         .debug_struct("Cadenced")
@@ -839,6 +894,7 @@ impl<
           && left_threshold == right_threshold
           && left_rearm == right_rearm
       }
+      (Self::AtTime { after_ticks: left }, Self::AtTime { after_ticks: right }) => left == right,
       (Self::Cadenced { every_ticks: left }, Self::Cadenced { every_ticks: right }) => {
         left == right
       }
@@ -904,6 +960,10 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     }
   }
 
+  pub fn at_time(after_ticks: u64) -> Self {
+    Self::AtTime { after_ticks }
+  }
+
   pub fn cadenced(every_ticks: u64) -> Self {
     Self::Cadenced { every_ticks }
   }
@@ -919,6 +979,17 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
         asset_filter,
       } => source_filter.has_canonical_members() && asset_filter.has_canonical_members(),
       _ => true,
+    }
+  }
+
+  pub const fn family(&self) -> TriggerFamily {
+    match self {
+      Self::Manual => TriggerFamily::Manual,
+      Self::AddressEvent { .. } => TriggerFamily::AddressEvent,
+      Self::ObservationChange { .. } => TriggerFamily::ObservationChange,
+      Self::ObservationCrossing { .. } => TriggerFamily::ObservationCrossing,
+      Self::AtTime { .. } => TriggerFamily::AtTime,
+      Self::Cadenced { .. } => TriggerFamily::Cadenced,
     }
   }
 
@@ -1128,6 +1199,34 @@ pub struct Step<
 }
 
 impl<
+  AssetId,
+  Balance,
+  AccountId,
+  MaxPreconditionClauses: Get<u32>,
+  MaxPredicatesPerClause: Get<u32>,
+  MaxSplitTransferLegs: Get<u32>,
+  ObservationFeedId,
+>
+  Step<
+    AssetId,
+    Balance,
+    AccountId,
+    MaxPreconditionClauses,
+    MaxPredicatesPerClause,
+    MaxSplitTransferLegs,
+    ObservationFeedId,
+  >
+{
+  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
+    self
+      .precondition
+      .as_ref()
+      .is_some_and(|precondition| precondition.opening_predicate_count() > 0)
+      || self.task.requires_frozen_cycle_snapshot()
+  }
+}
+
+impl<
   AssetId: Clone,
   Balance: Clone,
   AccountId: Clone,
@@ -1312,6 +1411,11 @@ pub enum OpeningSurface<AssetId> {
   StakingShares(AssetId),
 }
 
+pub const ACTOR_CONTRACT_HASH_DOMAIN: [u8; 19] = *b"DEOS_ACTOR_CONTRACT";
+pub const ACTOR_BODY_HASH_DOMAIN: [u8; 15] = *b"DEOS_ACTOR_BODY";
+pub const ACTOR_ADMISSION_HASH_DOMAIN: [u8; 20] = *b"DEOS_ACTOR_ADMISSION";
+pub const MAX_STEPS_PER_TAIL_CHUNK: u32 = 4;
+
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -1326,12 +1430,298 @@ pub struct ActorContract<Trigger, BlockNumber, Steps, FundingPolicy> {
 }
 
 #[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct PipelineMachineEnvelope<Balance> {
+  pub pipeline_machine_fee_upper: Balance,
+  pub cleanup_fee_upper: Balance,
+}
+
+#[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets, Balance> {
+pub struct ActorContractHeader<Trigger, BlockNumber, FundingPolicy, Balance, Hash> {
+  pub trigger: Trigger,
+  pub cooldown_blocks: u32,
+  pub window: Option<ScheduleWindow<BlockNumber>>,
+  pub funding: FundingPolicy,
+  pub completion: CompletionPolicy,
+  pub auto_close_at_cycle_nonce: Option<u64>,
+  pub step_count: u32,
+  pub semantic_contract_id: Hash,
+  pub body_commitment: Hash,
+  pub admission_identity: Hash,
+  pub pipeline_machine_envelope: PipelineMachineEnvelope<Balance>,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorContractHead<Header, Step> {
+  pub header: Header,
+  pub first_step: Option<Step>,
+  pub first_step_resources: Option<ActorStepResourceEnvelope>,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorActivationAuthority<ObservationFeedId, BlockNumber, Hash> {
+  pub feed: ObservationFeedId,
+  pub cooldown_blocks: u32,
+  pub window: Option<ScheduleWindow<BlockNumber>>,
+  pub auto_close_at_cycle_nonce: Option<u64>,
+  pub semantic_contract_id: Hash,
+  pub body_commitment: Hash,
+  pub admission_identity: Hash,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorBodyAuthority<ActorId, Hash> {
+  pub actor_id: ActorId,
+  pub semantic_contract_id: Hash,
+  pub body_commitment: Hash,
+  pub admission_identity: Hash,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorContractCommitment<Hash> {
+  pub semantic_contract_id: Hash,
+  pub body_commitment: Hash,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorStepChunk<ActorId, Hash, Steps, Resources> {
+  pub authority: ActorBodyAuthority<ActorId, Hash>,
+  pub first_step_index: u32,
+  pub steps: Steps,
+  pub step_resources: Resources,
+}
+
+pub type ActorStepControlWeight = Weight;
+pub type ActorTaskEffectWeight = Weight;
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorStepResourceEnvelope {
+  pub control: ActorStepControlWeight,
+  pub effect: ActorTaskEffectWeight,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct LoadedActorStep<Step> {
+  pub cursor: u32,
+  pub step: Step,
+  pub resources: ActorStepResourceEnvelope,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+#[scale_info(skip_type_params(Resources))]
+pub struct ActorAdmissionCertificate<Resources> {
+  pub semantic_contract_id: [u8; 32],
+  pub body_commitment: [u8; 32],
+  pub runtime_actor_semantics_version: u32,
+  pub production_weight_identity: [u8; 32],
+  pub body_geometry_version: u32,
+  pub configured_bounds_commitment: [u8; 32],
+  pub maximum_lifecycle_weight: Weight,
+  pub admission_identity: [u8; 32],
+  pub marker: core::marker::PhantomData<Resources>,
+}
+
+impl<Resources> ActorAdmissionCertificate<Resources> {
+  pub fn new(
+    semantic_contract_id: [u8; 32],
+    body_commitment: [u8; 32],
+    runtime_actor_semantics_version: u32,
+    production_weight_identity: [u8; 32],
+    body_geometry_version: u32,
+    configured_bounds_commitment: [u8; 32],
+    maximum_lifecycle_weight: Weight,
+  ) -> Self {
+    let admission_identity = Self::derive_admission_identity(
+      &semantic_contract_id,
+      &body_commitment,
+      runtime_actor_semantics_version,
+      &production_weight_identity,
+      body_geometry_version,
+      &configured_bounds_commitment,
+      maximum_lifecycle_weight,
+    );
+    Self {
+      semantic_contract_id,
+      body_commitment,
+      runtime_actor_semantics_version,
+      production_weight_identity,
+      body_geometry_version,
+      configured_bounds_commitment,
+      maximum_lifecycle_weight,
+      admission_identity,
+      marker: core::marker::PhantomData,
+    }
+  }
+
+  pub fn derive_admission_identity(
+    semantic_contract_id: &[u8; 32],
+    body_commitment: &[u8; 32],
+    runtime_actor_semantics_version: u32,
+    production_weight_identity: &[u8; 32],
+    body_geometry_version: u32,
+    configured_bounds_commitment: &[u8; 32],
+    maximum_lifecycle_weight: Weight,
+  ) -> [u8; 32] {
+    (
+      ACTOR_ADMISSION_HASH_DOMAIN,
+      semantic_contract_id,
+      body_commitment,
+      runtime_actor_semantics_version,
+      production_weight_identity,
+      body_geometry_version,
+      configured_bounds_commitment,
+      maximum_lifecycle_weight,
+    )
+      .using_encoded(frame::hashing::blake2_256)
+  }
+
+  pub fn has_valid_identity(&self) -> bool {
+    self.admission_identity
+      == Self::derive_admission_identity(
+        &self.semantic_contract_id,
+        &self.body_commitment,
+        self.runtime_actor_semantics_version,
+        &self.production_weight_identity,
+        self.body_geometry_version,
+        &self.configured_bounds_commitment,
+        self.maximum_lifecycle_weight,
+      )
+  }
+}
+
+impl<ActorId: PartialEq, Hash: PartialEq> ActorBodyAuthority<ActorId, Hash> {
+  pub fn matches(
+    &self,
+    actor_id: &ActorId,
+    semantic_contract_id: &Hash,
+    body_commitment: &Hash,
+    admission_identity: &Hash,
+  ) -> bool {
+    &self.actor_id == actor_id
+      && &self.semantic_contract_id == semantic_contract_id
+      && &self.body_commitment == body_commitment
+      && &self.admission_identity == admission_identity
+  }
+}
+
+impl<ActorId: PartialEq, Hash: PartialEq, Steps, Resources>
+  ActorStepChunk<ActorId, Hash, Steps, Resources>
+{
+  pub fn matches(
+    &self,
+    actor_id: &ActorId,
+    semantic_contract_id: &Hash,
+    body_commitment: &Hash,
+    admission_identity: &Hash,
+    first_step_index: u32,
+  ) -> bool {
+    self.first_step_index == first_step_index
+      && self.authority.matches(
+        actor_id,
+        semantic_contract_id,
+        body_commitment,
+        admission_identity,
+      )
+  }
+}
+
+impl<Trigger, BlockNumber, Steps, FundingPolicy>
+  ActorContract<Trigger, BlockNumber, Steps, FundingPolicy>
+{
+  pub fn semantic_contract_id(&self) -> [u8; 32]
+  where
+    Trigger: Encode,
+    BlockNumber: Encode,
+    Steps: Encode,
+    FundingPolicy: Encode,
+  {
+    (
+      ACTOR_CONTRACT_HASH_DOMAIN,
+      (
+        &self.trigger,
+        self.cooldown_blocks,
+        &self.window,
+        &self.funding,
+        self.completion,
+        self.auto_close_at_cycle_nonce,
+      ),
+      &self.steps,
+    )
+      .using_encoded(frame::hashing::blake2_256)
+  }
+
+  pub fn body_commitment<Step>(&self) -> Option<[u8; 32]>
+  where
+    Steps: AsRef<[Step]>,
+    Step: Encode,
+  {
+    let indexed_steps: Vec<(u32, &Step)> = self
+      .steps
+      .as_ref()
+      .iter() // deos-bypass: bounded-iter — admitted Contract Steps bound the complete visit.
+      .enumerate()
+      .map(|(index, step)| u32::try_from(index).ok().map(|index| (index, step)))
+      .collect::<Option<_>>()?;
+    Some(
+      (ACTOR_BODY_HASH_DOMAIN, indexed_steps.as_slice()).using_encoded(frame::hashing::blake2_256),
+    )
+  }
+
+  pub fn try_header<Hash, Balance, Step>(
+    &self,
+    semantic_contract_id: Hash,
+    body_commitment: Hash,
+    admission_identity: Hash,
+    pipeline_machine_envelope: PipelineMachineEnvelope<Balance>,
+  ) -> Option<ActorContractHeader<Trigger, BlockNumber, FundingPolicy, Balance, Hash>>
+  where
+    Trigger: Clone,
+    BlockNumber: Clone,
+    Steps: AsRef<[Step]>,
+    FundingPolicy: Clone,
+  {
+    let step_count = u32::try_from(self.steps.as_ref().len()).ok()?;
+    Some(ActorContractHeader {
+      trigger: self.trigger.clone(),
+      cooldown_blocks: self.cooldown_blocks,
+      window: self.window.clone(),
+      funding: self.funding.clone(),
+      completion: self.completion,
+      auto_close_at_cycle_nonce: self.auto_close_at_cycle_nonce,
+      step_count,
+      semantic_contract_id,
+      body_commitment,
+      admission_identity,
+      pipeline_machine_envelope,
+    })
+  }
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets> {
   pub funding_accumulated: FundingAccumulated,
   pub funding_tracked_assets: FundingTrackedAssets,
-  pub trigger_state_bond: Balance,
 }
 
 #[derive(

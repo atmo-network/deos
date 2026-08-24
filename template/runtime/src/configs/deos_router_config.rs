@@ -124,7 +124,6 @@ pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_rout
   let retryable = [
     MarketError::<Runtime>::ReserveLeftLessThanMinimal.into(),
     MarketError::<Runtime>::AmountOutTooHigh.into(),
-    MarketError::<Runtime>::PoolNotFound.into(),
     MarketError::<Runtime>::ProvidedMinimumNotSufficientForSwap.into(),
     MarketError::<Runtime>::ProvidedMaximumNotSufficientForSwap.into(),
     MarketError::<Runtime>::BelowMinimum.into(),
@@ -249,7 +248,7 @@ impl AssetConversionAdapter {
     amount2: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(), pallet_deos_actors::TaskFailure> {
-    if amount1.is_zero() || amount2.is_zero() || asset1 == asset2 {
+    if amount1.is_zero() || amount2.is_zero() || !asset1.is_valid_market_pair(asset2) {
       return Err(pallet_deos_actors::TaskFailure::permanent(
         DispatchError::Other("InvalidDonation"),
       ));
@@ -470,14 +469,7 @@ impl AssetConversionAdapter {
 
 impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConversionAdapter {
   fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
-    if asset_a == asset_b {
-      return None;
-    }
-    if asset_a < asset_b {
-      Some((asset_a, asset_b))
-    } else {
-      Some((asset_b, asset_a))
-    }
+    <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b).ok()
   }
 
   fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)> {
@@ -793,9 +785,86 @@ impl pallet_deos_router::types::LpPairIntegrity for RuntimeLpPairIntegrity {
   }
 
   fn expected_pool_count() -> Result<Option<u32>, &'static str> {
-    let count = u32::try_from(pallet_asset_conversion::Pools::<Runtime>::iter_keys().count())
-      .map_err(|_| "Asset Conversion pool cardinality exceeds u32")?;
+    let maximum = DeosRouterMaxLpPairs::get();
+    let scan_limit = usize::try_from(maximum.saturating_add(1))
+      .map_err(|_| "Asset Conversion pool scan bound exceeds usize")?;
+    let count = u32::try_from(
+      pallet_asset_conversion::Pools::<Runtime>::iter_keys()
+        .take(scan_limit)
+        .count(),
+    )
+    .map_err(|_| "Asset Conversion pool cardinality exceeds u32")?;
+    if count > maximum {
+      return Err("Asset Conversion pool cardinality exceeds the lifecycle bound");
+    }
     Ok(Some(count))
+  }
+
+  fn validate_complete_topology() -> Result<(), &'static str> {
+    let reverse = pallet_deos_router::LpPairByTokenId::<Runtime>::get();
+    let mut physical_pairs = alloc::collections::BTreeSet::new();
+    for (lp_token, pair) in &reverse {
+      let pool = pallet_asset_conversion::Pools::<Runtime>::get(pair)
+        .ok_or("LP reverse binding references an absent Asset Conversion pool")?;
+      if pool.lp_token != *lp_token {
+        return Err("LP reverse binding disagrees with the pool LP token");
+      }
+    }
+    let maximum = DeosRouterMaxLpPairs::get();
+    let scan_limit = usize::try_from(maximum.saturating_add(1))
+      .map_err(|_| "Asset Conversion pool scan bound exceeds usize")?;
+    let mut scanned = 0u32;
+    let all_pools = pallet_asset_conversion::Pools::<Runtime>::iter(); // deos-bypass: bounded-iter — consumed through MaxLpPairs + 1
+    let mut pools = all_pools.take(scan_limit);
+    while let Some((pair, pool)) = pools.next() {
+      scanned = scanned
+        .checked_add(1)
+        .ok_or("Asset Conversion pool scan count overflow")?;
+      if scanned > maximum {
+        return Err("Asset Conversion pool cardinality exceeds the lifecycle bound");
+      }
+      let canonical =
+        <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&pair.0, &pair.1)
+          .map_err(|_| "Asset Conversion pool has invalid canonical assets")?;
+      if canonical != pair {
+        return Err("Asset Conversion pool key is not canonical");
+      }
+      let physical = (pair.0.ledger_key(), pair.1.ledger_key());
+      if !physical_pairs.insert(physical) {
+        return Err("Asset Conversion contains a duplicate physical pair");
+      }
+      if reverse.get(&pool.lp_token) != Some(&pair) {
+        return Err("Asset Conversion pool lacks its exact LP reverse binding");
+      }
+      if !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(
+        pool.lp_token,
+      ) {
+        return Err("Asset Conversion pool LP asset does not exist");
+      }
+      let forward = super::oracle_config::deos_router_pool_feed(pair.0, pair.1);
+      let backward = super::oracle_config::deos_router_pool_feed(pair.1, pair.0);
+      if !pallet_oracle::Feeds::<Runtime>::contains_key(forward)
+        || !pallet_oracle::Feeds::<Runtime>::contains_key(backward)
+      {
+        return Err("Asset Conversion pool lacks required Oracle topology");
+      }
+    }
+    Ok(())
+  }
+
+  fn validate_genesis_topology() -> Result<(), &'static str> {
+    if pallet_asset_conversion::Pools::<Runtime>::iter_keys()
+      .next()
+      .is_some()
+    {
+      return Err(
+        "raw Asset Conversion genesis pools are unsupported; create complete pools through the permissionless DEOS lifecycle after genesis",
+      );
+    }
+    if !pallet_deos_router::LpPairByTokenId::<Runtime>::get().is_empty() {
+      return Err("genesis contains LP bindings without lifecycle-owned pools");
+    }
+    Ok(())
   }
 }
 
@@ -816,6 +885,7 @@ impl pallet_deos_router::pallet::Config for Runtime {
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;
   type PalletId = RouterPalletId;
+  type PoolLifecycle = super::assets_config::DeosPoolLifecycle;
   type Precision = DeosRouterPrecision;
   type PriceOracle = PriceOracleImpl<Runtime>;
   type TmcPallet = TmcPalletAdapter<Runtime>;
@@ -867,13 +937,7 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
     let creator = BurnActorAccount::get();
     let _ =
       <Balances as Currency<AccountId>>::deposit_creating(&creator, 1_000_000_000_000_000_000);
-    AssetConversionAdapter::ensure_lp_asset_namespace();
-    AssetConversion::create_pool(
-      RuntimeOrigin::signed(creator),
-      Box::new(asset1),
-      Box::new(asset2),
-    )?;
-    super::assets_config::register_pool_lp_pair(asset1, asset2)
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(creator), asset1, asset2)
   }
 
   fn prepare_observation_hook(

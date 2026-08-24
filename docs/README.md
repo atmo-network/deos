@@ -20,6 +20,8 @@ The simulator is the executable authority for TMCTOL formulas, thresholds, and i
 ## DEOS Actors
 
 - [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
+- [DEOS Actors Resource Policy Specification](./actors-resource-policy.specification.en.md)
+- [DEOS Actors Performance Assurance Specification](./actors-performance-assurance.specification.en.md)
 - [Package Architecture](../template/pallets/actors/docs/architecture.en.md)
 - [Embedding Guide](../template/pallets/actors/docs/embedding.md)
 - [DEOS Actors Integration](./actors.integration.en.md)
@@ -37,6 +39,7 @@ The simulator is the executable authority for TMCTOL formulas, thresholds, and i
 - [Specification](../template/pallets/router/docs/specification.en.md)
 - [Package Architecture](../template/pallets/router/docs/architecture.en.md)
 - [Embedding Guide](../template/pallets/router/docs/embedding.md)
+- [Asset Conversion Integration](./asset-conversion.integration.en.md)
 
 ## DEOS Staking
 

@@ -1,6 +1,10 @@
 use crate::{
-  Aggregation, Error, FeedLifecycle, Observation, ObservationState, OracleValue, ZeroPolicy,
-  mock::{Oracle, RuntimeOrigin, System, Test, hook_calls, new_test_ext, set_hook_failure},
+  Aggregation, Error, FeedLifecycle, Observation, ObservationCauseProvenance, ObservationState,
+  OracleValue, ZeroPolicy,
+  mock::{
+    Oracle, RuntimeOrigin, System, Test, hook_calls, new_test_ext, set_hook_failure,
+    take_hook_provenance,
+  },
 };
 use codec::{Decode, Encode};
 use polkadot_sdk::frame_support::{assert_noop, assert_ok, traits::StorageInfoTrait};
@@ -295,6 +299,18 @@ fn changed_hook_is_transactional_and_equal_refresh_is_hook_free() {
     assert_eq!(hook_calls(), vec![(1, 1, None, 10)]);
     assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 12));
     assert_eq!(hook_calls(), vec![(1, 1, None, 10), (1, 2, Some(10), 12)]);
+    assert_eq!(
+      take_hook_provenance(),
+      vec![
+        ObservationCauseProvenance::ExternalPhase,
+        ObservationCauseProvenance::ExternalPhase,
+      ]
+    );
+    assert_ok!(Oracle::publish_from(1, 1, 14));
+    assert_eq!(
+      take_hook_provenance(),
+      vec![ObservationCauseProvenance::Deferred]
+    );
   });
 }
 

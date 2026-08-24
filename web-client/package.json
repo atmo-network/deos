@@ -1,7 +1,7 @@
 {
   "name": "web-client",
   "private": true,
-  "version": "0.7.23",
+  "version": "0.7.24",
   "type": "module",
   "packageManager": "npm@11.7.0",
   "volta": {
@@ -17,8 +17,6 @@
     "generate:actors-abi": "node scripts/generate-actors-abi-manifest.mjs",
     "check:actors-abi": "node scripts/generate-actors-abi-manifest.mjs --check",
     "check:actors-normative-drift": "node scripts/check-actors-normative-drift.mjs",
-    "generate:actors-bonds": "cd ../template && cargo run -q --locked -p deos-runtime --example trigger_bond_vectors -- ../web-client/src/lib/automation/actors-trigger-bond-vectors.json",
-    "check:actors-bonds": "cd ../template && cargo run -q --locked -p deos-runtime --example trigger_bond_vectors -- --check ../web-client/src/lib/automation/actors-trigger-bond-vectors.json",
     "generate:observation-evidence": "node scripts/generate-observation-runtime-evidence.mjs",
     "check:observation-evidence": "node scripts/generate-observation-runtime-evidence.mjs --check",
     "generate:ingress-evidence": "node scripts/generate-ingress-runtime-evidence.mjs",
@@ -27,7 +25,7 @@
     "format:check": "prettier --check .",
     "test:automation": "node --test scripts/test-actors-*.mjs",
     "test:wiki-relations": "node --test scripts/test-wiki-relations.mjs",
-    "validate": "npm run prepare && npm run papi:generate && npm run format:check && npm run check:actors-abi && npm run check:actors-bonds && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run test:wiki-relations && npm run check && npm run build",
+    "validate": "npm run prepare && npm run papi:generate && npm run format:check && npm run check:actors-abi && npm run check:observation-evidence && npm run check:ingress-evidence && npm run test:automation && npm run test:wiki-relations && npm run check && npm run build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
   },

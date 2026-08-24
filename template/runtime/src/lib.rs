@@ -104,8 +104,10 @@ pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
     frame_system::CheckEra<Runtime>,
     frame_system::CheckNonce<Runtime>,
     frame_system::CheckWeight<Runtime>,
-    configs::address_event_ingress::AddressEventIngressExtension,
-    configs::pool_index::PoolIndexExtension,
+    (
+      configs::resource_meter::BlockResourceMeterExtension,
+      configs::address_event_ingress::AddressEventIngressExtension,
+    ),
     pallet_transaction_payment::ChargeTransactionPayment<Runtime>,
     frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
   ),
@@ -214,6 +216,8 @@ mod runtime {
   pub type CollatorSelection = pallet_collator_selection;
   #[runtime::pallet_index(22)]
   pub type Session = pallet_session;
+  #[runtime::pallet_index(25)]
+  pub type SessionRotation = pallet_session_rotation;
   #[runtime::pallet_index(23)]
   pub type Aura = pallet_aura;
   #[runtime::pallet_index(24)]
@@ -268,23 +272,6 @@ pub type Executive = frame_executive::Executive<
 >;
 
 pub use genesis_config_presets::{PARACHAIN_ID, template_session_keys};
-
-#[doc(hidden)]
-pub fn actors_trigger_state_bond(trigger: &pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
-  <configs::actor_config::RuntimeTriggerStateBond as pallet_deos_actors::TriggerStateBond<
-    AccountId,
-    pallet_deos_actors::TriggerOf<Runtime>,
-    Balance,
-  >>::amount(trigger)
-}
-
-#[doc(hidden)]
-pub fn actors_trigger_bond_vector_feed() -> primitives::OracleFeedId {
-  configs::oracle_config::deos_router_pool_feed(
-    primitives::AssetKind::Native,
-    primitives::AssetKind::Local(9),
-  )
-}
 
 pub type ConsensusHook = cumulus_pallet_aura_ext::FixedVelocityConsensusHook<
   Runtime,

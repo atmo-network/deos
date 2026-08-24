@@ -46,26 +46,14 @@ function rustVariantNames(block) {
 }
 
 function specEvents() {
-  const block = specSection(
-    '## 8. Events and Ordering',
-    '## 9. ABI, Errors, Storage, and Upgrades',
-  );
-  return block
-    .split('\n')
-    .map((line) => line.match(/^([A-Z][A-Za-z0-9_]*)\s*\{([^}]*)\}$/))
-    .filter(Boolean)
-    .map((match) => ({
-      name: match[1],
-      fields: match[2]
-        .split(',')
-        .map((field) => field.trim())
-        .filter(Boolean)
-        .map((field) => field.split(':')[0].trim()),
-    }));
+  return specTypeSurface('Event');
 }
 
 function specErrors() {
-  const block = specSection('### 9.2 Errors', '### 9.3 Storage Contract');
+  const block = specSection(
+    '### 12.4 Errors and projections',
+    '## 13. Storage, upgrades, configuration, and conformance',
+  );
   const body = block.match(/enum Error\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(body, 'spec Error enum body is missing');
   return splitTopLevel(body)
@@ -149,7 +137,10 @@ function specStructFields(name) {
 }
 
 function specCalls() {
-  const block = specSection('### 7.1 Calls', '### 7.2 Simulation');
+  const block = specSection(
+    '### 12.1 Calls and authorization',
+    '### 12.2 Events',
+  );
   const contract = block.match(/```text\n([\s\S]*?)```/);
   assert.ok(contract, 'calls contract block not found');
   return [...contract[1].matchAll(/\b[a-z][a-z0-9_]+\b/g)].map(
@@ -215,7 +206,7 @@ const headingNumbers = new Set(
     (match) => match[1],
   ),
 );
-for (const match of spec.matchAll(/\bSections? ([0-9]+(?:\.[0-9]+)?)/g)) {
+for (const match of spec.matchAll(/(?:\bSections? |§)([0-9]+(?:\.[0-9]+)?)/g)) {
   if (!headingNumbers.has(match[1])) {
     failures.push(`section reference: missing Section ${match[1]}`);
   }

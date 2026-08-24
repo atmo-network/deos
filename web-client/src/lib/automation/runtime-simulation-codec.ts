@@ -35,7 +35,7 @@ export type ActorDecodedRuntimeSimulationOutcome = {
   closeReason: string | null;
   cycleNonce: bigint;
   startCursor: number;
-  continuationCursor: number | null;
+  runCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
   cumulativeOutcomes: {
     executedSteps: number;
@@ -190,10 +190,7 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
     closeReason,
     cycleNonce: outcome.cycle_nonce,
     startCursor: asIndex(outcome.start_cursor, 'start_cursor'),
-    continuationCursor: asOptionalIndex(
-      outcome.continuation_cursor,
-      'continuation_cursor',
-    ),
+    runCursor: asOptionalIndex(outcome.run_cursor, 'run_cursor'),
     unsuccessfulAttemptsAtCursor: asOptionalIndex(
       outcome.unsuccessful_attempts_at_cursor,
       'unsuccessful_attempts_at_cursor',

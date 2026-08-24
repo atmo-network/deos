@@ -82,7 +82,7 @@ function feedIdentity(feed: {
   };
 }
 
-function runtimeFeed(feed: ObservationFeedIdentity) {
+export function runtimeFeed(feed: ObservationFeedIdentity) {
   return {
     asset_in: runtimeAsset(feed.assetIn),
     asset_out: runtimeAsset(feed.assetOut),

@@ -251,7 +251,7 @@ impl TmctolReadModel {
     let dust_threshold = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
+      .zip(crate::Actors::actor_contract(actor_id));
     let (
       actor_exists,
       is_system,
@@ -316,7 +316,7 @@ impl TmctolReadModel {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
+      .zip(crate::Actors::actor_contract(actor_id));
     let Some(((identity, hot), program)) = maybe_actor else {
       let status = if pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized

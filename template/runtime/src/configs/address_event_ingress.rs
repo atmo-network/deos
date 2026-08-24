@@ -292,7 +292,12 @@ impl AddressEventIngressExtension {
   }
 
   fn notify_weight() -> Weight {
-    <<Runtime as pallet_deos_actors::Config>::WeightInfo as pallet_deos_actors::WeightInfo>::transaction_extension_ingress_notify()
+    let base = Self::base_weight();
+    let notify = <<Runtime as pallet_deos_actors::Config>::WeightInfo as pallet_deos_actors::WeightInfo>::transaction_extension_ingress_notify();
+    Weight::from_parts(
+      base.ref_time().max(notify.ref_time()),
+      base.proof_size().max(notify.proof_size()),
+    )
   }
 
   pub(crate) fn post_dispatch_refund(result_is_err: bool, submitted: bool) -> Weight {

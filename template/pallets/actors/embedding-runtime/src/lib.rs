@@ -582,6 +582,19 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetId, Balance, u32>
   ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
     Err(DispatchError::Other("BenchmarkIngressUnsupported"))
   }
+
+  type MaximumContextInherent = ();
+  fn prepare_maximum_context_inherent() {}
+  fn execute_maximum_context_inherent(_: ()) -> DispatchResult {
+    Err(DispatchError::Other("BenchmarkContextUnsupported"))
+  }
+  fn verify_maximum_context_inherent() {}
+  fn prepare_maximum_xcm_version_discovery() {}
+  fn execute_maximum_xcm_version_discovery() {}
+  fn verify_maximum_xcm_version_discovery() {}
+  fn prepare_block_resource_meter_extension() {}
+  fn execute_block_resource_meter_extension() {}
+  fn verify_block_resource_meter_extension() {}
 }
 
 pub struct RuntimeTime;
@@ -594,11 +607,91 @@ impl Time for RuntimeTime {
   }
 }
 
+pub struct FixtureStepControlWeight;
+impl pallet_deos_actors::StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>>
+  for FixtureStepControlWeight
+{
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    Some([1; 32])
+  }
+
+  fn maximum_control_weight(
+    _: pallet_deos_actors::StepControlWeightContext,
+    _: &pallet_deos_actors::StepOf<Runtime>,
+  ) -> Option<Weight> {
+    Some(Weight::from_parts(100_000_000, 100_000))
+  }
+
+  fn actual_control_weight(
+    _: pallet_deos_actors::StepControlWeightContext,
+    _: &pallet_deos_actors::StepOf<Runtime>,
+    maximum: Weight,
+    _: pallet_deos_actors::StepControlExecution,
+  ) -> Option<Weight> {
+    Some(maximum)
+  }
+}
+
+pub struct FixtureTaskEffectWeight;
+impl pallet_deos_actors::TaskEffectWeightProvider<pallet_deos_actors::TaskOf<Runtime>>
+  for FixtureTaskEffectWeight
+{
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    Some([2; 32])
+  }
+
+  fn maximum_effect_weight(_: &pallet_deos_actors::TaskOf<Runtime>) -> Option<Weight> {
+    Some(Weight::from_parts(100_000_000, 100_000))
+  }
+
+  fn actual_effect_weight(
+    _: &pallet_deos_actors::TaskOf<Runtime>,
+    execution: pallet_deos_actors::TaskEffectExecution,
+  ) -> Option<Weight> {
+    Some(match execution {
+      pallet_deos_actors::TaskEffectExecution::NotInvoked => Weight::zero(),
+      pallet_deos_actors::TaskEffectExecution::Invoked => Weight::from_parts(100_000_000, 100_000),
+    })
+  }
+}
+
+pub struct FixtureAdmissionCertificateAuthority;
+impl pallet_deos_actors::AdmissionCertificateAuthorityProvider
+  for FixtureAdmissionCertificateAuthority
+{
+  fn current() -> Option<pallet_deos_actors::AdmissionCertificateAuthority> {
+    Some(pallet_deos_actors::AdmissionCertificateAuthority {
+      runtime_actor_semantics_version: 1,
+      production_weight_identity:
+        pallet_deos_actors::AdmissionCertificateAuthority::compose_production_weight_identity(
+          [1; 32], [2; 32],
+        ),
+      body_geometry_version: 1,
+      configured_bounds_commitment: [3; 32],
+      maximum_lifecycle_weight: Weight::from_parts(500_000_000, 500_000),
+    })
+  }
+}
+
+pub struct EmbeddingBlockResourceBudget;
+impl Get<pallet_deos_actors::BlockResourceBudget> for EmbeddingBlockResourceBudget {
+  fn get() -> pallet_deos_actors::BlockResourceBudget {
+    pallet_deos_actors::BlockResourceBudget::new(
+      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      Weight::zero(),
+    )
+    .unwrap_or_else(|_| pallet_deos_actors::BlockResourceBudget::fail_closed(Weight::zero()))
+  }
+}
+
 impl pallet_deos_actors::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;
   type FeeNativeAssetId = ConstU32<NATIVE_ASSET>;
   type AssetOps = NativeAssetOps;
+  type AdmissionCertificateAuthority = FixtureAdmissionCertificateAuthority;
+  type StepControlWeight = FixtureStepControlWeight;
+  type TaskEffectWeight = FixtureTaskEffectWeight;
   type ObservationFeedId = u32;
   type ObservationProvider = ();
   type FundingAuthority = ();
@@ -626,6 +719,7 @@ impl pallet_deos_actors::Config for Runtime {
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
   type ObservationPageSize = ConstU32<8>;
+  type CrossingPageSize = ConstU32<8>;
   type MaxCrossingTransitionsPerFeed = ConstU32<8>;
   type MaxCrossingMembersPerFeed = ConstU32<16>;
   type MaxUserCrossingMembersPerFeed = ConstU32<12>;
@@ -644,7 +738,7 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxSplitTransferLegs = ConstU32<4>;
   type TargetBlockTime = ConstU64<315_576>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
-  type MaxCadenceDelayTicks = ConstU64<631_152_000>;
+  type MaxTemporalDelayTicks = ConstU64<631_152_000>;
   type MaxIdleStarvationBlocks = ConstU32<3>;
   type ActorOnIdleReserve = ActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
@@ -652,14 +746,19 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxActorIdentities = ConstU32<96>;
   type MaxSystemSovereigns = ConstU32<96>;
   type ActorCreationFee = ConstU128<100>;
+  type RuntimeHoldReason = RuntimeHoldReason;
+  type StateHoldCurrency = Balances;
+  type ActorStateHoldBase = ConstU128<1>;
+  type ActorStateHoldPerByte = ConstU128<1>;
   type WeightToFee = LinearWeightToFee;
   type FeeSink = FeeSink;
   type FeeCollector = NativeFeeCollector;
-  type TriggerStateBond = ();
   type MaxConsecutiveFailures = ConstU32<2>;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = ConstU128<10>;
   type WeightInfo = pallet_deos_actors::weights::SubstrateWeight<Runtime>;
+  type BlockResourceBudget = EmbeddingBlockResourceBudget;
+  type PrepassContext = ();
   type GenesisSystemActors = ();
   type SystemActorContractValidator = ();
   #[cfg(feature = "runtime-benchmarks")]
@@ -728,6 +827,31 @@ mod tests {
     UncheckedExtrinsic::new_signed(call, signer, signature, tx_ext)
   }
 
+  fn service_actor_idle(block: BlockNumber) {
+    if pallet_deos_actors::CurrentBlockResourceState::<Runtime>::get()
+      .is_none_or(|state| state.block_number() != block)
+    {
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    }
+    Actors::on_idle(block, Weight::MAX);
+  }
+
+  fn run_until_not_running(actor_id: pallet_deos_actors::ActorId) {
+    let mut block = System::block_number();
+    service_actor_idle(block);
+    for _ in 1..16 {
+      if Actors::actor_hot(actor_id)
+        .is_none_or(|hot| hot.cycle_state != pallet_deos_actors::CycleState::Running)
+      {
+        break;
+      }
+      block = block.checked_add(1).expect("fixture block advances");
+      System::set_block_number(block);
+      Actors::on_initialize(block);
+      service_actor_idle(block);
+    }
+  }
+
   fn contract_steps(
     task: pallet_deos_actors::TaskOf<Runtime>,
   ) -> pallet_deos_actors::ContractSteps<Runtime> {
@@ -777,12 +901,8 @@ mod tests {
 
   /// Spec 7.1 prefunding requirement: `MinUserBalance + attempt fee envelope`.
   fn user_prefunding_requirement(plan: &pallet_deos_actors::ContractSteps<Runtime>) -> Balance {
-    let min_user_balance: Balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
-    min_user_balance.saturating_add(
-      Actors::attempt_fee_envelope(pallet_deos_actors::ActorType::User, plan, 0)
-        .expect("fixture plan has a checked fee envelope")
-        .total,
-    )
+    Actors::user_pipeline_machine_capacity_requirement(plan)
+      .expect("fixture plan has a checked opening-Step fee")
   }
 
   fn lowest_free_owner_slot(owner: AccountId) -> u8 {
@@ -914,7 +1034,8 @@ mod tests {
       b"ActorHot".as_slice(),
       b"ActorContract".as_slice(),
       b"ActorFunding".as_slice(),
-      b"ContinuationState".as_slice(),
+      b"ActorRunHead".as_slice(),
+      b"ActorRunPayload".as_slice(),
       b"QueuePages".as_slice(),
       b"WakeupPages".as_slice(),
       b"Precondition".as_slice(),
@@ -978,7 +1099,7 @@ mod tests {
   #[test]
   fn independent_runtime_starts_from_the_fresh_schema_without_system_topology() {
     new_test_ext().execute_with(|| {
-      let baseline = StorageVersion::new(9);
+      let baseline = StorageVersion::new(15);
       assert_eq!(Actors::in_code_storage_version(), baseline);
       assert_eq!(Actors::on_chain_storage_version(), baseline);
       assert_eq!(Actors::actor_identity_count(), 0);
@@ -1071,7 +1192,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
         Actors::active_actor_state(actor_id)
@@ -1150,7 +1271,7 @@ mod tests {
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 1, trigger)),
         Ok(Ok(_))
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      run_until_not_running(actor_id);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(31));
     });
   }
@@ -1183,7 +1304,7 @@ mod tests {
       assert!(matches!(result, Ok(Ok(_))), "{result:?}");
       assert!(Actors::pending_signal(actor_id));
       let bob_before = Balances::free_balance(BOB);
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       System::set_block_number(2);
       let _ = Actors::on_idle(2, Weight::MAX);
@@ -1316,7 +1437,7 @@ mod tests {
         NATIVE_ASSET,
         10_000_000_000,
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       System::set_block_number(2);
       let _ = Actors::on_idle(2, Weight::MAX);
@@ -1359,9 +1480,9 @@ mod tests {
         pallet_deos_actors::WakeupPages::<Runtime>::iter().count(),
         2
       );
-      for block in 21..=25 {
+      for block in 20..=30 {
         System::set_block_number(block);
-        let _ = Actors::on_idle(block, Weight::MAX);
+        service_actor_idle(block);
       }
       for actor_id in &actor_ids {
         assert_eq!(
@@ -1377,7 +1498,7 @@ mod tests {
         assert!(
           pallet_deos_actors::ActorHot::<Runtime>::get(*actor_id)
             .expect("hot state remains")
-            .wakeup_pointer
+            .trigger_wakeup_pointer
             .is_some()
         );
       }
@@ -1460,8 +1581,7 @@ mod tests {
       ));
       let active_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
       System::set_block_number(3);
-      let mut contract = pallet_deos_actors::ActorContracts::<Runtime>::get(active_id)
-        .expect("Actor Contract exists");
+      let mut contract = Actors::actor_contract(active_id).expect("Actor Contract exists");
       contract.steps = contract_steps(mint_task());
       contract.completion = pallet_deos_actors::CompletionPolicy::Persistent;
       assert_noop!(
@@ -1487,7 +1607,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         system_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(Balances::free_balance(sovereign), 100);
       assert_eq!(
         Actors::active_actor_state(system_id)
@@ -1501,7 +1621,7 @@ mod tests {
 
   #[cfg(feature = "dex-fixture")]
   #[test]
-  fn mutable_user_continuation_preserves_prefix_and_residual_admission() {
+  fn mutable_user_run_preserves_prefix_and_residual_admission() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let plan = active_contract(
@@ -1545,24 +1665,26 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
-
-      let suspended = Actors::continuation_state(actor_id).expect("temporary failure suspends");
-      assert_eq!(suspended.cursor, 1);
-      assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
-      assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
-      System::set_block_number(2);
-      let _ = Actors::on_idle(2, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(
-        Actors::continuation_state(actor_id)
-          .expect("cooldown defers retry")
-          .unsuccessful_attempts_at_cursor,
+        Actors::actor_run_state(actor_id)
+          .expect("first committed Step preserves the run")
+          .cursor,
         1
       );
+      assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
+
+      System::set_block_number(2);
+      service_actor_idle(2);
+      let resumed = Actors::actor_run_state(actor_id).expect("successful retry advances one Step");
+      assert_eq!(resumed.cycle_nonce, 1);
+      assert_eq!(resumed.cursor, 2);
+      assert_eq!(resumed.unsuccessful_attempts_at_cursor, 0);
+      assert_eq!(resumed.suspension, None);
 
       System::set_block_number(3);
-      let _ = Actors::on_idle(3, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      service_actor_idle(3);
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         Actors::active_actor_state(actor_id)
           .expect("actor completes")
@@ -1576,7 +1698,7 @@ mod tests {
 
   #[cfg(feature = "dex-fixture")]
   #[test]
-  fn mutable_system_continuation_retries_without_external_topology() {
+  fn mutable_system_run_retries_without_external_topology() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       assert_ok!(Actors::create_system_actor(
@@ -1600,18 +1722,24 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
+      let suspended = Actors::active_actor_state(actor_id).expect("system actor suspends");
       assert_eq!(
-        Actors::active_actor_state(actor_id)
-          .expect("system actor suspends")
-          .hot
-          .cycle_state,
+        suspended.hot.cycle_state,
         pallet_deos_actors::CycleState::Suspended
+      );
+      assert_eq!(suspended.identity.cycle_nonce, 0);
+      assert_eq!(
+        suspended
+          .run_state
+          .expect("system run persists")
+          .cycle_nonce,
+        1
       );
 
       System::set_block_number(2);
-      let _ = Actors::on_idle(2, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      service_actor_idle(2);
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         Actors::active_actor_state(actor_id)
           .expect("system actor completes")
@@ -1645,7 +1773,7 @@ mod tests {
         NATIVE_ASSET,
         100_000_000_000,
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       let before = Actors::active_actor_state(actor_id).expect("actor suspends");
       let before_hot =
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state exists");
@@ -1653,6 +1781,13 @@ mod tests {
         before.hot.cycle_state,
         pallet_deos_actors::CycleState::Suspended
       );
+      assert_eq!(before.identity.cycle_nonce, 0);
+      let opening_funding = before
+        .run_state
+        .as_ref()
+        .expect("open run persists funding")
+        .funding_snapshot
+        .clone();
       assert!(before_hot.wakeup_pointer.is_some());
       assert!(before_hot.queue_ticket.is_none());
 
@@ -1670,6 +1805,14 @@ mod tests {
       let after_hot =
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
       assert!(after.hot.pending_signal);
+      assert_eq!(
+        after
+          .run_state
+          .as_ref()
+          .expect("ingress preserves open run")
+          .funding_snapshot,
+        opening_funding
+      );
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
       assert_eq!(after_hot.queue_ticket, before_hot.queue_ticket);
       let repeated_call =
@@ -1686,32 +1829,29 @@ mod tests {
       assert_eq!(repeated_hot.queue_ticket, after_hot.queue_ticket);
       assert_eq!(repeated_hot.wakeup_pointer, after_hot.wakeup_pointer);
       System::set_block_number(2);
-      assert_ok!(Actors::cancel_continuation(
-        RuntimeOrigin::signed(ALICE),
-        actor_id,
-      ));
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id,));
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert!(Actors::pending_signal(actor_id));
       let reprime_hot =
         pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
       assert_eq!(reprime_hot.wakeup_pointer, before_hot.wakeup_pointer);
 
       System::set_block_number(3);
-      let _ = Actors::on_idle(3, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      service_actor_idle(3);
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         Actors::active_actor_state(actor_id)
-          .expect("latched run completes")
+          .expect("latched run completes after cancelled cycle remains uncommitted")
           .identity
           .cycle_nonce,
-        2
+        1
       );
     });
   }
 
   #[cfg(feature = "dex-fixture")]
   #[test]
-  fn continuation_cancel_then_pure_close_preserves_sovereign_balance() {
+  fn run_cancel_then_pure_close_preserves_sovereign_balance() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let contract = active_contract(
@@ -1740,14 +1880,11 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_some());
+      service_actor_idle(1);
+      assert!(Actors::actor_run_state(actor_id).is_some());
       let balance_before = Balances::free_balance(sovereign);
       System::set_block_number(2);
-      assert_ok!(Actors::cancel_continuation(
-        RuntimeOrigin::signed(ALICE),
-        actor_id,
-      ));
+      assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id,));
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
       assert!(Actors::active_actor_state(actor_id).is_none());
       assert_eq!(Balances::free_balance(sovereign), balance_before);
@@ -1785,16 +1922,16 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       let actor = Actors::active_actor_state(actor_id).expect("actor remains after first failure");
       assert_eq!(actor.hot.unsuccessful_attempt_streak, 1);
       assert_eq!(actor.hot.cycle_state, pallet_deos_actors::CycleState::Idle);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
     });
   }
 
   #[test]
-  fn immutable_and_unsupported_paths_never_create_continuation() {
+  fn immutable_and_unsupported_paths_never_create_run_state() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let unsupported_retry = active_contract(
@@ -1835,7 +1972,7 @@ mod tests {
         actor_id
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         Actors::active_actor_state(actor_id)
           .expect("actor remains")
@@ -1847,12 +1984,12 @@ mod tests {
   }
 
   #[test]
-  fn independent_runtime_binds_nonzero_continuation_weights() {
-    let suspend = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::continuation_suspend(12);
+  fn independent_runtime_binds_nonzero_run_weights() {
+    let suspend = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_suspend();
     let retry =
-      <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::continuation_retry(
+      <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_retry(
       );
-    let cancel = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::continuation_cancel();
+    let cancel = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_cancel();
     assert!(suspend.ref_time() > retry.ref_time());
     assert!(cancel.proof_size() > retry.proof_size());
   }
@@ -1884,7 +2021,7 @@ mod tests {
         actor_id
       ));
       let _ = Actors::on_idle(1, Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_some());
+      assert!(Actors::actor_run_state(actor_id).is_some());
       assert!(Actors::try_state(1).is_ok());
     });
   }
@@ -1941,7 +2078,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      run_until_not_running(actor_id);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
       assert_eq!(
         Actors::active_actor_state(actor_id)
@@ -1984,7 +2121,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      let _ = Actors::on_idle(1, Weight::MAX);
+      service_actor_idle(1);
       assert_eq!(
         Balances::free_balance(DEX_SINK),
         sink_before.saturating_add(50)

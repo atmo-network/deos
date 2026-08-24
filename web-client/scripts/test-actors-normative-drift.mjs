@@ -16,9 +16,12 @@ const scriptSource = await readFile(
 );
 
 test('drift gate script exists and parses the canonical spec markers', () => {
-  assert.match(scriptSource, /## 8\. Events and Ordering/);
-  assert.match(scriptSource, /## 9\. ABI, Errors, Storage, and Upgrades/);
-  assert.match(scriptSource, /### 9\.2 Errors/);
+  assert.match(scriptSource, /specTypeSurface\('Event'\)/);
+  assert.match(scriptSource, /### 12\.4 Errors and projections/);
+  assert.match(
+    scriptSource,
+    /## 13\. Storage, upgrades, configuration, and conformance/,
+  );
   assert.match(scriptSource, /'ActorContract'/);
   assert.match(scriptSource, /'Task'/);
   assert.match(scriptSource, /'Predicate'/);
@@ -151,7 +154,7 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
 
     const missingCallManifest = JSON.parse(manifestSource);
     missingCallManifest.pallet.calls = missingCallManifest.pallet.calls.filter(
-      (entry) => entry.name !== 'cancel_continuation',
+      (entry) => entry.name !== 'cancel_run',
     );
     await writeFile(manifestPath, JSON.stringify(missingCallManifest));
     await writeFile(sandboxSpecPath, specSource);
@@ -160,15 +163,12 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
       webClient,
     );
     assert.equal(missingCall.code, 1);
-    assert.match(missingCall.output, /calls: missing: cancel_continuation/);
+    assert.match(missingCall.output, /calls: missing: cancel_run/);
 
     await writeFile(manifestPath, manifestSource);
     await writeFile(
       sandboxSpecPath,
-      specSource.replace(
-        '  Manual,\n  AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },',
-        '  AddressEvent { source_filter: SourceFilter<AccountId>, asset_filter: AssetFilter<AssetId> },\n  Manual,',
-      ),
+      specSource.replace('  Manual,\n  AddressEvent {', '  AddressEvent {'),
     );
     const structFieldDrift = await run(
       ['scripts/check-actors-normative-drift.mjs'],
@@ -178,10 +178,7 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     assert.match(structFieldDrift.output, /Trigger variants: ordered drift/);
 
     await writeFile(manifestPath, manifestSource);
-    await writeFile(
-      sandboxSpecPath,
-      specSource.replace('Section 4.4.', 'Section 99.9.'),
-    );
+    await writeFile(sandboxSpecPath, specSource.replace('§4.4', '§99.9'));
     const staleReference = await run(
       ['scripts/check-actors-normative-drift.mjs'],
       webClient,
@@ -251,8 +248,8 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await writeFile(
       sandboxSpecPath,
       specSource.replace(
-        'ActorCreated { actor_id: ActorId, owner: AccountId, actor_class: ActorClass, mutability: Mutability, sovereign_account: AccountId, initial_lifecycle: InitialLifecycle }\nActorActivated { actor_id: ActorId }',
-        'ActorActivated { actor_id: ActorId }\nActorCreated { actor_id: ActorId, owner: AccountId, actor_class: ActorClass, mutability: Mutability, sovereign_account: AccountId, initial_lifecycle: InitialLifecycle }',
+        '  ActorCreated { actor_id: ActorId, owner: AccountId, actor_class: ActorClass, mutability: Mutability, sovereign_account: AccountId, initial_lifecycle: InitialLifecycle },\n  ActorActivated { actor_id: ActorId },',
+        '  ActorActivated { actor_id: ActorId },\n  ActorCreated { actor_id: ActorId, owner: AccountId, actor_class: ActorClass, mutability: Mutability, sovereign_account: AccountId, initial_lifecycle: InitialLifecycle },',
       ),
     );
     const orderDrift = await run(

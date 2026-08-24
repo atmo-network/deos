@@ -11,19 +11,25 @@ use codec::Encode;
 use primitives::{AssetKind, ecosystem};
 
 use polkadot_sdk::frame_support::traits::{
-  Currency, Get, ReservableCurrency,
+  Currency, Get,
   fungible::{Inspect as NativeInspect, Mutate as NativeMutate},
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
   tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_core::U256;
-use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
+use polkadot_sdk::{
+  sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError},
+  sp_weights::Weight,
+};
 
 use crate::{AssetConversion, RuntimeOrigin, Timestamp};
 use pallet_deos_actors::{
-  ActorType, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FeeCollector, FundingAuthority,
-  LiquidityOps, TaskFailure, TriggerStateBond,
+  ActorPrepassContext, ActorType, AdmissionCertificateAuthority,
+  AdmissionCertificateAuthorityProvider, AssetOps, DexOps, DexSwapOutcome, ExecutionContext,
+  FeeCollector, FundingAuthority, LiquidityOps, StepControlExecution, StepControlOutcome,
+  StepControlPhase, StepControlPlacement, StepControlWeightProvider, Task,
+  TaskEffectWeightProvider, TaskFailure, WeightInfo as ActorsWeightInfo,
 };
 
 parameter_types! {
@@ -31,21 +37,16 @@ parameter_types! {
 
   pub const ActorsPalletId: PalletId = PalletId(*ecosystem::pallet_ids::ACTORS_PALLET_ID);
   pub const ActorFeeNativeAssetId: AssetKind = AssetKind::Native;
-  pub const ActorManualTriggerBond: Balance = EXISTENTIAL_DEPOSIT;
-  pub const ActorAddressEventTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
-  pub const ActorObservationChangeTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
-  pub const ActorObservationCrossingTriggerBond: Balance = 5 * EXISTENTIAL_DEPOSIT;
-  pub const ActorCadencedTriggerBond: Balance = 2 * EXISTENTIAL_DEPOSIT;
   pub const ActorCadenceTickMillis: u64 = ecosystem::params::ACTOR_CADENCE_TICK_MILLIS;
   /// User Actors slot capacity per owner; System Actors is not constrained by this limit
   pub const ActorMaxOwnerSlots: u8 = 255;
 
   // --- Execution-plan and task bounds ---
 
-  pub const ActorMaxContractSteps: u32 = 8;
-  pub const ActorMaxFundingTrackedAssets: u32 = 10;
-  pub const ActorMaxOpeningSnapshotEntries: u32 = 16;
-  pub const ActorMaxOpeningPredicateResults: u32 = 32;
+  pub const ActorMaxContractSteps: u32 = 32;
+  pub const ActorMaxFundingTrackedAssets: u32 = 40;
+  pub const ActorMaxOpeningSnapshotEntries: u32 = 64;
+  pub const ActorMaxOpeningPredicateResults: u32 = 128;
   pub const ActorMaxPreconditionClauses: u32 = 4;
   pub const ActorMaxPredicatesPerClause: u32 = 4;
   pub const ActorMaxPredicatesPerStep: u32 = 4;
@@ -55,7 +56,7 @@ parameter_types! {
 
   pub const ActorTargetBlockTime: u64 = 6;
   pub const ActorMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
-  pub const ActorMaxCadenceDelayTicks: u64 = 631_152_000;
+  pub const ActorMaxTemporalDelayTicks: u64 = 631_152_000;
   pub const ActorMinWindowLength: BlockNumber = 100;
   pub const ActorMaxWhitelistSize: u32 = 16;
 
@@ -68,16 +69,19 @@ parameter_types! {
   pub const ActorQueuePageSize: u32 = 64;
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const ActorWakeupPageSize: u32 = 32;
-  /// Independent observation subscriber/fanout page granularity.
+  /// Broad ObservationChange subscriber/fanout page granularity.
   pub const ActorObservationPageSize: u32 = 64;
+  /// ObservationCrossing membership page granularity selected by EXP-0008/EXP-0009.
+  pub const ActorCrossingPageSize: u32 = 128;
   pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
   pub const ActorMaxCrossingMembersPerFeed: u32 = 10_000;
 pub const ActorMaxUserCrossingMembersPerFeed: u32 = 9_000;
 pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
   pub const ActorMaxCrossingLeavesPerBlock: u32 = 64;
   pub const ActorMaxCrossingPagesPerBlock: u32 = 64;
-  /// Reachable placed-fire ceiling under the generated pair cohort and 10% worker reserve.
-  pub const ActorMaxCrossingActorsPerBlock: u32 = 4;
+  /// Accepted tail/preflight ceiling under Actor Control. Exact non-tail compaction is
+  /// independently clamped to 64 candidates by the pallet.
+  pub const ActorMaxCrossingActorsPerBlock: u32 = 128;
   pub const ActorMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const ActorMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const ActorMaxWakeupsPerBlock: u32 = 512;
@@ -90,6 +94,9 @@ pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
   pub ActorWakeupWeightLimit: Weight = Perbill::from_percent(14) * MAXIMUM_BLOCK_WEIGHT;
   pub ActorOnIdleReserve: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
+  /// Mandatory cutoff capture is Actor-specific control work, never fixed-context work.
+  pub ActorControlInitializationWeight: Weight =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::scheduler_on_initialize_cutoff();
   // --- Lifecycle and sweep controls ---
 
   pub const ActorMaxConsecutiveFailures: u32 = 10;
@@ -111,8 +118,12 @@ pub const ActorMaxCrossingTransitionsPerBlock: u32 = 8;
   pub const ActorMaxSystemReferenceAgeBlocks: u32 =
     ecosystem::params::MAX_SYSTEM_REFERENCE_AGE_BLOCKS;
 
-  /// Non-refundable opening fee routed to `FeeSink`
-  pub const ActorCreationFee: Balance = ExistentialDeposit::get();
+  /// Non-refundable opening fee routed to `FeeSink`.
+  pub const ActorCreationFee: Balance = 2 * ExistentialDeposit::get();
+  /// Fixed accounting owner for each present Actor-state component.
+  pub const ActorStateHoldBase: Balance = ExistentialDeposit::get();
+  /// Linear refundable price for each retained SCALE byte.
+  pub const ActorStateHoldPerByte: Balance = MICRO_UNIT;
 }
 
 pub struct ActorMinUserBalanceGuard;
@@ -145,70 +156,1152 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
   }
 }
 
-pub struct RuntimeTriggerStateBond;
-
-#[cfg(test)]
-std::thread_local! {
-  static FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT: core::cell::Cell<bool> = const {
-    core::cell::Cell::new(false)
-  };
-}
-
-#[cfg(test)]
-pub fn fail_next_trigger_bond_after_adjustment() {
-  FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT.with(|flag| flag.set(true));
-}
-
-impl TriggerStateBond<AccountId, pallet_deos_actors::TriggerOf<Runtime>, Balance>
-  for RuntimeTriggerStateBond
-{
-  fn amount(trigger: &pallet_deos_actors::TriggerOf<Runtime>) -> Balance {
-    match trigger {
-      pallet_deos_actors::types::Trigger::Manual => ActorManualTriggerBond::get(),
-      pallet_deos_actors::types::Trigger::AddressEvent { .. } => {
-        ActorAddressEventTriggerBond::get()
-      }
-      pallet_deos_actors::types::Trigger::ObservationChange { .. } => {
-        ActorObservationChangeTriggerBond::get()
-      }
-      pallet_deos_actors::types::Trigger::ObservationCrossing { .. } => {
-        ActorObservationCrossingTriggerBond::get()
-      }
-      pallet_deos_actors::types::Trigger::Cadenced { .. } => ActorCadencedTriggerBond::get(),
-    }
-  }
-
-  fn maximum() -> Balance {
-    ActorObservationCrossingTriggerBond::get()
-  }
-
-  fn set_bond(owner: &AccountId, current: Balance, target: Balance) -> DispatchResult {
-    let result = if target > current {
-      <Balances as ReservableCurrency<AccountId>>::reserve(owner, target - current)
-    } else if current > target {
-      let remainder =
-        <Balances as ReservableCurrency<AccountId>>::unreserve(owner, current - target);
-      if remainder == 0 {
-        Ok(())
-      } else {
-        Err(DispatchError::Token(TokenError::FundsUnavailable))
-      }
-    } else {
-      Ok(())
-    };
-    result?;
-    #[cfg(test)]
-    if FAIL_NEXT_TRIGGER_BOND_AFTER_ADJUSTMENT.with(|flag| flag.replace(false)) {
-      return Err(DispatchError::Other("injected Trigger-state bond failure"));
-    }
-    Ok(())
-  }
-}
-
 pub struct ActorFeeRecipient;
 impl Get<crate::AccountId> for ActorFeeRecipient {
   fn get() -> crate::AccountId {
     crate::Actors::sovereign_account_id_system(ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
+  }
+}
+
+pub struct RuntimeStepControlWeight;
+
+impl RuntimeStepControlWeight {
+  fn component_max(left: Weight, right: Weight) -> Weight {
+    Weight::from_parts(
+      left.ref_time().max(right.ref_time()),
+      left.proof_size().max(right.proof_size()),
+    )
+  }
+
+  fn nonzero_parameterized(value: u32, weight: impl FnOnce(u32) -> Weight) -> Weight {
+    if value == 0 {
+      Weight::zero()
+    } else {
+      weight(value)
+    }
+  }
+}
+
+impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeStepControlWeight {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let tail_plan = (1..=4)
+      .map(ControlWeights::current_step_plan_running_tail)
+      .collect::<alloc::vec::Vec<_>>();
+    let maximum_opening_tail_chunks = ActorMaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+    let opening_failed = (0..=maximum_opening_tail_chunks)
+      .map(|tail_chunks| {
+        (
+          ControlWeights::scheduler_inner_opening_failed_min(tail_chunks),
+          ControlWeights::scheduler_inner_opening_failed_max(tail_chunks),
+        )
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let opening_retry = (0..=maximum_opening_tail_chunks)
+      .map(|tail_chunks| {
+        (
+          ControlWeights::scheduler_inner_opening_retry_min(tail_chunks),
+          ControlWeights::scheduler_inner_opening_retry_max(tail_chunks),
+        )
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let opening_complete = (0..=maximum_opening_tail_chunks)
+      .map(|tail_chunks| {
+        (
+          ControlWeights::scheduler_inner_opening_complete_min(tail_chunks),
+          ControlWeights::scheduler_inner_opening_complete_max(tail_chunks),
+        )
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let opening_progress = (1..=maximum_opening_tail_chunks)
+      .map(|tail_chunks| {
+        (
+          ControlWeights::scheduler_inner_opening_progress_min(tail_chunks),
+          ControlWeights::scheduler_inner_opening_progress_max(tail_chunks),
+        )
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let running_complete = (1..=4)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_running_complete(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let running_progress = (2..=4)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_running_progress(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let suspended_tail_retry = (1..=4)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_tail_retry(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let suspended_tail_complete = (1..=4)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_tail_complete(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let suspended_tail_progress = (2..=4)
+      .flat_map(|steps| {
+        (0..=ActorMaxPredicatesPerStep::get()).map(move |predicates| {
+          ControlWeights::scheduler_inner_suspended_tail_progress(steps, predicates)
+        })
+      })
+      .collect::<alloc::vec::Vec<_>>();
+    let suspended_head_retry = [
+      ControlWeights::scheduler_inner_suspended_head_retry(0, 0, 0, 0),
+      ControlWeights::scheduler_inner_suspended_head_retry(
+        ActorMaxOpeningSnapshotEntries::get(),
+        0,
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_retry(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_retry(
+        0,
+        0,
+        ActorMaxFundingTrackedAssets::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_retry(
+        0,
+        0,
+        0,
+        ActorMaxPredicatesPerStep::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_retry(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+        ActorMaxPredicatesPerStep::get(),
+      ),
+    ];
+    let suspended_head_complete = [
+      ControlWeights::scheduler_inner_suspended_head_complete(0, 0, 0, 0),
+      ControlWeights::scheduler_inner_suspended_head_complete(
+        ActorMaxOpeningSnapshotEntries::get(),
+        0,
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_complete(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_complete(
+        0,
+        0,
+        ActorMaxFundingTrackedAssets::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_complete(
+        0,
+        0,
+        0,
+        ActorMaxPredicatesPerStep::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_complete(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+        ActorMaxPredicatesPerStep::get(),
+      ),
+    ];
+    let suspended_head_progress = [
+      ControlWeights::scheduler_inner_suspended_head_progress(0, 0, 0, 0),
+      ControlWeights::scheduler_inner_suspended_head_progress(
+        ActorMaxOpeningSnapshotEntries::get(),
+        0,
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_progress(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_progress(
+        0,
+        0,
+        ActorMaxFundingTrackedAssets::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_progress(
+        0,
+        0,
+        0,
+        ActorMaxPredicatesPerStep::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_progress(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+        ActorMaxPredicatesPerStep::get(),
+      ),
+    ];
+    let suspended_head_opening_retry = [
+      ControlWeights::scheduler_inner_suspended_head_opening_retry(0, 1, 0),
+      ControlWeights::scheduler_inner_suspended_head_opening_retry(
+        ActorMaxOpeningSnapshotEntries::get(),
+        1,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_retry(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_retry(
+        0,
+        1,
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_retry(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+    ];
+    let suspended_head_opening_complete = [
+      ControlWeights::scheduler_inner_suspended_head_opening_complete(0, 1, 0),
+      ControlWeights::scheduler_inner_suspended_head_opening_complete(
+        ActorMaxOpeningSnapshotEntries::get(),
+        1,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_complete(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_complete(
+        0,
+        1,
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_complete(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+    ];
+    let suspended_head_opening_progress = [
+      ControlWeights::scheduler_inner_suspended_head_opening_progress(0, 1, 0),
+      ControlWeights::scheduler_inner_suspended_head_opening_progress(
+        ActorMaxOpeningSnapshotEntries::get(),
+        1,
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_progress(
+        0,
+        ActorMaxOpeningPredicateResults::get(),
+        0,
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_progress(
+        0,
+        1,
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+      ControlWeights::scheduler_inner_suspended_head_opening_progress(
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxFundingTrackedAssets::get(),
+      ),
+    ];
+    let opening_tail_chunks = (0..=ActorMaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK))
+      .map(ControlWeights::contract_geometry_reconstruct)
+      .collect::<alloc::vec::Vec<_>>();
+    let opening_snapshot = (1..=ActorMaxOpeningSnapshotEntries::get())
+      .map(ControlWeights::opening_snapshot_capture)
+      .collect::<alloc::vec::Vec<_>>();
+    let opening_predicates = (1..=ActorMaxOpeningPredicateResults::get())
+      .map(ControlWeights::opening_predicate_capture)
+      .collect::<alloc::vec::Vec<_>>();
+    let funding = (1..=ActorMaxFundingTrackedAssets::get())
+      .map(ControlWeights::funding_snapshot_open)
+      .collect::<alloc::vec::Vec<_>>();
+    let current_predicates = (1..=ActorMaxPredicatesPerStep::get())
+      .map(ControlWeights::predicate_set_evaluation)
+      .collect::<alloc::vec::Vec<_>>();
+    Some(
+      (
+        *b"DEOS_ACTOR_STEP_CONTROL_WEIGHT",
+        *b"DEOS_ACTOR_CONTROL_ACTUAL_V2",
+        (
+          ControlWeights::scheduler_paged_tombstone_drain(1),
+          ControlWeights::scheduler_actor_state_probe(),
+          ControlWeights::scheduler_paged_consume_preserve_page(),
+          ControlWeights::scheduler_paged_consume_delete_page(),
+        ),
+        (
+          ControlWeights::scheduler_inner_zero_step_complete(),
+          ControlWeights::scheduler_paged_execute_opening_max(),
+          opening_failed,
+          opening_retry,
+          opening_complete,
+          opening_progress,
+        ),
+        ControlWeights::current_step_plan_opening_head(),
+        ControlWeights::current_step_plan_suspended_head(),
+        tail_plan,
+        (
+          running_complete,
+          running_progress,
+          suspended_tail_retry,
+          suspended_tail_complete,
+          suspended_tail_progress,
+          suspended_head_retry,
+          suspended_head_complete,
+          suspended_head_progress,
+          suspended_head_opening_retry,
+          suspended_head_opening_complete,
+          suspended_head_opening_progress,
+        ),
+        opening_tail_chunks,
+        opening_snapshot,
+        opening_predicates,
+        funding,
+        current_predicates,
+        ControlWeights::run_progress(),
+        ControlWeights::run_suspend(),
+        ControlWeights::run_complete(),
+        ControlWeights::scheduler_paged_append_new_page(),
+        (
+          ControlWeights::scheduler_wakeup_append_new_page(),
+          ControlWeights::close_actor(),
+        ),
+      )
+        .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256),
+    )
+  }
+
+  fn maximum_control_weight(
+    context: pallet_deos_actors::StepControlWeightContext,
+    _: &pallet_deos_actors::StepOf<Runtime>,
+  ) -> Option<Weight> {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let maximum_evaluation_units = ActorMaxPredicatesPerStep::get().checked_mul(2)?;
+    let maximum_opening_tail_chunks = ActorMaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+    if context.predicate_evaluation_units > maximum_evaluation_units
+      || context.opening_tail_chunks > maximum_opening_tail_chunks
+      || context.cursor > 0 && context.opening_tail_chunks != 0
+      || context.opening_snapshot_entries > ActorMaxOpeningSnapshotEntries::get()
+      || context.opening_predicate_results > ActorMaxOpeningPredicateResults::get()
+      || context.funding_snapshot_entries > ActorMaxFundingTrackedAssets::get()
+    {
+      return None;
+    }
+    let maximum_opening = context.cursor == 0
+      && context.steps_in_fragment == 1
+      && context.opening_tail_chunks == maximum_opening_tail_chunks
+      && context.predicate_evaluation_units == maximum_evaluation_units
+      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
+      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
+      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+    if maximum_opening {
+      return Some(Self::component_max(
+        ControlWeights::scheduler_paged_execute_opening_max(),
+        ControlWeights::scheduler_inner_opening_progress_max(maximum_opening_tail_chunks),
+      ));
+    }
+    let plan = if context.cursor == 0 {
+      if context.steps_in_fragment != 1 {
+        return None;
+      }
+      Self::component_max(
+        ControlWeights::current_step_plan_opening_head(),
+        ControlWeights::current_step_plan_suspended_head(),
+      )
+    } else {
+      if context.steps_in_fragment == 0 || context.steps_in_fragment > 4 {
+        return None;
+      }
+      ControlWeights::current_step_plan_running_tail(context.steps_in_fragment)
+    };
+    let opening_tail = if context.opening_tail_chunks == 0 {
+      Weight::zero()
+    } else {
+      ControlWeights::contract_geometry_reconstruct(context.opening_tail_chunks)
+        .checked_sub(&ControlWeights::contract_geometry_reconstruct(0))?
+    };
+    let opening_snapshot = Self::nonzero_parameterized(
+      context.opening_snapshot_entries,
+      ControlWeights::opening_snapshot_capture,
+    );
+    let opening_predicates = Self::nonzero_parameterized(
+      context.opening_predicate_results,
+      ControlWeights::opening_predicate_capture,
+    );
+    let funding = Self::nonzero_parameterized(
+      context.funding_snapshot_entries,
+      ControlWeights::funding_snapshot_open,
+    );
+    let current_predicates = if context.predicate_evaluation_units == 0 {
+      Weight::zero()
+    } else {
+      ControlWeights::predicate_set_evaluation(
+        context
+          .predicate_evaluation_units
+          .min(ActorMaxPredicatesPerStep::get()),
+      )
+    };
+    let commit = Self::component_max(
+      Self::component_max(
+        ControlWeights::run_progress(),
+        ControlWeights::run_suspend(),
+      ),
+      ControlWeights::run_complete(),
+    );
+    let placement = Self::component_max(
+      ControlWeights::scheduler_paged_append_new_page(),
+      ControlWeights::scheduler_wakeup_append_new_page(),
+    );
+    let composed = plan
+      .saturating_add(opening_tail)
+      .saturating_add(opening_snapshot)
+      .saturating_add(opening_predicates)
+      .saturating_add(funding)
+      .saturating_add(current_predicates)
+      .saturating_add(commit)
+      .saturating_add(placement);
+    let opening_geometry_steps = 1u32
+      .saturating_add(
+        context
+          .opening_tail_chunks
+          .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+      )
+      .min(ActorMaxContractSteps::get());
+    let minimal_opening = context.cursor == 0
+      && context.predicate_evaluation_units == 0
+      && context.opening_snapshot_entries == 0
+      && context.opening_predicate_results == 0;
+    let maximal_opening = context.cursor == 0
+      && context.opening_tail_chunks > 0
+      && context.predicate_evaluation_units == maximum_evaluation_units
+      && context.opening_snapshot_entries
+        == opening_geometry_steps
+          .saturating_mul(2)
+          .min(ActorMaxOpeningSnapshotEntries::get())
+      && context.opening_predicate_results
+        == opening_geometry_steps
+          .saturating_mul(ActorMaxPredicatesPerStep::get())
+          .min(ActorMaxOpeningPredicateResults::get())
+      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+    let maximal_opening_completion = context.cursor == 0
+      && context.predicate_evaluation_units == maximum_evaluation_units
+      && context.opening_snapshot_entries
+        == opening_geometry_steps
+          .saturating_sub(1)
+          .saturating_mul(2)
+          .min(ActorMaxOpeningSnapshotEntries::get())
+      && context.opening_predicate_results
+        == opening_geometry_steps
+          .saturating_mul(ActorMaxPredicatesPerStep::get())
+          .min(ActorMaxOpeningPredicateResults::get())
+      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+    let composed = if minimal_opening {
+      let non_progress_min = Self::component_max(
+        ControlWeights::scheduler_inner_opening_failed_min(context.opening_tail_chunks),
+        Self::component_max(
+          ControlWeights::scheduler_inner_opening_retry_min(context.opening_tail_chunks),
+          ControlWeights::scheduler_inner_opening_complete_min(context.opening_tail_chunks),
+        ),
+      );
+      let direct = if context.opening_tail_chunks == 0 {
+        non_progress_min
+      } else {
+        Self::component_max(
+          non_progress_min,
+          ControlWeights::scheduler_inner_opening_progress_min(context.opening_tail_chunks),
+        )
+      };
+      Self::component_max(composed, direct)
+    } else if maximal_opening {
+      Self::component_max(
+        composed,
+        ControlWeights::scheduler_inner_opening_progress_max(context.opening_tail_chunks),
+      )
+    } else if maximal_opening_completion {
+      Self::component_max(
+        composed,
+        Self::component_max(
+          ControlWeights::scheduler_inner_opening_failed_max(context.opening_tail_chunks),
+          Self::component_max(
+            ControlWeights::scheduler_inner_opening_retry_max(context.opening_tail_chunks),
+            ControlWeights::scheduler_inner_opening_complete_max(context.opening_tail_chunks),
+          ),
+        ),
+      )
+    } else {
+      composed
+    };
+    if context.cursor == 0 && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      let retry = ControlWeights::scheduler_inner_suspended_head_retry(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      );
+      let complete = ControlWeights::scheduler_inner_suspended_head_complete(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      );
+      let progress = ControlWeights::scheduler_inner_suspended_head_progress(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      );
+      return Some(Self::component_max(
+        composed,
+        Self::component_max(retry, Self::component_max(complete, progress)),
+      ));
+    }
+    if context.cursor == 0
+      && context.predicate_evaluation_units > ActorMaxPredicatesPerStep::get()
+      && context.predicate_evaluation_units <= maximum_evaluation_units
+    {
+      let opening_retry = ControlWeights::scheduler_inner_suspended_head_opening_retry(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+      );
+      let opening_complete = ControlWeights::scheduler_inner_suspended_head_opening_complete(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+      );
+      let opening_progress = ControlWeights::scheduler_inner_suspended_head_opening_progress(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+      );
+      return Some(Self::component_max(
+        composed,
+        Self::component_max(
+          opening_retry,
+          Self::component_max(opening_complete, opening_progress),
+        ),
+      ));
+    }
+    if context.cursor > 0 && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      let atomic_complete = ControlWeights::scheduler_inner_running_complete(
+        context.steps_in_fragment,
+        context.predicate_evaluation_units,
+      );
+      let atomic = if context.steps_in_fragment >= 2 {
+        Self::component_max(
+          atomic_complete,
+          ControlWeights::scheduler_inner_running_progress(
+            context.steps_in_fragment,
+            context.predicate_evaluation_units,
+          ),
+        )
+      } else {
+        atomic_complete
+      };
+      let atomic = Self::component_max(
+        atomic,
+        ControlWeights::scheduler_inner_suspended_tail_retry(
+          context.steps_in_fragment,
+          context.predicate_evaluation_units,
+        ),
+      );
+      let atomic = Self::component_max(
+        atomic,
+        ControlWeights::scheduler_inner_suspended_tail_complete(
+          context.steps_in_fragment,
+          context.predicate_evaluation_units,
+        ),
+      );
+      let atomic = if context.steps_in_fragment >= 2 {
+        Self::component_max(
+          atomic,
+          ControlWeights::scheduler_inner_suspended_tail_progress(
+            context.steps_in_fragment,
+            context.predicate_evaluation_units,
+          ),
+        )
+      } else {
+        atomic
+      };
+      return Some(Self::component_max(composed, atomic));
+    }
+    Some(composed)
+  }
+
+  fn actual_control_weight(
+    context: pallet_deos_actors::StepControlWeightContext,
+    step: &pallet_deos_actors::StepOf<Runtime>,
+    maximum: Weight,
+    execution: StepControlExecution,
+  ) -> Option<Weight> {
+    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let expected_context_maximum = Self::maximum_control_weight(context, step)?;
+    if execution.phase == StepControlPhase::Opening && expected_context_maximum != maximum {
+      return None;
+    }
+    let maximum_evaluation_units = ActorMaxPredicatesPerStep::get().checked_mul(2)?;
+    let maximum_opening_tail_chunks = ActorMaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+    let maximum_opening = context.cursor == 0
+      && context.steps_in_fragment == 1
+      && context.opening_tail_chunks == maximum_opening_tail_chunks
+      && context.predicate_evaluation_units == maximum_evaluation_units
+      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
+      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
+      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Failed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.predicate_evaluation_units == 0
+      && context.opening_snapshot_entries == 0
+      && context.opening_predicate_results == 0
+    {
+      return Some(ControlWeights::scheduler_inner_opening_failed_min(
+        context.opening_tail_chunks,
+      ));
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Suspended
+      && execution.placement == StepControlPlacement::Wakeup
+      && context.cursor == 0
+      && context.predicate_evaluation_units == 0
+      && context.opening_snapshot_entries == 0
+      && context.opening_predicate_results == 0
+    {
+      return Some(ControlWeights::scheduler_inner_opening_retry_min(
+        context.opening_tail_chunks,
+      ));
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Completed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.predicate_evaluation_units == 0
+      && context.opening_snapshot_entries == 0
+      && context.opening_predicate_results == 0
+    {
+      return Some(ControlWeights::scheduler_inner_opening_complete_min(
+        context.opening_tail_chunks,
+      ));
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Continued
+      && execution.placement == StepControlPlacement::Queue
+      && context.cursor == 0
+      && context.opening_tail_chunks > 0
+    {
+      let opening_geometry_steps = 1u32
+        .saturating_add(
+          context
+            .opening_tail_chunks
+            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+        )
+        .min(ActorMaxContractSteps::get());
+      if context.predicate_evaluation_units == 0
+        && context.opening_snapshot_entries == 0
+        && context.opening_predicate_results == 0
+      {
+        return Some(ControlWeights::scheduler_inner_opening_progress_min(
+          context.opening_tail_chunks,
+        ));
+      }
+      if context.predicate_evaluation_units == maximum_evaluation_units
+        && context.opening_snapshot_entries
+          == opening_geometry_steps
+            .saturating_mul(2)
+            .min(ActorMaxOpeningSnapshotEntries::get())
+        && context.opening_predicate_results
+          == opening_geometry_steps
+            .saturating_mul(ActorMaxPredicatesPerStep::get())
+            .min(ActorMaxOpeningPredicateResults::get())
+        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
+      {
+        return Some(ControlWeights::scheduler_inner_opening_progress_max(
+          context.opening_tail_chunks,
+        ));
+      }
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Failed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.predicate_evaluation_units == maximum_evaluation_units
+    {
+      let opening_geometry_steps = 1u32
+        .saturating_add(
+          context
+            .opening_tail_chunks
+            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+        )
+        .min(ActorMaxContractSteps::get());
+      if context.opening_snapshot_entries
+        == opening_geometry_steps
+          .saturating_sub(1)
+          .saturating_mul(2)
+          .min(ActorMaxOpeningSnapshotEntries::get())
+        && context.opening_predicate_results
+          == opening_geometry_steps
+            .saturating_mul(ActorMaxPredicatesPerStep::get())
+            .min(ActorMaxOpeningPredicateResults::get())
+        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
+      {
+        return Some(ControlWeights::scheduler_inner_opening_failed_max(
+          context.opening_tail_chunks,
+        ));
+      }
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Suspended
+      && execution.placement == StepControlPlacement::Wakeup
+      && context.cursor == 0
+      && context.predicate_evaluation_units == maximum_evaluation_units
+    {
+      let opening_geometry_steps = 1u32
+        .saturating_add(
+          context
+            .opening_tail_chunks
+            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+        )
+        .min(ActorMaxContractSteps::get());
+      if context.opening_snapshot_entries
+        == opening_geometry_steps
+          .saturating_sub(1)
+          .saturating_mul(2)
+          .min(ActorMaxOpeningSnapshotEntries::get())
+        && context.opening_predicate_results
+          == opening_geometry_steps
+            .saturating_mul(ActorMaxPredicatesPerStep::get())
+            .min(ActorMaxOpeningPredicateResults::get())
+        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
+      {
+        return Some(ControlWeights::scheduler_inner_opening_retry_max(
+          context.opening_tail_chunks,
+        ));
+      }
+    }
+    if execution.phase == StepControlPhase::Opening
+      && execution.outcome == StepControlOutcome::Completed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.predicate_evaluation_units == maximum_evaluation_units
+    {
+      let opening_geometry_steps = 1u32
+        .saturating_add(
+          context
+            .opening_tail_chunks
+            .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+        )
+        .min(ActorMaxContractSteps::get());
+      if context.opening_snapshot_entries
+        == opening_geometry_steps
+          .saturating_sub(1)
+          .saturating_mul(2)
+          .min(ActorMaxOpeningSnapshotEntries::get())
+        && context.opening_predicate_results
+          == opening_geometry_steps
+            .saturating_mul(ActorMaxPredicatesPerStep::get())
+            .min(ActorMaxOpeningPredicateResults::get())
+        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
+      {
+        return Some(ControlWeights::scheduler_inner_opening_complete_max(
+          context.opening_tail_chunks,
+        ));
+      }
+    }
+    if maximum_opening && execution.phase == StepControlPhase::Opening {
+      return Some(maximum);
+    }
+    if execution.phase == StepControlPhase::Running
+      && context.cursor > 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      if execution.outcome == StepControlOutcome::Completed
+        && execution.placement == StepControlPlacement::None
+      {
+        return Some(ControlWeights::scheduler_inner_running_complete(
+          context.steps_in_fragment,
+          context.predicate_evaluation_units,
+        ));
+      }
+      if execution.outcome == StepControlOutcome::Continued
+        && execution.placement == StepControlPlacement::Queue
+        && context.steps_in_fragment >= 2
+      {
+        return Some(ControlWeights::scheduler_inner_running_progress(
+          context.steps_in_fragment,
+          context.predicate_evaluation_units,
+        ));
+      }
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Continued
+      && execution.placement == StepControlPlacement::Queue
+      && context.cursor == 0
+      && context.opening_tail_chunks > 0
+      && context.predicate_evaluation_units > ActorMaxPredicatesPerStep::get()
+      && context.predicate_evaluation_units <= maximum_evaluation_units
+    {
+      return Some(
+        ControlWeights::scheduler_inner_suspended_head_opening_progress(
+          context.opening_snapshot_entries,
+          context.opening_predicate_results,
+          context.funding_snapshot_entries,
+        ),
+      );
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Completed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.opening_tail_chunks == 0
+      && context.predicate_evaluation_units > ActorMaxPredicatesPerStep::get()
+      && context.predicate_evaluation_units <= maximum_evaluation_units
+    {
+      return Some(
+        ControlWeights::scheduler_inner_suspended_head_opening_complete(
+          context.opening_snapshot_entries,
+          context.opening_predicate_results,
+          context.funding_snapshot_entries,
+        ),
+      );
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Suspended
+      && execution.placement == StepControlPlacement::Wakeup
+      && context.cursor == 0
+      && context.predicate_evaluation_units > ActorMaxPredicatesPerStep::get()
+      && context.predicate_evaluation_units <= maximum_evaluation_units
+    {
+      return Some(
+        ControlWeights::scheduler_inner_suspended_head_opening_retry(
+          context.opening_snapshot_entries,
+          context.opening_predicate_results,
+          context.funding_snapshot_entries,
+        ),
+      );
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Continued
+      && execution.placement == StepControlPlacement::Queue
+      && context.cursor == 0
+      && context.opening_tail_chunks > 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_head_progress(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      ));
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Completed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor == 0
+      && context.opening_tail_chunks == 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_head_complete(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      ));
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Suspended
+      && execution.placement == StepControlPlacement::Wakeup
+      && context.cursor == 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_head_retry(
+        context.opening_snapshot_entries,
+        context.opening_predicate_results,
+        context.funding_snapshot_entries,
+        context.predicate_evaluation_units,
+      ));
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Completed
+      && execution.placement == StepControlPlacement::None
+      && context.cursor > 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_tail_complete(
+        context.steps_in_fragment,
+        context.predicate_evaluation_units,
+      ));
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Continued
+      && execution.placement == StepControlPlacement::Queue
+      && context.cursor > 0
+      && context.steps_in_fragment >= 2
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_tail_progress(
+        context.steps_in_fragment,
+        context.predicate_evaluation_units,
+      ));
+    }
+    if execution.phase == StepControlPhase::Suspended
+      && execution.outcome == StepControlOutcome::Suspended
+      && execution.placement == StepControlPlacement::Wakeup
+      && context.cursor > 0
+      && context.predicate_evaluation_units <= ActorMaxPredicatesPerStep::get()
+    {
+      return Some(ControlWeights::scheduler_inner_suspended_tail_retry(
+        context.steps_in_fragment,
+        context.predicate_evaluation_units,
+      ));
+    }
+    let plan = match execution.phase {
+      StepControlPhase::Opening if context.cursor == 0 => {
+        ControlWeights::current_step_plan_opening_head()
+      }
+      StepControlPhase::Suspended if context.cursor == 0 => {
+        ControlWeights::current_step_plan_suspended_head()
+      }
+      StepControlPhase::Running | StepControlPhase::Suspended if context.cursor > 0 => {
+        ControlWeights::current_step_plan_running_tail(context.steps_in_fragment)
+      }
+      _ => return None,
+    };
+    let opening_tail =
+      if execution.phase != StepControlPhase::Opening || context.opening_tail_chunks == 0 {
+        Weight::zero()
+      } else {
+        ControlWeights::contract_geometry_reconstruct(context.opening_tail_chunks)
+          .checked_sub(&ControlWeights::contract_geometry_reconstruct(0))?
+      };
+    let opening_snapshot = if execution.phase == StepControlPhase::Opening {
+      Self::nonzero_parameterized(
+        context.opening_snapshot_entries,
+        ControlWeights::opening_snapshot_capture,
+      )
+    } else {
+      Weight::zero()
+    };
+    let opening_predicates = if execution.phase == StepControlPhase::Opening {
+      Self::nonzero_parameterized(
+        context.opening_predicate_results,
+        ControlWeights::opening_predicate_capture,
+      )
+    } else {
+      Weight::zero()
+    };
+    let funding = if execution.phase == StepControlPhase::Opening {
+      Self::nonzero_parameterized(
+        context.funding_snapshot_entries,
+        ControlWeights::funding_snapshot_open,
+      )
+    } else {
+      Weight::zero()
+    };
+    let current_predicates = Self::nonzero_parameterized(
+      context
+        .predicate_evaluation_units
+        .min(ActorMaxPredicatesPerStep::get()),
+      ControlWeights::predicate_set_evaluation,
+    );
+    let commit = match execution.outcome {
+      StepControlOutcome::Continued => ControlWeights::run_progress(),
+      StepControlOutcome::Suspended => ControlWeights::run_suspend(),
+      StepControlOutcome::Completed | StepControlOutcome::Failed => ControlWeights::run_complete(),
+    };
+    let placement = match execution.placement {
+      StepControlPlacement::None => Weight::zero(),
+      StepControlPlacement::Queue => ControlWeights::scheduler_paged_append_new_page(),
+      StepControlPlacement::Wakeup => ControlWeights::scheduler_wakeup_append_new_page(),
+    };
+    Some(
+      plan
+        .saturating_add(opening_tail)
+        .saturating_add(opening_snapshot)
+        .saturating_add(opening_predicates)
+        .saturating_add(funding)
+        .saturating_add(current_predicates)
+        .saturating_add(commit)
+        .saturating_add(placement),
+    )
+  }
+}
+
+pub struct TmctolTaskEffectWeight;
+
+impl<AssetId, Balance, AccountId, MaxSplitTransferLegs>
+  TaskEffectWeightProvider<Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>>
+  for TmctolTaskEffectWeight
+where
+  MaxSplitTransferLegs: Get<u32>,
+{
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    type EffectWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let split_transfer = (0..=ActorMaxSplitTransferLegs::get())
+      .map(EffectWeights::task_split_transfer)
+      .collect::<alloc::vec::Vec<_>>();
+    Some(
+      (
+        *b"DEOS_ACTOR_TASK_EFFECT_WEIGHT",
+        *b"DEOS_ACTOR_EFFECT_ACTUAL_V1",
+        EffectWeights::task_transfer(),
+        split_transfer,
+        EffectWeights::task_dex_exact_in(),
+        EffectWeights::task_dex_exact_out(),
+        EffectWeights::task_add_liquidity(),
+        EffectWeights::task_remove_liquidity(),
+        EffectWeights::task_donate_liquidity(),
+        EffectWeights::task_burn(),
+        EffectWeights::task_mint(),
+        EffectWeights::task_stake(),
+        EffectWeights::task_unstake(),
+        Weight::zero(),
+      )
+        .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256),
+    )
+  }
+
+  fn maximum_effect_weight(
+    task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
+  ) -> Option<Weight> {
+    type EffectWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    match task {
+      Task::Transfer { .. } => Some(EffectWeights::task_transfer()),
+      Task::SplitTransfer { legs, .. } => Some(EffectWeights::task_split_transfer(
+        u32::try_from(legs.len()).ok()?,
+      )),
+      Task::SwapIn { .. } => Some(EffectWeights::task_dex_exact_in()),
+      Task::SwapOut { .. } => Some(EffectWeights::task_dex_exact_out()),
+      Task::AddLiquidity { .. } => Some(EffectWeights::task_add_liquidity()),
+      Task::RemoveLiquidity { .. } => Some(EffectWeights::task_remove_liquidity()),
+      Task::Burn { .. } => Some(EffectWeights::task_burn()),
+      Task::Mint { .. } => Some(EffectWeights::task_mint()),
+      Task::Stake { .. } => Some(EffectWeights::task_stake()),
+      Task::DonateLiquidity { .. } => Some(EffectWeights::task_donate_liquidity()),
+      Task::Unstake { .. } => Some(EffectWeights::task_unstake()),
+      Task::StopCycle => Some(Weight::zero()),
+    }
+  }
+
+  fn actual_effect_weight(
+    task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
+    execution: pallet_deos_actors::TaskEffectExecution,
+  ) -> Option<Weight> {
+    match execution {
+      pallet_deos_actors::TaskEffectExecution::NotInvoked => Some(Weight::zero()),
+      pallet_deos_actors::TaskEffectExecution::Invoked => Self::maximum_effect_weight(task),
+    }
+  }
+}
+
+pub struct RuntimeAdmissionCertificateAuthority;
+
+impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthority {
+  fn current() -> Option<AdmissionCertificateAuthority> {
+    type ControlWeights = <Runtime as pallet_deos_actors::Config>::StepControlWeight;
+    type EffectWeights = <Runtime as pallet_deos_actors::Config>::TaskEffectWeight;
+    let control_identity = <ControlWeights as StepControlWeightProvider<
+      pallet_deos_actors::StepOf<Runtime>,
+    >>::production_weight_identity()?;
+    let effect_identity = <EffectWeights as TaskEffectWeightProvider<
+      pallet_deos_actors::TaskOf<Runtime>,
+    >>::production_weight_identity()?;
+    let configured_bounds_commitment = (
+      *b"DEOS_ACTOR_CONFIGURED_BOUNDS",
+      (
+        ActorMaxContractSteps::get(),
+        ActorMaxFundingTrackedAssets::get(),
+        ActorMaxOpeningSnapshotEntries::get(),
+        ActorMaxOpeningPredicateResults::get(),
+        ActorMaxPreconditionClauses::get(),
+        ActorMaxPredicatesPerClause::get(),
+        ActorMaxPredicatesPerStep::get(),
+        ActorMaxSplitTransferLegs::get(),
+        ActorMaxWhitelistSize::get(),
+      ),
+      (
+        ActorMaxConsecutiveFailures::get(),
+        ActorMaxRetryAttempts::get(),
+        ActorMaxAutoCloseNonceHorizon::get(),
+        ActorMaxExecutionDelayBlocks::get(),
+        ActorMaxTemporalDelayTicks::get(),
+        ActorMinWindowLength::get(),
+        ActorTargetBlockTime::get(),
+      ),
+      (
+        ActorMaxExecutionsPerBlock::get(),
+        ActorMaxQueueLength::get(),
+        ActorMaxQueueEntriesScannedPerBlock::get(),
+        ActorQueuePageSize::get(),
+        ActorWakeupPageSize::get(),
+        ActorObservationPageSize::get(),
+        ActorOnIdleReserve::get(),
+      ),
+    )
+      .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256);
+    type LifecycleWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let maximum_lifecycle_weight = [
+      LifecycleWeights::create_user_actor(),
+      LifecycleWeights::create_user_actor_crossing_new_page(),
+      LifecycleWeights::create_user_actor_at_slot(),
+      LifecycleWeights::create_system_actor(),
+      LifecycleWeights::create_system_actor_at_sovereign_id(),
+      LifecycleWeights::create_dormant_system_actor(),
+      LifecycleWeights::activate_actor(),
+      LifecycleWeights::deactivate_actor(),
+      LifecycleWeights::pause_actor(),
+      LifecycleWeights::resume_actor(),
+      LifecycleWeights::update_contract(),
+      LifecycleWeights::close_actor(),
+      LifecycleWeights::run_cancel(),
+    ]
+    .into_iter()
+    .fold(Weight::zero(), |maximum, weight| {
+      Weight::from_parts(
+        maximum.ref_time().max(weight.ref_time()),
+        maximum.proof_size().max(weight.proof_size()),
+      )
+    });
+    Some(AdmissionCertificateAuthority {
+      runtime_actor_semantics_version: 1,
+      production_weight_identity: AdmissionCertificateAuthority::compose_production_weight_identity(
+        control_identity,
+        effect_identity,
+      ),
+      body_geometry_version: 1,
+      configured_bounds_commitment,
+      maximum_lifecycle_weight,
+    })
   }
 }
 
@@ -688,15 +1781,9 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
       use alloc::boxed::Box;
       let result = (|| -> Result<(Balance, Balance, Balance), TaskFailure> {
         if AssetConversion::get_reserves(asset_a, asset_b).is_err() {
-          AssetConversion::create_pool(
-            RuntimeOrigin::signed(who.clone()),
-            Box::new(asset_a),
-            Box::new(asset_b),
-          )
-          .map_err(TaskFailure::permanent)?;
+          crate::DeosRouter::create_pool(RuntimeOrigin::signed(who.clone()), asset_a, asset_b)
+            .map_err(TaskFailure::permanent)?;
         }
-        super::assets_config::register_pool_lp_pair(asset_a, asset_b)
-          .map_err(TaskFailure::permanent)?;
         let lp_before = liquidity_lp_balance(who, asset_a, asset_b);
         let a_before = TmctolAssetOps::balance(who, asset_a);
         let b_before = TmctolAssetOps::balance(who, asset_b);
@@ -1068,7 +2155,7 @@ impl DeosSystemActorContractValidator {
       let contract = candidate
         .filter(|(candidate_id, _)| *candidate_id == actor_id)
         .map(|(_, contract)| contract.clone())
-        .or_else(|| pallet_deos_actors::ActorContracts::<Runtime>::get(actor_id));
+        .or_else(|| crate::Actors::actor_contract(actor_id));
       if let Some(contract) = contract {
         contracts.push((actor_id, contract));
       }
@@ -2305,6 +3392,15 @@ impl pallet_deos_actors::ObservationProvider<primitives::OracleFeedId, crate::Bl
   }
 }
 
+pub struct DeosActorPrepassContext;
+
+impl ActorPrepassContext for DeosActorPrepassContext {
+  fn context_ready() -> bool {
+    Timestamp::get() != 0
+      && polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::exists()
+  }
+}
+
 impl pallet_deos_actors::Config for Runtime {
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -2312,6 +3408,9 @@ impl pallet_deos_actors::Config for Runtime {
   type FeeNativeAssetId = ActorFeeNativeAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
+  type AdmissionCertificateAuthority = RuntimeAdmissionCertificateAuthority;
+  type StepControlWeight = RuntimeStepControlWeight;
+  type TaskEffectWeight = TmctolTaskEffectWeight;
   type ObservationFeedId = primitives::OracleFeedId;
   type ObservationProvider = TmctolObservationProvider;
   type FundingAuthority = DeosFundingAuthority;
@@ -2323,9 +3422,12 @@ impl pallet_deos_actors::Config for Runtime {
   type Time = Timestamp;
   type CadenceTickMillis = ActorCadenceTickMillis;
   type ActorCreationFee = ActorCreationFee;
+  type RuntimeHoldReason = RuntimeHoldReason;
+  type StateHoldCurrency = Balances;
+  type ActorStateHoldBase = ActorStateHoldBase;
+  type ActorStateHoldPerByte = ActorStateHoldPerByte;
   type FeeSink = ActorFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
-  type TriggerStateBond = RuntimeTriggerStateBond;
   type GenesisSystemActors = TmctolGenesisSystemActors;
   type SystemActorContractValidator = DeosSystemActorContractValidator;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
@@ -2341,12 +3443,13 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxAutoCloseNonceHorizon = ActorMaxAutoCloseNonceHorizon;
   type TargetBlockTime = ActorTargetBlockTime;
   type MaxExecutionDelayBlocks = ActorMaxExecutionDelayBlocks;
-  type MaxCadenceDelayTicks = ActorMaxCadenceDelayTicks;
+  type MaxTemporalDelayTicks = ActorMaxTemporalDelayTicks;
   type MaxExecutionsPerBlock = ActorMaxExecutionsPerBlock;
   type MaxQueueLength = ActorMaxQueueLength;
   type QueuePageSize = ActorQueuePageSize;
   type WakeupPageSize = ActorWakeupPageSize;
   type ObservationPageSize = ActorObservationPageSize;
+  type CrossingPageSize = ActorCrossingPageSize;
   type MaxCrossingTransitionsPerFeed = ActorMaxCrossingTransitionsPerFeed;
   type MaxCrossingMembersPerFeed = ActorMaxCrossingMembersPerFeed;
   type MaxUserCrossingMembersPerFeed = ActorMaxUserCrossingMembersPerFeed;
@@ -2372,6 +3475,8 @@ impl pallet_deos_actors::Config for Runtime {
   type MinUserBalance = ActorMinUserBalanceGuard;
   type MinWindowLength = ActorMinWindowLength;
   type WeightInfo = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+  type BlockResourceBudget = crate::configs::BlockResourceBudgetValue;
+  type PrepassContext = DeosActorPrepassContext;
   type WeightToFee = crate::WeightToFee;
   // Runtime binds task upper bounds so fee admission stays chain-specific and auditable
   #[cfg(feature = "runtime-benchmarks")]
@@ -2406,13 +3511,8 @@ impl RuntimeActorsBenchmarkHelper {
     asset_b: AssetKind,
     liquidity: Balance,
   ) -> Result<(), DispatchError> {
-    AssetConversion::create_pool(
-      RuntimeOrigin::signed(owner.clone()),
-      alloc::boxed::Box::new(asset_a),
-      alloc::boxed::Box::new(asset_b),
-    )
-    .map_err(|_| DispatchError::Other("CreateDirectPoolForBenchmarkFailed"))?;
-    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(owner.clone()), asset_a, asset_b)
+      .map_err(|_| DispatchError::Other("CreateDirectPoolForBenchmarkFailed"))?;
     let pool_account =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset_a, &asset_b)
         .map_err(|_| DispatchError::Other("DirectPoolAddressUnavailable"))?;
@@ -2542,17 +3642,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
     let asset_a = AssetKind::Local(asset_id);
     let asset_b = AssetKind::Local(staked_asset_id);
-    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
-    let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
-    if current_next_lp < lp_namespace_start {
-      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
-    }
-    AssetConversion::create_pool(
-      RuntimeOrigin::signed(owner.clone()),
-      alloc::boxed::Box::new(asset_a),
-      alloc::boxed::Box::new(asset_b),
-    )?;
-    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
+    crate::DeosRouter::create_pool(RuntimeOrigin::signed(owner.clone()), asset_a, asset_b)?;
     let pool_id =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
         .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
@@ -2610,16 +3700,11 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       }
       let asset_a = AssetKind::Native;
       let asset_b = AssetKind::Local(local_asset_id);
-      if AssetConversion::create_pool(
-        RuntimeOrigin::signed(owner.clone()),
-        alloc::boxed::Box::new(asset_a),
-        alloc::boxed::Box::new(asset_b),
-      )
-      .is_err()
+      if crate::DeosRouter::create_pool(RuntimeOrigin::signed(owner.clone()), asset_a, asset_b)
+        .is_err()
       {
         return Err(DispatchError::Other("CreatePoolForBenchmarkFailed"));
       }
-      super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
       let pool_account =
         <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset_a, &asset_b)
           .map_err(|_| DispatchError::Other("PoolAddressUnavailable"))?;
@@ -2825,5 +3910,161 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
     amount: Balance,
   ) -> DispatchResult {
     crate::configs::xcm_config::benchmark_foreign_asset_deposit(recipient, source, amount)
+  }
+
+  type MaximumContextInherent = (
+    cumulus_pallet_parachain_system::parachain_inherent::BasicParachainInherentData,
+    cumulus_pallet_parachain_system::parachain_inherent::InboundMessagesData,
+  );
+
+  fn prepare_maximum_context_inherent() -> Self::MaximumContextInherent {
+    use polkadot_sdk::frame_support::traits::BuildGenesisConfig;
+    parachain_info::GenesisConfig::<Runtime> {
+      parachain_id: 100u32.into(),
+      _config: Default::default(),
+    }
+    .build();
+    use alloc::{collections::BTreeMap, vec};
+    use codec::Decode;
+    use cumulus_pallet_parachain_system::parachain_inherent::{
+      InboundDownwardMessages, InboundHrmpMessages, InboundMessagesData,
+    };
+    use polkadot_sdk::cumulus_primitives_core::{
+      InboundDownwardMessage, InboundHrmpMessage, ParaId,
+    };
+
+    let downward_messages = (0..MaxInboundDownwardMessagesPerContext::get())
+      .map(|_| InboundDownwardMessage {
+        sent_at: 1,
+        msg: vec![0; 65_536],
+      })
+      .collect::<Vec<_>>();
+    let mut horizontal_messages = BTreeMap::new();
+    let channels = MaxInboundHorizontalChannelsPerContext::get();
+    for message_index in 0..MaxInboundHorizontalMessagesPerContext::get() {
+      let sender = ParaId::from(message_index % channels + 1);
+      horizontal_messages
+        .entry(sender)
+        .or_insert_with(Vec::new)
+        .push(InboundHrmpMessage {
+          sent_at: 1,
+          data: vec![0],
+        });
+    }
+    let data =
+      cumulus_pallet_parachain_system::parachain_inherent::BasicParachainInherentData::decode(
+        &mut &include_bytes!("../../fixtures/maximum-context-basic.scale")[..],
+      )
+      .expect("validated maximum-context BasicParachainInherentData fixture must decode"); // deos-bypass: panic-owner — fixture hash 720062c34020ad38b5c56e7772befd24a38775a7b3dff547c4b5b28dac97ae17 passed the actual maximum-context dispatch test.
+    let collection_size_limit = (RuntimeBlockWeights::get().max_block.proof_size() / 6) as usize;
+    let mut size_limit = collection_size_limit;
+    let downward = InboundDownwardMessages::new(downward_messages).into_abridged(&mut size_limit);
+    size_limit = size_limit.saturating_add(collection_size_limit);
+    let horizontal =
+      InboundHrmpMessages::from_map(horizontal_messages).into_abridged(&mut size_limit);
+    (data, InboundMessagesData::new(downward, horizontal))
+  }
+
+  fn execute_maximum_context_inherent(
+    (data, inbound): Self::MaximumContextInherent,
+  ) -> DispatchResult {
+    crate::ParachainSystem::set_validation_data(
+      polkadot_sdk::frame_system::RawOrigin::None.into(),
+      data,
+      inbound,
+    )
+  }
+
+  fn verify_maximum_context_inherent() {
+    assert_eq!(
+      polkadot_sdk::cumulus_pallet_parachain_system::ProcessedDownwardMessages::<Runtime>::get(),
+      6
+    );
+  }
+
+  fn prepare_maximum_xcm_version_discovery() {
+    use codec::Encode;
+    use xcm::{VersionedLocation, latest::prelude::*};
+
+    let queue = (0..<Runtime as polkadot_sdk::pallet_xcm::Config>::VERSION_DISCOVERY_QUEUE_SIZE)
+      .map(|index| {
+        (
+          VersionedLocation::from(Location::new(0, [GeneralIndex(u128::from(index))])),
+          index,
+        )
+      })
+      .collect::<Vec<_>>();
+    let queue_key = polkadot_sdk::frame_support::storage::storage_prefix(
+      b"PolkadotXcm",
+      b"VersionDiscoveryQueue",
+    );
+    let migration_key =
+      polkadot_sdk::frame_support::storage::storage_prefix(b"PolkadotXcm", b"CurrentMigration");
+    polkadot_sdk::sp_io::storage::set(&queue_key, &queue.encode());
+    polkadot_sdk::sp_io::storage::clear(&migration_key);
+  }
+
+  fn execute_maximum_xcm_version_discovery() {
+    use polkadot_sdk::frame_support::traits::Hooks;
+    let _ = crate::PolkadotXcm::on_initialize(1);
+  }
+
+  fn verify_maximum_xcm_version_discovery() {
+    use codec::Decode;
+
+    let queue_key = polkadot_sdk::frame_support::storage::storage_prefix(
+      b"PolkadotXcm",
+      b"VersionDiscoveryQueue",
+    );
+    let encoded = polkadot_sdk::sp_io::storage::get(&queue_key)
+      .expect("XCM discovery queue must be rewritten after traversal"); // deos-bypass: panic-owner — benchmark setup writes the exact storage key and on_initialize always rewrites the taken queue.
+    let remaining = Vec::<(xcm::VersionedLocation, u32)>::decode(&mut &encoded[..])
+      .expect("rewritten XCM discovery queue must decode"); // deos-bypass: panic-owner — pallet_xcm owns the same bounded queue SCALE type used by setup.
+    assert!(remaining.is_empty());
+  }
+
+  fn prepare_block_resource_meter_extension() {
+    use polkadot_sdk::sp_runtime::traits::One;
+
+    let measured_block = crate::System::block_number().saturating_add(One::one());
+    let mut state = pallet_deos_actors::BlockResourceState::new(measured_block);
+    state
+      .begin_prepass()
+      .and_then(|()| state.open_external_phase())
+      .expect("benchmark state must enter ExternalPhase"); // deos-bypass: panic-owner — fresh state has no reservations and follows the canonical transition.
+    pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(state);
+  }
+
+  fn execute_block_resource_meter_extension() {
+    use polkadot_sdk::frame_support::dispatch::{GetDispatchInfo, Pays, PostDispatchInfo};
+    use polkadot_sdk::sp_runtime::traits::TransactionExtension;
+
+    let extension = crate::configs::resource_meter::BlockResourceMeterExtension;
+    let call = crate::RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() });
+    let mut info = call.get_dispatch_info();
+    info.extension_weight = extension.weight(&call);
+    let origin = crate::RuntimeOrigin::none();
+    let reservation = extension
+      .prepare((), &origin, &call, &info, 0)
+      .expect("prepared benchmark resource state must admit one remark"); // deos-bypass: panic-owner — benchmark setup opens the exact current-block ExternalPhase budget.
+    let post_info = PostDispatchInfo {
+      actual_weight: Some(info.total_weight()),
+      pays_fee: Pays::Yes,
+    };
+    let _ = crate::configs::resource_meter::BlockResourceMeterExtension::post_dispatch_details(
+      reservation,
+      &info,
+      &post_info,
+      0,
+      &Ok(()),
+    )
+    .expect("valid benchmark reservation must settle"); // deos-bypass: panic-owner — actual equals the exact reserved maximum.
+  }
+
+  fn verify_block_resource_meter_extension() {
+    let state = crate::Actors::block_resource_state()
+      .expect("resource extension benchmark must retain current state"); // deos-bypass: panic-owner — setup creates and execution mutates the authoritative state.
+    assert_eq!(state.outstanding_reservations(), 0);
+    assert!(state.usage().user_dispatch_used() != Weight::zero());
   }
 }

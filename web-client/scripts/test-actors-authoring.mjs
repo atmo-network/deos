@@ -157,14 +157,19 @@ test('authoring controls cover every current task and predicate variant', () => 
   assert.equal(ACTORS_AUTHORING_CONDITION_TYPES.length, 10);
 });
 
-test('one metadata-aligned eight-step baseline applies to both actor classes', () => {
-  const steps = Array.from({ length: 9 }, (_, index) =>
+test('one metadata-aligned zero-to-thirty-two-step baseline applies to both actor classes', () => {
+  const steps = Array.from({ length: 33 }, (_, index) =>
     authoringStep(`step-${index}`),
   );
   for (const actorType of ['User', 'System']) {
     assert.equal(
-      validateActorAuthoringContract(contract(steps.slice(0, 8), { actorType }))
-        .valid,
+      validateActorAuthoringContract(contract([], { actorType })).valid,
+      true,
+    );
+    assert.equal(
+      validateActorAuthoringContract(
+        contract(steps.slice(0, 32), { actorType }),
+      ).valid,
       true,
     );
     const tooLong = validateActorAuthoringContract(
@@ -175,7 +180,7 @@ test('one metadata-aligned eight-step baseline applies to both actor classes', (
       assert(
         tooLong.issues.some(
           (issue) =>
-            issue.path === 'steps' && /1\.\.8 steps/.test(issue.message),
+            issue.path === 'steps' && /0\.\.32 steps/.test(issue.message),
         ),
       );
     }
@@ -765,13 +770,12 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
       splitValidation.issues.some((issue) => /exceed/.test(issue.message)),
     );
   }
-  assert.equal(validateActorAuthoringContract(contract([])).valid, false);
   for (const overrides of [
     { trigger: { type: 'Cadenced', everyTicks: 0 } },
     {
       trigger: {
         type: 'Cadenced',
-        everyTicks: DEOS_ACTORS_AUTHORING_LIMITS.maxCadenceTicks + 1,
+        everyTicks: DEOS_ACTORS_AUTHORING_LIMITS.maxTemporalTicks + 1,
       },
     },
     {
@@ -987,6 +991,15 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
       fundingPolicy: { type: 'OwnerOnly' },
     }),
     contract(undefined, {
+      trigger: { type: 'AtTime', afterTicks: 10 },
+      cooldownBlocks: 0,
+      scheduleWindow: null,
+      steps: [],
+      mutability: 'Immutable',
+      autoCloseAtCycleNonce: 1n,
+      fundingPolicy: { type: 'OwnerOnly' },
+    }),
+    contract(undefined, {
       trigger: { type: 'Cadenced', everyTicks: 10 },
       fundingPolicy: { type: 'RuntimePolicy' },
       actorType: 'System',
@@ -1021,7 +1034,7 @@ test('trigger, completion, and funding policy variants lower as typed ActorContr
       true,
     );
   }
-  const lowered = lowerActorAuthoringContract(drafts[2]);
+  const lowered = lowerActorAuthoringContract(drafts[3]);
   assert.equal(lowered.trigger.type, 'AddressEvent');
   assert.deepEqual(
     lowered.trigger.value.asset_filter.value.map((asset) => asset.type),

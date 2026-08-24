@@ -1,4 +1,4 @@
-use super::lifecycle::ActorId;
+use super::{contract::ActorContractCommitment, lifecycle::ActorId};
 use frame::prelude::*;
 
 pub type QueueTicket = u64;
@@ -199,6 +199,15 @@ pub struct WakeupPointer<BlockNumber> {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub struct TriggerWakeupPointer {
+  pub tick: SchedulerTick,
+  pub page_id: WakeupPageId,
+  pub slot: WakeupSlot,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub struct WakeupEntry {
   pub actor_id: ActorId,
 }
@@ -225,12 +234,39 @@ pub struct WakeupBucketState {
   pub cursor_index: Option<WakeupCursorIndex>,
 }
 
+pub type QueueEntry<BlockNumber> = ActorStepTicket<BlockNumber, ActorContractCommitment<[u8; 32]>>;
+
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct QueueEntry {
-  pub ticket: QueueTicket,
+pub struct ActorStepTicket<BlockNumber, ContractCommitment> {
   pub actor_id: ActorId,
+  pub cycle_nonce: u64,
+  pub cursor: u32,
+  pub ticket: QueueTicket,
+  pub eligible_at: BlockNumber,
+  pub contract_commitment: ContractCommitment,
+}
+
+impl<BlockNumber: PartialEq, ContractCommitment: PartialEq>
+  ActorStepTicket<BlockNumber, ContractCommitment>
+{
+  pub fn matches(
+    &self,
+    actor_id: ActorId,
+    cycle_nonce: u64,
+    cursor: u32,
+    ticket: QueueTicket,
+    eligible_at: &BlockNumber,
+    contract_commitment: &ContractCommitment,
+  ) -> bool {
+    self.actor_id == actor_id
+      && self.cycle_nonce == cycle_nonce
+      && self.cursor == cursor
+      && self.ticket == ticket
+      && &self.eligible_at == eligible_at
+      && &self.contract_commitment == contract_commitment
+  }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

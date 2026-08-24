@@ -44,6 +44,19 @@ fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
   crate::System::set_block_number(block);
   let _ = Actors::on_initialize(block);
   let _ = Actors::on_idle(block, Weight::MAX);
+  let eligible_block = block.saturating_add(1);
+  crate::System::set_block_number(eligible_block);
+  let _ = Actors::on_initialize(eligible_block);
+  let _ = Actors::on_idle(eligible_block, Weight::MAX);
+}
+
+fn cadence_key(actor_id: pallet_deos_actors::ActorId) -> WakeupKey<crate::BlockNumber> {
+  WakeupKey::Tick(
+    Actors::actor_hot(actor_id)
+      .and_then(|hot| hot.trigger_wakeup_pointer)
+      .expect("Cadenced Trigger deadline exists")
+      .tick,
+  )
 }
 
 fn initialize_genesis_fee_sink_cadence(timestamp_millis: u64) -> WakeupKey<crate::BlockNumber> {
@@ -53,10 +66,7 @@ fn initialize_genesis_fee_sink_cadence(timestamp_millis: u64) -> WakeupKey<crate
   crate::System::set_block_number(block);
   let _ = Actors::on_initialize(block);
   let _ = Actors::on_idle(block, Weight::MAX);
-  Actors::actor_hot(fee_sink_id)
-    .and_then(|hot| hot.wakeup_pointer)
-    .expect("Fee Sink cadence rearms after first consensus timestamp")
-    .block
+  cadence_key(fee_sink_id)
 }
 
 #[test]
@@ -101,10 +111,7 @@ fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
     .expect("Alice has enough balance for fee withdrawal");
     RuntimeFeeCollector::on_unbalanced(credit);
     assert!(!Actors::pending_signal(fee_sink_id));
-    let cadence_block = Actors::actor_hot(fee_sink_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Fee Sink cadence remains scheduled")
-      .block;
+    let cadence_block = cadence_key(fee_sink_id);
 
     run_at_cadence_tick(cadence_block);
 
@@ -129,10 +136,7 @@ fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
 fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_early() {
   new_test_ext().execute_with(|| {
     let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
-    let initial = Actors::actor_hot(fee_sink_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Fee Sink cadence bootstrap remains armed")
-      .block;
+    let initial = cadence_key(fee_sink_id);
     assert_eq!(initial, WakeupKey::Tick(0));
     assert!(matches!(
       Actors::actor_hot(fee_sink_id)
@@ -154,6 +158,10 @@ fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_earl
     set_consensus_timestamp(60_999);
     crate::System::set_block_number(10_000);
     let _ = Actors::on_initialize(10_000);
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<crate::Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData::default(),
+    );
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
     let _ = Actors::on_idle(10_000, Weight::MAX);
     assert_eq!(
       Actors::active_actor_state(fee_sink_id)
@@ -166,7 +174,22 @@ fn fee_sink_cadence_anchors_at_first_consensus_timestamp_and_never_executes_earl
     set_consensus_timestamp(61_000);
     crate::System::set_block_number(10_001);
     let _ = Actors::on_initialize(10_001);
+    pallet_deos_actors::CurrentBlockResourceState::<crate::Runtime>::kill();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
     let _ = Actors::on_idle(10_001, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(fee_sink_id)
+        .expect("Fee Sink remains active")
+        .identity
+        .cycle_nonce,
+      0,
+    );
+
+    crate::System::set_block_number(10_002);
+    let _ = Actors::on_initialize(10_002);
+    pallet_deos_actors::CurrentBlockResourceState::<crate::Runtime>::kill();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    let _ = Actors::on_idle(10_002, Weight::MAX);
     assert_eq!(
       Actors::active_actor_state(fee_sink_id)
         .expect("Fee Sink remains active")
@@ -197,10 +220,7 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
         AssetKind::Native,
         2,
       ));
-      let cadence_block = Actors::actor_hot(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
-        .and_then(|hot| hot.wakeup_pointer)
-        .expect("Fee Sink cadence remains armed")
-        .block;
+      let cadence_block = cadence_key(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
       run_at_cadence_tick(cadence_block);
     }
 
@@ -231,10 +251,7 @@ fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
       AssetKind::Native,
       amount,
     ));
-    let cadence_block = Actors::actor_hot(fee_sink_id)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Fee Sink cadence remains armed")
-      .block;
+    let cadence_block = cadence_key(fee_sink_id);
     run_at_cadence_tick(cadence_block);
 
     assert_eq!(Balances::free_balance(&staking_pool), anchor * 2);
@@ -316,10 +333,7 @@ fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
       AssetKind,
       crate::Balance,
     >>::mint(&fee_sink, AssetKind::Native, amount));
-    let cadence = Actors::actor_hot(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
-      .and_then(|hot| hot.wakeup_pointer)
-      .expect("Fee Sink cadence remains armed")
-      .block;
+    let cadence = cadence_key(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID);
     run_at_cadence_tick(cadence);
     let followup_block = crate::System::block_number().saturating_add(1);
     crate::System::set_block_number(followup_block);

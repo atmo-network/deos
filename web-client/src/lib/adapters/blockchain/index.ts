@@ -5,6 +5,8 @@ Excludes: Wallet store ownership, system composition wiring, UI Kit presentation
 Zone: Transport adapter boundary; consumes adapter contracts and runtime helpers without importing widgets.
 */
 import type { Adapter, AdapterRuntimeContext } from '$lib/adapters/contract';
+import type { ActorMaterializationProjection } from '$lib/automation/materialization';
+import type { ActorResourceProjection } from '$lib/automation/resource';
 import type {
   AutomationActorSnapshot,
   AutomationAuthoringContext,
@@ -31,6 +33,8 @@ import type { SystemConfig, SystemSnapshot } from '$lib/system/types';
 import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
 import { readActorEligibility } from './actor-eligibility';
+import { readActorMaterializationProjection } from './actor-materialization';
+import { readActorResourceProjection } from './actor-resource';
 import { getDeosActorFinalizedAuthoringContext } from './actor-simulation';
 import { BlockchainConnectionSession } from './connection';
 import type {
@@ -44,7 +48,7 @@ import {
   formatChainEventMessage,
   unwrapEventRecord,
 } from './events';
-import { BlockchainObservationReader } from './observations';
+import { BlockchainObservationReader, runtimeFeed } from './observations';
 import {
   quoteBuyAtSnapshot,
   quoteSellAtSnapshot,
@@ -146,10 +150,9 @@ function automationFundingAccumulated(
   });
 }
 
-function automationFundingSourcePolicy(funding: unknown): string | null {
-  const value = triggerRecord(funding);
-  const policy = triggerRecord(value?.funding_source_policy);
-  return typeof policy?.type === 'string' ? policy.type : null;
+function automationFundingSourcePolicy(policy: unknown): string | null {
+  const value = triggerRecord(policy);
+  return typeof value?.type === 'string' ? value.type : null;
 }
 
 function automationTriggerLabel(trigger?: {
@@ -160,6 +163,14 @@ function automationTriggerLabel(trigger?: {
   if (trigger.type === 'AddressEvent') return 'Address event';
   if (trigger.type === 'ObservationChange') return 'Observation change';
   if (trigger.type === 'ObservationCrossing') return 'Observation crossing';
+  if (trigger.type === 'AtTime') {
+    const afterTicks = triggerRecord(trigger.value)?.after_ticks;
+    const delay =
+      typeof afterTicks === 'number' || typeof afterTicks === 'bigint'
+        ? afterTicks.toString()
+        : 'unknown';
+    return `At time · after ${delay} ticks`;
+  }
   if (trigger.type !== 'Cadenced') return trigger.type;
   const everyTicks = triggerRecord(trigger.value)?.every_ticks;
   const cadence =
@@ -434,12 +445,28 @@ export class BlockchainAdapter implements Adapter {
     );
   }
 
+  async getActorResourceProjection(): Promise<ActorResourceProjection> {
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return readActorResourceProjection(snapshot.typedApi, snapshot.at);
+  }
+
+  async getActorMaterializationProjection(
+    feed: ObservationFeedIdentity,
+  ): Promise<ActorMaterializationProjection> {
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return readActorMaterializationProjection(
+      snapshot.typedApi,
+      snapshot.at,
+      runtimeFeed(feed),
+    );
+  }
+
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {
     try {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const [identity, hot, program, continuation, funding] =
+          const [identity, hot, contractHead, runHead, funding] =
             await Promise.all([
               snapshot.typedApi.query.Actors.ActorIdentities.getValue(
                 BigInt(actor.actorId),
@@ -451,11 +478,11 @@ export class BlockchainAdapter implements Adapter {
                   at: snapshot.at,
                 },
               ),
-              snapshot.typedApi.query.Actors.ActorContract.getValue(
+              snapshot.typedApi.query.Actors.ActorContractHead.getValue(
                 BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
-              snapshot.typedApi.query.Actors.ContinuationState.getValue(
+              snapshot.typedApi.query.Actors.ActorRunHead.getValue(
                 BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
@@ -469,7 +496,8 @@ export class BlockchainAdapter implements Adapter {
             snapshot.at,
             actor.actorId,
           );
-          const exists = identity != null && hot != null && program != null;
+          const exists =
+            identity != null && hot != null && contractHead != null;
           const sovereignAccount =
             identity?.sovereign_account ??
             deriveSystemActorSovereignAccount(actor.actorId);
@@ -491,14 +519,16 @@ export class BlockchainAdapter implements Adapter {
             paused: automationActorPaused(hot),
             runState: automationActorRunState(hot),
             cycleNonce: identity?.cycle_nonce ?? 0n,
-            continuation: automationContinuationSnapshot(continuation),
+            continuation: automationContinuationSnapshot(runHead),
             lastCycleBlock: hot?.last_cycle_block ?? null,
-            completionPolicy: program?.completion.type ?? null,
-            triggerLabel: automationTriggerLabel(program?.trigger),
+            completionPolicy: contractHead?.header.completion.type ?? null,
+            triggerLabel: automationTriggerLabel(contractHead?.header.trigger),
             nativeBalance: account?.data?.free ?? 0n,
             queueTicket: automationQueueTicket(hot),
             fundingAccumulated: automationFundingAccumulated(funding),
-            fundingSourcePolicy: automationFundingSourcePolicy(funding),
+            fundingSourcePolicy: automationFundingSourcePolicy(
+              contractHead?.header.funding,
+            ),
             eligibility: eligibility.projection,
           } satisfies AutomationActorSnapshot;
         }),

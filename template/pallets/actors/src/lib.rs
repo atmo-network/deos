@@ -10,6 +10,34 @@ use polkadot_sdk::{
 
 pub use pallet::*;
 
+pub trait ActorPrepassContext {
+  fn context_ready() -> bool;
+}
+
+impl ActorPrepassContext for () {
+  fn context_ready() -> bool {
+    true
+  }
+}
+
+pub const ACTOR_PREPASS_INHERENT_VERSION: u8 = 1;
+
+#[derive(codec::Decode, codec::Encode)]
+pub struct ActorPrepassInherentData {
+  version: u8,
+}
+
+pub fn provide_actor_prepass_inherent_data(
+  data: &mut polkadot_sdk::sp_inherents::InherentData,
+) -> Result<(), polkadot_sdk::sp_inherents::Error> {
+  data.put_data(
+    ACTOR_PREPASS_INHERENT_IDENTIFIER,
+    &ActorPrepassInherentData {
+      version: ACTOR_PREPASS_INHERENT_VERSION,
+    },
+  )
+}
+
 pub mod contract;
 
 pub mod types;
@@ -24,12 +52,20 @@ pub use scheduler::EnqueueOutcome;
 
 pub mod adapters;
 pub use adapters::{
-  AddressEventIngress, AssetOps, CanonicalObservationState, DexOps, DexSwapOutcome,
-  ExecutionContext, FundingAuthority, IngressFailure, LiquidityOps, ObservationProvider,
-  ObservationTransition, ObservationTransitionIngress, RetryClass, ScalarObservationState,
-  SovereignAccountDeriver, StakingOps, SystemActorContractValidator, TaskFailure,
+  AddressEventIngress, AdmissionCertificateAuthority, AdmissionCertificateAuthorityProvider,
+  AssetOps, CanonicalObservationState, DexOps, DexSwapOutcome, ExecutionContext, FundingAuthority,
+  IngressFailure, LiquidityOps, ObservationProvider, ObservationTransition,
+  ObservationTransitionIngress, RetryClass, ScalarObservationState, SovereignAccountDeriver,
+  StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
+  StepControlWeightContext, StepControlWeightProvider, SystemActorContractValidator,
+  TaskEffectExecution, TaskEffectWeightProvider, TaskFailure,
 };
-pub use types::{AddressEvent, InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
+pub use types::{
+  ActorStepResourceReservation, AddressEvent, BlockResourceBudget, BlockResourceDomain,
+  BlockResourceLimits, BlockResourcePhase, BlockResourceReservation, BlockResourceState,
+  CrossingCapacity, FinalizedBlockResourceSnapshot, FixedBlockWeightComponents, InputLimit,
+  MAX_STEPS_PER_TAIL_CHUNK, MaterializationFaults, Task, WakeupBucketState, WakeupCursorIndex,
+};
 
 pub mod weights;
 pub use weights::WeightInfo;
@@ -86,36 +122,18 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
-}
-
-pub trait TriggerStateBond<AccountId, Trigger, Balance> {
-  fn amount(trigger: &Trigger) -> Balance;
-  fn maximum() -> Balance;
-  fn set_bond(
-    owner: &AccountId,
-    current: Balance,
-    target: Balance,
-  ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
-}
-
-impl<AccountId, Trigger, Balance: Zero + Copy> TriggerStateBond<AccountId, Trigger, Balance>
-  for ()
-{
-  fn amount(_trigger: &Trigger) -> Balance {
-    Zero::zero()
-  }
-
-  fn maximum() -> Balance {
-    Zero::zero()
-  }
-
-  fn set_bond(
-    _owner: &AccountId,
-    _current: Balance,
-    _target: Balance,
-  ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    Ok(())
-  }
+  type MaximumContextInherent;
+  fn prepare_maximum_context_inherent() -> Self::MaximumContextInherent;
+  fn execute_maximum_context_inherent(
+    inherent: Self::MaximumContextInherent,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult;
+  fn verify_maximum_context_inherent();
+  fn prepare_maximum_xcm_version_discovery();
+  fn execute_maximum_xcm_version_discovery();
+  fn verify_maximum_xcm_version_discovery();
+  fn prepare_block_resource_meter_extension();
+  fn execute_block_resource_meter_extension();
+  fn verify_block_resource_meter_extension();
 }
 
 pub trait FeeCollector<AccountId, AssetId, Balance> {
@@ -138,6 +156,26 @@ pub struct StepFeeEnvelope<Balance> {
   pub evaluation: Balance,
   pub execution: Balance,
   pub total: Balance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TriggerFeeBreakdown<Balance> {
+  pub trigger_family: types::TriggerFamily,
+  pub trigger_fee: Balance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PipelineFeeBreakdown<Balance> {
+  pub pipeline_machine_fee: Balance,
+  pub cleanup_fee: Balance,
+  pub total_fee: Balance,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StepFeeBreakdown<Balance> {
+  pub control_fee: Balance,
+  pub effect_fee: Balance,
+  pub total_fee: Balance,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,59 +313,108 @@ sp_api::decl_runtime_apis! {
     ) -> Result<Simulation, types::SimulationError>;
   }
 
+  /// Read-only named Actors cost projection with independent fee and hold provenance.
+  pub trait ActorCostApi<Balance>
+  where
+    Balance: codec::Codec,
+  {
+    fn actor_cost_quote(
+      actor_id: types::ActorId,
+    ) -> Result<types::ActorCostQuote<Balance>, types::ActorCostQuoteError>;
+  }
+
+  /// Bounded current and finalized block-resource projection.
+  pub trait ActorResourceApi<BlockNumber>
+  where
+    BlockNumber: codec::Codec,
+  {
+    fn block_resource_budget() -> types::BlockResourceBudget;
+
+    fn current_block_resource_state() -> Option<types::BlockResourceState<BlockNumber>>;
+
+    fn finalized_block_resource_snapshot(
+    ) -> Option<types::FinalizedBlockResourceSnapshot<BlockNumber>>;
+  }
+
   /// Read-only eligibility projection for one actor (spec 7.3).
   ///
   /// Returns absence/dormancy or the canonical Active classification, reusing
   /// the same pure owners as
   /// admission so clients do not reimplement cadence phase, cooldown, window
   /// floor, retry backoff, breaker, or latch arithmetic.
-  #[api_version(4)]
-  pub trait ActorEligibilityApi<FeedId, BlockNumber, Trigger, Balance>
+  #[api_version(6)]
+  pub trait ActorEligibilityApi<FeedId, BlockNumber>
   where
     FeedId: codec::Codec,
     BlockNumber: codec::Codec,
-    Trigger: codec::Codec,
-    Balance: codec::Codec,
   {
     fn actor_eligibility(
       actor_id: types::ActorId,
     ) -> Result<types::ActorEligibility<FeedId, BlockNumber>, types::ActorClassificationError>;
 
-    fn materialization_faults() -> (
-      Option<types::CrossingWorkerFault<FeedId>>,
-      Option<types::ObservationFanoutWorkerFault<FeedId>>,
-      Option<types::WakeupWorkerFault<BlockNumber>>,
-    );
+    fn materialization_faults() -> types::MaterializationFaults<FeedId, BlockNumber>;
 
-    fn crossing_capacity(feed: FeedId) -> (u32, u32, u32, u32);
+    fn crossing_capacity(feed: FeedId) -> types::CrossingCapacity;
 
-    fn trigger_state_bond(trigger: Trigger) -> Balance;
   }
 }
 
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector, FeeEnvelopeError, FeeEnvelopeInput,
-    FundingAuthority, LiquidityOps, ObservationProvider, TriggerStateBond, WeightInfo,
-    compose_attempt_fee_envelope, contract_steps_bound_is_valid,
+    ACTOR_PREPASS_INHERENT_VERSION, ActorPrepassContext, ActorPrepassInherentData,
+    AdmissionCertificateAuthorityProvider, AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector,
+    FeeEnvelopeError, FeeEnvelopeInput, FundingAuthority, LiquidityOps, ObservationProvider,
+    PipelineFeeBreakdown, StepControlWeightContext, StepControlWeightProvider, StepFeeBreakdown,
+    TaskEffectWeightProvider, TriggerFeeBreakdown, WeightInfo, compose_attempt_fee_envelope,
+    contract_steps_bound_is_valid,
   };
   use crate::adapters::{
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
     SystemActorContractValidator as _,
   };
+  use alloc::{collections::BTreeSet, vec::Vec};
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{
       PalletId,
-      traits::{EnsureOrigin, Time},
+      traits::{
+        EnsureOrigin, Time,
+        fungible::{InspectHold, MutateHold},
+        tokens::Precision,
+      },
     },
-    sp_runtime::traits::{CheckedAdd, One, SaturatedConversion, Saturating, Zero},
+    sp_inherents::{InherentData, InherentIdentifier, IsFatalError},
+    sp_runtime::traits::{
+      CheckedAdd, CheckedMul, CheckedSub, One, SaturatedConversion, Saturating, Zero,
+    },
     sp_weights::{WeightMeter, WeightToFee as _},
   };
 
+  pub const ACTOR_PREPASS_INHERENT_IDENTIFIER: InherentIdentifier = *b"deosact0";
+
+  #[derive(codec::Encode, Debug)]
+  pub enum ActorPrepassInherentError {
+    MissingData,
+    MissingCall,
+    UnsupportedVersion,
+  }
+
+  impl IsFatalError for ActorPrepassInherentError {
+    fn is_fatal_error(&self) -> bool {
+      true
+    }
+  }
+
   use super::types::Task as ActorTask;
   pub use super::types::*;
+
+  #[pallet::composite_enum]
+  pub enum HoldReason {
+    /// Refundable backing for retained User Actor process state.
+    #[codec(index = 0)]
+    ActorState,
+  }
 
   #[pallet::config]
   pub trait Config: frame_system::Config {
@@ -345,6 +432,9 @@ pub mod pallet {
     type FeeNativeAssetId: Get<Self::AssetId>;
 
     type AssetOps: AssetOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type AdmissionCertificateAuthority: AdmissionCertificateAuthorityProvider;
+    type StepControlWeight: StepControlWeightProvider<StepOf<Self>>;
+    type TaskEffectWeight: TaskEffectWeightProvider<TaskOf<Self>>;
     type ObservationFeedId: Parameter + Member + Copy + MaxEncodedLen + Ord;
     type ObservationProvider: ObservationProvider<Self::ObservationFeedId, BlockNumberFor<Self>>;
     type FundingAuthority: FundingAuthority<Self::AccountId>;
@@ -394,6 +484,9 @@ pub mod pallet {
     /// Physical I/O granularity for observation subscriber pages.
     #[pallet::constant]
     type ObservationPageSize: Get<u32>;
+    /// Physical I/O granularity for ObservationCrossing membership pages.
+    #[pallet::constant]
+    type CrossingPageSize: Get<u32>;
     #[pallet::constant]
     type MaxCrossingMembersPerFeed: Get<u32>;
     #[pallet::constant]
@@ -436,7 +529,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
-    type MaxCadenceDelayTicks: Get<SchedulerTick>;
+    type MaxTemporalDelayTicks: Get<SchedulerTick>;
     #[pallet::constant]
     type MaxIdleStarvationBlocks: Get<u32>;
     /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
@@ -457,13 +550,20 @@ pub mod pallet {
 
     #[pallet::constant]
     type ActorCreationFee: Get<Self::Balance>;
+    type RuntimeHoldReason: Parameter + Member + MaxEncodedLen + Copy + From<HoldReason>;
+    type StateHoldCurrency: InspectHold<Self::AccountId, Balance = Self::Balance, Reason = Self::RuntimeHoldReason>
+      + MutateHold<Self::AccountId>;
+    /// Fixed accounting price for each present retained-state component.
+    #[pallet::constant]
+    type ActorStateHoldBase: Get<Self::Balance>;
+    /// Linear accounting price for each SCALE-encoded retained byte.
+    #[pallet::constant]
+    type ActorStateHoldPerByte: Get<Self::Balance>;
     /// Converts weight to fee for execution cost calculation
     type WeightToFee: polkadot_sdk::sp_weights::WeightToFee<Balance = Self::Balance>;
     /// Runtime-bound upper weights for every Actors task variant
     type FeeSink: Get<Self::AccountId>;
     type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
-    type TriggerStateBond: TriggerStateBond<Self::AccountId, TriggerOf<Self>, Self::Balance>;
-
     #[pallet::constant]
     type MaxConsecutiveFailures: Get<u32>;
     #[pallet::constant]
@@ -472,6 +572,11 @@ pub mod pallet {
     type MinUserBalance: Get<Self::Balance>;
 
     type WeightInfo: WeightInfo;
+
+    /// Runtime-owned immutable block-resource budget derived from the fixed envelope.
+    type BlockResourceBudget: Get<BlockResourceBudget>;
+
+    type PrepassContext: ActorPrepassContext;
 
     /// Provides System Actors specs to initialize at genesis.
     /// Use `()` for no genesis System Actors (default).
@@ -497,7 +602,7 @@ pub mod pallet {
   pub type ObservationSubscriberPageOf<T> =
     ObservationSubscriberPage<<T as Config>::ObservationPageSize>;
   pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::ObservationPageSize>;
-  pub type CrossingMemberPageOf<T> = CrossingMemberPage<<T as Config>::ObservationPageSize>;
+  pub type CrossingMemberPageOf<T> = CrossingMemberPage<<T as Config>::CrossingPageSize>;
   pub type CrossingLeafKeyOf<T> = CrossingLeafKey<<T as Config>::ObservationFeedId>;
   pub type CrossingRadixNodeKeyOf<T> = CrossingRadixNodeKey<<T as Config>::ObservationFeedId>;
   pub type CrossingMembershipLocatorOf<T> =
@@ -576,6 +681,51 @@ pub mod pallet {
     FundingSourcePolicyOf<T>,
   >;
 
+  pub type ActorContractHeaderOf<T> = super::types::ActorContractHeader<
+    TriggerOf<T>,
+    BlockNumberFor<T>,
+    FundingSourcePolicyOf<T>,
+    <T as Config>::Balance,
+    [u8; 32],
+  >;
+
+  pub type ActorContractHeadOf<T> =
+    super::types::ActorContractHead<ActorContractHeaderOf<T>, StepOf<T>>;
+
+  pub type ActorActivationAuthorityOf<T> = super::types::ActorActivationAuthority<
+    <T as Config>::ObservationFeedId,
+    BlockNumberFor<T>,
+    [u8; 32],
+  >;
+
+  pub type ActorStepChunkOf<T> = super::types::ActorStepChunk<
+    ActorId,
+    [u8; 32],
+    BoundedVec<StepOf<T>, ConstU32<{ super::types::MAX_STEPS_PER_TAIL_CHUNK }>>,
+    BoundedVec<ActorStepResourceEnvelope, ConstU32<{ super::types::MAX_STEPS_PER_TAIL_CHUNK }>>,
+  >;
+
+  pub type ActorAdmissionResourcesOf<T> =
+    BoundedVec<ActorStepResourceEnvelope, <T as Config>::MaxContractSteps>;
+
+  pub type ActorAdmissionCertificateOf<T> = ActorAdmissionCertificate<ActorAdmissionResourcesOf<T>>;
+
+  pub type ActorStepTicketOf<T> =
+    ActorStepTicket<BlockNumberFor<T>, ActorContractCommitment<[u8; 32]>>;
+
+  pub type LoadedActorStepOf<T> = LoadedActorStep<StepOf<T>>;
+
+  pub type CurrentStepPlanOf<T> = StepExecutionPlan<
+    ActorIdentityOf<T>,
+    ActorHotStateOf<T>,
+    ActorRunStateOf<T>,
+    ActorFundingStateOf<T>,
+    ActorAdmissionCertificateOf<T>,
+    ActorStepTicketOf<T>,
+    LoadedActorStepOf<T>,
+    StepFeeBreakdown<<T as Config>::Balance>,
+  >;
+
   pub type FundingAccumulatedOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
     <T as Config>::Balance,
@@ -587,7 +737,7 @@ pub mod pallet {
 
   pub type FundingSnapshotOf<T> = FundingAccumulatedOf<T>;
 
-  pub type ContinuationSnapshotOf<T> = BoundedBTreeMap<
+  pub type RunOpeningSnapshotOf<T> = BoundedBTreeMap<
     OpeningSurface<<T as Config>::AssetId>,
     <T as Config>::Balance,
     <T as Config>::MaxOpeningSnapshotEntries,
@@ -596,7 +746,17 @@ pub mod pallet {
   pub type OpeningPredicateResultsOf<T> =
     BoundedVec<Result<bool, PredicateError>, <T as Config>::MaxOpeningPredicateResults>;
 
-  pub type ContinuationStateOf<T> = ContinuationState<
+  pub type ActorRunHeadOf<T> = ActorRunHead<BlockNumberFor<T>>;
+
+  pub type ActorRunPayloadOf<T> = ActorRunPayload<
+    <T as Config>::AssetId,
+    <T as Config>::Balance,
+    <T as Config>::MaxOpeningSnapshotEntries,
+    <T as Config>::MaxFundingTrackedAssets,
+    <T as Config>::MaxOpeningPredicateResults,
+  >;
+
+  pub type ActorRunStateOf<T> = ActorRunState<
     <T as Config>::AssetId,
     <T as Config>::Balance,
     BlockNumberFor<T>,
@@ -605,7 +765,7 @@ pub mod pallet {
     <T as Config>::MaxOpeningPredicateResults,
   >;
 
-  pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
+  pub type QueuePageOf<T> = BoundedVec<QueueEntry<BlockNumberFor<T>>, <T as Config>::QueuePageSize>;
   pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
   pub type WakeupCursorPageOf<T> =
@@ -621,17 +781,21 @@ pub mod pallet {
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
 
   pub type ActorFundingStateOf<T> =
-    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>, <T as Config>::Balance>;
+    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
 
   pub type ActorIdentityOf<T> =
     ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
+
+  pub type ActorStateHoldBreakdownOf<T> = ActorStateHoldBreakdown<<T as Config>::Balance>;
+  pub type ActorStateHoldRecordOf<T> =
+    ActorStateHoldRecord<<T as frame_system::Config>::AccountId, <T as Config>::Balance>;
 
   pub type ActiveActorStateOf<T> = ActiveActorState<
     ActorIdentityOf<T>,
     ActorHotStateOf<T>,
     ActorContractOf<T>,
     ActorFundingStateOf<T>,
-    ContinuationStateOf<T>,
+    ActorRunStateOf<T>,
   >;
 
   pub(crate) enum LoadedActorStateOf<T: Config> {
@@ -641,11 +805,20 @@ pub mod pallet {
     Corrupt,
   }
 
+  pub struct ObservationActivationState<T: Config> {
+    pub actor_id: ActorId,
+    pub identity: ActorIdentityOf<T>,
+    pub hot: ActorHotStateOf<T>,
+    pub authority: ActorActivationAuthorityOf<T>,
+    pub run_head: Option<ActorRunHeadOf<T>>,
+    pub loaded_step: Option<LoadedActorStepOf<T>>,
+  }
+
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
   pub struct Pallet<T>(_);
 
-  const STORAGE_VERSION: StorageVersion = StorageVersion::new(9);
+  const STORAGE_VERSION: StorageVersion = StorageVersion::new(15);
 
   #[pallet::storage]
   #[pallet::getter(fn next_actor_id)]
@@ -657,10 +830,31 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, ActorId, ActorHotStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
-  #[pallet::storage_prefix = "ActorContract"]
-  #[pallet::getter(fn actor_contract)]
-  pub type ActorContracts<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorContractOf<T>, OptionQuery>;
+  #[pallet::storage_prefix = "ActorContractHead"]
+  pub type ActorContractHeads<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorContractHeadOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::storage_prefix = "ActorActivationAuthority"]
+  pub type ActorActivationAuthorities<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorActivationAuthorityOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::storage_prefix = "ActorAdmissionCertificate"]
+  pub type ActorAdmissionCertificates<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorAdmissionCertificateOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::storage_prefix = "ActorContractTailChunk"]
+  pub type ActorContractTailChunks<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    ActorId,
+    Blake2_128Concat,
+    u32,
+    ActorStepChunkOf<T>,
+    OptionQuery,
+  >;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_funding)]
@@ -668,12 +862,1182 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, ActorId, ActorFundingStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
-  #[pallet::storage_prefix = "ContinuationState"]
-  #[pallet::getter(fn continuation_state)]
-  pub type ContinuationStateStore<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ContinuationStateOf<T>, OptionQuery>;
+  #[pallet::storage_prefix = "ActorRunHead"]
+  pub type ActorRunHeads<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorRunHeadOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::storage_prefix = "ActorRunPayload"]
+  pub type ActorRunPayloads<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorRunPayloadOf<T>, OptionQuery>;
+
+  pub struct ActorRunStateStore<T: Config>(core::marker::PhantomData<T>);
+
+  impl<T: Config> ActorRunStateStore<T> {
+    pub fn get(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
+      ActorRunState::from_tiers(
+        ActorRunHeads::<T>::get(actor_id)?,
+        ActorRunPayloads::<T>::get(actor_id)?,
+      )
+    }
+
+    pub fn insert(actor_id: ActorId, state: ActorRunStateOf<T>) {
+      let (head, payload) = state.into_tiers();
+      let payload_changed = ActorRunHeads::<T>::get(actor_id)
+        .is_none_or(|current| current.payload_commitment != head.payload_commitment);
+      ActorRunHeads::<T>::insert(actor_id, head);
+      if payload_changed {
+        ActorRunPayloads::<T>::insert(actor_id, payload);
+      }
+    }
+
+    pub fn remove(actor_id: ActorId) {
+      ActorRunHeads::<T>::remove(actor_id);
+      ActorRunPayloads::<T>::remove(actor_id);
+    }
+
+    pub fn take(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
+      let state = Self::get(actor_id)?;
+      Self::remove(actor_id);
+      Some(state)
+    }
+
+    pub fn contains_key(actor_id: ActorId) -> bool {
+      ActorRunHeads::<T>::contains_key(actor_id) && ActorRunPayloads::<T>::contains_key(actor_id)
+    }
+
+    pub fn iter_keys() -> impl Iterator<Item = ActorId> {
+      ActorRunHeads::<T>::iter_keys()
+    }
+
+    pub fn mutate<R>(
+      actor_id: ActorId,
+      mutate: impl FnOnce(&mut Option<ActorRunStateOf<T>>) -> R,
+    ) -> R {
+      let mut state = Self::get(actor_id);
+      let result = mutate(&mut state);
+      if let Some(state) = state {
+        Self::insert(actor_id, state);
+      } else {
+        Self::remove(actor_id);
+      }
+      result
+    }
+  }
 
   impl<T: Config> Pallet<T> {
+    pub fn actor_run_state(actor_id: ActorId) -> Option<ActorRunStateOf<T>> {
+      ActorRunStateStore::<T>::get(actor_id)
+    }
+    pub fn actor_contract(actor_id: ActorId) -> Option<ActorContractOf<T>> {
+      Self::load_actor_contract(actor_id)
+    }
+
+    pub fn actor_cost_quote(
+      actor_id: ActorId,
+    ) -> Result<ActorCostQuote<T::Balance>, ActorCostQuoteError> {
+      let (state, admission) = Self::load_actor_state_with_admission(actor_id);
+      let (identity, active) = match state {
+        LoadedActorStateOf::NotRegistered => return Err(ActorCostQuoteError::ActorNotFound),
+        LoadedActorStateOf::Dormant(identity) => (identity, None),
+        LoadedActorStateOf::Active(state) => (state.identity.clone(), Some(state)),
+        LoadedActorStateOf::Corrupt => return Err(ActorCostQuoteError::ActorInvariant),
+      };
+      let actor_type = identity.actor_class.actor_type();
+      let creation_fee = if actor_type == ActorType::System {
+        T::Balance::zero()
+      } else {
+        T::ActorCreationFee::get()
+      };
+      let effect_identity = T::TaskEffectWeight::production_weight_identity()
+        .ok_or(ActorCostQuoteError::WeightAuthorityUnavailable)?;
+      let zero_action = ActorActionFeeQuote {
+        maximum_effect_weight: Weight::zero(),
+        maximum_effect_fee: T::Balance::zero(),
+        production_weight_identity: effect_identity,
+      };
+      let (prospective_trigger_fee, prospective_pipeline_fee, maximum_next_action_fee) =
+        match active {
+          None => (None, None, zero_action),
+          Some(state) => {
+            let admission = admission.ok_or(ActorCostQuoteError::ActorInvariant)?;
+            let trigger_family = state.contract.trigger.family();
+            let maximum_weight = Self::trigger_occurrence_weight(trigger_family);
+            let trigger_fee =
+              Self::trigger_fee_for_weight(actor_type, trigger_family, maximum_weight);
+            let machine_envelope = ActorContractHeads::<T>::get(actor_id)
+              .ok_or(ActorCostQuoteError::ActorInvariant)?
+              .header
+              .pipeline_machine_envelope;
+            let pipeline_fee = Self::pipeline_fee_breakdown(actor_type, machine_envelope)
+              .map_err(|_| ActorCostQuoteError::ComputationOverflow)?;
+            let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+            let action = if state.contract.steps.is_empty() {
+              zero_action
+            } else {
+              let loaded = Self::load_current_step_from_storage(actor_id, cursor)
+                .ok_or(ActorCostQuoteError::ActorInvariant)?;
+              let maximum =
+                Self::maximum_current_action_fee(actor_type, &loaded.step, loaded.resources)
+                  .map_err(|_| ActorCostQuoteError::ComputationOverflow)?;
+              ActorActionFeeQuote {
+                maximum_effect_weight: if matches!(loaded.step.task, ActorTask::StopCycle) {
+                  Weight::zero()
+                } else {
+                  loaded.resources.effect
+                },
+                maximum_effect_fee: maximum.effect_fee,
+                production_weight_identity: effect_identity,
+              }
+            };
+            (
+              Some(ActorTriggerFeeQuote {
+                trigger_family,
+                maximum_weight,
+                fee: trigger_fee.trigger_fee,
+                production_weight_identity: Self::trigger_weight_identity(),
+              }),
+              Some(ActorPipelineFeeQuote {
+                pipeline_machine_fee: pipeline_fee.pipeline_machine_fee,
+                cleanup_fee: pipeline_fee.cleanup_fee,
+                total_fee: pipeline_fee.total_fee,
+                strategy: PipelineMachineFeeStrategy::UpfrontBounded,
+                admission_identity: admission.admission_identity,
+                production_weight_identity: admission.production_weight_identity,
+              }),
+              action,
+            )
+          }
+        };
+      let actor_state_hold = Self::actor_state_hold_quote(actor_id, actor_type)?;
+      Ok(ActorCostQuote {
+        actor_type,
+        creation_fee,
+        prospective_trigger_fee,
+        prospective_pipeline_fee,
+        maximum_next_action_fee,
+        actor_state_hold,
+      })
+    }
+
+    pub(crate) fn load_actor_contract(actor_id: ActorId) -> Option<ActorContractOf<T>> {
+      Self::load_admitted_contract_geometry(actor_id).map(|(contract, _)| contract)
+    }
+
+    pub(crate) fn store_actor_contract(
+      actor_id: ActorId,
+      contract: ActorContractOf<T>,
+    ) -> DispatchResult {
+      let certificate =
+        Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      let stored = if ActorContractHeads::<T>::contains_key(actor_id) {
+        Self::replace_admitted_contract_geometry(actor_id, &contract, &certificate)
+      } else {
+        Self::insert_admitted_contract_geometry(actor_id, &contract, &certificate)
+      };
+      ensure!(stored, Error::<T>::ActorInvariant);
+      if CrossingMemberships::<T>::contains_key(actor_id)
+        && let Some(crossing) = Self::crossing_from_trigger(&contract.trigger)
+      {
+        let phase = match ActorHot::<T>::get(actor_id).map(|hot| hot.trigger_runtime_state) {
+          Some(TriggerRuntimeState::ObservationCrossing { phase, .. }) => phase,
+          _ => return Err(Error::<T>::ActorInvariant.into()),
+        };
+        Self::sync_crossing_compiled_authority(
+          actor_id,
+          crossing,
+          phase,
+          certificate.admission_identity,
+        )?;
+      }
+      Self::sync_activation_authority(actor_id, &contract, &certificate);
+      Ok(())
+    }
+
+    fn sync_activation_authority(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) {
+      let feed = match &contract.trigger {
+        Trigger::ObservationChange { feed } => Some(*feed),
+        Trigger::ObservationCrossing { feed, .. } => Some(*feed),
+        _ => None,
+      };
+      if let Some(feed) = feed {
+        ActorActivationAuthorities::<T>::insert(
+          actor_id,
+          ActorActivationAuthority {
+            feed,
+            cooldown_blocks: contract.cooldown_blocks,
+            window: contract.window,
+            auto_close_at_cycle_nonce: contract.auto_close_at_cycle_nonce,
+            semantic_contract_id: certificate.semantic_contract_id,
+            body_commitment: certificate.body_commitment,
+            admission_identity: certificate.admission_identity,
+          },
+        );
+      } else {
+        ActorActivationAuthorities::<T>::remove(actor_id);
+      }
+    }
+
+    pub(crate) fn remove_actor_contract(actor_id: ActorId) -> DispatchResult {
+      ensure!(
+        Self::remove_admitted_contract_geometry(actor_id).is_some(),
+        Error::<T>::ActorInvariant
+      );
+      Ok(())
+    }
+
+    pub(crate) fn insert_admitted_contract_geometry(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> bool {
+      if ActorContractHeads::<T>::contains_key(actor_id)
+        || ActorAdmissionCertificates::<T>::contains_key(actor_id)
+      {
+        return false;
+      }
+      // An orphan Contract partition has no execution authority. System's zero-fee projection
+      // keeps corruption-mask tests and diagnostic geometry independent of identity state.
+      let actor_type = ActorIdentities::<T>::get(actor_id)
+        .map(|identity| identity.actor_class.actor_type())
+        .unwrap_or(ActorType::System);
+      let Some((head, chunks)) =
+        Self::decompose_admitted_contract_geometry(actor_id, actor_type, contract, certificate)
+      else {
+        return false;
+      };
+      if chunks
+        .iter(/* deos-bypass: bounded-iter */)
+        .any(|(chunk_index, _)| {
+          ActorContractTailChunks::<T>::contains_key(actor_id, chunk_index)
+        })
+      {
+        return false;
+      }
+      ActorAdmissionCertificates::<T>::insert(actor_id, certificate);
+      ActorContractHeads::<T>::insert(actor_id, head);
+      for (chunk_index, chunk) in chunks {
+        ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
+      }
+      true
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 bounded reconstruction is staged behind the centralized Contract owner"
+    )]
+    pub(crate) fn load_admitted_contract_geometry(
+      actor_id: ActorId,
+    ) -> Option<(ActorContractOf<T>, ActorAdmissionCertificateOf<T>)> {
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      if !certificate.has_valid_identity()
+        || certificate.semantic_contract_id != head.header.semantic_contract_id
+        || certificate.body_commitment != head.header.body_commitment
+        || certificate.admission_identity != head.header.admission_identity
+      {
+        return None;
+      }
+      let chunk_count = head
+        .header
+        .step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let chunks = (0..chunk_count)
+        .map(|chunk_index| {
+          Some((
+            chunk_index,
+            ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
+          ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+      let mut resource_count = usize::from(head.header.step_count > 0);
+      for (_, chunk) in &chunks {
+        if chunk.steps.len() != chunk.step_resources.len() {
+          return None;
+        }
+        resource_count = resource_count.checked_add(chunk.step_resources.len())?;
+      }
+      if resource_count != head.header.step_count as usize {
+        return None;
+      }
+      let contract = Self::reconstruct_contract_geometry(actor_id, head, &chunks)?;
+      Some((contract, certificate))
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 lazy production loading is staged before current-Step scheduler wiring"
+    )]
+    pub(crate) fn load_current_step_from_storage(
+      actor_id: ActorId,
+      cursor: u32,
+    ) -> Option<LoadedActorStepOf<T>> {
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      let tail_chunk = if cursor == 0 {
+        None
+      } else {
+        let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+        Some((
+          chunk_index,
+          ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
+        ))
+      };
+      Self::load_current_step_from_geometry(
+        actor_id,
+        &head,
+        &certificate,
+        cursor,
+        tail_chunk.as_ref().map(|(index, chunk)| (*index, chunk)),
+      )
+    }
+
+    pub(crate) fn replace_admitted_contract_geometry(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> bool {
+      let Some((current_contract, _)) = Self::load_admitted_contract_geometry(actor_id) else {
+        return false;
+      };
+      let actor_type = ActorIdentities::<T>::get(actor_id)
+        .map(|identity| identity.actor_class.actor_type())
+        .unwrap_or(ActorType::System);
+      let Some((head, chunks)) =
+        Self::decompose_admitted_contract_geometry(actor_id, actor_type, contract, certificate)
+      else {
+        return false;
+      };
+      let Ok(old_step_count) = u32::try_from(current_contract.steps.len()) else {
+        return false;
+      };
+      let old_chunk_count = old_step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let Ok(new_chunk_count) = u32::try_from(chunks.len()) else {
+        return false;
+      };
+      ActorAdmissionCertificates::<T>::insert(actor_id, certificate);
+      ActorContractHeads::<T>::insert(actor_id, head);
+      for (chunk_index, chunk) in chunks {
+        ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
+      }
+      for chunk_index in new_chunk_count..old_chunk_count {
+        ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
+      }
+      true
+    }
+
+    pub(crate) fn remove_admitted_contract_geometry(
+      actor_id: ActorId,
+    ) -> Option<ActorContractOf<T>> {
+      let (contract, _) = Self::load_admitted_contract_geometry(actor_id)?;
+      let chunk_count = u32::try_from(contract.steps.len())
+        .ok()?
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      ActorActivationAuthorities::<T>::remove(actor_id);
+      ActorAdmissionCertificates::<T>::remove(actor_id);
+      ActorContractHeads::<T>::remove(actor_id);
+      for chunk_index in 0..chunk_count {
+        ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
+      }
+      Some(contract)
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I4 dual-meter admission is staged before scheduler plan wiring"
+    )]
+    pub(crate) fn current_step_resources_fit(
+      control_meter: &WeightMeter,
+      effect_meter: &WeightMeter,
+      resources: ActorStepResourceEnvelope,
+    ) -> bool {
+      control_meter.can_consume(resources.control) && effect_meter.can_consume(resources.effect)
+    }
+
+    fn trigger_occurrence_weight(trigger_family: TriggerFamily) -> Weight {
+      match trigger_family {
+        TriggerFamily::Manual => T::WeightInfo::manual_trigger(),
+        TriggerFamily::AddressEvent => T::WeightInfo::address_event_trigger_occurrence(),
+        TriggerFamily::ObservationChange => T::WeightInfo::observation_change_trigger_occurrence(),
+        TriggerFamily::ObservationCrossing => {
+          T::WeightInfo::observation_crossing_trigger_occurrence()
+        }
+        TriggerFamily::AtTime => T::WeightInfo::at_time_trigger_occurrence(),
+        TriggerFamily::Cadenced => T::WeightInfo::cadenced_trigger_occurrence(),
+      }
+    }
+
+    fn trigger_weight_identity() -> [u8; 32] {
+      (
+        b"DEOS_ACTOR_TRIGGER_WEIGHT_V1",
+        Self::trigger_occurrence_weight(TriggerFamily::Manual),
+        Self::trigger_occurrence_weight(TriggerFamily::AddressEvent),
+        Self::trigger_occurrence_weight(TriggerFamily::ObservationChange),
+        Self::trigger_occurrence_weight(TriggerFamily::ObservationCrossing),
+        Self::trigger_occurrence_weight(TriggerFamily::AtTime),
+        Self::trigger_occurrence_weight(TriggerFamily::Cadenced),
+      )
+        .using_encoded(frame::hashing::blake2_256)
+    }
+
+    pub(crate) fn trigger_fee_for_weight(
+      actor_type: ActorType,
+      trigger_family: TriggerFamily,
+      weight: Weight,
+    ) -> TriggerFeeBreakdown<T::Balance> {
+      let trigger_fee = if actor_type == ActorType::System || weight == Weight::zero() {
+        Zero::zero()
+      } else {
+        T::WeightToFee::weight_to_fee(&weight)
+      };
+      TriggerFeeBreakdown {
+        trigger_family,
+        trigger_fee,
+      }
+    }
+
+    pub(crate) fn pipeline_fee_breakdown(
+      actor_type: ActorType,
+      envelope: PipelineMachineEnvelope<T::Balance>,
+    ) -> Result<PipelineFeeBreakdown<T::Balance>, Error<T>> {
+      if actor_type == ActorType::System {
+        return Ok(PipelineFeeBreakdown {
+          pipeline_machine_fee: Zero::zero(),
+          cleanup_fee: Zero::zero(),
+          total_fee: Zero::zero(),
+        });
+      }
+      let total_fee = envelope
+        .pipeline_machine_fee_upper
+        .checked_add(&envelope.cleanup_fee_upper)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(PipelineFeeBreakdown {
+        pipeline_machine_fee: envelope.pipeline_machine_fee_upper,
+        cleanup_fee: envelope.cleanup_fee_upper,
+        total_fee,
+      })
+    }
+
+    pub(crate) fn step_fee_for_resources(
+      actor_type: ActorType,
+      resources: ActorStepResourceEnvelope,
+    ) -> Result<StepFeeBreakdown<T::Balance>, Error<T>> {
+      if actor_type == ActorType::System {
+        return Ok(StepFeeBreakdown {
+          control_fee: Zero::zero(),
+          effect_fee: Zero::zero(),
+          total_fee: Zero::zero(),
+        });
+      }
+      let control_fee: T::Balance = Zero::zero();
+      let effect_fee = if resources.effect == Weight::zero() {
+        Zero::zero()
+      } else {
+        T::WeightToFee::weight_to_fee(&resources.effect)
+      };
+      let total_fee = control_fee
+        .checked_add(&effect_fee)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(StepFeeBreakdown {
+        control_fee,
+        effect_fee,
+        total_fee,
+      })
+    }
+
+    pub(crate) fn maximum_current_action_fee(
+      actor_type: ActorType,
+      step: &StepOf<T>,
+      resources: ActorStepResourceEnvelope,
+    ) -> Result<StepFeeBreakdown<T::Balance>, Error<T>> {
+      if matches!(step.task, super::types::Task::StopCycle) {
+        return Ok(StepFeeBreakdown {
+          control_fee: Zero::zero(),
+          effect_fee: Zero::zero(),
+          total_fee: Zero::zero(),
+        });
+      }
+      Self::step_fee_for_resources(actor_type, resources)
+    }
+
+    pub(crate) fn maximum_current_step_fee(
+      actor_type: ActorType,
+      resources: ActorStepResourceEnvelope,
+    ) -> Result<StepFeeBreakdown<T::Balance>, Error<T>> {
+      Self::step_fee_for_resources(actor_type, resources)
+    }
+
+    pub(crate) fn derive_pipeline_machine_envelope(
+      actor_type: ActorType,
+      contract_steps: &ContractSteps<T>,
+      resources: &ActorAdmissionResourcesOf<T>,
+    ) -> Result<PipelineMachineEnvelope<T::Balance>, Error<T>> {
+      ensure!(
+        contract_steps.len() == resources.len(),
+        Error::<T>::ActorRunInvariant
+      );
+      if actor_type == ActorType::System {
+        return Ok(PipelineMachineEnvelope {
+          pipeline_machine_fee_upper: Zero::zero(),
+          cleanup_fee_upper: Zero::zero(),
+        });
+      }
+      let mut pipeline_machine_fee_upper: T::Balance = if contract_steps.is_empty() {
+        T::WeightToFee::weight_to_fee(&T::WeightInfo::scheduler_inner_zero_step_complete())
+      } else {
+        Zero::zero()
+      };
+      for (step, resource) in contract_steps
+        .iter(/* deos-bypass: bounded-iter — admitted Contract Steps bound the complete visit. */)
+        .zip(
+          resources
+            .iter(/* deos-bypass: bounded-iter — admitted resource count equals Step count. */),
+        )
+      {
+        let machine_weight = if matches!(step.task, super::types::Task::StopCycle) {
+          resource.control.saturating_add(resource.effect)
+        } else {
+          resource.control
+        };
+        let machine_attempt_fee = if machine_weight == Weight::zero() {
+          Zero::zero()
+        } else {
+          T::WeightToFee::weight_to_fee(&machine_weight)
+        };
+        let attempts = step.on_error.retry_max_attempts().unwrap_or(1);
+        for _ in 0..attempts {
+          pipeline_machine_fee_upper = pipeline_machine_fee_upper
+            .checked_add(&machine_attempt_fee)
+            .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+        }
+      }
+      let cleanup_fee_upper = T::WeightToFee::weight_to_fee(&T::WeightInfo::close_actor());
+      pipeline_machine_fee_upper
+        .checked_add(&cleanup_fee_upper)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(PipelineMachineEnvelope {
+        pipeline_machine_fee_upper,
+        cleanup_fee_upper,
+      })
+    }
+
+    pub(crate) fn step_control_weight_context(
+      step_count: u32,
+      cursor: u32,
+      predicate_evaluation_units: u32,
+      opening_snapshot_entries: u32,
+      opening_predicate_results: u32,
+      funding_snapshot_entries: u32,
+    ) -> Option<StepControlWeightContext> {
+      if step_count == 0 || step_count > T::MaxContractSteps::get() || cursor >= step_count {
+        return None;
+      }
+      if cursor == 0 {
+        return Some(StepControlWeightContext {
+          cursor,
+          steps_in_fragment: 1,
+          opening_tail_chunks: step_count
+            .saturating_sub(1)
+            .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
+          predicate_evaluation_units,
+          opening_snapshot_entries,
+          opening_predicate_results,
+          funding_snapshot_entries,
+        });
+      }
+      let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+      let first_step_index =
+        1u32.checked_add(chunk_index.checked_mul(MAX_STEPS_PER_TAIL_CHUNK)?)?;
+      Some(StepControlWeightContext {
+        cursor,
+        steps_in_fragment: step_count
+          .checked_sub(first_step_index)?
+          .min(MAX_STEPS_PER_TAIL_CHUNK),
+        opening_tail_chunks: 0,
+        predicate_evaluation_units,
+        opening_snapshot_entries: 0,
+        opening_predicate_results: 0,
+        funding_snapshot_entries: 0,
+      })
+    }
+
+    fn opening_control_geometry(steps: &ContractSteps<T>) -> Option<(u32, u32)> {
+      let snapshot_entries = u32::try_from(
+        Self::opening_surfaces(steps, 0)
+          .into_iter()
+          .collect::<BTreeSet<_>>()
+          .len(),
+      )
+      .ok()?;
+      let predicate_results = steps
+        .iter(/* deos-bypass: bounded-iter */)
+        .try_fold(0u32, |total, step| {
+          total.checked_add(
+            step
+              .precondition
+              .as_ref()
+              .map_or(0, Precondition::opening_predicate_count),
+          )
+        })?;
+      Some((snapshot_entries, predicate_results))
+    }
+
+    pub(crate) fn execution_step_control_weight_context(
+      instance: &ActiveActorViewOf<T>,
+      run: Option<&ActorRunStateOf<T>>,
+      loaded_step: &LoadedActorStepOf<T>,
+    ) -> Option<StepControlWeightContext> {
+      let step_count = u32::try_from(instance.steps.len()).ok()?;
+      let cursor = loaded_step.cursor;
+      if instance.cycle_state == CycleState::Idle && cursor != 0 {
+        return None;
+      }
+      let predicate_evaluation_units = loaded_step
+        .step
+        .precondition
+        .as_ref()
+        .map_or(0, Precondition::evaluation_units);
+      let (opening_snapshot_entries, opening_predicate_results) = if cursor == 0 {
+        if instance.cycle_state == CycleState::Idle {
+          Self::opening_control_geometry(&instance.steps)?
+        } else {
+          let run = run?;
+          (
+            u32::try_from(run.opening_snapshot.len()).ok()?,
+            u32::try_from(run.opening_predicate_results.len()).ok()?,
+          )
+        }
+      } else {
+        (0, 0)
+      };
+      Self::step_control_weight_context(
+        step_count,
+        cursor,
+        predicate_evaluation_units,
+        opening_snapshot_entries,
+        opening_predicate_results,
+        T::MaxFundingTrackedAssets::get(),
+      )
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I4 resource derivation is staged before the production control-Weight owner"
+    )]
+    pub(crate) fn derive_step_resource_envelopes(
+      contract: &ActorContractOf<T>,
+    ) -> Option<ActorAdmissionResourcesOf<T>> {
+      let step_count = u32::try_from(contract.steps.len()).ok()?;
+      let (opening_snapshot_entries, opening_predicate_results) =
+        Self::opening_control_geometry(&contract.steps)?;
+      contract
+        .steps
+        .iter(/* deos-bypass: bounded-iter */)
+        .enumerate()
+        .map(|(cursor, step)| {
+          let cursor = u32::try_from(cursor).ok()?;
+          let predicate_evaluation_units = step
+            .precondition
+            .as_ref()
+            .map_or(0, Precondition::evaluation_units);
+          let context = Self::step_control_weight_context(
+            step_count,
+            cursor,
+            predicate_evaluation_units,
+            opening_snapshot_entries,
+            opening_predicate_results,
+            T::MaxFundingTrackedAssets::get(),
+          )?;
+          Some(ActorStepResourceEnvelope {
+            control: T::StepControlWeight::maximum_control_weight(context, step)?,
+            effect: T::TaskEffectWeight::maximum_effect_weight(&step.task)?,
+          })
+        })
+        .collect::<Option<Vec<_>>>()?
+        .try_into()
+        .ok()
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 certificate construction is staged before centralized Contract persistence"
+    )]
+    pub(crate) fn build_admission_certificate(
+      contract: &ActorContractOf<T>,
+    ) -> Option<ActorAdmissionCertificateOf<T>> {
+      let authority = T::AdmissionCertificateAuthority::current()?;
+      Some(ActorAdmissionCertificate::new(
+        contract.semantic_contract_id(),
+        contract.body_commitment()?,
+        authority.runtime_actor_semantics_version,
+        authority.production_weight_identity,
+        authority.body_geometry_version,
+        authority.configured_bounds_commitment,
+        authority.maximum_lifecycle_weight,
+      ))
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 admitted geometry is staged before production storage wiring"
+    )]
+    pub(crate) fn decompose_admitted_contract_geometry(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<(ActorContractHeadOf<T>, Vec<(u32, ActorStepChunkOf<T>)>)> {
+      let semantic_contract_id = contract.semantic_contract_id();
+      let body_commitment = contract.body_commitment()?;
+      let step_resources = Self::derive_step_resource_envelopes(contract)?;
+      if !certificate.has_valid_identity()
+        || certificate.semantic_contract_id != semantic_contract_id
+        || certificate.body_commitment != body_commitment
+      {
+        return None;
+      }
+      let pipeline_machine_envelope =
+        Self::derive_pipeline_machine_envelope(actor_type, &contract.steps, &step_resources)
+          .ok()?;
+      Self::decompose_contract_geometry(
+        actor_id,
+        contract,
+        certificate.admission_identity,
+        pipeline_machine_envelope,
+        &step_resources,
+      )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_actor_step_ticket(
+      actor_id: ActorId,
+      queue_ticket: QueueTicket,
+      eligible_at: BlockNumberFor<T>,
+      identity: &ActorIdentityOf<T>,
+      hot: &ActorHotStateOf<T>,
+      run: Option<&ActorRunStateOf<T>>,
+      admission: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<ActorStepTicketOf<T>> {
+      if hot.queue_ticket != Some(queue_ticket) || !admission.has_valid_identity() {
+        return None;
+      }
+      let (cycle_nonce, cursor, eligible_at) = match (hot.cycle_state, run) {
+        (CycleState::Idle, None) => (identity.cycle_nonce.checked_add(1)?, 0, eligible_at),
+        (CycleState::Running, Some(run))
+          if run.running_is_coherent()
+            && run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            ) =>
+        {
+          if run.eligible_at != eligible_at {
+            return None;
+          }
+          (run.cycle_nonce, run.cursor, run.eligible_at)
+        }
+        (CycleState::Suspended, Some(run))
+          if run.suspension_is_coherent()
+            && run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            ) =>
+        {
+          if run.eligible_at != eligible_at {
+            return None;
+          }
+          (run.cycle_nonce, run.cursor, run.eligible_at)
+        }
+        _ => return None,
+      };
+      Some(ActorStepTicket {
+        actor_id,
+        cycle_nonce,
+        cursor,
+        ticket: queue_ticket,
+        eligible_at,
+        contract_commitment: ActorContractCommitment {
+          semantic_contract_id: admission.semantic_contract_id,
+          body_commitment: admission.body_commitment,
+        },
+      })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_current_step_plan(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      run: Option<ActorRunStateOf<T>>,
+      funding: ActorFundingStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      ticket: ActorStepTicketOf<T>,
+      loaded_step: LoadedActorStepOf<T>,
+      maximum_fee: StepFeeBreakdown<T::Balance>,
+    ) -> Option<CurrentStepPlanOf<T>> {
+      let queue_ticket = hot.queue_ticket?;
+      if !Self::validate_loaded_step_authority(
+        actor_id,
+        queue_ticket,
+        &admission,
+        &ticket,
+        &loaded_step,
+      ) {
+        return None;
+      }
+      match (hot.cycle_state, run.as_ref()) {
+        (CycleState::Idle, None) => {
+          if ticket.cursor != 0 || ticket.cycle_nonce != identity.cycle_nonce.checked_add(1)? {
+            return None;
+          }
+        }
+        (CycleState::Running, Some(run)) => {
+          if !run.running_is_coherent()
+            || !run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            )
+            || ticket.cycle_nonce != run.cycle_nonce
+            || ticket.cursor != run.cursor
+            || ticket.eligible_at != run.eligible_at
+          {
+            return None;
+          }
+        }
+        (CycleState::Suspended, Some(run)) => {
+          if !run.suspension_is_coherent()
+            || !run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            )
+            || ticket.cycle_nonce != run.cycle_nonce
+            || ticket.cursor != run.cursor
+            || ticket.eligible_at != run.eligible_at
+          {
+            return None;
+          }
+        }
+        _ => return None,
+      }
+      Some(StepExecutionPlan {
+        identity,
+        hot,
+        run,
+        funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      })
+    }
+
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn load_current_step_plan_from_storage(
+      ticket: ActorStepTicketOf<T>,
+    ) -> Option<CurrentStepPlanOf<T>> {
+      if ticket.eligible_at > frame_system::Pallet::<T>::block_number() {
+        return None;
+      }
+      let actor_id = ticket.actor_id;
+      let identity = ActorIdentities::<T>::get(actor_id)?;
+      let hot = ActorHot::<T>::get(actor_id)?;
+      let run = ActorRunStateStore::<T>::get(actor_id);
+      let funding = ActorFunding::<T>::get(actor_id)?;
+      let admission = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      let loaded_step = Self::load_current_step_from_storage(actor_id, ticket.cursor)?;
+      let maximum_fee =
+        Self::maximum_current_step_fee(identity.actor_class.actor_type(), loaded_step.resources)
+          .ok()?;
+      Self::build_current_step_plan(
+        actor_id,
+        identity,
+        hot,
+        run,
+        funding,
+        admission,
+        ticket,
+        loaded_step,
+        maximum_fee,
+      )
+    }
+
+    pub(crate) fn validate_loaded_step_authority(
+      actor_id: ActorId,
+      queue_ticket: QueueTicket,
+      certificate: &ActorAdmissionCertificateOf<T>,
+      ticket: &ActorStepTicketOf<T>,
+      loaded_step: &LoadedActorStepOf<T>,
+    ) -> bool {
+      certificate.has_valid_identity()
+        && ticket.actor_id == actor_id
+        && ticket.ticket == queue_ticket
+        && ticket.cursor == loaded_step.cursor
+        && ticket.contract_commitment.semantic_contract_id == certificate.semantic_contract_id
+        && ticket.contract_commitment.body_commitment == certificate.body_commitment
+    }
+
+    pub(crate) fn load_current_step_from_geometry(
+      actor_id: ActorId,
+      head: &ActorContractHeadOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+      cursor: u32,
+      tail_chunk: Option<(u32, &ActorStepChunkOf<T>)>,
+    ) -> Option<LoadedActorStep<StepOf<T>>> {
+      if !certificate.has_valid_identity()
+        || certificate.semantic_contract_id != head.header.semantic_contract_id
+        || certificate.body_commitment != head.header.body_commitment
+        || certificate.admission_identity != head.header.admission_identity
+      {
+        return None;
+      }
+      if cursor == 0 {
+        if tail_chunk.is_some() || head.header.step_count == 0 {
+          return None;
+        }
+        return Some(LoadedActorStep {
+          cursor,
+          step: head.first_step.clone()?,
+          resources: head.first_step_resources?,
+        });
+      }
+      let expected_chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+      let expected_first_step_index =
+        1u32.checked_add(expected_chunk_index.checked_mul(MAX_STEPS_PER_TAIL_CHUNK)?)?;
+      let (chunk_index, chunk) = tail_chunk?;
+      if chunk_index != expected_chunk_index
+        || !chunk.matches(
+          &actor_id,
+          &head.header.semantic_contract_id,
+          &head.header.body_commitment,
+          &head.header.admission_identity,
+          expected_first_step_index,
+        )
+      {
+        return None;
+      }
+      let local_index = cursor.checked_sub(expected_first_step_index)? as usize;
+      let resources = *chunk.step_resources.get(local_index)?;
+      if chunk.steps.len() != chunk.step_resources.len() {
+        return None;
+      }
+      Some(LoadedActorStep {
+        cursor,
+        step: chunk.steps.get(local_index)?.clone(),
+        resources,
+      })
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 geometry decomposition is staged before production storage wiring"
+    )]
+    pub(crate) fn decompose_contract_geometry(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+      admission_identity: [u8; 32],
+      pipeline_machine_envelope: PipelineMachineEnvelope<T::Balance>,
+      resources: &ActorAdmissionResourcesOf<T>,
+    ) -> Option<(ActorContractHeadOf<T>, Vec<(u32, ActorStepChunkOf<T>)>)> {
+      let semantic_contract_id = contract.semantic_contract_id();
+      let body_commitment = contract.body_commitment()?;
+      let header = contract.try_header(
+        semantic_contract_id,
+        body_commitment,
+        admission_identity,
+        pipeline_machine_envelope,
+      )?;
+      if resources.len() != contract.steps.len() {
+        return None;
+      }
+      let first_step = contract.steps.first().cloned();
+      let first_step_resources = resources.first().copied();
+      let authority = ActorBodyAuthority {
+        actor_id,
+        semantic_contract_id,
+        body_commitment,
+        admission_identity,
+      };
+      let chunks = contract
+        .steps
+        .as_slice()
+        .get(1..)
+        .unwrap_or_default()
+        .chunks(MAX_STEPS_PER_TAIL_CHUNK as usize)
+        .enumerate()
+        .map(|(chunk_index, steps)| {
+          let chunk_index = u32::try_from(chunk_index).ok()?;
+          let first_step_index =
+            1u32.checked_add(chunk_index.checked_mul(MAX_STEPS_PER_TAIL_CHUNK)?)?;
+          let first_resource = usize::try_from(first_step_index).ok()?;
+          let last_resource = first_resource.checked_add(steps.len())?;
+          Some((
+            chunk_index,
+            ActorStepChunk {
+              authority: authority.clone(),
+              first_step_index,
+              steps: BoundedVec::try_from(steps.to_vec()).ok()?,
+              step_resources: BoundedVec::try_from(
+                resources
+                  .as_slice()
+                  .get(first_resource..last_resource)?
+                  .to_vec(),
+              )
+              .ok()?,
+            },
+          ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+      Some((
+        ActorContractHead {
+          header,
+          first_step,
+          first_step_resources,
+        },
+        chunks,
+      ))
+    }
+
+    #[allow(
+      dead_code,
+      reason = "I2 bounded reconstruction is staged before production storage wiring"
+    )]
+    pub(crate) fn reconstruct_contract_geometry(
+      actor_id: ActorId,
+      head: ActorContractHeadOf<T>,
+      chunks: &[(u32, ActorStepChunkOf<T>)],
+    ) -> Option<ActorContractOf<T>> {
+      let mut steps = Vec::with_capacity(head.header.step_count as usize);
+      match (head.first_step, head.first_step_resources) {
+        (Some(first_step), Some(_)) if head.header.step_count > 0 => steps.push(first_step),
+        (None, None) if head.header.step_count == 0 => {}
+        _ => return None,
+      }
+      for (expected_chunk_index, (chunk_index, chunk)) in chunks
+        .iter(/* deos-bypass: bounded-iter */)
+        .enumerate()
+      {
+        let expected_chunk_index = u32::try_from(expected_chunk_index).ok()?;
+        if *chunk_index != expected_chunk_index
+          || chunk.steps.is_empty()
+          || chunk.steps.len() != chunk.step_resources.len()
+          || (expected_chunk_index + 1 < chunks.len() as u32
+            && chunk.steps.len() != MAX_STEPS_PER_TAIL_CHUNK as usize)
+        {
+          return None;
+        }
+        let first_step_index =
+          1u32.checked_add(expected_chunk_index.checked_mul(MAX_STEPS_PER_TAIL_CHUNK)?)?;
+        if !chunk.matches(
+          &actor_id,
+          &head.header.semantic_contract_id,
+          &head.header.body_commitment,
+          &head.header.admission_identity,
+          first_step_index,
+        ) {
+          return None;
+        }
+        steps.extend(chunk
+            .steps
+            .iter(/* deos-bypass: bounded-iter */)
+            .cloned());
+      }
+      if steps.len() != head.header.step_count as usize {
+        return None;
+      }
+      let contract = ActorContract {
+        trigger: head.header.trigger,
+        cooldown_blocks: head.header.cooldown_blocks,
+        window: head.header.window,
+        steps: ContractSteps::<T>::try_from(steps).ok()?,
+        funding: head.header.funding,
+        completion: head.header.completion,
+        auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
+      };
+      if contract.semantic_contract_id() != head.header.semantic_contract_id
+        || contract.body_commitment()? != head.header.body_commitment
+      {
+        return None;
+      }
+      Some(contract)
+    }
+
+    pub(crate) fn record_crossing_worker_fault(
+      meter: &mut WeightMeter,
+      fault: CrossingWorkerFault<T::ObservationFeedId>,
+    ) -> bool {
+      if CrossingWorkerFaultState::<T>::exists() {
+        return false;
+      }
+      let weight = T::WeightInfo::record_crossing_worker_fault();
+      if !meter.can_consume(weight) {
+        return false;
+      }
+      meter.consume(weight);
+      CrossingWorkerFaultState::<T>::put(fault);
+      Self::deposit_event(Event::ActorFaultRecorded {
+        fault_id: FaultId::CrossingWorker,
+        kind: ActorFaultKind::Detector,
+        first_recorded_block: frame_system::Pallet::<T>::block_number(),
+        context: FaultContext::Crossing(fault),
+      });
+      true
+    }
+
+    pub(crate) fn record_observation_fanout_worker_fault(
+      meter: &mut WeightMeter,
+      fault: ObservationFanoutWorkerFault<T::ObservationFeedId>,
+    ) -> bool {
+      if ObservationFanoutWorkerFaultState::<T>::exists() {
+        return false;
+      }
+      let weight = T::WeightInfo::record_observation_fanout_worker_fault();
+      if !meter.can_consume(weight) {
+        return false;
+      }
+      meter.consume(weight);
+      ObservationFanoutWorkerFaultState::<T>::put(fault);
+      Self::deposit_event(Event::ActorFaultRecorded {
+        fault_id: FaultId::ObservationFanoutWorker,
+        kind: ActorFaultKind::Detector,
+        first_recorded_block: frame_system::Pallet::<T>::block_number(),
+        context: FaultContext::ObservationFanout(fault),
+      });
+      true
+    }
+
+    pub(crate) fn record_wakeup_worker_fault(
+      meter: &mut WeightMeter,
+      fault: WakeupWorkerFault<BlockNumberFor<T>>,
+    ) -> bool {
+      if WakeupWorkerFaultState::<T>::exists() {
+        return false;
+      }
+      let weight = T::WeightInfo::record_wakeup_worker_fault();
+      if !meter.can_consume(weight) {
+        return false;
+      }
+      meter.consume(weight);
+      WakeupWorkerFaultState::<T>::put(fault);
+      Self::deposit_event(Event::ActorFaultRecorded {
+        fault_id: FaultId::WakeupWorker,
+        kind: ActorFaultKind::Wakeup,
+        first_recorded_block: frame_system::Pallet::<T>::block_number(),
+        context: FaultContext::Wakeup(fault),
+      });
+      true
+    }
+
     pub(crate) fn derive_active_actor_view(
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
@@ -697,38 +2061,314 @@ pub mod pallet {
         pending_signal: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
         wakeup_pointer: hot.wakeup_pointer,
+        trigger_wakeup_pointer: hot.trigger_wakeup_pointer,
         last_control_mutation_block: identity.last_control_mutation_block,
         schedule_anchor: hot.schedule_anchor,
-        cadence_anchor_tick: hot.trigger_runtime_state.cadence_anchor_tick(),
+        temporal_anchor_tick: hot.trigger_runtime_state.temporal_anchor_tick(),
+        temporal_occurrence_consumed: hot.trigger_runtime_state.temporal_occurrence_consumed(),
         last_cycle_block: hot.last_cycle_block,
       }
     }
 
-    pub(crate) fn load_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
+    pub(crate) fn load_actor_state_with_admission(
+      actor_id: ActorId,
+    ) -> (
+      LoadedActorStateOf<T>,
+      Option<ActorAdmissionCertificateOf<T>>,
+    ) {
       let identity = ActorIdentities::<T>::get(actor_id);
       let hot = ActorHot::<T>::get(actor_id);
-      let contract = ActorContracts::<T>::get(actor_id);
+      let admitted_contract = Self::load_admitted_contract_geometry(actor_id);
       let funding = ActorFunding::<T>::get(actor_id);
-      let continuation = ContinuationStateStore::<T>::get(actor_id);
-      match (identity, hot, contract, funding, continuation) {
-        (None, None, None, None, None) => LoadedActorStateOf::NotRegistered,
-        (Some(identity), None, None, None, None) => LoadedActorStateOf::Dormant(identity),
-        (Some(identity), Some(hot), Some(contract), Some(funding), continuation)
-          if (hot.cycle_state == CycleState::Suspended) == continuation.is_some()
-            && hot
-              .trigger_runtime_state
-              .is_compatible_with(&contract.trigger) =>
+      let run_state = ActorRunStateStore::<T>::get(actor_id);
+      match (identity, hot, admitted_contract, funding, run_state) {
+        (None, None, None, None, None) => (LoadedActorStateOf::NotRegistered, None),
+        (Some(identity), None, None, None, None) => (LoadedActorStateOf::Dormant(identity), None),
+        (Some(identity), Some(hot), Some((contract, admission)), Some(funding), run_state)
+          if match (hot.cycle_state, run_state.as_ref()) {
+            (CycleState::Idle, None) => true,
+            (CycleState::Running, Some(run)) => {
+              run.running_is_coherent()
+                && run.has_contract_authority(
+                  admission.semantic_contract_id,
+                  admission.body_commitment,
+                  admission.admission_identity,
+                )
+            }
+            (CycleState::Suspended, Some(run)) => {
+              run.suspension_is_coherent()
+                && run.has_contract_authority(
+                  admission.semantic_contract_id,
+                  admission.body_commitment,
+                  admission.admission_identity,
+                )
+            }
+            _ => false,
+          } && hot
+            .trigger_runtime_state
+            .is_compatible_with(&contract.trigger) =>
         {
-          LoadedActorStateOf::Active(ActiveActorState {
-            identity,
-            hot,
-            contract,
-            funding,
-            continuation,
-          })
+          (
+            LoadedActorStateOf::Active(ActiveActorState {
+              identity,
+              hot,
+              contract,
+              funding,
+              run_state,
+            }),
+            Some(admission),
+          )
         }
-        _ => LoadedActorStateOf::Corrupt,
+        _ => (LoadedActorStateOf::Corrupt, None),
       }
+    }
+
+    pub(crate) fn load_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
+      Self::load_actor_state_with_admission(actor_id).0
+    }
+
+    pub fn load_crossing_idle_activation_state(
+      actor_id: ActorId,
+      feed: T::ObservationFeedId,
+    ) -> Option<ObservationActivationState<T>> {
+      let identity = ActorIdentities::<T>::get(actor_id)?;
+      let hot = ActorHot::<T>::get(actor_id)?;
+      if hot.cycle_state != CycleState::Idle
+        || !matches!(
+          hot.trigger_runtime_state,
+          TriggerRuntimeState::ObservationCrossing { .. }
+        )
+        || ActorRunHeads::<T>::contains_key(actor_id)
+      {
+        return None;
+      }
+      let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
+      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      if authority.feed != feed
+        || authority.semantic_contract_id != certificate.semantic_contract_id
+        || authority.body_commitment != certificate.body_commitment
+        || authority.admission_identity != certificate.admission_identity
+      {
+        return None;
+      }
+      Some(ObservationActivationState {
+        actor_id,
+        identity,
+        hot,
+        authority,
+        run_head: None,
+        loaded_step: None,
+      })
+    }
+
+    pub(crate) fn load_observation_activation_state(
+      actor_id: ActorId,
+      feed: T::ObservationFeedId,
+    ) -> Option<ObservationActivationState<T>> {
+      let identity = ActorIdentities::<T>::get(actor_id)?;
+      let hot = ActorHot::<T>::get(actor_id)?;
+      let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
+      if authority.feed != feed {
+        return None;
+      }
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      if !matches!(
+        &head.header.trigger,
+        Trigger::ObservationChange { feed: contract_feed } if *contract_feed == feed
+      ) || authority.cooldown_blocks != head.header.cooldown_blocks
+        || authority.window != head.header.window
+        || authority.auto_close_at_cycle_nonce != head.header.auto_close_at_cycle_nonce
+        || authority.semantic_contract_id != head.header.semantic_contract_id
+        || authority.body_commitment != head.header.body_commitment
+        || authority.admission_identity != head.header.admission_identity
+        || !hot
+          .trigger_runtime_state
+          .is_compatible_with(&head.header.trigger)
+      {
+        return None;
+      }
+      let run_head = ActorRunHeads::<T>::get(actor_id);
+      let cursor = match (hot.cycle_state, run_head.as_ref()) {
+        (CycleState::Idle, None) => 0,
+        (CycleState::Running, Some(run))
+          if run.running_is_coherent()
+            && run.has_contract_authority(
+              authority.semantic_contract_id,
+              authority.body_commitment,
+              authority.admission_identity,
+            ) =>
+        {
+          run.cursor
+        }
+        (CycleState::Suspended, Some(run))
+          if run.suspension_is_coherent()
+            && run.has_contract_authority(
+              authority.semantic_contract_id,
+              authority.body_commitment,
+              authority.admission_identity,
+            ) =>
+        {
+          run.cursor
+        }
+        _ => return None,
+      };
+      if cursor > head.header.step_count
+        || (cursor == head.header.step_count && head.header.step_count > 0)
+      {
+        return None;
+      }
+      let loaded_step = if head.header.step_count == 0 {
+        if cursor != 0 || head.first_step.is_some() || head.first_step_resources.is_some() {
+          return None;
+        }
+        None
+      } else if cursor == 0 {
+        Some(LoadedActorStep {
+          cursor,
+          step: head.first_step.clone()?,
+          resources: head.first_step_resources?,
+        })
+      } else {
+        let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+        let chunk = ActorContractTailChunks::<T>::get(actor_id, chunk_index)?;
+        let expected_first_step_index =
+          1u32.checked_add(chunk_index.checked_mul(MAX_STEPS_PER_TAIL_CHUNK)?)?;
+        if !chunk.matches(
+          &actor_id,
+          &authority.semantic_contract_id,
+          &authority.body_commitment,
+          &authority.admission_identity,
+          expected_first_step_index,
+        ) || chunk.steps.len() != chunk.step_resources.len()
+        {
+          return None;
+        }
+        let local_index = cursor.checked_sub(expected_first_step_index)? as usize;
+        Some(LoadedActorStep {
+          cursor,
+          step: chunk.steps.get(local_index)?.clone(),
+          resources: *chunk.step_resources.get(local_index)?,
+        })
+      };
+      Some(ObservationActivationState {
+        actor_id,
+        identity,
+        hot,
+        authority,
+        run_head,
+        loaded_step,
+      })
+    }
+
+    pub(crate) fn load_actor_service_state(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActiveActorStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+      Option<LoadedActorStepOf<T>>,
+    )> {
+      let identity = ActorIdentities::<T>::get(actor_id)?;
+      let hot = ActorHot::<T>::get(actor_id)?;
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      let funding = ActorFunding::<T>::get(actor_id)?;
+      let run_state = ActorRunStateStore::<T>::get(actor_id);
+      let admission = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      let cursor = match (hot.cycle_state, run_state.as_ref()) {
+        (CycleState::Idle, None) => 0,
+        (CycleState::Running, Some(run))
+          if run.running_is_coherent()
+            && run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            ) =>
+        {
+          run.cursor
+        }
+        (CycleState::Suspended, Some(run))
+          if run.suspension_is_coherent()
+            && run.has_contract_authority(
+              admission.semantic_contract_id,
+              admission.body_commitment,
+              admission.admission_identity,
+            ) =>
+        {
+          run.cursor
+        }
+        _ => return None,
+      };
+      let tail_chunk = if cursor == 0 {
+        None
+      } else {
+        let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+        Some((
+          chunk_index,
+          ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
+        ))
+      };
+      let loaded_step = if head.header.step_count == 0 {
+        if cursor != 0
+          || tail_chunk.is_some()
+          || head.first_step.is_some()
+          || head.first_step_resources.is_some()
+        {
+          return None;
+        }
+        None
+      } else {
+        Some(Self::load_current_step_from_geometry(
+          actor_id,
+          &head,
+          &admission,
+          cursor,
+          tail_chunk
+            .as_ref()
+            .map(|(chunk_index, chunk)| (*chunk_index, chunk)),
+        )?)
+      };
+      if !hot
+        .trigger_runtime_state
+        .is_compatible_with(&head.header.trigger)
+      {
+        return None;
+      }
+      let mut steps = ContractSteps::<T>::default();
+      if let Some(loaded_step) = loaded_step.as_ref() {
+        for _ in 0..head.header.step_count {
+          steps.try_push(loaded_step.step.clone()).ok()?;
+        }
+      }
+      let contract = ActorContract {
+        trigger: head.header.trigger,
+        cooldown_blocks: head.header.cooldown_blocks,
+        window: head.header.window,
+        funding: head.header.funding,
+        steps,
+        completion: head.header.completion,
+        auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
+      };
+      Some((
+        ActiveActorState {
+          identity,
+          hot,
+          contract,
+          funding,
+          run_state,
+        },
+        admission,
+        loaded_step,
+      ))
+    }
+
+    pub(crate) fn load_current_step_service_state(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActiveActorStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+      LoadedActorStepOf<T>,
+    )> {
+      let (state, admission, loaded_step) = Self::load_actor_service_state(actor_id)?;
+      Some((state, admission, loaded_step?))
     }
 
     pub(crate) fn active_actor_view(actor_id: ActorId) -> Option<ActiveActorViewOf<T>> {
@@ -824,6 +2464,7 @@ pub mod pallet {
       prospective_is_user: Option<bool>,
     ) -> Result<Option<(CrossingPhase, ObservationRevision)>, DispatchError> {
       let _intent = plan.intent;
+      IndexedTriggerDetectionDisabled::<T>::remove(actor_id);
       let is_user = prospective_is_user.unwrap_or_else(|| {
         ActorIdentities::<T>::get(actor_id)
           .is_some_and(|identity| matches!(identity.actor_class, ActorClass::User { .. }))
@@ -848,31 +2489,36 @@ pub mod pallet {
       )?;
       hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
         &contract.trigger,
-        hot.trigger_runtime_state.cadence_anchor_tick(),
+        hot.trigger_runtime_state.temporal_anchor_tick(),
         crossing_state,
       )?;
       ActorIdentities::<T>::insert(actor_id, identity);
       ActorHot::<T>::insert(actor_id, hot);
-      ActorContracts::<T>::insert(actor_id, contract);
-      Ok(())
+      Self::store_actor_contract(actor_id, contract)
     }
 
     fn provisional_trigger_runtime_state(
       trigger: &TriggerOf<T>,
-      cadence_anchor_tick: Option<SchedulerTick>,
+      temporal_anchor_tick: Option<SchedulerTick>,
     ) -> TriggerRuntimeState {
-      if matches!(trigger, Trigger::Cadenced { .. }) {
-        TriggerRuntimeState::Cadenced {
-          anchor_tick: cadence_anchor_tick,
-        }
-      } else {
-        TriggerRuntimeState::Stateless
+      match trigger {
+        Trigger::AtTime { .. } => TriggerRuntimeState::AtTime {
+          anchor_tick: temporal_anchor_tick,
+          consumed: false,
+        },
+        Trigger::Cadenced { .. } => TriggerRuntimeState::Cadenced {
+          anchor_tick: temporal_anchor_tick,
+        },
+        Trigger::Manual
+        | Trigger::AddressEvent { .. }
+        | Trigger::ObservationChange { .. }
+        | Trigger::ObservationCrossing { .. } => TriggerRuntimeState::Stateless,
       }
     }
 
     fn installed_trigger_runtime_state(
       trigger: &TriggerOf<T>,
-      cadence_anchor_tick: Option<SchedulerTick>,
+      temporal_anchor_tick: Option<SchedulerTick>,
       crossing_state: Option<(CrossingPhase, ObservationRevision)>,
     ) -> Result<TriggerRuntimeState, DispatchError> {
       match trigger {
@@ -884,8 +2530,12 @@ pub mod pallet {
             installed_at_revision,
           })
         }
+        Trigger::AtTime { .. } => Ok(TriggerRuntimeState::AtTime {
+          anchor_tick: temporal_anchor_tick,
+          consumed: false,
+        }),
         Trigger::Cadenced { .. } => Ok(TriggerRuntimeState::Cadenced {
-          anchor_tick: cadence_anchor_tick,
+          anchor_tick: temporal_anchor_tick,
         }),
         Trigger::Manual | Trigger::AddressEvent { .. } | Trigger::ObservationChange { .. } => {
           Ok(TriggerRuntimeState::Stateless)
@@ -899,8 +2549,8 @@ pub mod pallet {
     ) -> DispatchResult {
       Self::commit_trigger_transition(actor_id, trigger_transition, None)?;
       ActorHot::<T>::remove(actor_id);
-      ActorContracts::<T>::remove(actor_id);
-      ContinuationStateStore::<T>::remove(actor_id);
+      Self::remove_actor_contract(actor_id)?;
+      ActorRunStateStore::<T>::remove(actor_id);
       Ok(())
     }
   }
@@ -913,6 +2563,12 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn actor_identity_count)]
   pub type ActorIdentityCount<T> = StorageValue<_, u32, ValueQuery>;
+
+  /// Per-Actor authority for the owner's aggregate dedicated Actor-state hold.
+  #[pallet::storage]
+  #[pallet::getter(fn actor_state_hold)]
+  pub type ActorStateHolds<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorStateHoldRecordOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn active_actor_count)]
@@ -927,10 +2583,28 @@ pub mod pallet {
   #[pallet::getter(fn system_sovereign_count)]
   pub type SystemSovereignCount<T> = StorageValue<_, u32, ValueQuery>;
 
-  /// Next never-used ticket and current-block cutoff source for the canonical FIFO.
+  /// Next never-used ticket for the canonical FIFO.
   #[pallet::storage]
   #[pallet::getter(fn next_queue_ticket)]
   pub type NextQueueTicket<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Ticket frontier frozen at block initialization before ordinary external causes.
+  #[pallet::storage]
+  #[pallet::getter(fn prepass_execution_cutoff)]
+  pub type PrepassExecutionCutoff<T: Config> =
+    StorageValue<_, (BlockNumberFor<T>, QueueTicket), OptionQuery>;
+
+  /// Authoritative transient resource protocol state for the current block.
+  #[pallet::storage]
+  #[pallet::getter(fn block_resource_state)]
+  pub type CurrentBlockResourceState<T: Config> =
+    StorageValue<_, BlockResourceState<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Latest successfully reconciled block resource counters; read-only and non-authoritative.
+  #[pallet::storage]
+  #[pallet::getter(fn finalized_block_resource_telemetry)]
+  pub type FinalizedBlockResourceTelemetry<T: Config> =
+    StorageValue<_, FinalizedBlockResourceSnapshot<BlockNumberFor<T>>, OptionQuery>;
 
   /// Physical head position of the canonical paged FIFO.
   #[pallet::storage]
@@ -1008,6 +2682,12 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn configured_active_actor_limit)]
   pub type ActiveActorLimit<T: Config> = StorageValue<_, u32, ValueQuery>;
+
+  /// Detector-local latch authority for indexed Trigger memberships retained during active traversal.
+  #[pallet::storage]
+  #[pallet::getter(fn indexed_trigger_detection_disabled)]
+  pub type IndexedTriggerDetectionDisabled<T> =
+    StorageMap<_, Blake2_128Concat, ActorId, (), OptionQuery>;
 
   /// Canonical observation feed ownership derived from each active actor's trigger policy.
   #[pallet::storage]
@@ -1267,10 +2947,6 @@ pub mod pallet {
           mutability == Mutability::Mutable || !contract.trigger.manual_source_enabled(),
           "genesis System Immutable Actors cannot admit Manual readiness"
         );
-        assert!(
-          !contract.steps.is_empty(),
-          "genesis System Actors Contract Steps cannot be empty"
-        );
         Pallet::<T>::validate_trigger(&contract.trigger, contract.cooldown_blocks)
           .expect("genesis trigger and cooldown must be valid");
         if let Some(ref window) = contract.window {
@@ -1302,9 +2978,9 @@ pub mod pallet {
         let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&contract.steps)
           .expect("genesis contract steps must have valid funding-tracked assets");
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(contract.window, Zero::zero());
-        // Genesis has no consensus timestamp. Cadenced actors use `None` as a bounded bootstrap
-        // marker and re-anchor from the first timestamp observed by ordinary wakeup service.
-        let cadence_anchor_tick = None;
+        // Genesis has no consensus timestamp. Temporal actors use `None` as a bounded bootstrap
+        // marker and anchor from the first timestamp observed by ordinary wakeup service.
+        let temporal_anchor_tick = None;
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
@@ -1316,7 +2992,7 @@ pub mod pallet {
           last_control_mutation_block: Zero::zero(),
         };
         let trigger_runtime_state =
-          Pallet::<T>::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
+          Pallet::<T>::provisional_trigger_runtime_state(&contract.trigger, temporal_anchor_tick);
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
@@ -1325,6 +3001,7 @@ pub mod pallet {
           pending_signal: false,
           queue_ticket: None,
           wakeup_pointer: None,
+          trigger_wakeup_pointer: None,
           terminal_at: contract
             .window
             .map(|window| Pallet::<T>::window_terminal_at(&window)),
@@ -1361,7 +3038,6 @@ pub mod pallet {
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
-            trigger_state_bond: Zero::zero(),
           },
         );
         ActiveActorCount::<T>::put(
@@ -1514,6 +3190,184 @@ pub mod pallet {
         _ => Weight::zero(),
       }
     }
+
+    fn service_materialization_families(
+      now: BlockNumberFor<T>,
+      available: Weight,
+    ) -> Option<Weight> {
+      let family_cursor = MaterializationFamilyCursor::<T>::get();
+      if family_cursor >= 3 {
+        return None;
+      }
+      let shared_limit = Self::materialization_weight_limit();
+      let mut remaining = Weight::from_parts(
+        shared_limit.ref_time().min(available.ref_time()),
+        shared_limit.proof_size().min(available.proof_size()),
+      );
+      let mut consumed_total = Weight::zero();
+      let mut wakeups = WakeupDrainStats::default();
+      let mut crossing = crate::crossing::CrossingWorkCounters::default();
+      let mut fanout_pages = 0u32;
+      let all_minimum_quanta = Self::materialization_family_minimum(0)
+        .saturating_add(Self::materialization_family_minimum(1))
+        .saturating_add(Self::materialization_family_minimum(2));
+      let can_reserve_all_minima = all_minimum_quanta.all_lte(remaining);
+      for offset in 0u8..3 {
+        let family = family_cursor.saturating_add(offset) % 3;
+        let family_budget = Self::materialization_family_budget(
+          family_cursor,
+          offset,
+          remaining,
+          can_reserve_all_minima,
+        );
+        let consumed = Self::service_materialization_family(
+          family,
+          now,
+          family_budget,
+          &mut wakeups,
+          &mut crossing,
+          &mut fanout_pages,
+        );
+        consumed_total = consumed_total.saturating_add(consumed);
+        remaining = remaining.saturating_sub(consumed);
+      }
+      if !remaining.is_zero() && Self::materialization_family_has_work(family_cursor, now) {
+        consumed_total = consumed_total.saturating_add(Self::service_materialization_family(
+          family_cursor,
+          now,
+          remaining,
+          &mut wakeups,
+          &mut crossing,
+          &mut fanout_pages,
+        ));
+      }
+      MaterializationFamilyCursor::<T>::put(family_cursor.saturating_add(1) % 3);
+      Some(consumed_total)
+    }
+  }
+
+  impl<T: Config> Pallet<T> {
+    fn execute_mandatory_prepass(now: BlockNumberFor<T>) -> Result<Weight, Error<T>> {
+      ensure!(
+        T::PrepassContext::context_ready(),
+        Error::<T>::PrepassContextIncomplete
+      );
+      let control_weight = T::WeightInfo::scheduler_on_initialize_cutoff();
+      if let Some(mut existing) = CurrentBlockResourceState::<T>::get()
+        && existing.ensure_block(now).is_ok()
+      {
+        existing.halt_optional_actor_work();
+        CurrentBlockResourceState::<T>::put(existing);
+        return Err(Error::<T>::PrepassDuplicateOrStale);
+      }
+
+      let budget = T::BlockResourceBudget::get();
+      let mut state = BlockResourceState::new(now);
+      if state.begin_prepass().is_err() {
+        state.halt_optional_actor_work();
+        CurrentBlockResourceState::<T>::put(state);
+        return Err(Error::<T>::ResourceProtocolFailed);
+      }
+      let cutoff = NextQueueTicket::<T>::get();
+      let mut cutoff_reservation = state
+        .reserve(
+          budget.limits(),
+          BlockResourceDomain::ActorControl,
+          control_weight,
+        )
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      PrepassExecutionCutoff::<T>::put((now, cutoff));
+      state
+        .settle(&mut cutoff_reservation, control_weight)
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+
+      let cleanup_units = u32::from(
+        QueueHead::<T>::get() < QueueTail::<T>::get()
+          && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get()),
+      );
+      let cleanup_weight = if cleanup_units > 0 {
+        T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units)
+      } else {
+        Weight::zero()
+      };
+      if cleanup_units > 0 {
+        let mut cleanup_reservation = state
+          .reserve(
+            budget.limits(),
+            BlockResourceDomain::ActorControl,
+            cleanup_weight,
+          )
+          .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+        let _ = Self::paged_drain_tombstones(cutoff, 1);
+        state
+          .settle(&mut cleanup_reservation, cleanup_weight)
+          .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      }
+
+      let materialization_configured = T::WeightInfo::materialization_coordinator_base()
+        .saturating_add(Self::materialization_weight_limit());
+      let materialization_remaining = budget
+        .limits()
+        .actor_control()
+        .checked_sub(&state.usage().actor_control_used())
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let materialization_maximum = Weight::from_parts(
+        materialization_configured
+          .ref_time()
+          .min(materialization_remaining.ref_time()),
+        materialization_configured
+          .proof_size()
+          .min(materialization_remaining.proof_size()),
+      );
+      ensure!(
+        T::WeightInfo::materialization_coordinator_base().all_lte(materialization_maximum),
+        Error::<T>::ResourceProtocolFailed
+      );
+      let materialization_family_budget =
+        materialization_maximum.saturating_sub(T::WeightInfo::materialization_coordinator_base());
+      let mut materialization_reservation = state
+        .reserve(
+          budget.limits(),
+          BlockResourceDomain::ActorControl,
+          materialization_maximum,
+        )
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+      let materialization_weight =
+        Self::service_materialization_families(now, materialization_family_budget)
+          .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let materialization_actual =
+        T::WeightInfo::materialization_coordinator_base().saturating_add(materialization_weight);
+      state
+        .settle(&mut materialization_reservation, materialization_actual)
+        .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
+
+      let control_remaining = budget
+        .limits()
+        .actor_control()
+        .checked_sub(&state.usage().actor_control_used())
+        .unwrap_or_else(Weight::zero);
+      let prepass_limit = control_remaining
+        .checked_add(&budget.limits().actor_base_turn())
+        .unwrap_or_else(Weight::zero);
+      let pass = Self::execute_cycle_to_cutoff_with_resources(
+        prepass_limit,
+        cutoff,
+        &mut state,
+        budget.limits(),
+        BlockResourceDomain::ActorBaseEffect,
+        control_remaining,
+      );
+      if state.open_external_phase().is_err() {
+        state.halt_optional_actor_work();
+      }
+      CurrentBlockResourceState::<T>::put(state);
+      Ok(
+        control_weight
+          .saturating_add(cleanup_weight)
+          .saturating_add(materialization_actual)
+          .saturating_add(pass.consumed),
+      )
+    }
   }
 
   #[pallet::hooks]
@@ -1521,7 +3375,7 @@ pub mod pallet {
     fn integrity_test() {
       assert!(
         T::MaxConsecutiveFailures::get() > 0,
-        "MaxConsecutiveFailures must be non-zero for bounded Continuation lifetime"
+        "MaxConsecutiveFailures must be non-zero for bounded Actor run lifetime"
       );
       assert!(
         contract_steps_bound_is_valid(T::MaxContractSteps::get()),
@@ -1545,11 +3399,11 @@ pub mod pallet {
         "CadenceTickMillis must be non-zero"
       );
       let cadence_tick_millis = T::CadenceTickMillis::get();
-      let expected_cadence_horizon = 315_576_000_000u64.div_ceil(cadence_tick_millis);
+      let expected_temporal_horizon = 315_576_000_000u64.div_ceil(cadence_tick_millis);
       assert_eq!(
-        T::MaxCadenceDelayTicks::get(),
-        expected_cadence_horizon,
-        "MaxCadenceDelayTicks must cover exactly ten Julian years"
+        T::MaxTemporalDelayTicks::get(),
+        expected_temporal_horizon,
+        "MaxTemporalDelayTicks must cover exactly ten Julian years"
       );
       let expected_horizon = 315_576_000u64.div_ceil(target_block_time);
       let configured_horizon: u64 = T::MaxExecutionDelayBlocks::get().saturated_into();
@@ -1588,6 +3442,10 @@ pub mod pallet {
       assert!(
         T::ObservationPageSize::get() > 0,
         "ObservationPageSize must be non-zero"
+      );
+      assert!(
+        T::CrossingPageSize::get() > 0,
+        "CrossingPageSize must be non-zero"
       );
       assert!(
         T::MaxCrossingMembersPerFeed::get() > 0
@@ -1629,8 +3487,10 @@ pub mod pallet {
         fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0,
         "observation fanout Weight limit must be non-zero in both dimensions"
       );
-      let fanout_unit = T::WeightInfo::observation_fanout_base()
-        .saturating_add(T::WeightInfo::observation_fanout_page());
+      let fanout_unit = T::WeightInfo::observation_fanout_base().saturating_add(
+        Self::observation_fanout_ordinary_weight_upper()
+          .max(T::WeightInfo::observation_fanout_terminal()),
+      );
       assert!(
         fanout_unit.all_lte(fanout_limit),
         "positive observation fanout cap must admit one complete page unit"
@@ -1691,23 +3551,75 @@ pub mod pallet {
       Self::do_try_state()
     }
 
+    fn on_initialize(_now: BlockNumberFor<T>) -> Weight {
+      Weight::zero()
+    }
+
     fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
       let reserved = T::ActorOnIdleReserve::get();
       let available = Weight::from_parts(
         remaining_weight.ref_time().min(reserved.ref_time()),
         remaining_weight.proof_size().min(reserved.proof_size()),
       );
+      let (control_available, resource_state) = match CurrentBlockResourceState::<T>::get() {
+        Some(state)
+          if state.ensure_block(now).is_ok()
+            && state.phase() == BlockResourcePhase::ExternalPhase
+            && !state.optional_actor_work_halted() =>
+        {
+          (
+            T::BlockResourceBudget::get()
+              .limits()
+              .actor_control()
+              .checked_sub(&state.usage().actor_control_used())
+              .map(|remaining| {
+                Weight::from_parts(
+                  available.ref_time().min(remaining.ref_time()),
+                  available.proof_size().min(remaining.proof_size()),
+                )
+              })
+              .unwrap_or_else(Weight::zero),
+            Some(state),
+          )
+        }
+        Some(_) => (Weight::zero(), None),
+        None => (available, None),
+      };
+      let legacy_unmetered_materialization = resource_state.is_none();
       let base_weight = T::WeightInfo::scheduler_on_idle_base();
-      let coordinator_weight = T::WeightInfo::materialization_coordinator_base();
-      let fixed_weight = base_weight.saturating_add(coordinator_weight);
-      if !fixed_weight.all_lte(available) {
+      let coordinator_weight = if legacy_unmetered_materialization {
+        T::WeightInfo::materialization_coordinator_base()
+      } else {
+        Weight::zero()
+      };
+      let finalize_weight = T::WeightInfo::block_resource_finalize();
+      let fixed_weight = base_weight
+        .saturating_add(coordinator_weight)
+        .saturating_add(finalize_weight);
+      if !fixed_weight.all_lte(control_available) {
         return Weight::zero();
       }
+      let mut control_authority = match resource_state {
+        Some(mut state) => match state.reserve(
+          T::BlockResourceBudget::get().limits(),
+          BlockResourceDomain::ActorControl,
+          control_available,
+        ) {
+          Ok(reservation) => Some((state, reservation)),
+          Err(_) => {
+            state.halt_optional_actor_work();
+            CurrentBlockResourceState::<T>::put(state);
+            return Weight::zero();
+          }
+        },
+        None => None,
+      };
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      let after_base = available.saturating_sub(fixed_weight);
+      let after_base = control_available.saturating_sub(fixed_weight);
       let cleanup_units = u32::from(QueueHead::<T>::get() < QueueTail::<T>::get());
       let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
-      let saturated_cleanup_weight = if cleanup_units > 0
+      let saturated_cleanup_weight = if legacy_unmetered_materialization
+        && cleanup_units > 0
         && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get())
         && queue_cleanup_weight.all_lte(after_base)
       {
@@ -1721,72 +3633,80 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_cleanup = after_base.saturating_sub(saturated_cleanup_weight);
-      let family_cursor = MaterializationFamilyCursor::<T>::get();
-      if family_cursor >= 3 {
-        return fixed_weight.saturating_add(saturated_cleanup_weight);
-      }
-      let mut materialization_weight = Weight::zero();
-      let shared_limit = Self::materialization_weight_limit();
-      let mut remaining_materialization_budget = Weight::from_parts(
-        shared_limit
-          .ref_time()
-          .min(remaining_after_cleanup.ref_time()),
-        shared_limit
-          .proof_size()
-          .min(remaining_after_cleanup.proof_size()),
-      );
-      let mut wakeup_counters = WakeupDrainStats::default();
-      let mut crossing_counters = crate::crossing::CrossingWorkCounters::default();
-      let mut fanout_pages = 0u32;
-      let all_minimum_quanta = Self::materialization_family_minimum(0)
-        .saturating_add(Self::materialization_family_minimum(1))
-        .saturating_add(Self::materialization_family_minimum(2));
-      let can_reserve_all_minima = all_minimum_quanta.all_lte(remaining_materialization_budget);
-      for offset in 0u8..3 {
-        let family = family_cursor.saturating_add(offset) % 3;
-        let family_budget = Self::materialization_family_budget(
-          family_cursor,
-          offset,
-          remaining_materialization_budget,
-          can_reserve_all_minima,
-        );
-        let consumed = Self::service_materialization_family(
-          family,
-          now,
-          family_budget,
-          &mut wakeup_counters,
-          &mut crossing_counters,
-          &mut fanout_pages,
-        );
-        materialization_weight = materialization_weight.saturating_add(consumed);
-        remaining_materialization_budget =
-          remaining_materialization_budget.saturating_sub(consumed);
-      }
-      if !remaining_materialization_budget.is_zero()
-        && Self::materialization_family_has_work(family_cursor, now)
-      {
-        let consumed = Self::service_materialization_family(
-          family_cursor,
-          now,
-          remaining_materialization_budget,
-          &mut wakeup_counters,
-          &mut crossing_counters,
-          &mut fanout_pages,
-        );
-        materialization_weight = materialization_weight.saturating_add(consumed);
-      }
-      MaterializationFamilyCursor::<T>::put(family_cursor.saturating_add(1) % 3);
-      let remaining_after_housekeeping =
-        remaining_after_cleanup.saturating_sub(materialization_weight);
+      let materialization_weight = if legacy_unmetered_materialization {
+        let Some(consumed) = Self::service_materialization_families(now, remaining_after_cleanup)
+        else {
+          return fixed_weight.saturating_add(saturated_cleanup_weight);
+        };
+        consumed
+      } else {
+        Weight::zero()
+      };
       let housekeeping_weight = fixed_weight
         .saturating_add(saturated_cleanup_weight)
         .saturating_add(materialization_weight);
+      let remaining_after_housekeeping = available.saturating_sub(housekeeping_weight);
+      Self::settle_on_idle_control(&mut control_authority, housekeeping_weight);
       if breaker_active {
+        Self::finalize_empty_actor_drain(now);
         return housekeeping_weight;
       }
-      let pass = Self::execute_cycle(remaining_after_housekeeping);
+      let execution_cutoff = PrepassExecutionCutoff::<T>::get()
+        .filter(|(cutoff_block, _)| *cutoff_block == now)
+        .map(|(_, cutoff)| cutoff)
+        .unwrap_or_else(NextQueueTicket::<T>::get);
+      let pass = match CurrentBlockResourceState::<T>::get() {
+        Some(mut state)
+          if state.ensure_block(now).is_ok()
+            && state.phase() == BlockResourcePhase::ExternalPhase
+            && !state.optional_actor_work_halted() =>
+        {
+          let budget = T::BlockResourceBudget::get();
+          if state.begin_drain().is_err() {
+            state.halt_optional_actor_work();
+            CurrentBlockResourceState::<T>::put(state);
+            return housekeeping_weight;
+          }
+          let control_maximum = budget
+            .limits()
+            .actor_control()
+            .checked_sub(&state.usage().actor_control_used())
+            .unwrap_or_else(Weight::zero);
+          let pass = Self::execute_cycle_to_cutoff_with_resources(
+            remaining_after_housekeeping,
+            execution_cutoff,
+            &mut state,
+            budget.limits(),
+            BlockResourceDomain::ActorDrainEffect,
+            control_maximum,
+          );
+          if state.finish_drain(budget, budget.fixed_envelope()).is_err() {
+            state.halt_optional_actor_work();
+          } else if let Ok(snapshot) = state.finalized_snapshot() {
+            FinalizedBlockResourceTelemetry::<T>::put(snapshot);
+          }
+          CurrentBlockResourceState::<T>::put(state);
+          pass
+        }
+        Some(mut state) => {
+          state.halt_optional_actor_work();
+          CurrentBlockResourceState::<T>::put(state);
+          return housekeeping_weight;
+        }
+        None => Self::execute_cycle_to_cutoff(remaining_after_housekeeping, execution_cutoff),
+      };
       Self::update_idle_starvation_state(now, pass.starved);
       housekeeping_weight.saturating_add(pass.consumed)
+    }
+
+    fn on_finalize(now: BlockNumberFor<T>) {
+      let valid = CurrentBlockResourceState::<T>::take().is_some_and(|state| {
+        state.ensure_block(now).is_ok()
+          && state.phase() == BlockResourcePhase::Finalizable
+          && state.outstanding_reservations() == 0
+      }) && FinalizedBlockResourceTelemetry::<T>::get()
+        .is_some_and(|snapshot| snapshot.block_number() == now);
+      assert!(valid, "Actors block resource protocol did not finalize"); // deos-bypass: panic-owner — invalid phase/reservation/telemetry makes the authored block consensus-invalid; finalization tests cover every accepted marker.
     }
   }
 
@@ -1960,6 +3880,12 @@ pub mod pallet {
     GlobalCircuitBreakerSet {
       paused: bool,
     },
+    ActorFaultRecorded {
+      fault_id: FaultId,
+      kind: ActorFaultKind,
+      first_recorded_block: BlockNumberFor<T>,
+      context: FaultContext<T::ObservationFeedId, BlockNumberFor<T>>,
+    },
     CrossingWorkerFaultCleared {
       feed: T::ObservationFeedId,
       revision: Option<ObservationRevision>,
@@ -1978,6 +3904,22 @@ pub mod pallet {
     },
     ManualTriggerSet {
       actor_id: ActorId,
+    },
+    TriggerOccurrenceProcessed {
+      actor_id: ActorId,
+      trigger_family: TriggerFamily,
+      fee: BalanceOf<T>,
+    },
+    PipelineFeeCharged {
+      actor_id: ActorId,
+      fee: BalanceOf<T>,
+    },
+    ActionFeeCharged {
+      actor_id: ActorId,
+      cycle_nonce: u64,
+      step_index: u32,
+      actual_effect_weight: Weight,
+      fee: BalanceOf<T>,
     },
     FundingAccumulated {
       actor_id: ActorId,
@@ -2015,7 +3957,6 @@ pub mod pallet {
     ActiveActorLimitTooLow,
     ActiveActorLimitBelowCurrent,
     ActorPaused,
-    EmptyContractSteps,
     ContractStepsExceedOnIdleBudget,
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
@@ -2054,8 +3995,8 @@ pub mod pallet {
     ControlMutationRateLimited,
     QueueCapacityUnavailable,
     RetryLaterNotAllowedForImmutableActor,
-    ContinuationNotFound,
-    ContinuationInvariant,
+    ActorRunNotFound,
+    ActorRunInvariant,
     ComputationOverflow,
     EmptyPrecondition,
     ManualSourceDisabled,
@@ -2078,6 +4019,12 @@ pub mod pallet {
     WakeupWorkerFaultNotFound,
     SystemActorTopologyInvalid,
     AdmissionBoundOverflow,
+    StateHoldUnavailable,
+    StateHoldInvariant,
+    StateHoldOverflow,
+    PrepassDuplicateOrStale,
+    ResourceProtocolFailed,
+    PrepassContextIncomplete,
   }
 
   #[pallet::call]
@@ -2148,13 +4095,17 @@ pub mod pallet {
     #[pallet::weight(T::WeightInfo::pause_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.continuation;
+      let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableActor
+      );
       if snapshot.lifecycle.is_paused() {
         return Ok(());
       }
@@ -2181,13 +4132,17 @@ pub mod pallet {
     #[pallet::weight(T::WeightInfo::resume_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.continuation;
+      let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
         return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
       }
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableActor
+      );
       if !snapshot.lifecycle.is_paused() {
         return Ok(());
       }
@@ -2211,26 +4166,52 @@ pub mod pallet {
 
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
-    pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
+    pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResultWithPostInfo {
       let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.continuation;
+      let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
-        return Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired);
+        Self::finalize_actor(actor_id, &snapshot, CloseReason::WindowExpired)?;
+        return Ok(Pays::Yes.into());
       }
       ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::ActorPaused);
       ensure!(
         snapshot.trigger.manual_source_enabled(),
         Error::<T>::ManualSourceDisabled
       );
+      let actor_type = snapshot.actor_class.actor_type();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::Manual,
+        T::WeightInfo::manual_trigger(),
+      );
+      let mut trigger_processed = false;
       Self::with_control_transaction(|| {
-        let outcome = Self::request_activation(actor_id).map_err(Self::activation_failure_error)?;
+        let Some(outcome) = Self::commit_trigger_occurrence(
+          actor_id,
+          actor_type,
+          &snapshot.sovereign_account,
+          breakdown,
+          TriggerCauseProvenance::ExternalPhase,
+        )?
+        else {
+          return Ok(());
+        };
         if matches!(outcome, crate::scheduler::ActivationOutcome::Latched) {
           Self::deposit_event(Event::ManualTriggerSet { actor_id });
         }
+        trigger_processed = true;
         Ok(())
+      })?;
+      Ok(PostDispatchInfo {
+        actual_weight: Some(T::WeightInfo::manual_trigger()),
+        pays_fee: if actor_type == ActorType::User && trigger_processed {
+          Pays::No
+        } else {
+          Pays::Yes
+        },
       })
     }
 
@@ -2241,7 +4222,10 @@ pub mod pallet {
         LoadedActorStateOf::Active(state) => {
           let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
           Self::ensure_control_origin(origin, &instance)?;
-          Self::ensure_not_system_immutable(&instance)?;
+          ensure!(
+            instance.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableActor
+          );
           Self::finalize_actor(actor_id, &instance, CloseReason::OwnerInitiated)
         }
         LoadedActorStateOf::Dormant(identity) => {
@@ -2260,7 +4244,6 @@ pub mod pallet {
       actor_id: ActorId,
       mut contract: ActorContractOf<T>,
     ) -> DispatchResult {
-      ensure!(!contract.steps.is_empty(), Error::<T>::EmptyContractSteps);
       Self::canonicalize_preconditions(&mut contract.steps)?;
       Self::validate_trigger(&contract.trigger, contract.cooldown_blocks)?;
       if let Some(ref window) = contract.window {
@@ -2268,11 +4251,11 @@ pub mod pallet {
       }
       Self::validate_future_schedule_targets(&contract)?;
       let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.continuation;
+      let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       let current_contract =
-        ActorContracts::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+        Self::load_actor_contract(actor_id).ok_or(Error::<T>::ActorInvariant)?;
       if current_contract == contract {
         return Ok(());
       }
@@ -2289,7 +4272,6 @@ pub mod pallet {
         || current_contract.cooldown_blocks != contract.cooldown_blocks
         || current_contract.window != contract.window;
       let steps_changed = current_contract.steps != contract.steps;
-      let funding_changed = current_contract.funding != contract.funding;
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::validate_contract_steps_shape(snapshot.actor_class.actor_type(), &contract.steps)?;
@@ -2318,22 +4300,16 @@ pub mod pallet {
       }
       let new_tracked = Self::derive_funding_tracked_assets(&contract.steps)?;
       let mut funding_state = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      let target_trigger_state_bond = if snapshot.actor_class.actor_type() == ActorType::User {
-        T::TriggerStateBond::amount(&contract.trigger)
-      } else {
-        Zero::zero()
-      };
-      let current_trigger_state_bond = funding_state.trigger_state_bond;
-      funding_state.trigger_state_bond = target_trigger_state_bond;
       funding_state.funding_tracked_assets = new_tracked.clone();
       funding_state
         .funding_accumulated
         .retain(|asset, _| new_tracked.contains(asset));
-      let cancellation_reason = (schedule_changed || steps_changed || funding_changed)
-        .then_some(CancellationReason::ContractReplaced);
+      // Every non-no-op Contract update rotates semantic and admission authority, so an open run
+      // cannot remain bound to the replaced Contract even when only completion policy changes.
+      let cancellation_reason = Some(CancellationReason::ContractReplaced);
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
-      let cadence_anchor_tick =
-        Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
+      let temporal_anchor_tick =
+        Self::temporal_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
       let trigger_transition = schedule_changed
         .then(|| {
           Self::preflight_trigger_transition(
@@ -2344,13 +4320,8 @@ pub mod pallet {
         })
         .transpose()?;
       Self::with_control_transaction(|| {
-        T::TriggerStateBond::set_bond(
-          &snapshot.owner,
-          current_trigger_state_bond,
-          target_trigger_state_bond,
-        )?;
-        let continuation_cancelled = if let Some(reason) = cancellation_reason {
-          Self::cancel_continuation_internal(actor_id, reason, None)?
+        let run_cancelled = if let Some(reason) = cancellation_reason {
+          Self::cancel_run_internal(actor_id, reason, None)?
         } else {
           false
         };
@@ -2359,14 +4330,19 @@ pub mod pallet {
         } else {
           None
         };
-        ActorContracts::<T>::insert(actor_id, contract.clone());
+        if schedule_changed
+          && ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.trigger_wakeup_pointer.is_some())
+        {
+          Self::trigger_wakeup_substrate_invalidate_inner(actor_id)
+            .map_err(Self::placement_error)?;
+        }
         ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
           let hot = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
           if schedule_changed {
             hot.schedule_anchor = schedule_anchor;
             hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
               &contract.trigger,
-              cadence_anchor_tick,
+              temporal_anchor_tick,
               crossing_state,
             )?;
             hot.terminal_at = contract
@@ -2383,13 +4359,17 @@ pub mod pallet {
           Self::record_control_mutation(actor_id, now)?;
           Ok(())
         })?;
+        // Crossing compilation binds the newly installed runtime phase to the replacement
+        // admission identity, so publish hot schedule authority before storing its Contract.
+        Self::store_actor_contract(actor_id, contract.clone())?;
         ActorFunding::<T>::insert(actor_id, funding_state);
         Self::deposit_event(Event::ContractUpdated { actor_id });
         #[cfg(test)]
         crate::mock::control_atomicity_checkpoint(actor_id)?;
-        if schedule_changed || continuation_cancelled {
+        if schedule_changed || run_cancelled {
           Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
         }
+        Self::reconcile_actor_state_hold(actor_id)?;
         Ok(())
       })
     }
@@ -2465,7 +4445,7 @@ pub mod pallet {
             }
             LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
           };
-          let continuation = state.continuation;
+          let continuation = state.run_state;
           let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
           if let Some(reason) = Self::classify_actor_loaded(&instance, continuation.as_ref())
             .map_err(Self::classification_dispatch_error)?
@@ -2568,33 +4548,90 @@ pub mod pallet {
     }
 
     #[pallet::call_index(19)]
-    #[pallet::weight(T::WeightInfo::continuation_cancel())]
-    pub fn cancel_continuation(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
+    #[pallet::weight(T::WeightInfo::run_cancel())]
+    pub fn cancel_run(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.continuation;
+      let run_state = state.run_state;
       let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin, &instance)?;
       ensure!(
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableActor
       );
-      if Self::expiry_substitution_due_loaded(&instance, continuation.as_ref())? {
+      if Self::expiry_substitution_due_loaded(&instance, run_state.as_ref())? {
         return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
-        instance.cycle_state == CycleState::Suspended,
-        Error::<T>::ContinuationNotFound
+        matches!(
+          instance.cycle_state,
+          CycleState::Running | CycleState::Suspended
+        ),
+        Error::<T>::ActorRunNotFound
       );
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&instance, now)?;
       Self::with_control_transaction(|| {
         ensure!(
-          Self::cancel_continuation_internal(actor_id, CancellationReason::Explicit, None)?,
-          Error::<T>::ContinuationNotFound
+          Self::cancel_run_internal(actor_id, CancellationReason::Explicit, None)?,
+          Error::<T>::ActorRunNotFound
         );
         Self::record_control_mutation(actor_id, now)?;
         Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
       })
+    }
+
+    #[pallet::call_index(23)]
+    #[pallet::weight((
+      T::BlockResourceBudget::get()
+        .limits()
+        .actor_control()
+        .saturating_add(T::BlockResourceBudget::get().limits().actor_base_turn()),
+      DispatchClass::Mandatory,
+      Pays::No,
+    ))]
+    pub fn actor_prepass(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+      ensure_none(origin)?;
+      let now = frame_system::Pallet::<T>::block_number();
+      let actual_weight = Self::execute_mandatory_prepass(now)?;
+      Ok(PostDispatchInfo {
+        actual_weight: Some(actual_weight),
+        pays_fee: Pays::No,
+      })
+    }
+  }
+
+  #[pallet::inherent]
+  impl<T: Config> ProvideInherent for Pallet<T> {
+    type Call = Call<T>;
+    type Error = ActorPrepassInherentError;
+    const INHERENT_IDENTIFIER: InherentIdentifier = ACTOR_PREPASS_INHERENT_IDENTIFIER;
+
+    fn create_inherent(data: &InherentData) -> Option<Self::Call> {
+      data
+        .get_data::<ActorPrepassInherentData>(&Self::INHERENT_IDENTIFIER)
+        .ok()
+        .flatten()
+        .filter(|provided| provided.version == ACTOR_PREPASS_INHERENT_VERSION)
+        .map(|_| Call::actor_prepass {})
+    }
+
+    fn is_inherent_required(_data: &InherentData) -> Result<Option<Self::Error>, Self::Error> {
+      Ok(Some(ActorPrepassInherentError::MissingCall))
+    }
+
+    fn check_inherent(call: &Self::Call, data: &InherentData) -> Result<(), Self::Error> {
+      if !Self::is_inherent(call) {
+        return Ok(());
+      }
+      match data.get_data::<ActorPrepassInherentData>(&Self::INHERENT_IDENTIFIER) {
+        Ok(Some(provided)) if provided.version == ACTOR_PREPASS_INHERENT_VERSION => Ok(()),
+        Ok(Some(_)) => Err(ActorPrepassInherentError::UnsupportedVersion),
+        _ => Err(ActorPrepassInherentError::MissingData),
+      }
+    }
+
+    fn is_inherent(call: &Self::Call) -> bool {
+      matches!(call, Call::actor_prepass {})
     }
   }
 
@@ -2651,11 +4688,10 @@ pub mod pallet {
           .retry_max_attempts()
           .is_some()
       }) {
-        let snapshot_entries = Self::opening_surfaces(contract_steps, start_cursor).len() as u32;
         upper = upper.saturating_add(
-          T::WeightInfo::continuation_suspend(snapshot_entries)
-            .max(T::WeightInfo::continuation_complete())
-            .max(T::WeightInfo::continuation_cancel()),
+          T::WeightInfo::run_suspend()
+            .max(T::WeightInfo::run_complete())
+            .max(T::WeightInfo::run_cancel()),
         );
       }
       upper
@@ -2675,21 +4711,13 @@ pub mod pallet {
     ) -> Result<AttemptFeeEnvelopeOf<T>, Error<T>> {
       let mut inputs = BoundedVec::default();
       for step in contract_steps {
-        let evaluation = if actor_type == ActorType::User {
-          Self::compute_eval_fee_checked(
-            step
-              .precondition
-              .as_ref()
-              .map_or(0, Precondition::evaluation_units),
-          )?
-        } else {
-          Zero::zero()
-        };
-        let execution = if actor_type == ActorType::User {
-          T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task))
-        } else {
-          Zero::zero()
-        };
+        let evaluation = Zero::zero();
+        let execution =
+          if actor_type == ActorType::User && !matches!(step.task, super::types::Task::StopCycle) {
+            T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task))
+          } else {
+            Zero::zero()
+          };
         inputs
           .try_push(FeeEnvelopeInput {
             evaluation,
@@ -2699,12 +4727,13 @@ pub mod pallet {
       }
       compose_attempt_fee_envelope(actor_type, &inputs, start_cursor).map_err(|error| match error {
         FeeEnvelopeError::CursorOutOfBounds | FeeEnvelopeError::ReservationUnderflow => {
-          Error::<T>::ContinuationInvariant
+          Error::<T>::ActorRunInvariant
         }
         FeeEnvelopeError::Overflow => Error::<T>::AdmissionBoundOverflow,
       })
     }
 
+    #[cfg(test)]
     pub(crate) fn attempt_weight_upper_bound(
       instance: &ActiveActorViewOf<T>,
       start_cursor: usize,
@@ -2716,28 +4745,15 @@ pub mod pallet {
       );
       if instance.cycle_state == CycleState::Suspended {
         let suffix_steps = instance.steps.len().saturating_sub(start_cursor) as u32;
-        // Retry and terminal transition touch the same bounded Continuation value. The transition
+        // Retry and terminal transition touch the same bounded Actor run value. The transition
         // envelope already carries its maximum proof, so only incremental RefTime composes here.
-        let retry = T::WeightInfo::continuation_retry();
-        let suffix_admission = T::WeightInfo::continuation_suffix_admission(suffix_steps);
+        let retry = T::WeightInfo::run_retry();
+        let suffix_admission = T::WeightInfo::run_suffix_admission(suffix_steps);
         upper = upper
           .saturating_add(Weight::from_parts(retry.ref_time(), 0))
           .saturating_add(Weight::from_parts(suffix_admission.ref_time(), 0));
       }
       upper
-    }
-
-    pub(crate) fn attempt_fee_upper_bound(
-      instance: &ActiveActorViewOf<T>,
-      start_cursor: usize,
-    ) -> BalanceOf<T> {
-      Self::attempt_fee_envelope(
-        instance.actor_class.actor_type(),
-        &instance.steps,
-        start_cursor,
-      )
-      .expect("admitted execution plans have a checked fee envelope")
-      .total
     }
 
     pub(crate) fn close_cycle_weight_upper_bound(_instance: &ActiveActorViewOf<T>) -> Weight {
@@ -2747,34 +4763,69 @@ pub mod pallet {
     /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
     /// envelope. Independently metered durable housekeeping may defer this work across blocks.
     pub fn contract_steps_admission_weight_upper(
-      actor_type: ActorType,
+      _actor_type: ActorType,
       contract_steps: &ContractSteps<T>,
     ) -> Weight {
-      let funding_count = Self::derive_funding_tracked_assets(contract_steps)
-        .map(|assets| assets.len() as u32)
-        .unwrap_or_else(|_| T::MaxFundingTrackedAssets::get());
-      let snapshot_open = if funding_count == 0 {
-        Weight::zero()
+      let maximum_step = if contract_steps.is_empty() {
+        T::WeightInfo::scheduler_inner_zero_step_complete()
       } else {
-        T::WeightInfo::funding_snapshot_open(funding_count)
-      };
-      let continuation_retry = if (0..contract_steps.len()).any(|step_index| {
-        contract_steps[step_index]
-          .on_error
-          .retry_max_attempts()
-          .is_some()
-      }) {
-        let retry = T::WeightInfo::continuation_retry();
-        let suffix = T::WeightInfo::continuation_suffix_admission(contract_steps.len() as u32);
-        Weight::from_parts(retry.ref_time().saturating_add(suffix.ref_time()), 0)
-      } else {
-        Weight::zero()
+        Self::derive_step_resource_envelopes(&ActorContract {
+          trigger: Trigger::manual(),
+          cooldown_blocks: Zero::zero(),
+          window: None,
+          steps: contract_steps.clone(),
+          funding: FundingSourcePolicy::OwnerOnly,
+          completion: CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
+        })
+        .map(|resources| {
+          resources
+            .into_iter()
+            .fold(Weight::zero(), |maximum, resource| {
+              let current = resource.control.saturating_add(resource.effect);
+              Weight::from_parts(
+                maximum.ref_time().max(current.ref_time()),
+                maximum.proof_size().max(current.proof_size()),
+              )
+            })
+        })
+        .unwrap_or(Weight::MAX)
       };
       Self::scheduler_admission_overhead()
-        .saturating_add(Self::compute_cycle_weight_upper(actor_type, contract_steps))
-        .saturating_add(continuation_retry)
-        .saturating_add(snapshot_open)
+        .saturating_add(maximum_step)
         .saturating_add(Self::close_cleanup_weight_upper())
+    }
+
+    fn finalize_empty_actor_drain(now: BlockNumberFor<T>) {
+      let Some(mut state) = CurrentBlockResourceState::<T>::get() else {
+        return;
+      };
+      let budget = T::BlockResourceBudget::get();
+      if state.ensure_block(now).is_err()
+        || state.begin_drain().is_err()
+        || state.finish_drain(budget, budget.fixed_envelope()).is_err()
+      {
+        state.halt_optional_actor_work();
+      } else if let Ok(snapshot) = state.finalized_snapshot() {
+        FinalizedBlockResourceTelemetry::<T>::put(snapshot);
+      }
+      CurrentBlockResourceState::<T>::put(state);
+    }
+
+    fn settle_on_idle_control(
+      authority: &mut Option<(
+        BlockResourceState<BlockNumberFor<T>>,
+        BlockResourceReservation,
+      )>,
+      actual: Weight,
+    ) {
+      let Some((mut state, mut reservation)) = authority.take() else {
+        return;
+      };
+      if state.settle(&mut reservation, actual).is_err() {
+        state.halt_optional_actor_work();
+      }
+      CurrentBlockResourceState::<T>::put(state);
     }
 
     pub fn materialization_weight_limit() -> Weight {
@@ -2800,6 +4851,22 @@ pub mod pallet {
       remaining
         .checked_sub(&reserved_for_later)
         .unwrap_or_else(Weight::zero)
+    }
+
+    pub fn observation_fanout_ordinary_weight_upper() -> Weight {
+      [
+        T::WeightInfo::observation_fanout_page(),
+        T::WeightInfo::observation_fanout_wakeup_page(),
+        T::WeightInfo::observation_fanout_coalesced_page(),
+        T::WeightInfo::observation_fanout_blocked_page(),
+      ]
+      .into_iter()
+      .fold(Weight::zero(), |maximum, weight| {
+        Weight::from_parts(
+          maximum.ref_time().max(weight.ref_time()),
+          maximum.proof_size().max(weight.proof_size()),
+        )
+      })
     }
 
     pub fn materialization_family_minimum(family: u8) -> Weight {
@@ -2828,9 +4895,11 @@ pub mod pallet {
                 .max(T::WeightInfo::crossing_skip_pair_probe()),
             )
             .saturating_add(branch)
+            .saturating_add(T::WeightInfo::record_crossing_worker_fault())
         }
         2 => T::WeightInfo::observation_fanout_base()
-          .saturating_add(T::WeightInfo::observation_fanout_page()),
+          .saturating_add(Self::observation_fanout_ordinary_weight_upper())
+          .saturating_add(T::WeightInfo::record_observation_fanout_worker_fault()),
         _ => Weight::zero(),
       }
     }
@@ -2858,6 +4927,21 @@ pub mod pallet {
           .all_lte(actor_service),
         Error::<T>::ContractStepsExceedOnIdleBudget
       );
+      if actor_type == ActorType::User {
+        let resources = Self::derive_step_resource_envelopes(&ActorContract {
+          trigger: Trigger::manual(),
+          cooldown_blocks: Zero::zero(),
+          window: None,
+          steps: contract_steps.clone(),
+          funding: FundingSourcePolicy::OwnerOnly,
+          completion: CompletionPolicy::Persistent,
+          auto_close_at_cycle_nonce: None,
+        })
+        .ok_or(Error::<T>::ActorRunInvariant)?;
+        for resource in resources.iter(/* deos-bypass: bounded-iter */) {
+          Self::maximum_current_step_fee(actor_type, *resource)?;
+        }
+      }
       Ok(())
     }
 
@@ -2911,6 +4995,259 @@ pub mod pallet {
       true
     }
 
+    fn state_hold_component(encoded_bytes: usize) -> Result<T::Balance, Error<T>> {
+      if encoded_bytes == 0 {
+        return Ok(T::Balance::zero());
+      }
+      let encoded_bytes =
+        u32::try_from(encoded_bytes).map_err(|_| Error::<T>::StateHoldOverflow)?;
+      let bytes: T::Balance = encoded_bytes.into();
+      T::ActorStateHoldPerByte::get()
+        .checked_mul(&bytes)
+        .and_then(|priced_bytes| priced_bytes.checked_add(&T::ActorStateHoldBase::get()))
+        .ok_or(Error::<T>::StateHoldOverflow)
+    }
+
+    fn state_hold_total(breakdown: &ActorStateHoldBreakdownOf<T>) -> Result<T::Balance, Error<T>> {
+      [
+        breakdown.identity,
+        breakdown.contract_head,
+        breakdown.contract_body,
+        breakdown.detector,
+        breakdown.funding,
+        breakdown.run,
+      ]
+      .into_iter()
+      .try_fold(T::Balance::zero(), |total, component| {
+        total
+          .checked_add(&component)
+          .ok_or(Error::<T>::StateHoldOverflow)
+      })
+    }
+
+    fn actor_state_hold_quote(
+      actor_id: ActorId,
+      actor_type: ActorType,
+    ) -> Result<ActorStateHoldQuote<T::Balance>, ActorCostQuoteError> {
+      let breakdown = if actor_type == ActorType::System {
+        if ActorStateHolds::<T>::contains_key(actor_id) {
+          return Err(ActorCostQuoteError::ActorInvariant);
+        }
+        ActorStateHoldBreakdown {
+          identity: T::Balance::zero(),
+          contract_head: T::Balance::zero(),
+          contract_body: T::Balance::zero(),
+          detector: T::Balance::zero(),
+          funding: T::Balance::zero(),
+          run: T::Balance::zero(),
+        }
+      } else {
+        ActorStateHolds::<T>::get(actor_id)
+          .ok_or(ActorCostQuoteError::ActorInvariant)?
+          .breakdown
+      };
+      let total =
+        Self::state_hold_total(&breakdown).map_err(|_| ActorCostQuoteError::ComputationOverflow)?;
+      Ok(ActorStateHoldQuote {
+        exempt: actor_type == ActorType::System,
+        base_per_component: T::ActorStateHoldBase::get(),
+        per_encoded_byte: T::ActorStateHoldPerByte::get(),
+        breakdown,
+        total,
+      })
+    }
+
+    fn add_state_hold_encoded_size<Value: codec::Encode>(
+      total: &mut usize,
+      value: &Value,
+    ) -> Result<(), Error<T>> {
+      *total = total
+        .checked_add(codec::Encode::encoded_size(value))
+        .ok_or(Error::<T>::StateHoldOverflow)?;
+      Ok(())
+    }
+
+    fn derive_actor_state_hold(
+      actor_id: ActorId,
+      identity: &ActorIdentityOf<T>,
+    ) -> Result<ActorStateHoldBreakdownOf<T>, Error<T>> {
+      let mut identity_bytes = 0usize;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, &actor_id)?;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, identity)?;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, &identity.sovereign_account)?;
+
+      let mut breakdown = ActorStateHoldBreakdown {
+        identity: Self::state_hold_component(identity_bytes)?,
+        contract_head: T::Balance::zero(),
+        contract_body: T::Balance::zero(),
+        detector: T::Balance::zero(),
+        funding: T::Balance::zero(),
+        run: T::Balance::zero(),
+      };
+      if identity.actor_class.actor_type() == ActorType::System {
+        return Ok(ActorStateHoldBreakdown {
+          identity: T::Balance::zero(),
+          ..breakdown
+        });
+      }
+
+      let Some(hot) = ActorHot::<T>::get(actor_id) else {
+        ensure!(
+          !ActorContractHeads::<T>::contains_key(actor_id)
+            && !ActorAdmissionCertificates::<T>::contains_key(actor_id)
+            && !ActorFunding::<T>::contains_key(actor_id)
+            && !ActorRunStateStore::<T>::contains_key(actor_id),
+          Error::<T>::StateHoldInvariant
+        );
+        return Ok(breakdown);
+      };
+      let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+      let admission =
+        ActorAdmissionCertificates::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+      let funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+
+      let mut head_bytes = <ActorHotStateOf<T> as codec::MaxEncodedLen>::max_encoded_len();
+      Self::add_state_hold_encoded_size(&mut head_bytes, &head)?;
+      Self::add_state_hold_encoded_size(&mut head_bytes, &admission)?;
+      breakdown.contract_head = Self::state_hold_component(head_bytes)?;
+
+      let chunk_count = head
+        .header
+        .step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let mut body_bytes = 0usize;
+      for chunk_index in 0..chunk_count {
+        let chunk = ActorContractTailChunks::<T>::get(actor_id, chunk_index)
+          .ok_or(Error::<T>::StateHoldInvariant)?;
+        Self::add_state_hold_encoded_size(&mut body_bytes, &chunk)?;
+      }
+      breakdown.contract_body = Self::state_hold_component(body_bytes)?;
+
+      let mut detector_bytes = 0usize;
+      let activation = ActorActivationAuthorities::<T>::get(actor_id);
+      if let Some(activation) = &activation {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, activation)?;
+      }
+      if let Some(feeds) = ActorObservationFeeds::<T>::get(actor_id) {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, &feeds)?;
+      }
+      if let Some(slot) = ObservationSubscriptionSlot::<T>::get(actor_id) {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, &slot)?;
+      }
+      let crossing_locator = CrossingMemberships::<T>::get(actor_id);
+      if let Some(locator) = &crossing_locator {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, locator)?;
+      }
+      if activation.is_some() || crossing_locator.is_some() {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, &())?;
+      }
+      if let Some(pointer) = hot.trigger_wakeup_pointer {
+        Self::add_state_hold_encoded_size(&mut detector_bytes, &pointer)?;
+      }
+      breakdown.detector = Self::state_hold_component(detector_bytes)?;
+      breakdown.funding = Self::state_hold_component(codec::Encode::encoded_size(&funding))?;
+      breakdown.run = Self::state_hold_component(
+        <ActorRunStateOf<T> as codec::MaxEncodedLen>::max_encoded_len(),
+      )?;
+      Ok(breakdown)
+    }
+
+    pub(crate) fn ensure_funding_state_hold_capacity(
+      actor_id: ActorId,
+      identity: &ActorIdentityOf<T>,
+      prospective_funding: &ActorFundingStateOf<T>,
+    ) -> DispatchResult {
+      if identity.actor_class.actor_type() == ActorType::System {
+        return Ok(());
+      }
+      let existing = ActorStateHolds::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+      ensure!(
+        existing.owner == identity.owner,
+        Error::<T>::StateHoldInvariant
+      );
+      let prospective =
+        Self::state_hold_component(codec::Encode::encoded_size(prospective_funding))?;
+      if prospective > existing.breakdown.funding {
+        let increase = prospective
+          .checked_sub(&existing.breakdown.funding)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+        let reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+        T::StateHoldCurrency::ensure_can_hold(&reason, &identity.owner, increase)
+          .map_err(|_| Error::<T>::StateHoldUnavailable)?;
+      }
+      Ok(())
+    }
+
+    pub(crate) fn reconcile_actor_state_hold(actor_id: ActorId) -> DispatchResult {
+      let existing = ActorStateHolds::<T>::get(actor_id);
+      let target = match ActorIdentities::<T>::get(actor_id) {
+        Some(identity) if identity.actor_class.actor_type() == ActorType::User => Some((
+          identity.owner.clone(),
+          Self::derive_actor_state_hold(actor_id, &identity)?,
+        )),
+        Some(_) | None => None,
+      };
+      let (owner, target_breakdown) = match (existing.as_ref(), target) {
+        (Some(existing), Some((owner, breakdown))) => {
+          ensure!(existing.owner == owner, Error::<T>::StateHoldInvariant);
+          (owner, breakdown)
+        }
+        (None, Some(target)) => target,
+        (Some(existing), None) => (
+          existing.owner.clone(),
+          ActorStateHoldBreakdown {
+            identity: T::Balance::zero(),
+            contract_head: T::Balance::zero(),
+            contract_body: T::Balance::zero(),
+            detector: T::Balance::zero(),
+            funding: T::Balance::zero(),
+            run: T::Balance::zero(),
+          },
+        ),
+        (None, None) => return Ok(()),
+      };
+      if existing
+        .as_ref()
+        .is_some_and(|record| record.owner == owner && record.breakdown == target_breakdown)
+      {
+        return Ok(());
+      }
+      let old_total = existing
+        .as_ref()
+        .map(|record| Self::state_hold_total(&record.breakdown))
+        .transpose()?
+        .unwrap_or_else(T::Balance::zero);
+      let target_total = Self::state_hold_total(&target_breakdown)?;
+      let reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+      if target_total > old_total {
+        let increase = target_total
+          .checked_sub(&old_total)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+        T::StateHoldCurrency::hold(&reason, &owner, increase)
+          .map_err(|_| Error::<T>::StateHoldUnavailable)?;
+      } else if old_total > target_total {
+        let decrease = old_total
+          .checked_sub(&target_total)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+        let released = T::StateHoldCurrency::release(&reason, &owner, decrease, Precision::Exact)
+          .map_err(|_| Error::<T>::StateHoldInvariant)?;
+        ensure!(released == decrease, Error::<T>::StateHoldInvariant);
+      }
+      if target_total.is_zero() {
+        ActorStateHolds::<T>::remove(actor_id);
+      } else {
+        ActorStateHolds::<T>::insert(
+          actor_id,
+          ActorStateHoldRecord {
+            owner,
+            breakdown: target_breakdown,
+          },
+        );
+      }
+      Ok(())
+    }
+
     fn charge_creation_fee(owner: &T::AccountId) -> DispatchResult {
       let creation_fee = T::ActorCreationFee::get();
       if creation_fee.is_zero() {
@@ -2922,28 +5259,251 @@ pub mod pallet {
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 
-    /// User Active creation/activation prefunding requirement (spec 7.1): the prospective/current
-    /// sovereign fee-native balance must cover `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`
-    /// so the first opening can charge the whole cycle fee while preserving `MinUserBalance`.
-    fn user_active_prefunding_requirement(
-      contract_steps: &ContractSteps<T>,
-    ) -> Result<BalanceOf<T>, Error<T>> {
-      let envelope_total = Self::attempt_fee_envelope(ActorType::User, contract_steps, 0)?.total;
-      T::MinUserBalance::get()
-        .checked_add(&envelope_total)
-        .ok_or(Error::<T>::AdmissionBoundOverflow)
-    }
-
-    fn ensure_user_active_prefunding(
+    fn ensure_trigger_occurrence_capacity(
+      actor_type: ActorType,
       sovereign_account: &T::AccountId,
-      contract_steps: &ContractSteps<T>,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
     ) -> DispatchResult {
-      let required = Self::user_active_prefunding_requirement(contract_steps)?;
       ensure!(
-        T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required,
-        Error::<T>::InsufficientBalance
+        Self::trigger_occurrence_capacity_sufficient(actor_type, sovereign_account, breakdown,)?,
+        Error::<T>::InsufficientFee
       );
       Ok(())
+    }
+
+    pub(crate) fn trigger_occurrence_capacity_sufficient(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+    ) -> Result<bool, Error<T>> {
+      if actor_type == ActorType::System || breakdown.trigger_fee.is_zero() {
+        return Ok(true);
+      }
+      let required = T::MinUserBalance::get()
+        .checked_add(&breakdown.trigger_fee)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required)
+    }
+
+    fn charge_trigger_occurrence(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+    ) -> DispatchResult {
+      Self::ensure_trigger_occurrence_capacity(actor_type, sovereign_account, breakdown)?;
+      if actor_type == ActorType::System || breakdown.trigger_fee.is_zero() {
+        return Ok(());
+      }
+      let native = T::FeeNativeAssetId::get();
+      let fee_sink = T::FeeSink::get();
+      T::FeeCollector::collect_fee(sovereign_account, &fee_sink, native, breakdown.trigger_fee)
+        .map_err(|_| Error::<T>::InsufficientFee.into())
+    }
+
+    pub(crate) fn commit_trigger_occurrence(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+      _cause_provenance: TriggerCauseProvenance,
+    ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
+      if ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.pending_signal) {
+        return Ok(None);
+      }
+      Self::ensure_trigger_occurrence_capacity(actor_type, sovereign_account, breakdown)?;
+      let outcome = Self::request_activation(actor_id).map_err(Self::activation_failure_error)?;
+      if matches!(outcome, crate::scheduler::ActivationOutcome::Closed) {
+        return Ok(None);
+      }
+      Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown)?;
+      Self::deposit_event(Event::TriggerOccurrenceProcessed {
+        actor_id,
+        trigger_family: breakdown.trigger_family,
+        fee: breakdown.trigger_fee,
+      });
+      Ok(Some(outcome))
+    }
+
+    pub(crate) fn try_commit_automatic_trigger_occurrence(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+      cause_provenance: TriggerCauseProvenance,
+    ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Self::commit_trigger_occurrence(
+          actor_id,
+          actor_type,
+          sovereign_account,
+          breakdown,
+          cause_provenance,
+        ) {
+          Ok(outcome) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
+          }
+          Err(error) if error == Error::<T>::InsufficientFee.into() => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(None))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    pub(crate) fn try_charge_prechecked_automatic_trigger_occurrence(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+    ) -> Result<bool, DispatchError> {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if actor_type == ActorType::System || breakdown.trigger_fee.is_zero() {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true));
+        }
+        let result = T::FeeCollector::collect_fee(
+          sovereign_account,
+          &T::FeeSink::get(),
+          T::FeeNativeAssetId::get(),
+          breakdown.trigger_fee,
+        );
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true)),
+          Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(false)),
+        }
+      })
+    }
+
+    pub(crate) fn try_charge_automatic_trigger_occurrence(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+    ) -> Result<bool, DispatchError> {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown) {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(true)),
+          Err(error) if error == Error::<T>::InsufficientFee.into() => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(false))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    pub(crate) fn pipeline_fee_for_actor(
+      actor_id: ActorId,
+      actor_type: ActorType,
+    ) -> Result<PipelineFeeBreakdown<T::Balance>, Error<T>> {
+      let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+      Self::pipeline_fee_breakdown(actor_type, head.header.pipeline_machine_envelope)
+    }
+
+    pub(crate) fn pipeline_capacity_sufficient(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+    ) -> Result<bool, Error<T>> {
+      if actor_type == ActorType::System {
+        return Ok(true);
+      }
+      let breakdown = Self::pipeline_fee_for_actor(actor_id, actor_type)?;
+      let required = T::MinUserBalance::get()
+        .checked_add(&breakdown.total_fee)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required)
+    }
+
+    pub(crate) fn action_capacity_sufficient(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      step: &StepOf<T>,
+      resources: ActorStepResourceEnvelope,
+    ) -> Result<bool, Error<T>> {
+      if actor_type == ActorType::System {
+        return Ok(true);
+      }
+      let fee = Self::maximum_current_action_fee(actor_type, step, resources)?;
+      if fee.total_fee.is_zero() {
+        return Ok(true);
+      }
+      let required = T::MinUserBalance::get()
+        .checked_add(&fee.total_fee)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      Ok(T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required)
+    }
+
+    pub(crate) fn collect_pipeline_fee(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+    ) -> Result<PipelineFeeBreakdown<T::Balance>, DispatchError> {
+      let breakdown = Self::pipeline_fee_for_actor(actor_id, actor_type)?;
+      if actor_type == ActorType::System || breakdown.total_fee.is_zero() {
+        return Ok(breakdown);
+      }
+      ensure!(
+        Self::pipeline_capacity_sufficient(actor_id, actor_type, sovereign_account)?,
+        Error::<T>::InsufficientFee
+      );
+      let native = T::FeeNativeAssetId::get();
+      T::FeeCollector::collect_fee(
+        sovereign_account,
+        &T::FeeSink::get(),
+        native,
+        breakdown.total_fee,
+      )
+      .map_err(|_| Error::<T>::InsufficientFee)?;
+      Ok(breakdown)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn maximum_contract_step_fee(
+      actor_type: ActorType,
+      contract_steps: &ContractSteps<T>,
+      cursor: usize,
+    ) -> Result<StepFeeBreakdown<T::Balance>, Error<T>> {
+      let resources = Self::derive_step_resource_envelopes(&ActorContract {
+        trigger: Trigger::manual(),
+        cooldown_blocks: Zero::zero(),
+        window: None,
+        steps: contract_steps.clone(),
+        funding: FundingSourcePolicy::OwnerOnly,
+        completion: CompletionPolicy::Persistent,
+        auto_close_at_cycle_nonce: None,
+      })
+      .and_then(|resources| resources.get(cursor).copied())
+      .ok_or(Error::<T>::ActorRunInvariant)?;
+      let step = contract_steps
+        .get(cursor)
+        .ok_or(Error::<T>::ActorRunInvariant)?;
+      Self::maximum_current_action_fee(actor_type, step, resources)
+    }
+
+    /// Returns ledger minimum plus the generated Pipeline Machine and cleanup charge.
+    /// Trigger-family pricing is composed separately at ready Opening.
+    pub fn user_pipeline_machine_capacity_requirement(
+      contract_steps: &ContractSteps<T>,
+    ) -> Result<BalanceOf<T>, Error<T>> {
+      let contract = ActorContract {
+        trigger: Trigger::manual(),
+        cooldown_blocks: Zero::zero(),
+        window: None,
+        steps: contract_steps.clone(),
+        funding: FundingSourcePolicy::OwnerOnly,
+        completion: CompletionPolicy::Persistent,
+        auto_close_at_cycle_nonce: None,
+      };
+      let resources =
+        Self::derive_step_resource_envelopes(&contract).ok_or(Error::<T>::ActorRunInvariant)?;
+      let envelope =
+        Self::derive_pipeline_machine_envelope(ActorType::User, contract_steps, &resources)?;
+      envelope
+        .pipeline_machine_fee_upper
+        .checked_add(&envelope.cleanup_fee_upper)
+        .and_then(|cycle_requirement| T::MinUserBalance::get().checked_add(&cycle_requirement))
+        .ok_or(Error::<T>::AdmissionBoundOverflow)
     }
 
     pub fn sovereign_account_id(owner: &T::AccountId, owner_slot: u8) -> T::AccountId {
@@ -3146,6 +5706,9 @@ pub mod pallet {
         if actor_type == ActorType::User || requested_system_sovereign_id.is_none() {
           frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         }
+        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         Self::deposit_event(Event::ActorCreated {
           actor_id,
           owner,
@@ -3225,7 +5788,6 @@ pub mod pallet {
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(!contract.steps.is_empty(), Error::<T>::EmptyContractSteps);
       Self::canonicalize_preconditions(&mut contract.steps)?;
       ensure!(
         (contract.steps.len() as u32) <= T::MaxContractSteps::get(),
@@ -3333,29 +5895,14 @@ pub mod pallet {
           },
         };
         if actor_type == ActorType::User {
-          // Spec 7.1: the allocated sovereign fee-native balance must cover
-          // `MinUserBalance + attempt_fee_envelope(plan, 0, User).total` before the opening
-          // fee or Active state commits; Dormant creation remains unfunded.
-          if let Err(error) =
-            Self::ensure_user_active_prefunding(&sovereign_account, &contract.steps)
-          {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-          }
+          // Creation establishes process state only. Sovereign activation capacity is checked
+          // when a Trigger-owned Opening becomes ready.
           if let Err(error) = Self::charge_creation_fee(&owner) {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
         }
-        let trigger_state_bond = if actor_type == ActorType::User {
-          T::TriggerStateBond::amount(&contract.trigger)
-        } else {
-          Zero::zero()
-        };
-        if let Err(error) = T::TriggerStateBond::set_bond(&owner, Zero::zero(), trigger_state_bond)
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
         let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
-        let cadence_anchor_tick = match Self::cadence_anchor_tick(&contract.trigger) {
+        let temporal_anchor_tick = match Self::temporal_anchor_tick(&contract.trigger) {
           Ok(anchor) => anchor,
           Err(error) => {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
@@ -3372,7 +5919,7 @@ pub mod pallet {
           last_control_mutation_block: now,
         };
         let trigger_runtime_state =
-          Self::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
+          Self::provisional_trigger_runtime_state(&contract.trigger, temporal_anchor_tick);
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
           cycle_state: CycleState::Idle,
@@ -3381,6 +5928,7 @@ pub mod pallet {
           pending_signal: false,
           queue_ticket: None,
           wakeup_pointer: None,
+          trigger_wakeup_pointer: None,
           terminal_at: contract
             .window
             .map(|window| Self::window_terminal_at(&window)),
@@ -3402,7 +5950,6 @@ pub mod pallet {
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
-            trigger_state_bond,
           },
         );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -3458,6 +6005,9 @@ pub mod pallet {
         if let Err(error) = Self::prime_actor_schedule(actor_id).map_err(Self::placement_error) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       })
     }
@@ -3476,7 +6026,6 @@ pub mod pallet {
         Error::<T>::ImmutableActor
       );
       let actor_type = identity.actor_class.actor_type();
-      ensure!(!contract.steps.is_empty(), Error::<T>::EmptyContractSteps);
       Self::canonicalize_preconditions(&mut contract.steps)?;
       ensure!(
         (contract.steps.len() as u32) <= T::MaxContractSteps::get(),
@@ -3510,9 +6059,6 @@ pub mod pallet {
         Self::active_instance_count() < Self::effective_active_actor_limit(),
         Error::<T>::ActiveActorCapacityExceeded
       );
-      if actor_type == ActorType::User {
-        Self::ensure_user_active_prefunding(&identity.sovereign_account, &contract.steps)?;
-      }
       let now = frame_system::Pallet::<T>::block_number();
       ensure!(
         identity.last_control_mutation_block != now,
@@ -3523,15 +6069,10 @@ pub mod pallet {
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
       // rather than block zero (spec 4.3.3).
       let schedule_anchor = Self::schedule_anchor_at(contract.window, now);
-      let cadence_anchor_tick =
-        Self::cadence_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
+      let temporal_anchor_tick =
+        Self::temporal_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
       let trigger_runtime_state =
-        Self::provisional_trigger_runtime_state(&contract.trigger, cadence_anchor_tick);
-      let trigger_state_bond = if actor_type == ActorType::User {
-        T::TriggerStateBond::amount(&contract.trigger)
-      } else {
-        Zero::zero()
-      };
+        Self::provisional_trigger_runtime_state(&contract.trigger, temporal_anchor_tick);
       let hot = ActorHotState {
         lifecycle: ActiveLifecycle::Active,
         cycle_state: CycleState::Idle,
@@ -3540,6 +6081,7 @@ pub mod pallet {
         pending_signal: false,
         queue_ticket: None,
         wakeup_pointer: None,
+        trigger_wakeup_pointer: None,
         terminal_at: contract
           .window
           .map(|window| Self::window_terminal_at(&window)),
@@ -3551,11 +6093,6 @@ pub mod pallet {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             Error::<T>::ActorAlreadyActive.into(),
           ));
-        }
-        if let Err(error) =
-          T::TriggerStateBond::set_bond(&identity.owner, Zero::zero(), trigger_state_bond)
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         if let Err(error) = Self::insert_active_actor(
           actor_id,
@@ -3571,7 +6108,6 @@ pub mod pallet {
           ActorFundingState {
             funding_accumulated: Default::default(),
             funding_tracked_assets,
-            trigger_state_bond,
           },
         );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -3590,6 +6126,9 @@ pub mod pallet {
         if let Err(error) = Self::prime_actor_schedule(actor_id).map_err(Self::placement_error) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       })
     }
@@ -3603,7 +6142,7 @@ pub mod pallet {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         if let Err(error) =
-          Self::cancel_continuation_internal(actor_id, CancellationReason::Deactivated, None)
+          Self::cancel_run_internal(actor_id, CancellationReason::Deactivated, None)
         {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
@@ -3622,12 +6161,12 @@ pub mod pallet {
             Error::<T>::ActorNotFound.into(),
           ));
         }
-        if let Err(error) = T::TriggerStateBond::set_bond(
-          &state.identity.owner,
-          state.funding.trigger_state_bond,
-          Zero::zero(),
-        ) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        if state.hot.trigger_wakeup_pointer.is_some()
+          && Self::trigger_wakeup_substrate_invalidate_inner(actor_id).is_err()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorNotFound.into(),
+          ));
         }
         if let Err(error) = Self::remove_active_actor(actor_id, trigger_transition) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
@@ -3639,6 +6178,9 @@ pub mod pallet {
             .ok_or(Error::<T>::ActiveActorCountInvariant)?;
           Ok(())
         }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         Self::deposit_event(Event::ActorDeactivated { actor_id });
@@ -3671,16 +6213,33 @@ pub mod pallet {
         );
       }
       let max_block_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
-      if let Trigger::Cadenced { every_ticks } = trigger {
-        ensure!(*every_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
-        ensure!(
-          *every_ticks <= T::MaxCadenceDelayTicks::get(),
-          Error::<T>::ExecutionDelayTooLong
-        );
-        ensure!(
-          cooldown_blocks == 0,
-          Error::<T>::InvalidTriggerConfiguration
-        );
+      match trigger {
+        Trigger::AtTime { after_ticks } => {
+          ensure!(*after_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
+          ensure!(
+            *after_ticks <= T::MaxTemporalDelayTicks::get(),
+            Error::<T>::ExecutionDelayTooLong
+          );
+          ensure!(
+            cooldown_blocks == 0,
+            Error::<T>::InvalidTriggerConfiguration
+          );
+        }
+        Trigger::Cadenced { every_ticks } => {
+          ensure!(*every_ticks > 0, Error::<T>::InvalidTriggerConfiguration);
+          ensure!(
+            *every_ticks <= T::MaxTemporalDelayTicks::get(),
+            Error::<T>::ExecutionDelayTooLong
+          );
+          ensure!(
+            cooldown_blocks == 0,
+            Error::<T>::InvalidTriggerConfiguration
+          );
+        }
+        Trigger::Manual
+        | Trigger::AddressEvent { .. }
+        | Trigger::ObservationChange { .. }
+        | Trigger::ObservationCrossing { .. } => {}
       }
       ensure!(
         cooldown_blocks <= max_block_delay,
@@ -3719,7 +6278,10 @@ pub mod pallet {
         schedule_anchor.checked_add(&cooldown).is_some(),
         Error::<T>::SchedulerIndexExhausted
       );
-      if matches!(contract.trigger, Trigger::Cadenced { .. }) {
+      if matches!(
+        contract.trigger,
+        Trigger::AtTime { .. } | Trigger::Cadenced { .. }
+      ) {
         ensure!(contract.window.is_none(), Error::<T>::InvalidScheduleWindow);
         return Ok(());
       }
@@ -3856,14 +6418,13 @@ pub mod pallet {
     }
 
     fn validate_contract_steps_shape(
-      actor_type: ActorType,
+      _actor_type: ActorType,
       contract_steps: &ContractSteps<T>,
     ) -> DispatchResult {
       ensure!(
         contract_steps_bound_is_valid(T::MaxContractSteps::get()),
         Error::<T>::TooManyContractSteps
       );
-      Self::attempt_fee_envelope(actor_type, contract_steps, 0)?;
       for step in contract_steps.as_slice() {
         if let Some(max_attempts) = step.on_error.retry_max_attempts() {
           ensure!(
@@ -4217,6 +6778,14 @@ pub mod pallet {
         Self::active_actor_view(actor_id).as_ref() == Some(instance),
         Error::<T>::ActorNotFound
       );
+      Self::finalize_actor_loaded(actor_id, instance, reason)
+    }
+
+    pub(crate) fn finalize_actor_loaded(
+      actor_id: ActorId,
+      instance: &ActiveActorViewOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
       ensure!(
         ActorFunding::<T>::contains_key(actor_id),
         Error::<T>::ActorNotFound
@@ -4249,19 +6818,15 @@ pub mod pallet {
           Error::<T>::SystemSovereignInvariant
         );
       }
-      let trigger_state_bond = ActorFunding::<T>::get(actor_id)
-        .ok_or(Error::<T>::ActorNotFound)?
-        .trigger_state_bond;
       let trigger_transition =
         Self::preflight_trigger_cleanup(actor_id, TriggerTransitionIntent::Close)?;
 
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let result = (|| -> DispatchResult {
-          Self::cancel_continuation_internal(actor_id, CancellationReason::Closing(reason), None)?;
+          Self::cancel_run_internal(actor_id, CancellationReason::Closing(reason), None)?;
 
           // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as
           // soon as hot state disappears. Terminal cleanup performs no shared-container scan.
-          T::TriggerStateBond::set_bond(&instance.owner, trigger_state_bond, Zero::zero())?;
           Self::remove_active_actor(actor_id, trigger_transition)?;
           ActorIdentities::<T>::remove(actor_id);
           ActorFunding::<T>::remove(actor_id);
@@ -4288,6 +6853,7 @@ pub mod pallet {
               SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
             }
           }
+          Self::reconcile_actor_state_hold(actor_id)?;
           Self::deposit_event(Event::ActorClosed { actor_id, reason });
           Ok(())
         })();
@@ -4348,6 +6914,7 @@ pub mod pallet {
             SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
           }
         }
+        Self::reconcile_actor_state_hold(actor_id)?;
         Self::deposit_event(Event::ActorClosed { actor_id, reason });
         Ok(())
       })
@@ -4405,6 +6972,13 @@ pub mod pallet {
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
+      if PrepassExecutionCutoff::<T>::get()
+        .is_some_and(|(_, cutoff)| cutoff > NextQueueTicket::<T>::get())
+      {
+        return Err(TryRuntimeError::Other(
+          "prepass execution cutoff exceeds the allocated ticket frontier",
+        ));
+      }
       if MaterializationFamilyCursor::<T>::get() >= 3 {
         return Err(TryRuntimeError::Other(
           "materialization family cursor is outside the canonical three-family domain",
@@ -4448,7 +7022,7 @@ pub mod pallet {
           "ActorIdentityCount exceeds MaxActorIdentities",
         ));
       }
-      for actor_id in ActorContracts::<T>::iter_keys() {
+      for actor_id in ActorContractHeads::<T>::iter_keys() {
         if !matches!(
           Self::load_actor_state(actor_id),
           LoadedActorStateOf::Active(_)
@@ -4469,6 +7043,66 @@ pub mod pallet {
         let hot = state.hot;
         let contract = state.contract;
         let funding = state.funding;
+        if !ActorAdmissionCertificates::<T>::contains_key(actor_id) {
+          return Err(TryRuntimeError::Other(
+            "Active actor has no admission certificate",
+          ));
+        }
+        let head = ActorContractHeads::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+          "Active actor has no C6 Contract head",
+        ))?;
+        let resources = Self::derive_step_resource_envelopes(&contract).ok_or(
+          TryRuntimeError::Other("Active actor Step resources cannot be rederived"),
+        )?;
+        let expected_pipeline_machine_envelope = Self::derive_pipeline_machine_envelope(
+          identity.actor_class.actor_type(),
+          &contract.steps,
+          &resources,
+        )
+        .map_err(|_| {
+          TryRuntimeError::Other("Active actor Pipeline Machine envelope cannot be rederived")
+        })?;
+        if head.header.pipeline_machine_envelope != expected_pipeline_machine_envelope {
+          return Err(TryRuntimeError::Other(
+            "Active actor Pipeline Machine envelope disagrees with canonical Step control resources",
+          ));
+        }
+        let activation_authority = ActorActivationAuthorities::<T>::get(actor_id);
+        let expected_activation_feed = match &contract.trigger {
+          Trigger::ObservationChange { feed } => Some(*feed),
+          Trigger::ObservationCrossing { feed, .. } => Some(*feed),
+          _ => None,
+        };
+        match (expected_activation_feed, activation_authority) {
+          (Some(feed), Some(authority)) => {
+            let certificate = ActorAdmissionCertificates::<T>::get(actor_id).ok_or(
+              TryRuntimeError::Other("indexed Observation actor has no admission certificate"),
+            )?;
+            if authority.feed != feed
+              || authority.cooldown_blocks != contract.cooldown_blocks
+              || authority.window != contract.window
+              || authority.auto_close_at_cycle_nonce != contract.auto_close_at_cycle_nonce
+              || authority.semantic_contract_id != certificate.semantic_contract_id
+              || authority.body_commitment != certificate.body_commitment
+              || authority.admission_identity != certificate.admission_identity
+            {
+              return Err(TryRuntimeError::Other(
+                "indexed Observation activation authority disagrees with C6 Contract authority",
+              ));
+            }
+          }
+          (Some(_), None) => {
+            return Err(TryRuntimeError::Other(
+              "indexed Observation actor has no activation authority",
+            ));
+          }
+          (None, Some(_)) => {
+            return Err(TryRuntimeError::Other(
+              "non-indexed-Observation actor retains activation authority",
+            ));
+          }
+          (None, None) => {}
+        }
         // Terminal membership is derived from the schedule window: `terminal_at` is the sole
         // terminal-membership authority and must equal the window's exact terminal block, or be
         // absent without a window (spec 5.1).
@@ -4479,17 +7113,34 @@ pub mod pallet {
             "ActorHot terminal_at disagrees with schedule window terminal membership",
           ));
         }
-        let instance = Self::derive_active_actor_view(identity, hot, contract);
-        let expected_trigger_state_bond = if instance.actor_class.actor_type() == ActorType::User {
-          T::TriggerStateBond::amount(&instance.trigger)
-        } else {
-          Zero::zero()
-        };
-        if funding.trigger_state_bond != expected_trigger_state_bond {
-          return Err(TryRuntimeError::Other(
-            "ActorFunding Trigger-state bond disagrees with Actor class and Trigger policy",
-          ));
+        match hot.trigger_runtime_state {
+          TriggerRuntimeState::AtTime { consumed: true, .. }
+            if hot.trigger_wakeup_pointer.is_some() =>
+          {
+            return Err(TryRuntimeError::Other(
+              "consumed AtTime actor retains Trigger temporal membership",
+            ));
+          }
+          TriggerRuntimeState::AtTime {
+            consumed: false, ..
+          }
+          | TriggerRuntimeState::Cadenced { .. }
+            if hot.trigger_wakeup_pointer.is_none() =>
+          {
+            return Err(TryRuntimeError::Other(
+              "pending temporal actor has no Trigger temporal membership",
+            ));
+          }
+          TriggerRuntimeState::Stateless | TriggerRuntimeState::ObservationCrossing { .. }
+            if hot.trigger_wakeup_pointer.is_some() =>
+          {
+            return Err(TryRuntimeError::Other(
+              "non-temporal actor retains Trigger temporal membership",
+            ));
+          }
+          _ => {}
         }
+        let instance = Self::derive_active_actor_view(identity, hot, contract);
         if !Self::contract_steps_admission_weight_upper(
           instance.actor_class.actor_type(),
           &instance.steps,
@@ -4556,52 +7207,90 @@ pub mod pallet {
           ));
         }
       }
-      for actor_id in ContinuationStateStore::<T>::iter_keys() {
+      for actor_id in ActorRunHeads::<T>::iter_keys() {
+        if !ActorRunPayloads::<T>::contains_key(actor_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorRunHead has no immutable ActorRunPayload",
+          ));
+        }
         let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
           return Err(TryRuntimeError::Other(
-            "ContinuationState entry belongs to a corrupt actor partition set",
+            "ActorRunState entry belongs to a corrupt actor partition set",
           ));
         };
-        let continuation = state.continuation.ok_or(TryRuntimeError::Other(
-          "ContinuationState key is absent from loaded Active state",
+        let run_state = state.run_state.ok_or(TryRuntimeError::Other(
+          "ActorRunState key is absent from loaded Active state",
         ))?;
         let hot = state.hot;
         let identity = state.identity;
         let contract = state.contract;
-        if hot.cycle_state != CycleState::Suspended
-          || identity.mutability != Mutability::Mutable
-          || identity.cycle_nonce == 0
-          || continuation.cursor >= contract.steps.len() as u32
+        if !matches!(hot.cycle_state, CycleState::Running | CycleState::Suspended)
+          || identity.cycle_nonce.checked_add(1) != Some(run_state.cycle_nonce)
+          || run_state.cursor >= contract.steps.len() as u32
         {
           return Err(TryRuntimeError::Other(
-            "ContinuationState violates run marker, mutability, or cursor bounds",
+            "ActorRunState violates run marker, nonce, mutability, or cursor bounds",
           ));
         }
-        let max_attempts = contract.steps[continuation.cursor as usize]
-          .on_error
-          .retry_max_attempts()
-          .ok_or(TryRuntimeError::Other(
-            "ContinuationState cursor does not own RetryLater",
-          ))?;
-        if continuation.unsuccessful_attempts_at_cursor == 0
-          || continuation.unsuccessful_attempts_at_cursor >= max_attempts
-        {
-          return Err(TryRuntimeError::Other(
-            "ContinuationState cursor-local attempt count is outside its live range",
-          ));
+        match hot.cycle_state {
+          CycleState::Suspended => {
+            if identity.mutability != Mutability::Mutable || !run_state.suspension_is_coherent() {
+              return Err(TryRuntimeError::Other(
+                "Suspended ActorRunState has incoherent outcome or suspension authority",
+              ));
+            }
+            let max_attempts = contract.steps[run_state.cursor as usize]
+              .on_error
+              .retry_max_attempts()
+              .ok_or(TryRuntimeError::Other(
+                "ActorRunState cursor does not own RetryLater",
+              ))?;
+            if run_state.unsuccessful_attempts_at_cursor == 0
+              || run_state.unsuccessful_attempts_at_cursor >= max_attempts
+            {
+              return Err(TryRuntimeError::Other(
+                "ActorRunState cursor-local attempt count is outside its live range",
+              ));
+            }
+            let expected_eligible_at = Self::suspension_eligible_at(
+              contract.cooldown_blocks,
+              contract.window,
+              run_state.last_attempt_block,
+              run_state.unsuccessful_attempts_at_cursor,
+            )
+            .map_err(|_| {
+              TryRuntimeError::Other("ActorRunState retry eligibility is unrepresentable")
+            })?;
+            if run_state.eligible_at != expected_eligible_at {
+              return Err(TryRuntimeError::Other(
+                "ActorRunState retry eligibility disagrees with its suspension facts",
+              ));
+            }
+          }
+          CycleState::Running => {
+            if run_state.unsuccessful_attempts_at_cursor != 0 || !run_state.running_is_coherent() {
+              return Err(TryRuntimeError::Other(
+                "Running ActorRunState lacks a causal committed-Step boundary",
+              ));
+            }
+          }
+          CycleState::Idle => {
+            return Err(TryRuntimeError::Other(
+              "Idle Actor cannot retain ActorRunState",
+            ));
+          }
         }
-        let expected_surfaces =
-          Self::opening_surfaces(&contract.steps, continuation.cursor as usize);
-        let mut surfaces_match = expected_surfaces.len() == continuation.opening_snapshot.len();
+        let expected_surfaces = Self::opening_surfaces(&contract.steps, 0);
+        let mut surfaces_match = expected_surfaces.len() == run_state.opening_snapshot.len();
         for surface in &expected_surfaces {
-          if !continuation.opening_snapshot.contains_key(surface) {
+          if !run_state.opening_snapshot.contains_key(surface) {
             surfaces_match = false;
             break;
           }
         }
         if !surfaces_match {
           return Err(TryRuntimeError::Other(
-            "ContinuationState opening snapshot disagrees with unresolved suffix",
+            "ActorRunState opening snapshot disagrees with the complete Contract",
           ));
         }
         let expected_opening_predicates = contract
@@ -4613,9 +7302,25 @@ pub mod pallet {
             })
           })
           .sum::<usize>();
-        if continuation.opening_predicate_results.len() != expected_opening_predicates {
+        if run_state.opening_predicate_results.len() != expected_opening_predicates {
           return Err(TryRuntimeError::Other(
-            "ContinuationState opening predicate results disagree with the Actor Contract",
+            "ActorRunState opening predicate results disagree with the Actor Contract",
+          ));
+        }
+        if run_state
+          .funding_snapshot
+          .keys()
+          .any(|asset| !state.funding.funding_tracked_assets.contains(asset))
+        {
+          return Err(TryRuntimeError::Other(
+            "ActorRunState funding snapshot contains an untracked asset",
+          ));
+        }
+      }
+      for actor_id in ActorRunPayloads::<T>::iter_keys() {
+        if !ActorRunHeads::<T>::contains_key(actor_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorRunPayload has no mutable ActorRunHead",
           ));
         }
       }
@@ -4632,7 +7337,8 @@ pub mod pallet {
           continue;
         }
         if ActorFunding::<T>::contains_key(actor_id)
-          || ContinuationStateStore::<T>::contains_key(actor_id)
+          || ActorRunHeads::<T>::contains_key(actor_id)
+          || ActorRunPayloads::<T>::contains_key(actor_id)
         {
           return Err(TryRuntimeError::Other(
             "Dormant identity owns active scheduler or readiness state",
@@ -4972,11 +7678,9 @@ pub mod pallet {
         *key_live = key_live
           .checked_add(live_entries)
           .ok_or(TryRuntimeError::Other("wakeup bucket live count overflows"))?;
-        // `wakeup_pointer` is the sole ordinary temporal-membership authority (spec 5.1): a
-        // physical page slot is a live member only when the actor's pointer addresses exactly
-        // this slot. A slot whose actor owns a different pointer is corruption; a slot whose
-        // actor owns no pointer (or no hot state after a lazy terminal cleanup) is a stale
-        // physical entry with no authority until the bounded drain converges.
+        // Block-keyed Pipeline service and tick-keyed Trigger detection own independent exact
+        // pointers into one physical substrate. A slot whose clock-domain pointer differs is
+        // corruption; an absent pointer is a lazy stale entry until bounded drain converges.
         for slot in 0..page.entries.len() {
           let Some(entry) = &page.entries[slot] else {
             continue;
@@ -4986,7 +7690,15 @@ pub mod pallet {
             page_id,
             slot: slot as WakeupSlot,
           };
-          match ActorHot::<T>::get(entry.actor_id).and_then(|hot| hot.wakeup_pointer) {
+          let authoritative = ActorHot::<T>::get(entry.actor_id).and_then(|hot| match block {
+            WakeupKey::Block(_) => hot.wakeup_pointer,
+            WakeupKey::Tick(_) => hot.trigger_wakeup_pointer.map(|pointer| WakeupPointer {
+              block: WakeupKey::Tick(pointer.tick),
+              page_id: pointer.page_id,
+              slot: pointer.slot,
+            }),
+          });
+          match authoritative {
             Some(pointer) if pointer == expected => {
               live_wakeup_memberships =
                 live_wakeup_memberships
@@ -4997,18 +7709,18 @@ pub mod pallet {
             }
             Some(_) => {
               return Err(TryRuntimeError::Other(
-                "WakeupPage slot addresses an actor with a different wakeup pointer",
+                "WakeupPage slot addresses an actor with a different clock-domain pointer",
               ));
             }
             None => {}
           }
         }
       }
-      // Live wakeup memberships are one-per-active-actor and never exceed the active set;
-      // stale physical pages and cursor blocks may legitimately outlive their actors.
-      if live_wakeup_memberships > active_count {
+      // One Active Actor may own one Pipeline-service pointer and one Trigger-temporal pointer.
+      // Stale physical pages and cursor blocks may legitimately outlive their actors.
+      if live_wakeup_memberships > active_count.saturating_mul(2) {
         return Err(TryRuntimeError::Other(
-          "live wakeup memberships exceed active actor count",
+          "live wakeup memberships exceed dual active-actor capacity",
         ));
       }
       for block in WakeupBuckets::<T>::iter_keys() {
@@ -5113,28 +7825,52 @@ pub mod pallet {
         let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
           "wakeup-pointer hot key has no value",
         ))?;
-        let Some(pointer) = hot.wakeup_pointer else {
-          continue;
-        };
-        if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
-          return Err(TryRuntimeError::Other(
-            "multiple actors own the same wakeup pointer",
-          ));
+        if let Some(pointer) = hot.wakeup_pointer {
+          if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
+            return Err(TryRuntimeError::Other(
+              "multiple actors own the same wakeup pointer",
+            ));
+          }
+          if !Self::wakeup_page_entry_matches(pointer, actor_id) {
+            return Err(TryRuntimeError::Other(
+              "ActorHot Pipeline wakeup pointer does not resolve to its actor",
+            ));
+          }
+          if let Some(terminal_at) = hot.terminal_at
+            && !matches!(pointer.block, WakeupKey::Block(block) if block <= terminal_at)
+          {
+            return Err(TryRuntimeError::Other(
+              "ActorHot Pipeline wakeup pointer exceeds its terminal membership",
+            ));
+          }
         }
-        if !Self::wakeup_page_entry_matches(pointer, actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorHot wakeup pointer does not resolve to its actor",
-          ));
-        }
-        // The earlier due requirement determines the next temporal service point (spec 5.1):
-        // every placement path clamps the wakeup target to the terminal block, so an ordinary
-        // or terminal wakeup must never be scheduled beyond `terminal_at`.
-        if let Some(terminal_at) = hot.terminal_at
-          && !matches!(pointer.block, WakeupKey::Block(block) if block <= terminal_at)
-        {
-          return Err(TryRuntimeError::Other(
-            "ActorHot wakeup pointer exceeds its terminal membership",
-          ));
+        if let Some(trigger_pointer) = hot.trigger_wakeup_pointer {
+          let pointer = WakeupPointer {
+            block: WakeupKey::Tick(trigger_pointer.tick),
+            page_id: trigger_pointer.page_id,
+            slot: trigger_pointer.slot,
+          };
+          if !matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::AtTime {
+              consumed: false,
+              ..
+            } | TriggerRuntimeState::Cadenced { .. }
+          ) {
+            return Err(TryRuntimeError::Other(
+              "non-pending temporal Actor owns a Trigger wakeup pointer",
+            ));
+          }
+          if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
+            return Err(TryRuntimeError::Other(
+              "multiple actors own the same wakeup pointer",
+            ));
+          }
+          if !Self::wakeup_page_entry_matches(pointer, actor_id) {
+            return Err(TryRuntimeError::Other(
+              "ActorHot Trigger wakeup pointer does not resolve to its actor",
+            ));
+          }
         }
       }
       let next_id = NextActorId::<T>::get();
@@ -5169,6 +7905,58 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "SystemSovereignCount disagrees with bounded locator registry",
         ));
+      }
+      let mut owner_hold_totals = alloc::collections::BTreeMap::new();
+      for (actor_id, identity) in ActorIdentities::<T>::iter() {
+        match identity.actor_class.actor_type() {
+          ActorType::System => {
+            if ActorStateHolds::<T>::contains_key(actor_id) {
+              return Err(TryRuntimeError::Other(
+                "System Actor retains a User Actor-state hold",
+              ));
+            }
+          }
+          ActorType::User => {
+            let expected = Self::derive_actor_state_hold(actor_id, &identity).map_err(|_| {
+              TryRuntimeError::Other("User Actor-state hold geometry cannot be rederived")
+            })?;
+            let record = ActorStateHolds::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+              "User Actor has no Actor-state hold record",
+            ))?;
+            if record.owner != identity.owner || record.breakdown != expected {
+              return Err(TryRuntimeError::Other(
+                "User Actor-state hold record disagrees with retained geometry",
+              ));
+            }
+            let total = Self::state_hold_total(&expected).map_err(|_| {
+              TryRuntimeError::Other("User Actor-state hold total cannot be rederived")
+            })?;
+            let owner_total = owner_hold_totals
+              .entry(record.owner)
+              .or_insert(T::Balance::zero());
+            *owner_total = owner_total
+              .checked_add(&total)
+              .ok_or(TryRuntimeError::Other(
+                "aggregate User Actor-state hold overflows",
+              ))?;
+          }
+        }
+      }
+      for (actor_id, _) in ActorStateHolds::<T>::iter() {
+        // deos-bypass: bounded-iter -- MaxActorIdentities bounds per-Actor hold records.
+        if !ActorIdentities::<T>::contains_key(actor_id) {
+          return Err(TryRuntimeError::Other(
+            "Actor-state hold record has no Actor identity",
+          ));
+        }
+      }
+      let hold_reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+      for (owner, expected) in owner_hold_totals {
+        if T::StateHoldCurrency::balance_on_hold(&hold_reason, &owner) != expected {
+          return Err(TryRuntimeError::Other(
+            "owner Actor-state hold balance disagrees with per-Actor records",
+          ));
+        }
       }
       Self::do_try_state_observation_subscriptions()?;
       Self::do_try_state_dirty_observations()?;

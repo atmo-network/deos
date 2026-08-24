@@ -18,6 +18,7 @@ PALLETS=(
     "pallet_asset_registry"
     "pallet_governance"
     "pallet_oracle"
+    "pallet_session_rotation"
     "pallet_staking"
     "pallet_xcm"
 )
@@ -40,7 +41,7 @@ Options:
   --repeat N      Number of repetitions per benchmark (default: $REPEAT)
   --all           Benchmark all custom pallets
   --list          List available pallets
-  --check         Only verify benchmarks compile (no execution)
+  --check         Verify benchmark compilation and generated storage names (no execution)
   --extra         Include Actors circular-chain diagnostic benchmarks excluded from production weights
   --extrinsic NAME
                   Benchmark one extrinsic (requires one PALLET_NAME)
@@ -192,7 +193,66 @@ check_only() {
         log_error "Benchmark compilation mutated the canonical production runtime Wasm"
         return 1
     fi
-    log_success "All benchmarks compile successfully"
+    audit_generated_weight_storage_names
+    log_success "Benchmark compilation and generated storage-name audit passed"
+}
+
+audit_generated_weight_storage_names() {
+    local actor_source="$TEMPLATE_DIR/pallets/actors/src/lib.rs"
+    require_commands node
+    node --input-type=module - "$actor_source" "$WEIGHTS_DIR" "$@" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+
+const [, , actorSourcePath, weightsDirectory, ...requestedFiles] = process.argv;
+const sourceLines = fs.readFileSync(actorSourcePath, 'utf8').split(/\r?\n/);
+const storageNames = new Set();
+let pendingStorage = false;
+let explicitPrefix;
+for (const line of sourceLines) {
+  const trimmed = line.trim();
+  if (trimmed === '#[pallet::storage]') {
+    pendingStorage = true;
+    explicitPrefix = undefined;
+    continue;
+  }
+  if (!pendingStorage) continue;
+  const prefix = trimmed.match(/^#\[pallet::storage_prefix\s*=\s*"([^"]+)"\]$/);
+  if (prefix) {
+    explicitPrefix = prefix[1];
+    continue;
+  }
+  const type = trimmed.match(/^pub type ([A-Za-z0-9_]+)/);
+  if (type) {
+    storageNames.add(explicitPrefix ?? type[1]);
+    pendingStorage = false;
+  }
+}
+if (storageNames.size === 0) {
+  console.error(`Could not derive Actors storage names from ${actorSourcePath}`);
+  process.exit(1);
+}
+
+const files = requestedFiles.length > 0
+  ? requestedFiles
+  : fs.readdirSync(weightsDirectory)
+      .filter((name) => name.endsWith('.rs'))
+      .sort()
+      .map((name) => path.join(weightsDirectory, name));
+const stale = [];
+for (const file of files) {
+  const text = fs.readFileSync(file, 'utf8');
+  const references = new Set([...text.matchAll(/Storage: `Actors::([^`]+)`/g)].map((match) => match[1]));
+  for (const name of [...references].sort()) {
+    if (!storageNames.has(name)) stale.push(`${file}: Actors::${name}`);
+  }
+}
+if (stale.length > 0) {
+  console.error('Generated Weight files reference stale Actors storage names:');
+  for (const entry of stale.sort()) console.error(`  ${entry}`);
+  process.exit(1);
+}
+NODE
 }
 
 resolve_runtime_wasm_path() {
@@ -240,6 +300,8 @@ normalize_weight_file() {
 verify_weight_file_contract() {
     local pallet_name="$1"
     local output_file="$2"
+
+    audit_generated_weight_storage_names "$output_file"
 
     if [[ "$pallet_name" == "pallet_oracle" ]]; then
         local measured_proof
@@ -305,12 +367,17 @@ verify_weight_file_contract() {
         "scheduler_paged_mixed_scan"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
+        "run_suspend"
+        "record_crossing_worker_fault"
+        "record_observation_fanout_worker_fault"
+        "record_wakeup_worker_fault"
         "crossing_worker_base"
         "crossing_transition_unit"
         "crossing_leaf_unit"
         "crossing_page_unit"
         "crossing_actor_unit"
         "predicate_set_evaluation"
+        "observation_fanout_blocked_page"
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do
         if ! grep -q "fn ${benchmark}" "$output_file"; then
@@ -357,7 +424,17 @@ run_pallet_benchmark() {
             "update_contract_observation_change"
             "precondition_all_max"
             "precondition_observation"
-            "observation_fanout_blocked_page"
+            "benchmark_monolithic_create"
+            "benchmark_chunked_create"
+            "benchmark_monolithic_close"
+            "benchmark_chunked_close"
+            "benchmark_monolithic_update"
+            "benchmark_monolithic_reconstruct"
+            "benchmark_chunked_reconstruct"
+            "benchmark_monolithic_load_first"
+            "benchmark_monolithic_load_tail"
+            "benchmark_chunked_load_first"
+            "benchmark_chunked_load_tail"
         )
         local benchmark
         for benchmark in "${diagnostic_benchmarks[@]}"; do

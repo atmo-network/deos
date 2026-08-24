@@ -1,28 +1,89 @@
 use crate::{
-  ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
-  ActorClassificationError, ActorContract, ActorContracts, ActorEligibility, ActorExecutionPhase,
-  ActorFunding, ActorHot, ActorId, ActorIdentities, ActorTriggerActivation, ActorType,
-  AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition, CancellationReason,
-  CloseReason, ContinuationStateStore, CrossingDirection, CrossingMemberPages, CrossingMemberships,
-  CrossingPhase, CrossingTransition, CycleResult, CycleState, Error, Event, FeeChargeKind,
-  FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker,
-  IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf,
-  Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList, ObservationTiming,
-  OpeningSurface, OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, QueueEntry, QueueHead,
-  QueueOccupancy, QueuePages, QueueTail, RetryClass, ScheduleWindow, SimulationError,
-  SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
-  SystemSovereignState, Task, TaskFailure, TaskOf, TimedPredicate, Trigger, TriggerRuntimeState,
-  WakeupBucketState, WakeupBuckets, WakeupClock, WakeupEntry, WakeupKey, WakeupPage, WakeupPages,
-  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
-  mock::*, settle_attempt_fee_step,
+  ActiveLifecycle, ActorActivationPlacement, ActorAdmissionCertificates, ActorClass,
+  ActorClassification, ActorClassificationError, ActorContract, ActorEligibility,
+  ActorExecutionPhase, ActorFunding, ActorHot, ActorId, ActorIdentities, ActorRunAuthority,
+  ActorRunStateStore, ActorTriggerActivation, ActorType, AmountResolution, AssetFilter,
+  AssetFilterOf, AttemptDisposition, CancellationReason, CloseReason, CrossingDirection,
+  CrossingMemberPages, CrossingMemberships, CrossingPhase, CrossingTransition, CycleResult,
+  CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy,
+  GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit,
+  LoadedActorStateOf, Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList,
+  ObservationTiming, OpeningSurface, OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate,
+  QueueEntry, QueueHead, QueueOccupancy, QueuePages, QueueTail, RetryClass, ScheduleWindow,
+  SimulationError, SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf,
+  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome,
+  StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf,
+  TimedPredicate, Trigger, TriggerFamily, TriggerRuntimeState, WakeupBucketState, WakeupBuckets,
+  WakeupClock, WakeupEntry, WakeupKey, WakeupPage, WakeupPages, WakeupPointer, adapters::AssetOps,
+  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
 const RETRY_LATER: StepErrorPolicy = StepErrorPolicy::RetryLater { max_attempts: 10 };
 
+fn manual_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::Manual,
+    <TestWeightInfo as crate::WeightInfo>::manual_trigger(),
+  )
+  .trigger_fee
+}
+
+fn address_event_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::AddressEvent,
+    <TestWeightInfo as crate::WeightInfo>::address_event_trigger_occurrence(),
+  )
+  .trigger_fee
+}
+
+fn observation_change_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::ObservationChange,
+    <TestWeightInfo as crate::WeightInfo>::observation_change_trigger_occurrence(),
+  )
+  .trigger_fee
+}
+
+fn observation_crossing_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::ObservationCrossing,
+    <TestWeightInfo as crate::WeightInfo>::observation_crossing_trigger_occurrence(),
+  )
+  .trigger_fee
+}
+
+fn at_time_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::AtTime,
+    <TestWeightInfo as crate::WeightInfo>::at_time_trigger_occurrence(),
+  )
+  .trigger_fee
+}
+
+fn cadenced_trigger_fee() -> Balance {
+  Actors::trigger_fee_for_weight(
+    ActorType::User,
+    TriggerFamily::Cadenced,
+    <TestWeightInfo as crate::WeightInfo>::cadenced_trigger_occurrence(),
+  )
+  .trigger_fee
+}
+
+fn pipeline_opening_fee(plan: &crate::ContractSteps<crate::mock::Test>) -> Balance {
+  Actors::user_pipeline_machine_capacity_requirement(plan)
+    .expect("fixture Pipeline Machine requirement fits")
+    .checked_sub(TestMinUserBalance::get())
+    .expect("Pipeline requirement contains the ledger minimum")
+}
+
 fn update_contract_parts(actor_id: ActorId) -> crate::ActorContractOf<Test> {
-  ActorContracts::<Test>::get(actor_id).expect("Actor Contract exists")
+  Actors::load_actor_contract(actor_id).expect("Actor Contract exists")
 }
 
 fn replace_auto_close(
@@ -101,15 +162,44 @@ type RuntimeTrigger = crate::TriggerOf<Test>;
 type RuntimeTask = TaskOf<Test>;
 type RuntimeStep = StepOf<Test>;
 type RuntimeActorContract = crate::ActorContractOf<Test>;
-type RuntimeContinuationState = crate::ContinuationStateOf<Test>;
+type RuntimeActorRunState = crate::ActorRunStateOf<Test>;
 type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>;
 type TestWeightInfo = crate::weights::TestWeightInfo;
 
+fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
+  let admission =
+    ActorAdmissionCertificates::<Test>::get(actor_id).expect("Actor admission certificate exists");
+  ActorRunAuthority {
+    semantic_contract_id: admission.semantic_contract_id,
+    body_commitment: admission.body_commitment,
+    admission_identity: admission.admission_identity,
+  }
+}
+
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::actor_hot(actor_id).and_then(|hot| match hot.wakeup_pointer?.block {
-    WakeupKey::Block(block) => Some(block),
-    WakeupKey::Tick(tick) => Some(tick),
+  Actors::actor_hot(actor_id).and_then(|hot| {
+    hot
+      .wakeup_pointer
+      .map(|pointer| match pointer.block {
+        WakeupKey::Block(block) => block,
+        WakeupKey::Tick(tick) => tick,
+      })
+      .or_else(|| hot.trigger_wakeup_pointer.map(|pointer| pointer.tick))
   })
+}
+
+fn queue_entry(ticket: u64, actor_id: ActorId) -> QueueEntry<MockBlockNumber> {
+  QueueEntry {
+    actor_id,
+    cycle_nonce: 0,
+    cursor: 0,
+    ticket,
+    eligible_at: 0,
+    contract_commitment: crate::ActorContractCommitment {
+      semantic_contract_id: [0; 32],
+      body_commitment: [0; 32],
+    },
+  }
 }
 
 fn seed_saturated_tombstone_queue() {
@@ -119,9 +209,11 @@ fn seed_saturated_tombstone_queue() {
     let first = page_id * page_size;
     let len = page_size.min(capacity - first);
     let entries = (0..len)
-      .map(|offset| QueueEntry {
-        ticket: u64::from(first + offset),
-        actor_id: 10_000_000 + u64::from(first + offset),
+      .map(|offset| {
+        queue_entry(
+          u64::from(first + offset),
+          10_000_000 + u64::from(first + offset),
+        )
       })
       .collect::<Vec<_>>();
     QueuePages::<Test>::insert(
@@ -227,7 +319,9 @@ fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
     .trigger_runtime_state
   {
     TriggerRuntimeState::ObservationCrossing { phase, .. } => phase,
-    TriggerRuntimeState::Stateless | TriggerRuntimeState::Cadenced { .. } => {
+    TriggerRuntimeState::Stateless
+    | TriggerRuntimeState::AtTime { .. }
+    | TriggerRuntimeState::Cadenced { .. } => {
       panic!("actor does not own Crossing runtime state")
     }
   }
@@ -333,6 +427,13 @@ fn observation_schedule(feeds: Vec<u32>) -> RuntimeSchedule {
     .expect("one observation trigger feed is required");
   Schedule {
     trigger: RuntimeTrigger::observation_change(feed),
+    cooldown_blocks: 0,
+  }
+}
+
+fn at_time_schedule(after_ticks: u32) -> RuntimeSchedule {
+  Schedule {
+    trigger: Trigger::at_time(u64::from(after_ticks)),
     cooldown_blocks: 0,
   }
 }
@@ -567,6 +668,18 @@ fn native_balance(who: &AccountId) -> Balance {
   <Balances as Currency<AccountId>>::free_balance(who)
 }
 
+fn actor_state_hold_total(actor_id: ActorId) -> Balance {
+  let hold = Actors::actor_state_hold(actor_id).expect("User Actor state hold exists");
+  hold
+    .breakdown
+    .identity
+    .saturating_add(hold.breakdown.contract_head)
+    .saturating_add(hold.breakdown.contract_body)
+    .saturating_add(hold.breakdown.detector)
+    .saturating_add(hold.breakdown.funding)
+    .saturating_add(hold.breakdown.run)
+}
+
 fn asset_balance(who: &AccountId, asset: TestAsset) -> Balance {
   MockAssetOps::balance(who, asset)
 }
@@ -618,32 +731,34 @@ fn create_suspended_system_retry(block: u64) -> u64 {
     actor_id
   ));
   run_idle(Weight::MAX);
-  assert!(Actors::continuation_state(actor_id).is_some());
+  assert!(Actors::actor_run_state(actor_id).is_some());
   actor_id
 }
 
 fn user_step_fee(step: &StepOf<Test>) -> Balance {
   let plan = BoundedVec::try_from(vec![step.clone()]).expect("one step fits the shared bound");
-  Actors::attempt_fee_envelope(ActorType::User, &plan, 0)
-    .expect("one step has a checked fee envelope")
-    .total
+  Actors::maximum_contract_step_fee(ActorType::User, &plan, 0)
+    .expect("one Step has a checked fee")
+    .total_fee
 }
 
 fn fund_native_raw(who: &AccountId, amount: Balance) {
   let _ = <Balances as frame::traits::Currency<AccountId>>::deposit_creating(who, amount);
 }
 
-/// User Active prefunding requirement: `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`.
+/// Fixture funding: ledger minimum plus one Manual Trigger occurrence and the complete
+/// Pipeline Machine/cleanup maximum. Creation itself still requires no service prefunding.
 fn user_prefunding_requirement(plan: &crate::ContractSteps<crate::mock::Test>) -> Balance {
-  <Test as crate::Config>::MinUserBalance::get().saturating_add(
-    Actors::attempt_fee_envelope(ActorType::User, plan, 0)
-      .expect("fixture plan has a checked fee envelope")
-      .total,
-  )
+  let pipeline = Actors::user_pipeline_machine_capacity_requirement(plan)
+    .expect("fixture plan has a checked Pipeline Machine requirement");
+  let trigger = manual_trigger_fee();
+  pipeline
+    .checked_add(trigger)
+    .expect("fixture Trigger and Pipeline funding fits")
 }
 
-/// Pre-funds the deterministic User sovereign account so Active creation/activation admits
-/// (spec 7.1), without mutating any pallet state.
+/// Pre-funds the deterministic User sovereign account for later activation/execution fixtures
+/// without mutating Actors state.
 fn prefund_user_sovereign(
   owner: AccountId,
   slot: u8,
@@ -668,9 +783,59 @@ fn deplete_user_sovereign(actor_id: u64, amount: Balance) {
   MockAssetOps::burn(&acc, TestAsset::Native, amount).expect("fixture depletion burn succeeds");
 }
 
-fn run_idle(weight: Weight) {
+fn run_actor_hook_order_with_external(
+  now: u64,
+  external: impl FnOnce(),
+  idle_weight: Weight,
+) -> Weight {
+  frame_system::Pallet::<Test>::set_block_number(now);
+  let initialize_weight = Actors::on_initialize(now);
+  let prepass_weight = Actors::actor_prepass(RuntimeOrigin::none())
+    .expect("fixture prepass succeeds")
+    .actual_weight
+    .unwrap_or_else(Weight::zero);
+  external();
+  initialize_weight
+    .saturating_add(prepass_weight)
+    .saturating_add(Actors::on_idle(now, idle_weight))
+}
+
+fn run_next_idle(weight: Weight) {
+  let now = frame_system::Pallet::<Test>::block_number()
+    .checked_add(1)
+    .expect("test block number advances");
+  frame_system::Pallet::<Test>::set_block_number(now);
+  Actors::on_initialize(now);
+  run_prepass();
+  run_idle(weight);
+}
+
+fn run_prepass() {
   let now = frame_system::Pallet::<Test>::block_number();
+  if Actors::block_resource_state().is_some_and(|state| state.ensure_block(now).is_err()) {
+    crate::CurrentBlockResourceState::<Test>::kill();
+  }
+  assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+}
+
+fn run_idle(weight: Weight) {
+  let mut now = frame_system::Pallet::<Test>::block_number();
   Actors::on_idle(now, weight);
+  let max_blocks =
+    <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get().saturating_mul(2u32);
+  for _ in 1..max_blocks {
+    if !ActorHot::<Test>::iter_values().any(|hot| hot.cycle_state == CycleState::Running) {
+      break;
+    }
+    let Some(next) = now.checked_add(1) else {
+      break;
+    };
+    now = next;
+    frame_system::Pallet::<Test>::set_block_number(now);
+    Actors::on_initialize(now);
+    run_prepass();
+    Actors::on_idle(now, weight);
+  }
 }
 
 fn starvation_observation_weight() -> Weight {
@@ -712,14 +877,19 @@ fn run_idle_until_cycle_nonce(actor_id: u64, target_cycle_nonce: u64) {
   panic!("cycle nonce did not reach target");
 }
 
-fn has_actor_event(predicate: impl Fn(&Event<Test>) -> bool) -> bool {
+fn actor_event_count(predicate: impl Fn(&Event<Test>) -> bool) -> usize {
   frame_system::Pallet::<Test>::events()
     .into_iter()
     .filter_map(|record| match record.event {
       RuntimeEvent::Actors(event) => Some(event),
       _ => None,
     })
-    .any(|event| predicate(&event))
+    .filter(predicate)
+    .count()
+}
+
+fn has_actor_event(predicate: impl Fn(&Event<Test>) -> bool) -> bool {
+  actor_event_count(predicate) > 0
 }
 
 fn mixed_materialization_ticket_trace() -> Vec<u64> {
@@ -824,12 +994,18 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
     };
     match reason {
       CloseReason::WindowExpired => fund_native(actor_id, 1_000),
-      CloseReason::BalanceExhausted => {}
-      CloseReason::FeeBudgetExhausted => fund_native(actor_id, 60),
+      CloseReason::CycleAdmissionInsufficient => {
+        let balance = native_balance(&sovereign_account(actor_id));
+        deplete_user_sovereign(actor_id, balance);
+        fund_native(
+          actor_id,
+          TestMinUserBalance::get().saturating_add(manual_trigger_fee()),
+        );
+      }
       CloseReason::CycleNonceExhausted => {
         fund_native(actor_id, 1_000);
         ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-          maybe.as_mut().expect("actor identity exists").cycle_nonce = u64::MAX;
+          maybe.as_mut().expect("actor identity exists").cycle_nonce = u64::MAX - 1;
         });
       }
       CloseReason::ConsecutiveFailures => {
@@ -844,12 +1020,9 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
         ActorIdentities::<Test>::mutate(actor_id, |maybe| {
           maybe.as_mut().expect("actor identity exists").cycle_nonce = 1;
         });
-        ActorContracts::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("actor contract exists")
-            .auto_close_at_cycle_nonce = Some(1);
-        });
+        let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
+        contract.auto_close_at_cycle_nonce = Some(1);
+        assert_ok!(Actors::store_actor_contract(actor_id, contract));
       }
       unsupported => panic!("unsupported admission-time close reason: {unsupported:?}"),
     }
@@ -857,11 +1030,15 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    if reason == CloseReason::WindowExpired {
-      ActorContracts::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("actor contract exists").window =
-          Some(ScheduleWindow { start: 0, end: 0 });
+    if reason == CloseReason::CycleNonceExhausted {
+      ActorIdentities::<Test>::mutate(actor_id, |maybe| {
+        maybe.as_mut().expect("actor identity exists").cycle_nonce = u64::MAX;
       });
+    }
+    if reason == CloseReason::WindowExpired {
+      let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
+      contract.window = Some(ScheduleWindow { start: 0, end: 0 });
+      assert_ok!(Actors::store_actor_contract(actor_id, contract));
     }
     let before = Actors::actor_hot(actor_id)
       .unwrap_or_else(|| panic!("{reason:?} actor remains active before scheduler admission"));
@@ -872,7 +1049,11 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
     // admission budget covers only the queue discovery and actor probes plus the close.
     let pre_admission =
       discovery.saturating_add(Actors::scheduler_actor_state_probe_weight_upper());
-    let close = Actors::close_cleanup_weight_upper();
+    let close = if reason == CloseReason::CycleAdmissionInsufficient {
+      <TestWeightInfo as crate::WeightInfo>::pipeline_admission_apoptosis()
+    } else {
+      Actors::close_cleanup_weight_upper()
+    };
     let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
       .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
     let budget = pre_admission
@@ -898,15 +1079,15 @@ mod proptest_actor {
   use super::Schedule;
   use super::{
     RETRY_LATER, all_conditions, asset_balance, create_system_with, fund_native, make_step,
-    manual_schedule, native_balance, prefund_active_user_creation, run_idle, set_asset_balance,
-    setup_pool, setup_temporary_retry_pool, sovereign_account,
+    manual_schedule, native_balance, prefund_active_user_creation, run_idle, run_next_idle,
+    run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorContracts, ActorFunding, ActorHot, ActorIdentities, AmountResolution, AssetFilter,
-    ContinuationStateStore, CrossingDirection, CrossingPhase, CrossingTransition, CycleState,
-    Event, FundingSourcePolicy, Mutability, ObservationCrossing, QueueOccupancy, QueuePages,
-    SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger,
-    WakeupBuckets, WakeupPages, mock::*,
+    ActorFunding, ActorHot, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
+    CrossingDirection, CrossingPhase, CrossingTransition, CycleState, Event, FundingSourcePolicy,
+    Mutability, ObservationCrossing, QueueOccupancy, QueuePages, SourceFilter, StepErrorPolicy,
+    StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages,
+    mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -1064,9 +1245,7 @@ mod proptest_actor {
       ));
       run_idle(Weight::MAX);
       assert_eq!(
-        Actors::continuation_state(actor_id)
-          .expect("suspended")
-          .cursor,
+        Actors::actor_run_state(actor_id).expect("suspended").cursor,
         1
       );
       assert_eq!(native_balance(&actor), 80);
@@ -1074,10 +1253,14 @@ mod proptest_actor {
       let output_after_prefix = asset_balance(&actor, TestAsset::Local(77));
       assert!(output_after_prefix > 0);
 
-      frame_system::Pallet::<Test>::set_block_number(2);
+      let retry_block = frame_system::Pallet::<Test>::block_number().saturating_add(1);
+      frame_system::Pallet::<Test>::set_block_number(retry_block);
+      Actors::on_initialize(retry_block);
+      run_prepass();
       run_idle(Weight::MAX);
+      run_next_idle(Weight::MAX);
       assert_eq!(
-        Actors::continuation_state(actor_id)
+        Actors::actor_run_state(actor_id)
           .expect("same cursor")
           .cursor,
         1
@@ -1089,9 +1272,17 @@ mod proptest_actor {
       );
 
       set_temporary_add_liquidity_failure(false);
-      frame_system::Pallet::<Test>::set_block_number(4);
+      let eligible_at = Actors::actor_run_state(actor_id)
+        .expect("retry remains")
+        .eligible_at;
+      let prepass_block =
+        eligible_at.max(frame_system::Pallet::<Test>::block_number().saturating_add(1));
+      frame_system::Pallet::<Test>::set_block_number(prepass_block);
+      Actors::on_initialize(prepass_block);
+      run_prepass();
       run_idle(Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      run_next_idle(Weight::MAX);
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(native_balance(&actor), 70);
       assert_eq!(native_balance(&BOB), bob_before + 10);
       assert_eq!(
@@ -1147,7 +1338,7 @@ mod proptest_actor {
       run_idle(Weight::MAX);
       assert_eq!(native_balance(&actor), 90);
       assert_eq!(
-        Actors::continuation_state(actor_id).expect("suspended").cursor,
+        Actors::actor_run_state(actor_id).expect("suspended").cursor,
         1
       );
 
@@ -1155,13 +1346,13 @@ mod proptest_actor {
       run_idle(Weight::MAX);
       assert_eq!(native_balance(&actor), 90);
       assert_eq!(
-        Actors::continuation_state(actor_id).expect("same cursor").cursor,
+        Actors::actor_run_state(actor_id).expect("same cursor").cursor,
         1
       );
 
-      assert_ok!(Actors::cancel_continuation(RuntimeOrigin::root(), actor_id));
+      assert_ok!(Actors::cancel_run(RuntimeOrigin::root(), actor_id));
       assert_eq!(native_balance(&actor), 90);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         System::events()
           .iter()
@@ -1277,17 +1468,17 @@ mod proptest_actor {
     conserved_total: Balance,
   ) {
     let hot_ids: std::collections::BTreeSet<_> = ActorHot::<Test>::iter_keys().collect();
-    let contract_ids: std::collections::BTreeSet<_> = ActorContracts::<Test>::iter_keys().collect();
+    let contract_ids: std::collections::BTreeSet<_> =
+      crate::ActorContractHeads::<Test>::iter_keys().collect();
     let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
     let identity_ids: std::collections::BTreeSet<_> =
       ActorIdentities::<Test>::iter_keys().collect();
     let dormant_ids: std::collections::BTreeSet<_> =
       identity_ids.difference(&hot_ids).copied().collect();
-    let continuation_ids: std::collections::BTreeSet<_> =
-      ContinuationStateStore::<Test>::iter_keys().collect();
+    let run_ids: std::collections::BTreeSet<_> = ActorRunStateStore::<Test>::iter_keys().collect();
     assert_eq!(hot_ids, contract_ids);
     assert_eq!(hot_ids, funding_ids);
-    assert!(continuation_ids.is_subset(&hot_ids));
+    assert!(run_ids.is_subset(&hot_ids));
     assert!(hot_ids.is_subset(&identity_ids));
     assert_eq!(Actors::active_actor_count() as usize, hot_ids.len());
     assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
@@ -1302,8 +1493,8 @@ mod proptest_actor {
         Some(*actor_id)
       );
       assert_eq!(
-        hot.cycle_state == CycleState::Suspended,
-        continuation_ids.contains(actor_id)
+        matches!(hot.cycle_state, CycleState::Running | CycleState::Suspended),
+        run_ids.contains(actor_id)
       );
       let funding = ActorFunding::<Test>::get(actor_id).expect("funding key resolves");
       assert!(
@@ -1312,10 +1503,23 @@ mod proptest_actor {
           .keys()
           .all(|asset| funding.funding_tracked_assets.contains(asset))
       );
-      if let Some(continuation) = ContinuationStateStore::<Test>::get(actor_id) {
-        let contract = ActorContracts::<Test>::get(actor_id).expect("contract key resolves");
-        assert!((continuation.cursor as usize) < contract.steps.len());
-        assert!(continuation.cumulative_outcomes.executed_steps <= continuation.cursor);
+      if let Some(run_state) = ActorRunStateStore::<Test>::get(*actor_id) {
+        let contract = Actors::load_actor_contract(*actor_id).expect("contract key resolves");
+        assert_eq!(
+          identity.cycle_nonce.checked_add(1),
+          Some(run_state.cycle_nonce)
+        );
+        assert!((run_state.cursor as usize) < contract.steps.len());
+        assert!(run_state.cumulative_outcomes.executed_steps <= run_state.cursor);
+        assert!(run_state.last_step_outcome.is_some());
+        match hot.cycle_state {
+          CycleState::Running => {
+            assert!(run_state.suspension.is_none());
+            assert!(run_state.last_committed_step_block.is_some());
+          }
+          CycleState::Suspended => assert!(run_state.suspension.is_some()),
+          CycleState::Idle => panic!("Idle Actor cannot retain run state"),
+        }
       }
       if let Some(ticket) = hot.queue_ticket {
         assert!(
@@ -1336,6 +1540,21 @@ mod proptest_actor {
         );
         let page = WakeupPages::<Test>::get((pointer.block, pointer.page_id))
           .expect("live wakeup page exists");
+        assert_eq!(
+          page.entries.get(pointer.slot as usize),
+          Some(&Some(crate::WakeupEntry {
+            actor_id: *actor_id
+          }))
+        );
+      }
+      if let Some(pointer) = hot.trigger_wakeup_pointer {
+        let key = crate::WakeupKey::Tick(pointer.tick);
+        assert!(
+          live_wakeups.insert((key, pointer.page_id, pointer.slot)),
+          "duplicate live Trigger wakeup pointer"
+        );
+        let page = WakeupPages::<Test>::get((key, pointer.page_id))
+          .expect("live Trigger wakeup page exists");
         assert_eq!(
           page.entries.get(pointer.slot as usize),
           Some(&Some(crate::WakeupEntry {
@@ -1621,7 +1840,7 @@ mod proptest_actor {
     })]
 
     #[test]
-    fn seeded_continuation_state_machine_preserves_cross_store_and_scheduler_invariants(
+    fn seeded_actor_run_state_machine_preserves_cross_store_and_scheduler_invariants(
       operations in prop::collection::vec(model_op(), 1..80),
     ) {
       new_test_ext().execute_with(|| {
@@ -1675,7 +1894,7 @@ mod proptest_actor {
           let before_hot: std::collections::BTreeMap<_, _> = ActorHot::<Test>::iter().collect();
           let before_identities: std::collections::BTreeMap<_, _> =
             ActorIdentities::<Test>::iter().collect();
-          let before_continuation = ContinuationStateStore::<Test>::get(system_id);
+          let before_continuation = ActorRunStateStore::<Test>::get(system_id);
           let before_funding = ActorFunding::<Test>::get(system_id);
           let before_system_balance = Balances::free_balance(system_sovereign);
           let before_bob_balance = Balances::free_balance(BOB);
@@ -1856,12 +2075,12 @@ mod proptest_actor {
                 let _ = Actors::on_idle(block, Weight::MAX);
               }
             }
-            ModelOp::Continue if ContinuationStateStore::<Test>::contains_key(system_id) => {
+            ModelOp::Continue if ActorRunStateStore::<Test>::contains_key(system_id) => {
               set_temporary_dex_failure(false);
               let _ = Actors::on_idle(block, Weight::MAX);
             }
-            ModelOp::Cancel if ContinuationStateStore::<Test>::contains_key(system_id) => {
-              let _ = Actors::cancel_continuation(RuntimeOrigin::root(), system_id);
+            ModelOp::Cancel if ActorRunStateStore::<Test>::contains_key(system_id) => {
+              let _ = Actors::cancel_run(RuntimeOrigin::root(), system_id);
             }
             ModelOp::Close if !closed => {
               if Actors::close_actor(RuntimeOrigin::root(), system_id).is_ok() {
@@ -1950,15 +2169,22 @@ mod proptest_actor {
             closed = true;
           }
 
-          let after_continuation = ContinuationStateStore::<Test>::get(system_id);
+          let after_continuation = ActorRunStateStore::<Test>::get(system_id);
           if matches!(operation, ModelOp::Cancel) && before_continuation.is_some() {
-            assert!(after_continuation.is_none());
-            assert_eq!(Balances::free_balance(system_sovereign), before_system_balance);
-            assert_eq!(Balances::free_balance(BOB), before_bob_balance);
-            assert_eq!(
-              ActorFunding::<Test>::get(system_id).as_ref().map(Encode::encode),
-              before_funding.as_ref().map(Encode::encode)
-            );
+            if after_continuation.is_some() {
+              assert_eq!(
+                after_continuation.as_ref().map(Encode::encode),
+                before_continuation.as_ref().map(Encode::encode),
+                "rejected cancellation preserves the exact run"
+              );
+            } else {
+              assert_eq!(Balances::free_balance(system_sovereign), before_system_balance);
+              assert_eq!(Balances::free_balance(BOB), before_bob_balance);
+              assert_eq!(
+                ActorFunding::<Test>::get(system_id).as_ref().map(Encode::encode),
+                before_funding.as_ref().map(Encode::encode)
+              );
+            }
           }
           if matches!(operation, ModelOp::Pause | ModelOp::Resume)
             && before_continuation.is_some()
@@ -2322,7 +2548,7 @@ fn parity_target_step(case: StepParityCase) -> StepOf<Test> {
       all_conditions(vec![Predicate::ObservationAbove {
         feed: 1,
         threshold: 1,
-        max_age_blocks: 5,
+        max_age_blocks: 1,
       }]),
       transfer(AmountResolution::Fixed(5)),
     ),
@@ -2456,7 +2682,7 @@ fn observed_attempt_projection(
     let (_, outcomes) = summary.expect("attempt close follows its cycle summary");
     return (AttemptDisposition::Closed(reason), outcomes, None, None);
   }
-  if let Some(continuation) = Actors::continuation_state(actor_id) {
+  if let Some(continuation) = Actors::actor_run_state(actor_id) {
     return (
       AttemptDisposition::Suspended,
       continuation.cumulative_outcomes,

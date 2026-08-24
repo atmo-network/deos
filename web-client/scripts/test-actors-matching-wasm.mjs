@@ -82,7 +82,7 @@ const artifact = createActorContractArtifact({
 const base = {
   artifact,
   actorId: 14n,
-  mode: 'CurrentContinuation',
+  mode: 'CurrentRun',
   metadataBytes,
   runtime,
   runtimeCodeBytes: Uint8Array.of(1, 2, 3),
@@ -102,7 +102,7 @@ const suspendedRuntimeValue = {
     status: { type: 'Suspended', value: undefined },
     cycle_nonce: 7n,
     start_cursor: 0,
-    continuation_cursor: 1,
+    run_cursor: 1,
     unsuccessful_attempts_at_cursor: 2,
     cumulative_outcomes: {
       executed_steps: 3,
@@ -129,7 +129,7 @@ const suspendedOutcome = {
   closeReason: null,
   cycleNonce: 7n,
   startCursor: 0,
-  continuationCursor: 1,
+  runCursor: 1,
   unsuccessfulAttemptsAtCursor: 2,
   cumulativeOutcomes: {
     executedSteps: 3,
@@ -168,7 +168,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       status: { type: 'Completed', value: undefined },
       cycle_nonce: 8n,
       start_cursor: 0,
-      continuation_cursor: undefined,
+      run_cursor: undefined,
       cumulative_outcomes: {
         executed_steps: 1,
         committed_effectful_tasks: 0,
@@ -203,7 +203,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
         type: 'Closed',
         value: { type: 'ProductiveCycleCompleted', value: undefined },
       },
-      continuation_cursor: undefined,
+      run_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
     },
   });
@@ -212,7 +212,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   if (closed.success) {
     assert.equal(closed.outcome.status, 'Closed');
     assert.equal(closed.outcome.closeReason, 'ProductiveCycleCompleted');
-    assert.equal(closed.outcome.continuationCursor, null);
+    assert.equal(closed.outcome.runCursor, null);
     assert.equal(closed.outcome.unsuccessfulAttemptsAtCursor, null);
   }
   const rejectedScale = encodeActorRuntimeSimulationResult(metadataBytes, {
@@ -323,12 +323,12 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
   const result = await runDeosActorFinalizedSimulation(connection, {
     artifact,
     actorId: 14n,
-    mode: 'CurrentContinuation',
+    mode: 'CurrentRun',
     finalizedBlock: { hash: at, number: 42 },
   });
 
   assert.equal(result.outcome.status, 'Suspended');
-  assert.equal(result.outcome.continuationCursor, 1);
+  assert.equal(result.outcome.runCursor, 1);
   assert.equal(observedArguments[0], 14n);
   assert.deepEqual(observedArguments[1], {
     type: 'System',
@@ -339,7 +339,7 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
     value: undefined,
   });
   assert.deepEqual(observedArguments[4], {
-    type: 'CurrentContinuation',
+    type: 'CurrentRun',
     value: undefined,
   });
   assert.deepEqual(observedArguments[5], { at });
@@ -369,9 +369,9 @@ test('matching-Wasm gate binds runtime code, metadata, state, API, and Actor Con
   assert.equal(result.pin.metadataHash, artifact.metadataHash);
   assert.equal(result.pin.stateRoot, base.snapshot.stateRoot);
   assert.equal(observedRequest.actorId, 14n);
-  assert.equal(observedRequest.mode, 'CurrentContinuation');
+  assert.equal(observedRequest.mode, 'CurrentRun');
   assert.equal(observedRequest.contractScale, artifact.contractScale);
-  assert.equal(result.outcome.continuationCursor, 1);
+  assert.equal(result.outcome.runCursor, 1);
 });
 
 test('provider cannot change any requested runtime or state dependency', async () => {
@@ -419,7 +419,7 @@ test('provider summary must match canonical runtime SCALE bytes', async () => {
   );
 });
 
-test('local projections and malformed Continuation outcomes fail closed', async () => {
+test('local projections and malformed Actor run outcomes fail closed', async () => {
   await assert.rejects(
     runActorMatchingWasmSimulation({
       ...base,
@@ -445,12 +445,12 @@ test('local projections and malformed Continuation outcomes fail closed', async 
             pin: request.pin,
             outcome: {
               ...suspendedOutcome,
-              continuationCursor: null,
+              runCursor: null,
             },
           };
         },
       },
     }),
-    /require a Continuation cursor/,
+    /require an Actor run cursor/,
   );
 });
