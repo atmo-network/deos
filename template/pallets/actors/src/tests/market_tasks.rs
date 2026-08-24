@@ -316,7 +316,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       event,
       Event::SplitTransferExecuted { actor_id: id, .. } if *id == actor_id
     )));
-    let continuation = Actors::continuation_state(actor_id).expect("temporary rejection suspends");
+    let continuation = Actors::actor_run_state(actor_id).expect("temporary rejection suspends");
     assert_eq!(continuation.cursor, 0);
     assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
 
@@ -331,7 +331,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
     for (recipient, before) in recipients.iter().zip(retry_balances) {
       assert_eq!(asset_balance(recipient, asset), before + 10);
     }
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::SplitTransferExecuted {
@@ -546,7 +546,7 @@ fn on_address_event_asset_filter_is_enforced() {
 }
 
 #[test]
-fn fresh_attempt_result_commits_then_closes_when_tick_index_is_exhausted() {
+fn cadence_rearm_capacity_failure_rolls_back_pipeline_opening() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -558,6 +558,10 @@ fn fresh_attempt_result_commits_then_closes_when_tick_index_is_exhausted() {
     frame_system::Pallet::<Test>::set_block_number(2);
     let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
     Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
+    let ready = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active after detection");
+    assert!(ready.pending_signal);
+    assert!(ready.queue_ticket.is_some());
+    assert!(ready.trigger_wakeup_pointer.is_none());
     let bob_before = native_balance(&BOB);
     System::reset_events();
     crate::WakeupCursorLen::<Test>::insert(
@@ -568,13 +572,13 @@ fn fresh_attempt_result_commits_then_closes_when_tick_index_is_exhausted() {
     let _ = Actors::execute_cycle(Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
+    let state = Actors::active_actor_state(actor_id).expect("Cadenced Actor remains active");
+    assert_eq!(state.identity.cycle_nonce, 0);
+    assert!(state.hot.pending_signal);
+    assert!(state.hot.trigger_wakeup_pointer.is_none());
+    assert!(!has_actor_event(|event| matches!(
       event,
-      Event::ActorClosed {
-        actor_id: id,
-        reason: CloseReason::SchedulerIndexExhausted,
-      } if *id == actor_id
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
     )));
   });
 }
@@ -1973,7 +1977,10 @@ fn user_dca_swap_then_cold_storage_transfer() {
     let cold_before = native_balance(&cold_wallet);
     frame_system::Pallet::<Test>::set_block_number(6);
     Actors::on_initialize(6);
-    Actors::on_idle(6, Weight::MAX);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(7);
+    Actors::on_initialize(7);
+    run_idle(Weight::MAX);
     assert!(
       native_balance(&cold_wallet) > cold_before,
       "Cold storage should receive native after swap + transfer"

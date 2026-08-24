@@ -23,6 +23,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     validateActorAuthoringContract,
   } from '$lib/automation/authoring';
   import type { ActorContractArtifact } from '$lib/automation/contract-artifact';
+  import type { ActorMaterializationProjection } from '$lib/automation/materialization';
+  import type {
+    ActorResourceProjection,
+    ActorResourceWeight,
+  } from '$lib/automation/resource';
   import type {
     AutomationActorSnapshot,
     AutomationAuthoringContext,
@@ -50,6 +55,9 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   let loading = $state(true);
   let error = $state<string | null>(null);
   let actors = $state<AutomationActorSnapshot[]>([]);
+  let resource = $state<ActorResourceProjection | null>(null);
+  let resourceLoading = $state(true);
+  let resourceError = $state<string | null>(null);
   let view = $state<AutomationView>('actors');
   let draft = $state(createActorAuthoringContract());
   let autoCloseTargetText = $state('');
@@ -63,7 +71,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorContract + Actors.ContinuationState + System.Account + ActorEligibilityApi',
+    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorContract + Actors.ActorRunState + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -103,6 +111,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         return 'Observation change';
       case 'ObservationCrossing':
         return `Observation crossing · ${trigger.direction}`;
+      case 'AtTime':
+        return `At time · after ${trigger.afterTicks} ticks`;
       case 'Cadenced':
         return `Cadenced · ${trigger.everyTicks} ticks`;
     }
@@ -259,6 +269,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     return `${value.slice(0, 10)}…${value.slice(-8)}`;
   }
 
+  function weightLabel(value: ActorResourceWeight): string {
+    return `${value.refTime.toLocaleString()} ps · ${value.proofSize.toLocaleString()} B proof`;
+  }
+
   async function loadObservationFeeds() {
     const load = systemStore.adapter.getObservationFeeds;
     if (!load) throw new Error('Canonical observation registry unavailable');
@@ -275,6 +289,14 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     return await load.call(systemStore.adapter, feed, maxAgeBlocks, actorId);
   }
 
+  async function loadActorMaterialization(
+    feed: ObservationFeedIdentity,
+  ): Promise<ActorMaterializationProjection> {
+    const load = systemStore.adapter.getActorMaterializationProjection;
+    if (!load) throw new Error('Actor materialization state unavailable');
+    return await load.call(systemStore.adapter, feed);
+  }
+
   $effect(() => {
     const currentFingerprint = draftFingerprint();
     if (
@@ -289,6 +311,38 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       artifactMessage =
         'Draft changed. Rebind to finalized metadata for a new exact identity.';
     }
+  });
+
+  $effect(() => {
+    systemStore.snapshot?.blockNumber;
+    const adapter = systemStore.adapter;
+    if (!adapter.getActorResourceProjection) {
+      resource = null;
+      resourceLoading = false;
+      resourceError = 'Block resource projection unavailable';
+      return;
+    }
+    resourceLoading = true;
+    resourceError = null;
+    let cancelled = false;
+    void Promise.resolve(adapter.getActorResourceProjection())
+      .then((nextResource) => {
+        if (cancelled) return;
+        resource = nextResource;
+        resourceLoading = false;
+      })
+      .catch((refreshError) => {
+        if (cancelled) return;
+        resource = null;
+        resourceError =
+          refreshError instanceof Error
+            ? refreshError.message
+            : 'Block resource projection failed';
+        resourceLoading = false;
+      });
+    return () => {
+      cancelled = true;
+    };
   });
 
   $effect(() => {
@@ -377,6 +431,114 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
     {#if view === 'actors'}
       <div class="grid gap-3 p-3 text-xs">
+        <section
+          class="grid gap-2 rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3"
+          aria-labelledby="actor-resource-heading"
+        >
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <h3
+                id="actor-resource-heading"
+                class="font-medium text-(--mono-text)"
+              >
+                Block resource protocol
+              </h3>
+              <p class="text-[10px] text-(--mono-muted)">
+                Direct canonical budget · latest finalized telemetry is
+                operational evidence, not history
+              </p>
+            </div>
+            {#if resource?.finalized}
+              <Badge
+                variant={resource.finalized.optionalActorWorkHalted
+                  ? 'info'
+                  : 'tmc'}
+              >
+                {resource.finalized.optionalActorWorkHalted
+                  ? 'optional work halted'
+                  : `finalized #${resource.finalized.blockNumber}`}
+              </Badge>
+            {:else}
+              <Badge variant="info">no telemetry</Badge>
+            {/if}
+          </div>
+
+          {#if resourceLoading}
+            <div class="text-[10px] text-(--mono-muted)">
+              Loading resource evidence…
+            </div>
+          {:else if resourceError}
+            <Notice variant="warn">{resourceError}</Notice>
+          {:else if resource}
+            <div
+              class={compactPane
+                ? 'grid gap-1 text-[10px]'
+                : 'grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]'}
+            >
+              <DetailRow
+                label="Actor control limit"
+                value={weightLabel(resource.budget.limits.actorControl)}
+                valueClass="tabnum text-(--mono-text)"
+              />
+              <DetailRow
+                label="Shared economic limit"
+                value={weightLabel(resource.budget.limits.sharedEconomic)}
+                valueClass="tabnum text-(--mono-text)"
+              />
+              <DetailRow
+                label="Actor base turn"
+                value={weightLabel(resource.budget.limits.actorBaseTurn)}
+                valueClass="tabnum text-(--mono-text)"
+              />
+              <DetailRow
+                label="User base turn"
+                value={weightLabel(resource.budget.limits.userBaseTurn)}
+                valueClass="tabnum text-(--mono-text)"
+              />
+              {#if resource.current}
+                <DetailRow
+                  label="Current phase"
+                  value={`${resource.current.phase} · block ${resource.current.blockNumber}`}
+                  valueClass="text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Reservations"
+                  value={resource.current.outstandingReservations.toString()}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+              {:else}
+                <DetailRow
+                  label="Current block state"
+                  value="Consumed at finalization"
+                  valueClass="text-(--mono-muted)"
+                />
+              {/if}
+              {#if resource.finalized}
+                <DetailRow
+                  label="Actor control used"
+                  value={weightLabel(resource.finalized.usage.actorControl)}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Actor effects used"
+                  value={weightLabel(resource.finalized.usage.actorEffect)}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+                <DetailRow
+                  label="User dispatch used"
+                  value={weightLabel(resource.finalized.usage.userDispatch)}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Fixed reserved"
+                  value={weightLabel(resource.finalized.fixedReserved)}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+              {/if}
+            </div>
+          {/if}
+        </section>
+
         {#if loading}
           <div class="text-(--mono-muted)">Loading automation…</div>
         {:else if error}
@@ -558,6 +720,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         loadInspection={systemStore.adapter.getObservationInspection
           ? loadObservationInspection
           : null}
+        loadMaterialization={systemStore.adapter
+          .getActorMaterializationProjection
+          ? loadActorMaterialization
+          : null}
       />
     {:else}
       <div class="grid gap-3 p-3 text-xs">
@@ -683,6 +849,12 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         </div>
 
         <div class="grid gap-2">
+          {#if draft.steps.length === 0}
+            <Notice variant="muted">
+              Opening-only Contract: the Trigger completes a bounded lifecycle
+              without an Action.
+            </Notice>
+          {/if}
           {#each draft.steps as step, index (step.key)}
             <AutomationStepEditor
               bind:step={draft.steps[index]}

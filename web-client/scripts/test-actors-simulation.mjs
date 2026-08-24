@@ -72,7 +72,7 @@ test('local projection commits successful tasks and rolls back one failed task',
   assert.equal(result.provenance.truth, 'AdapterLocalProjection');
   assert.equal(result.status, 'Completed');
   assert.equal(result.state.balance, 95n);
-  assert.equal(result.continuationCursor, null);
+  assert.equal(result.runCursor, null);
   assert.deepEqual(
     result.journal.map(({ outcome, stateCommitted }) => [
       outcome.kind,
@@ -142,12 +142,12 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
 
   assert.equal(suspended.status, 'Suspended');
   assert.equal(suspended.state.balance, 90n);
-  assert.equal(suspended.continuationCursor, 1);
+  assert.equal(suspended.runCursor, 1);
   assert.equal(suspended.unsuccessfulAttemptsAtCursor, 1);
 
   const resumed = simulateActorLocally({
     ...provenance,
-    startCursor: suspended.continuationCursor,
+    startCursor: suspended.runCursor,
     unsuccessfulAttemptsAtCursor: suspended.unsuccessfulAttemptsAtCursor,
     initialState: suspended.state,
     initialCounts: suspended.cumulative,
@@ -184,7 +184,7 @@ test('RetryLater closes exactly on its local bound and counts funding unavailabi
   });
   assert.equal(closedImmediately.status, 'Closed');
   assert.equal(closedImmediately.closeReason, 'RetryAttemptsExhausted');
-  assert.equal(closedImmediately.continuationCursor, null);
+  assert.equal(closedImmediately.runCursor, null);
 
   const suspended = simulateActorLocally({
     ...provenance,
@@ -239,7 +239,7 @@ test('cursor advancement resets the local unsuccessful-attempt count', () => {
     },
   });
   assert.equal(result.status, 'Suspended');
-  assert.equal(result.continuationCursor, 1);
+  assert.equal(result.runCursor, 1);
   assert.equal(result.unsuccessfulAttemptsAtCursor, 1);
 });
 
@@ -254,7 +254,7 @@ test('permanent RetryLater aborts, and Immutable Actor Contracts reject retry po
     },
   });
   assert.equal(aborted.status, 'Failed');
-  assert.equal(aborted.continuationCursor, null);
+  assert.equal(aborted.runCursor, null);
   assert.equal(aborted.state.balance, 1n);
 
   assert.throws(

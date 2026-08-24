@@ -689,6 +689,24 @@ impl<T: Config> Pallet<T> {
         "observation subscription aggregate count disagrees",
       ));
     }
+    for actor_id in IndexedTriggerDetectionDisabled::<T>::iter_keys() {
+      let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
+        "disabled indexed detector has no active Actor",
+      ))?;
+      let contract = Self::load_actor_contract(actor_id).ok_or(TryRuntimeError::Other(
+        "disabled indexed detector has no Actor Contract",
+      ))?;
+      if !hot.pending_signal
+        || !matches!(
+          contract.trigger,
+          Trigger::ObservationChange { .. } | Trigger::ObservationCrossing { .. }
+        )
+      {
+        return Err(TryRuntimeError::Other(
+          "disabled indexed detector disagrees with useful readiness",
+        ));
+      }
+    }
     Ok(())
   }
 }

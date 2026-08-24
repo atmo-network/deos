@@ -13,7 +13,7 @@ The reusable package contract and implementation remain in [`template/pallets/or
 | DEOS feed identity, meaning, and provenance | `template/primitives/src/oracle.rs` |
 | Runtime bounds, origins, pool-feed identity, and Actors hook | `template/runtime/src/configs/oracle_config.rs` |
 | Canonical LP pair plus directional-feed registration | `template/runtime/src/configs/assets_config.rs` |
-| Pool-index and feed-admission weight envelope | `template/runtime/src/configs/pool_index.rs` |
+| Atomic pool/LP/feed lifecycle and admission Weight | `template/runtime/src/configs/assets_config.rs`, `template/runtime/src/weights/pallet_deos_router.rs` |
 | DEOS Router production and consumption | `template/runtime/src/configs/deos_router_config.rs`, `template/pallets/router/src/lib.rs` |
 | Runtime-generated DEOS Oracle weights | `template/runtime/src/weights/pallet_oracle.rs` |
 | Pallet index and metadata composition | `template/runtime/src/lib.rs` |
@@ -34,9 +34,9 @@ The DEOS runtime mounts DEOS Oracle at pallet index `52`. It bounds global feeds
 
 Canonical pool indexing admits one EMA feed at scale `12` for each ordered direction. Both use the DEOS Router pallet account as producer, pre-execution-reserve provenance, zero rejection, and Active lifecycle. Repeated indexing succeeds only when the complete immutable configuration matches.
 
-Two feeds per pool bound Router admission to `500` complete directional pairs. Before pool creation or liquidity mutation dispatches, `PoolIndexExtension` prevalidates the predicted or existing LP token, bounded reverse-index capacity and collisions, both feed identities, and producer capacity. This ordering is required because a transaction-extension post-dispatch error does not roll back successful call state.
+Two feeds per pool bound Router admission to `500` complete directional pairs. The permissionless DEOS pool lifecycle prevalidates the expected LP token, bounded reverse-index capacity and collisions, both feed identities, and producer capacity before underlying creation. Pool, actual LP verification, reverse binding, and both feeds share one transactional rollback owner; liquidity mutation never repairs topology.
 
-The pool-index call charges two worst-case DEOS Oracle registration envelopes plus 13 reads and one write for bounded preflight and LP-index work. No pool admission path performs an unbounded feed scan.
+Canonical pool creation is measured as one Router call at `144,923,000 / 34,255` with 13 reads and 10 writes. No pool admission path performs an unbounded feed scan. `PoolIndexExtension` is removed from the signed transaction format.
 
 ## Router Production and Consumption
 
@@ -60,7 +60,7 @@ Direct publication propagates the exact Actors dispatch error, including `DirtyO
 
 These failures are fail-closed availability signals, not deferred work. Operators must repair or clear the bounded dirty topology or restore capacity before retrying the producer operation. A later retry re-enters the same atomic path; no rejected observation revision or notification obligation survives for replay.
 
-The DEOS Oracle dispatch envelope adds the runtime-declared Actors ingress weight to the maximum DEOS Oracle publication branch. Independently metered fanout and actor execution never enter publication weight.
+The DEOS Oracle dispatch envelope adds the runtime-declared Actors ingress weight to the maximum DEOS Oracle publication branch. Changed publication may mark only bounded dirty authority: broad `ObservationChange` uses independent P64 subscriber pages, while ordered Crossing membership and preflight use P128 candidate geometry with P64 non-tail continuation. Publication performs none of that deferred page traversal. The shared materialization coordinator meters broad fanout, Crossing, and wakeups against their `20%`, `10%`, and `14%` contributions inside one `44%` Actor Control envelope; generated family minima and rotated lending preserve a positive Actor execution remainder. Independently metered fanout and actor execution never enter publication weight.
 
 ## Canonical and Materialized Read Surfaces
 

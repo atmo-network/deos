@@ -1,5 +1,5 @@
 [workspace.package]
-version = "0.7.23"
+version = "0.7.24"
 license = "MIT-0"
 authors = ["DEOS Contributors"]
 homepage = "https://github.com/atmo-network/deos"
@@ -8,7 +8,7 @@ edition = "2024"
 
 [workspace]
 default-members = ["pallets/router", "runtime"]
-members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/router/embedding-runtime", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/router/embedding-runtime", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/session-rotation", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -59,6 +59,7 @@ pallet-asset-registry = { package = "pallet-deos-asset-registry", path = "./pall
 pallet-deos-router = { package = "pallet-deos-router", path = "./pallets/router", default-features = false }
 pallet-governance = { package = "pallet-deos-governance", path = "./pallets/governance", default-features = false }
 pallet-oracle = { package = "pallet-deos-oracle", path = "./pallets/oracle", default-features = false }
+pallet-session-rotation = { package = "pallet-deos-session-rotation", path = "./pallets/session-rotation", default-features = false }
 pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }
 pallet-tmc = { package = "pallet-deos-tmc", path = "./pallets/tmc", default-features = false }
 
@@ -82,6 +83,11 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smallvec = "1.11"
 sp-api = { version = "43.0.0", default-features = false }
 sp-arithmetic = { version = "28.0.1", default-features = false }
+
+# Temporary minimal backport of Polkadot SDK PR #12408 / merge 408895c27a5aff4bac99e956df5426983566f8cb.
+# Remove when the selected SDK line contains full-balance Asset Conversion reserve semantics.
+[patch.crates-io]
+pallet-asset-conversion = { path = "vendor/pallet-asset-conversion" }
 
 [profile.release]
 opt-level = 3

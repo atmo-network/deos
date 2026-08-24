@@ -5,6 +5,7 @@ Excludes: Runtime queries, history, plan authoring, and trading recommendations.
 Zone: Observation domain UI; receives provider capabilities from its composition root.
 -->
 <script lang="ts">
+  import type { ActorMaterializationProjection } from '$lib/automation/materialization';
   import { formatObservationFeed } from '$lib/observation/inspection';
   import type {
     ObservationFeedIdentity,
@@ -34,6 +35,11 @@ Zone: Observation domain UI; receives provider capabilities from its composition
           actorId?: number,
         ) => Promise<ReadModelValue<ObservationInspection>>)
       | null;
+    loadMaterialization:
+      | ((
+          feed: ObservationFeedIdentity,
+        ) => Promise<ActorMaterializationProjection>)
+      | null;
   };
 
   let {
@@ -42,6 +48,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
     actorOptions = [],
     loadFeeds,
     loadInspection,
+    loadMaterialization,
   }: Props = $props();
   let feeds = $state<ReadModelValue<ObservationFeedIdentity[]> | null>(null);
   let inspection = $state<ReadModelValue<ObservationInspection> | null>(null);
@@ -50,6 +57,9 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   let maxAgeBlocks = $state(100);
   let loadingFeeds = $state(false);
   let loadingInspection = $state(false);
+  let materialization = $state<ActorMaterializationProjection | null>(null);
+  let loadingMaterialization = $state(false);
+  let materializationError = $state<string | null>(null);
   let error = $state<string | null>(null);
 
   const selectedFeed = $derived(feeds?.value[selectedFeedIndex] ?? null);
@@ -98,6 +108,39 @@ Zone: Observation domain UI; receives provider capabilities from its composition
             ? loadError.message
             : 'Observation registry read failed';
         loadingFeeds = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    const feed = selectedFeed;
+    refreshKey;
+    if (!feed || !loadMaterialization) {
+      materialization = null;
+      materializationError = loadMaterialization
+        ? null
+        : 'Actor materialization projection unavailable';
+      return;
+    }
+    let cancelled = false;
+    loadingMaterialization = true;
+    materializationError = null;
+    void loadMaterialization(feed)
+      .then((nextMaterialization) => {
+        if (cancelled) return;
+        materialization = nextMaterialization;
+        loadingMaterialization = false;
+      })
+      .catch((loadError) => {
+        if (cancelled) return;
+        materialization = null;
+        materializationError =
+          loadError instanceof Error
+            ? loadError.message
+            : 'Actor materialization read failed';
+        loadingMaterialization = false;
       });
     return () => {
       cancelled = true;
@@ -186,6 +229,83 @@ Zone: Observation domain UI; receives provider capabilities from its composition
       class="h-9 py-1.5 text-xs tabnum"
     />
   </div>
+
+  {#if materializationError}
+    <Notice variant="warn">{materializationError}</Notice>
+  {:else if loadingMaterialization}
+    <div class="text-(--mono-muted)">
+      Reading finalized Actor materialization state…
+    </div>
+  {:else if materialization}
+    <section
+      class="grid gap-2 rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3"
+      aria-labelledby="materialization-heading"
+    >
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3
+            id="materialization-heading"
+            class="font-medium text-(--mono-text)"
+          >
+            Reactive materialization
+          </h3>
+          <p class="text-[10px] text-(--mono-muted)">
+            Direct canonical capacity for the selected feed · current bounded
+            worker faults
+          </p>
+        </div>
+        <Badge
+          variant={materialization.faults.crossing ||
+          materialization.faults.fanout ||
+          materialization.faults.wakeup
+            ? 'info'
+            : 'tmc'}
+        >
+          {materialization.faults.crossing ||
+          materialization.faults.fanout ||
+          materialization.faults.wakeup
+            ? 'worker fault'
+            : 'clear'}
+        </Badge>
+      </div>
+      <div class={compact ? 'grid gap-1' : 'grid grid-cols-2 gap-x-4 gap-y-1'}>
+        <DetailRow
+          label="User Crossing memberships"
+          value={`${materialization.crossingCapacity.userMemberships} / ${materialization.crossingCapacity.userLimit}`}
+          valueClass="tabnum"
+        />
+        <DetailRow
+          label="Total Crossing memberships"
+          value={`${materialization.crossingCapacity.totalMemberships} / ${materialization.crossingCapacity.totalLimit}`}
+          valueClass="tabnum"
+        />
+        <DetailRow
+          label="Crossing worker"
+          value={materialization.faults.crossing
+            ? `${materialization.faults.crossing.class} · revision ${materialization.faults.crossing.revision?.toString() ?? 'none'}`
+            : 'Clear'}
+        />
+        <DetailRow
+          label="Fanout worker"
+          value={materialization.faults.fanout
+            ? `${materialization.faults.fanout.class} · revision ${materialization.faults.fanout.revision} · position ${materialization.faults.fanout.subscriberPosition}`
+            : 'Clear'}
+        />
+        <DetailRow
+          label="Wakeup worker"
+          value={materialization.faults.wakeup
+            ? `${materialization.faults.wakeup.class} · ${materialization.faults.wakeup.key.type} ${materialization.faults.wakeup.key.type === 'Block' ? materialization.faults.wakeup.key.block : materialization.faults.wakeup.key.tick} · page ${materialization.faults.wakeup.page}`
+            : 'Clear'}
+        />
+      </div>
+      {#if materialization.faults.crossing || materialization.faults.fanout || materialization.faults.wakeup}
+        <Notice variant="warn">
+          Optional materialization may be halted for the affected worker. This
+          current fault projection is not historical incident evidence.
+        </Notice>
+      {/if}
+    </section>
+  {/if}
 
   {#if loadingFeeds || loadingInspection}
     <div class="text-(--mono-muted)">Reading finalized observation state…</div>

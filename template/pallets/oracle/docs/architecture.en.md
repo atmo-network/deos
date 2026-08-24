@@ -26,7 +26,7 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 `FeedId` remains the immutable identity key chosen by the host. `FeedConfig` stores the authorized producer, explicit meaning and provenance, scalar scale, aggregation policy, zero policy, and lifecycle. The package never infers semantic equivalence, reverse direction, market meaning, or producer trust.
 
-`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current)` after a changed scalar and exposes no independent numeric Weight. Hook failure rolls back both the Oracle value and downstream transition admission.
+`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current, cause_provenance)` after a changed scalar; signed `publish` supplies `ExternalPhase`, while `publish_from` and `ObservationSink` supply fail-closed `Deferred`. The hook exposes no independent numeric Weight. Hook failure rolls back both the Oracle value and downstream transition admission.
 
 ## Storage Topology
 

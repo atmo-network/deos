@@ -11,7 +11,7 @@ The fixture deliberately uses:
 - A runtime-local transaction extension proving successful and failed Executive transfer ingress without event scanning.
 - Default-deny funding authority and deterministic unsupported DEX, liquidity, and staking adapters in the default profile.
 - An opt-in `dex-fixture` profile with one fixed-rate exact-output pair and one explicitly Temporary exact-input fixture, with no imported pool topology.
-- Mutable User and System Continuation coverage for cooldown, suffix resumption, concurrent Executive ingress, cancellation, pure close, and try-state integrity.
+- Mutable User and System `ActorRunState` coverage for open/finalized nonce separation, cursor and eligibility ownership, immutable Opening/funding facts, exact outcomes, cooldown, suffix resumption, concurrent Executive ingress, cancellation, pure close, and try-state integrity.
 - No DEOS primitives, TMCTOL topology, governance catalog, DEOS Router, TMC, or staking pallet.
 
 Run its focused evidence from `template/`:
@@ -25,4 +25,4 @@ cargo check -p pallet-deos-actors-embedding-fixture --no-default-features
 cargo clippy -p pallet-deos-actors-embedding-fixture --all-targets --all-features -- -D warnings
 ```
 
-Capability, ingress, Continuation, lifecycle, metadata, and optional-adapter evidence belongs in this crate so failures expose pressure on the public Actors embedding contract rather than borrowing DEOS runtime helpers.
+Capability, ingress, run-state, lifecycle, metadata, and optional-adapter evidence belongs in this crate so failures expose pressure on the public Actors embedding contract rather than borrowing DEOS runtime helpers.

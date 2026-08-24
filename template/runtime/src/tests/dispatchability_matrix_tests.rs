@@ -1,5 +1,8 @@
 use crate::{Runtime, configs::RuntimeBlockWeights};
-use polkadot_sdk::frame_support::{dispatch::DispatchClass, weights::Weight};
+use polkadot_sdk::frame_support::{
+  dispatch::{DispatchClass, Pays},
+  weights::Weight,
+};
 
 type ActorsWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
 type AssetRegistryWeights = crate::weights::pallet_asset_registry::SubstrateWeight<Runtime>;
@@ -9,13 +12,14 @@ type RouterWeights = crate::weights::pallet_deos_router::SubstrateWeight<Runtime
 type StakingWeights = crate::weights::pallet_staking::SubstrateWeight<Runtime>;
 type TmcWeights = crate::weights::pallet_tmc::SubstrateWeight<Runtime>;
 
-const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 63;
+const EXPECTED_CUSTOM_CALL_FAMILIES: usize = 65;
 
 #[derive(Clone, Copy)]
 struct DispatchabilityRow {
   family: &'static str,
   class: DispatchClass,
   maximum_weight: Weight,
+  success_payment: Pays,
 }
 
 fn normal(family: &'static str, maximum_weight: Weight) -> DispatchabilityRow {
@@ -23,6 +27,16 @@ fn normal(family: &'static str, maximum_weight: Weight) -> DispatchabilityRow {
     family,
     class: DispatchClass::Normal,
     maximum_weight,
+    success_payment: Pays::Yes,
+  }
+}
+
+fn actor_funded_success(family: &'static str, maximum_weight: Weight) -> DispatchabilityRow {
+  DispatchabilityRow {
+    family,
+    class: DispatchClass::Normal,
+    maximum_weight,
+    success_payment: Pays::No,
   }
 }
 
@@ -76,7 +90,7 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
       "Actors.resume_actor",
       ActorsWeights::resume_actor().saturating_add(close),
     ),
-    normal(
+    actor_funded_success(
       "Actors.manual_trigger",
       ActorsWeights::manual_trigger().saturating_add(close),
     ),
@@ -116,10 +130,7 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
     ),
     normal("Actors.activate_actor", ActorsWeights::activate_actor()),
     normal("Actors.deactivate_actor", ActorsWeights::deactivate_actor()),
-    normal(
-      "Actors.cancel_continuation",
-      ActorsWeights::continuation_cancel(),
-    ),
+    normal("Actors.cancel_run", ActorsWeights::run_cancel()),
     normal(
       "AssetRegistry.register_foreign_asset",
       AssetRegistryWeights::register_foreign_asset(),
@@ -195,6 +206,8 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
       "DEOS Router.update_router_fee",
       RouterWeights::update_router_fee(),
     ),
+    normal("DEOS Router.swap_exact_output", RouterWeights::swap()),
+    normal("DEOS Router.create_pool", RouterWeights::create_pool()),
     normal(
       "DEOS Staking.register_staking_asset",
       StakingWeights::register_staking_asset(),
@@ -276,6 +289,11 @@ fn every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input(
   );
   let block_weights = RuntimeBlockWeights::get();
   for row in rows {
+    if row.family == "Actors.manual_trigger" {
+      assert_eq!(row.success_payment, Pays::No);
+    } else {
+      assert_eq!(row.success_payment, Pays::Yes);
+    }
     let class_limits = block_weights.get(row.class);
     let max_extrinsic = class_limits.max_extrinsic.unwrap_or(
       class_limits

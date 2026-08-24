@@ -142,6 +142,17 @@ mod benches {
   }
 
   #[benchmark]
+  fn create_pool() {
+    let caller: T::AccountId = whitelisted_caller();
+    let asset_a = T::NativeAsset::get();
+    let asset_b = AssetKind::Local(19);
+    fund::<T>(&caller, &[asset_a, asset_b]);
+
+    #[extrinsic_call]
+    create_pool(RawOrigin::Signed(caller), asset_a, asset_b);
+  }
+
+  #[benchmark]
   fn update_router_fee() {
     let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(1);
 

@@ -38,10 +38,13 @@ The Router is a decision and execution mechanism. It does not own treasury polic
 - Fee routing, publication, Actor ingress, market mutation, balance changes, Router events, and outcome construction commit or roll back together.
 - Event and outcome route identity, amounts, fees, legs, and Weight class remain identical.
 - Unknown adapter or execution failures classify as Permanent at the Actor boundary.
+- Every accepted route endpoint is the unique canonical `AssetKind` for its `LedgerAssetKey`; semantic aliases of one physical ledger are invalid.
+- Public XYK execution enters through Router exact-input or exact-output calls so Router fee collection cannot be bypassed.
+- Permissionless pool creation enters through one host `PoolLifecycleApi` transaction that owns the underlying pool, LP identity, required observation topology, and rollback.
 
 ## Supported Assets and Route Families
 
-`AssetKind` is the shared asset identity. `NativeAsset` is host configuration. A route contains at most two legs under the current contract.
+`AssetKind` is shared semantic identity, while `LedgerAssetKey::{Native, Assets(u32)}` is physical-ledger identity. `Local(id)` and `Foreign(id)` cannot coexist as accepted representations of one `Assets(id)` ledger. `NativeAsset` is host configuration. A route contains at most two legs under the current contract.
 
 | Family | Legs | Admission |
 | --- | --- | --- |
@@ -293,7 +296,9 @@ Actor admission uses the maximum Router Weight class reachable by the authored s
 
 ## Adapter Contracts
 
-`AssetConversionApi` exposes canonical pool identity, current reserves, exact-input and exact-output one-pool quotes, and execution of one identified pool leg returning actual spend and output. Low-level helpers are package-private unless their names explicitly state single-pool primitive semantics.
+`AssetConversionApi` exposes canonical pool identity, current full-balance reserves, exact-input and exact-output one-pool quotes, and execution of one identified pool leg returning actual spend and output. Low-level helpers are package-private unless their names explicitly state single-pool primitive semantics.
+
+`PoolLifecycleApi` exposes one permissionless atomic creation transition. The host preflights canonical physical distinctness, LP namespace/collision/capacity, and required observation topology before creating the underlying pool; it verifies the actual LP identity and commits LP binding plus observation topology in the same rollback boundary.
 
 `TmcInterface` exposes curve existence, collateral support, exact-input recipient quote, and mint execution returning actual recipient output. It does not expose redemption or exact-output mint.
 
@@ -316,7 +321,7 @@ Package `try_state` proves the fee bound, canonical pair ordering, and one-to-on
 
 ## Public Calls and Runtime APIs
 
-The signed swap call preserves its existing call index while evolving to return or emit canonical outcome truth. Governance fee update preserves its existing call index and bounded origin contract.
+Call `0` executes signed exact-input swaps. Call `1` updates the bounded Router fee through governance. Call `2` executes signed exact-output swaps under a total caller-input cap. Call `3` permissionlessly creates one complete host-owned pool topology. Raw host XYK swaps and raw pool creation are outside the package contract and must be filtered by the embedding runtime.
 
 Pallet-facing execution APIs accept caller, recipient, assets, and typed intent. Exact-input and exact-output share preparation, comparator, protection, execution, and outcome owners rather than parallel implementations.
 

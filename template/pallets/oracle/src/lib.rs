@@ -78,12 +78,19 @@ pub enum ObservationState<BlockNumber> {
   Stale(Observation<BlockNumber>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservationCauseProvenance {
+  ExternalPhase,
+  Deferred,
+}
+
 pub trait OnObservationChanged<FeedId> {
   fn on_observation_changed(
     feed: FeedId,
     revision: Revision,
     previous: Option<OracleValue>,
     current: OracleValue,
+    cause_provenance: ObservationCauseProvenance,
   ) -> DispatchResult;
 }
 
@@ -93,6 +100,7 @@ impl<FeedId> OnObservationChanged<FeedId> for () {
     _: Revision,
     _: Option<OracleValue>,
     _: OracleValue,
+    _: ObservationCauseProvenance,
   ) -> DispatchResult {
     Ok(())
   }
@@ -400,7 +408,12 @@ pub mod pallet {
     )]
     pub fn publish(origin: OriginFor<T>, feed: T::FeedId, sample: OracleValue) -> DispatchResult {
       let producer = T::PublishOrigin::ensure_origin(origin)?;
-      Self::publish_from(producer, feed, sample)
+      Self::publish_with_provenance(
+        producer,
+        feed,
+        sample,
+        ObservationCauseProvenance::ExternalPhase,
+      )
     }
   }
 
@@ -426,6 +439,15 @@ pub mod pallet {
       producer: T::ProducerId,
       feed: T::FeedId,
       sample: OracleValue,
+    ) -> DispatchResult {
+      Self::publish_with_provenance(producer, feed, sample, ObservationCauseProvenance::Deferred)
+    }
+
+    fn publish_with_provenance(
+      producer: T::ProducerId,
+      feed: T::FeedId,
+      sample: OracleValue,
+      cause_provenance: ObservationCauseProvenance,
     ) -> DispatchResult {
       let config = Feeds::<T>::get(feed).ok_or(Error::<T>::FeedNotFound)?;
       ensure!(
@@ -476,6 +498,7 @@ pub mod pallet {
           revision,
           previous.map(|observation| observation.value),
           value,
+          cause_provenance,
         )?;
       }
       Observations::<T>::insert(

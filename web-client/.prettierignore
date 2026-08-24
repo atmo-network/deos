@@ -4,4 +4,5 @@ build/
 .papi
 src/lib/automation/actors-semantic-manifest.json
 src/lib/automation/actors-fee-envelope-vectors.json
+src/lib/automation/actors-cost-vectors.json
 src/lib/automation/actors-abi-manifest.json

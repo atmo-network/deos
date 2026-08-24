@@ -363,8 +363,9 @@ main() {
     reject_pattern 'get_preimage\(hash\)' \
         "Witness preparation regressed to loading the generic preimage value from storage" \
         "$runtime_configs/governance_config.rs"
-    reject_pattern 'DispatchClass::|Pays::' \
-        "Custom public call changed dispatch class or payment semantics outside the runtime dispatchability matrix" \
+    reject_pattern_except 'DispatchClass::' \
+        'pallets/actors/src/lib\.rs:[0-9]+:[[:space:]]+DispatchClass::Mandatory,$' \
+        "Custom public call changed dispatch class outside the runtime dispatchability matrix" \
         "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/asset-registry/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/governance/src/lib.rs" \
@@ -372,6 +373,26 @@ main() {
         "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/staking/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/tmc/src/lib.rs"
+    reject_pattern 'Pays::' \
+        "Custom public call changed payment semantics outside the Actors-funded Manual occurrence boundary" \
+        "$TEMPLATE_DIR/pallets/asset-registry/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/governance/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/oracle/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/staking/src/lib.rs" \
+        "$TEMPLATE_DIR/pallets/tmc/src/lib.rs"
+    local actor_pays_count
+    actor_pays_count="$(rg -N -o 'Pays::' "$TEMPLATE_DIR/pallets/actors/src/lib.rs" | wc -l | tr -d '[:space:]')"
+    [[ "$actor_pays_count" == "5" ]] || {
+        log_error "Actors public-call payment surface diverged from the audited Manual and mandatory-prepass boundaries"
+        exit 1
+    }
+    require_anchor 'Call::actor_prepass' \
+        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" "Mandatory Actor Prepass inherent lost its canonical call owner"
+    require_anchor 'actor_type == ActorType::User && trigger_processed' \
+        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" "Manual User occurrence no longer owns the sole Actors Pays::No success path"
+    require_anchor 'actor_funded_success' \
+        "$TEMPLATE_DIR/runtime/src/tests/dispatchability_matrix_tests.rs" "Actor-funded success payment is missing from the dispatchability matrix"
     require_anchor 'every_custom_runtime_call_family_fits_its_dispatch_envelope_at_maximum_input' \
         "$TEMPLATE_DIR/runtime/src/tests/dispatchability_matrix_tests.rs" "Custom-call dispatchability matrix is missing"
     local custom_call_count expected_custom_call_count
@@ -383,6 +404,7 @@ main() {
         "$TEMPLATE_DIR/pallets/router/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/staking/src/lib.rs" \
         "$TEMPLATE_DIR/pallets/tmc/src/lib.rs" | wc -l | tr -d '[:space:]')"
+    custom_call_count="$((custom_call_count - 1))" # Payload-free Mandatory inherent is not a signed dispatchability-matrix family.
     expected_custom_call_count="$(awk \
         '$1 == "const" && $2 == "EXPECTED_CUSTOM_CALL_FAMILIES:" { gsub(/;/, "", $5); print $5 }' \
         "$TEMPLATE_DIR/runtime/src/tests/dispatchability_matrix_tests.rs")"
@@ -648,12 +670,12 @@ main() {
         "$actors_tests" "Actors cursor-local unsuccessful-attempt reset evidence is missing"
     require_anchor 'retry_target_uses_only_cursor_local_count_and_last_attempt_block' \
         "$actors_tests" "Actors retry timing no longer proves its minimal stored inputs"
-    reject_pattern '(?:pub\s+attempt:\s*u32|ContinuationState\.attempt|\bcontinuation\.attempt|\battempt:\s*u32)' \
+    reject_pattern '(?:pub\s+attempt:\s*u32|ActorRunState\.attempt|\brun_state\.attempt|\battempt:\s*u32)' \
         "Removed Actors cycle-global attempt ordinal reintroduced" \
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/docs" \
         "$PROJECT_ROOT/docs/actors-control-plane.contract.en.md" \
         "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/web-client/docs"
-    require_anchor 'continuation_attempts_have_unique_chain_coordinates_without_the_stored_ordinal' \
+    require_anchor 'run_attempts_have_unique_chain_coordinates_without_the_stored_ordinal' \
         "$actors_tests" "Actors attempt-identity contraction proof is missing"
     require_anchor 'pub enum ActorClassificationError' \
         "$actors_lifecycle_types" \
@@ -669,7 +691,7 @@ main() {
         "Actors simulation classification wrapper is missing"
     require_anchor 'eligibility_projection_rejects_partial_active_partitions' "$actors_tests" \
         "Actors shared eligibility/simulation classification evidence is missing"
-    reject_pattern 'SimulationError::(?:ActorInvariant|ContinuationInvariant|ComputationOverflow)' \
+    reject_pattern 'SimulationError::(?:ActorInvariant|RunInvariant|ComputationOverflow)' \
         "Duplicated classification mapping reintroduced into simulation" \
         "$TEMPLATE_DIR/pallets/actors/src" "$TEMPLATE_DIR/pallets/actors/docs"
     require_anchor 'public_api_error_signatures_use_shared_typed_cores' "$actors_tests" \
@@ -708,7 +730,7 @@ main() {
     require_anchor 'cumulative_outcomes: attempt.outcomes' \
         "$TEMPLATE_DIR/pallets/actors/src/execution.rs" \
         "Actors simulation reconstructed counters outside production finalization"
-    require_anchor 'continuation_simulation_preserves_retry_position_and_committed_state' \
+    require_anchor 'run_simulation_preserves_retry_position_and_committed_state' \
         "$actors_tests" "Actors shared failure-cause simulation evidence is missing"
     reject_pattern '\b(?:SimulationStepOutcome|SimulationStatus)\b' \
         "Retired simulation-only Actors outcome vocabulary reintroduced" \
@@ -722,7 +744,7 @@ main() {
         "$TEMPLATE_DIR/pallets/actors" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client/src"
     require_anchor 'opening_and_current_predicates_observe_distinct_step_state' "$actors_tests" \
         "Actors explicit Opening/Current timing evidence is missing"
-    require_anchor 'opening_predicate_result_is_reused_by_continuation' "$actors_tests" \
+    require_anchor 'opening_predicate_result_is_reused_by_run_state' "$actors_tests" \
         "Actors frozen Opening truth evidence is missing"
     require_anchor 'unavailable_observation_skips_without_incrementing_failures' "$actors_tests" \
         "Actors false-precondition skip evidence is missing"
@@ -767,10 +789,84 @@ main() {
     reject_pattern 'predicate_set_evaluation\(step\.preconditions\.evaluation_units\(\)\)' \
         "Actors dual-phase predicate Weight bypasses benchmark-domain chunking" \
         "$TEMPLATE_DIR/pallets/actors/src"
-    require_anchor 'cycle_closes_with_fee_budget_exhausted_when_unfunded' "$actors_tests" \
-        "Actors fee-budget close-cause evidence is missing"
-    require_anchor 'balance_exhausted_takes_precedence_over_fee_budget_exhausted' "$actors_tests" \
-        "Actors balance-versus-fee close-cause precedence evidence is missing"
+    reject_pattern 'BalanceExhausted|FeeBudgetExhausted' \
+        "Actors active runtime/client surfaces revived retired mid-pipeline economic close reasons" \
+        "$TEMPLATE_DIR/pallets/actors/src" \
+        "$TEMPLATE_DIR/runtime/src" \
+        "$PROJECT_ROOT/web-client/src/lib/automation/eligibility.ts"
+    require_anchor 'underfunded_manual_occurrence_creates_no_fee_readiness_or_apoptosis' "$actors_tests" \
+        "Actors underfunded Manual occurrence preservation evidence is missing"
+    require_anchor 'manual_trigger_collection_failure_rolls_back_readiness_and_fee_movement' "$actors_tests" \
+        "Actors Manual occurrence collection rollback evidence is missing"
+    require_anchor 'address_event_charges_occurrence_before_pipeline_opening' "$actors_tests" \
+        "Actors AddressEvent occurrence charging evidence is missing"
+    require_anchor 'underfunded_address_event_advances_without_fee_readiness_or_apoptosis' "$actors_tests" \
+        "Actors automatic AddressEvent underfunding evidence is missing"
+    require_anchor 'address_event_collection_failure_preserves_source_progress_without_readiness' "$actors_tests" \
+        "Actors automatic AddressEvent collection-failure progression evidence is missing"
+    require_anchor 'address_event_trigger_occurrence' \
+        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
+        "Actors generated AddressEvent Trigger Weight owner is missing"
+    require_anchor 'observation_change_charges_occurrence_before_pipeline_opening' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
+        "Actors ObservationChange occurrence charging evidence is missing"
+    require_anchor 'underfunded_observation_change_advances_without_fee_readiness_or_apoptosis' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/observations.rs" \
+        "Actors automatic ObservationChange underfunding evidence is missing"
+    require_anchor 'observation_change_trigger_occurrence' \
+        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
+        "Actors generated ObservationChange Trigger Weight owner is missing"
+    require_anchor 'observation_crossing_fire_charges_before_readiness' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
+        "Actors ObservationCrossing fire occurrence charging evidence is missing"
+    require_anchor 'underfunded_crossing_fire_advances_without_fee_readiness_or_apoptosis' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
+        "Actors automatic ObservationCrossing underfunding evidence is missing"
+    require_anchor 'crossing_fire_collection_failure_advances_without_readiness' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
+        "Actors automatic ObservationCrossing collection-failure progression evidence is missing"
+    require_anchor 'crossing_batch_falls_back_to_scalar_progress_for_an_underfunded_member' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/crossing.rs" \
+        "Actors ObservationCrossing batch underfunding progress evidence is missing"
+    require_anchor 'observation_crossing_trigger_occurrence' \
+        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
+        "Actors generated ObservationCrossing Trigger Weight owner is missing"
+    require_anchor 'at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors AtTime occurrence charging evidence is missing"
+    require_anchor 'busy_at_time_occurrence_charges_and_preserves_independent_run_service' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors busy AtTime occurrence evidence is missing"
+    require_anchor 'underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors automatic AtTime underfunded-apoptosis evidence is missing"
+    require_anchor 'at_time_trigger_occurrence' \
+        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
+        "Actors generated AtTime Trigger Weight owner is missing"
+    require_anchor 'cadenced_latch_disables_detection_until_pipeline_opening' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors Cadenced useful-latch disable/re-arm evidence is missing"
+    require_anchor 'busy_cadenced_occurrence_charges_and_preserves_independent_run_service' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors busy Cadenced occurrence evidence is missing"
+    require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
+        "Actors automatic Cadenced underfunding evidence is missing"
+    require_anchor 'pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/wakeups.rs" \
+        "Actors independent Pipeline/Trigger temporal topology evidence is missing"
+    require_anchor 'cadenced_trigger_occurrence' \
+        "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
+        "Actors generated Cadenced Trigger Weight owner is missing"
+    reject_pattern 'Cadenced never reads or sets `pending_signal`|including while Running/Suspended or already pending|setting or coalescing readiness' \
+        "Actors documentation revived paid latched activity or bypassed canonical cadence readiness" \
+        "$TEMPLATE_DIR/pallets/actors/docs" "$PROJECT_ROOT/docs"
+    reject_pattern '\bFresh (?:cohort|opportunity|opening|Active|activation|cycle)\b' \
+        "Actors specification revived ambiguous Fresh scheduler vocabulary" \
+        "$TEMPLATE_DIR/pallets/actors/docs/specification.en.md"
+    require_anchor 'observation_fanout_blocked_page' \
+        "$TEMPLATE_DIR/pallets/actors/src/lib.rs" \
+        "Actors ordinary fanout admission omits the measured blocked-fallback owner"
     require_anchor '`Attempt identity proof`' \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "Actors attempt-identity proof is missing from the implementation map"

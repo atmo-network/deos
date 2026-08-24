@@ -460,14 +460,7 @@ pub mod pallet {
     }
 
     fn assets_are_distinct(left: AssetKind, right: AssetKind) -> bool {
-      match (left, right) {
-        (AssetKind::Native, AssetKind::Native) => false,
-        (
-          AssetKind::Local(left_id) | AssetKind::Foreign(left_id),
-          AssetKind::Local(right_id) | AssetKind::Foreign(right_id),
-        ) => left_id != right_id,
-        _ => true,
-      }
+      left.is_valid_market_pair(right)
     }
 
     fn ensure_asset_exists(asset: AssetKind) -> Result<(), DispatchError> {

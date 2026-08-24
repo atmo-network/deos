@@ -19,7 +19,11 @@ use pallet_deos_actors::{
   ActorContract, CompletionPolicy, FundingSourcePolicy, Mutability, Step, StepErrorPolicy, Task,
   Trigger,
 };
-use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok};
+use polkadot_sdk::{
+  frame_support::{BoundedVec, assert_noop, assert_ok, traits::Contains},
+  pallet_asset_conversion::PoolLocator,
+  sp_runtime::traits::Dispatchable,
+};
 use primitives::AssetKind;
 
 /// Setup test environment with pools and liquidity
@@ -42,6 +46,72 @@ fn check_router_host_pool_registry() -> Result<(), &'static str> {
     }
   }
   Ok(())
+}
+
+#[test]
+fn complete_pool_topology_integrity_rejects_every_corruption_class() {
+  use pallet_deos_router::LpPairIntegrity;
+
+  #[derive(Clone, Copy)]
+  enum Corruption {
+    MissingReverse,
+    OrphanReverse,
+    MissingOracle,
+    PhysicalAlias,
+  }
+
+  for corruption in [
+    Corruption::MissingReverse,
+    Corruption::OrphanReverse,
+    Corruption::MissingOracle,
+    Corruption::PhysicalAlias,
+  ] {
+    seeded_test_ext().execute_with(|| {
+      assert_ok!(setup_test_environment());
+      assert!(
+        <crate::configs::deos_router_config::RuntimeLpPairIntegrity as LpPairIntegrity>::validate_complete_topology()
+          .is_ok()
+      );
+      let (pair, pool) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
+        .next()
+        .expect("one pool exists");
+      match corruption {
+        Corruption::MissingReverse => {
+          pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+            pairs.remove(&pool.lp_token);
+          });
+        }
+        Corruption::OrphanReverse => {
+          pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+            pairs
+              .try_insert(
+                pool.lp_token.saturating_add(10_000),
+                (AssetKind::Local(800_001), AssetKind::Local(800_002)),
+              )
+              .expect("orphan entry fits");
+          });
+        }
+        Corruption::MissingOracle => {
+          pallet_oracle::Feeds::<Runtime>::remove(
+            crate::configs::oracle_config::deos_router_pool_feed(pair.0, pair.1),
+          );
+        }
+        Corruption::PhysicalAlias => {
+          let id = primitives::TYPE_FOREIGN | 99;
+          polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::insert(
+            (AssetKind::Local(id), AssetKind::Foreign(id)),
+            polkadot_sdk::pallet_asset_conversion::PoolInfo {
+              lp_token: pool.lp_token.saturating_add(10_000),
+            },
+          );
+        }
+      }
+      assert!(
+        <crate::configs::deos_router_config::RuntimeLpPairIntegrity as LpPairIntegrity>::validate_complete_topology()
+          .is_err()
+      );
+    });
+  }
 }
 
 #[test]
@@ -104,6 +174,355 @@ fn router_host_pool_registry_corruption_matrix_is_deterministic() {
       assert_eq!(check_router_host_pool_registry().err(), expected);
     });
   }
+}
+
+#[test]
+fn raw_asset_conversion_genesis_topology_is_rejected_fail_closed() {
+  use pallet_deos_router::LpPairIntegrity;
+
+  seeded_test_ext().execute_with(|| {
+    assert!(
+      <crate::configs::deos_router_config::RuntimeLpPairIntegrity as LpPairIntegrity>::validate_genesis_topology()
+        .is_ok()
+    );
+    polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::insert(
+      (AssetKind::Native, AssetKind::Local(ASSET_A)),
+      polkadot_sdk::pallet_asset_conversion::PoolInfo { lp_token: 700_001 },
+    );
+    assert_eq!(
+      <crate::configs::deos_router_config::RuntimeLpPairIntegrity as LpPairIntegrity>::validate_genesis_topology(),
+      Err(
+        "raw Asset Conversion genesis pools are unsupported; create complete pools through the permissionless DEOS lifecycle after genesis"
+      )
+    );
+  });
+}
+
+#[test]
+fn canonical_pool_creation_rolls_back_when_lp_index_is_full() {
+  seeded_test_ext().execute_with(|| {
+    pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+      for index in 0..500u32 {
+        pairs
+          .try_insert(
+            100_000 + index,
+            (
+              AssetKind::Local(200_000 + index * 2),
+              AssetKind::Local(200_001 + index * 2),
+            ),
+          )
+          .expect("production LP index capacity");
+      }
+    });
+    let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      DeosRouter::create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1),
+      pallet_deos_router::Error::<Runtime>::LpPairCapacityExceeded
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &pair.0, &pair.1,
+    )
+    .expect("canonical pool identity");
+    assert!(!polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id));
+    assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(
+      crate::configs::oracle_config::deos_router_pool_feed(pool_id.0, pool_id.1)
+    ));
+  });
+}
+
+#[test]
+fn canonical_pool_creation_rolls_back_on_lp_identity_collision() {
+  seeded_test_ext().execute_with(|| {
+    let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
+    crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
+    let expected_lp = polkadot_sdk::pallet_asset_conversion::NextPoolAssetId::<Runtime>::get()
+      .expect("LP namespace initialized");
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      expected_lp,
+      ALICE.into(),
+      true,
+      1,
+    ));
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert!(DeosRouter::create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1).is_err());
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &pair.0, &pair.1,
+    )
+    .expect("canonical pool identity");
+    assert!(!polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id));
+    assert!(pallet_deos_router::LpPairByTokenId::<Runtime>::get().is_empty());
+    assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(
+      crate::configs::oracle_config::deos_router_pool_feed(pool_id.0, pool_id.1)
+    ));
+  });
+}
+
+#[test]
+fn canonical_pool_creation_rolls_back_on_lp_identity_mismatch() {
+  seeded_test_ext().execute_with(|| {
+    let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
+    crate::configs::assets_config::set_force_lp_identity_mismatch(true);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      DeosRouter::create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1),
+      polkadot_sdk::sp_runtime::DispatchError::Other("LP identity mismatch")
+    );
+    crate::configs::assets_config::set_force_lp_identity_mismatch(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &pair.0, &pair.1,
+    )
+    .expect("canonical pool identity");
+    assert!(!polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id));
+    assert!(pallet_deos_router::LpPairByTokenId::<Runtime>::get().is_empty());
+  });
+}
+
+#[test]
+fn canonical_pool_creation_rolls_back_complete_topology_after_underlying_mutation() {
+  seeded_test_ext().execute_with(|| {
+    let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
+    crate::configs::assets_config::set_fail_after_pool_creation(true);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      DeosRouter::create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1),
+      polkadot_sdk::sp_runtime::DispatchError::Other("Injected post-pool lifecycle failure")
+    );
+    crate::configs::assets_config::set_fail_after_pool_creation(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before
+    );
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &pair.0, &pair.1,
+    )
+    .expect("canonical pool identity");
+    assert!(!polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id));
+    assert!(pallet_deos_router::LpPairByTokenId::<Runtime>::get().is_empty());
+    assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(
+      crate::configs::oracle_config::deos_router_pool_feed(pool_id.0, pool_id.1)
+    ));
+  });
+}
+
+#[test]
+fn canonical_pool_creation_builds_complete_topology_and_closes_raw_bypass() {
+  seeded_test_ext().execute_with(|| {
+    let asset_a = AssetKind::Native;
+    let asset_b = AssetKind::Local(ASSET_A);
+    let raw = crate::RuntimeCall::AssetConversion(
+      polkadot_sdk::pallet_asset_conversion::Call::create_pool {
+        asset1: Box::new(asset_a),
+        asset2: Box::new(asset_b),
+      },
+    );
+    assert!(!crate::configs::RuntimeCallFilter::contains(&raw));
+    assert_noop!(
+      raw.dispatch(RuntimeOrigin::signed(ALICE)),
+      polkadot_sdk::frame_system::Error::<Runtime>::CallFiltered
+    );
+
+    assert_ok!(DeosRouter::create_pool(
+      RuntimeOrigin::signed(ALICE),
+      asset_a,
+      asset_b,
+    ));
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &asset_a, &asset_b,
+    )
+    .expect("canonical pool identity");
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .expect("underlying pool exists");
+    assert_eq!(
+      DeosRouter::lp_pair_by_token_id(pool.lp_token),
+      Some(pool_id)
+    );
+    let forward = crate::configs::oracle_config::deos_router_pool_feed(pool_id.0, pool_id.1);
+    let reverse = crate::configs::oracle_config::deos_router_pool_feed(pool_id.1, pool_id.0);
+    assert!(pallet_oracle::Feeds::<Runtime>::contains_key(forward));
+    assert!(pallet_oracle::Feeds::<Runtime>::contains_key(reverse));
+  });
+}
+
+#[test]
+fn raw_asset_conversion_swaps_are_call_filtered_fail_closed() {
+  let path = vec![
+    Box::new(AssetKind::Native),
+    Box::new(AssetKind::Local(ASSET_A)),
+  ];
+  let exact_input = crate::RuntimeCall::AssetConversion(
+    polkadot_sdk::pallet_asset_conversion::Call::swap_exact_tokens_for_tokens {
+      path: path.clone(),
+      amount_in: SWAP_AMOUNT,
+      amount_out_min: MIN_AMOUNT_OUT,
+      send_to: ALICE,
+      keep_alive: true,
+    },
+  );
+  let exact_output = crate::RuntimeCall::AssetConversion(
+    polkadot_sdk::pallet_asset_conversion::Call::swap_tokens_for_exact_tokens {
+      path,
+      amount_out: MIN_AMOUNT_OUT,
+      amount_in_max: SWAP_AMOUNT,
+      send_to: ALICE,
+      keep_alive: true,
+    },
+  );
+  assert!(!crate::configs::RuntimeCallFilter::contains(&exact_input));
+  assert!(!crate::configs::RuntimeCallFilter::contains(&exact_output));
+  seeded_test_ext().execute_with(|| {
+    assert_noop!(
+      exact_input.clone().dispatch(RuntimeOrigin::signed(ALICE)),
+      polkadot_sdk::frame_system::Error::<Runtime>::CallFiltered
+    );
+    assert_noop!(
+      exact_output.clone().dispatch(RuntimeOrigin::signed(ALICE)),
+      polkadot_sdk::frame_system::Error::<Runtime>::CallFiltered
+    );
+  });
+
+  let router = crate::RuntimeCall::DeosRouter(pallet_deos_router::Call::swap {
+    from: AssetKind::Native,
+    to: AssetKind::Local(ASSET_A),
+    amount_in: SWAP_AMOUNT,
+    min_amount_out: MIN_AMOUNT_OUT,
+    recipient: ALICE,
+    deadline: 10,
+  });
+  assert!(crate::configs::RuntimeCallFilter::contains(&router));
+  let router_exact_output =
+    crate::RuntimeCall::DeosRouter(pallet_deos_router::Call::swap_exact_output {
+      from: AssetKind::Native,
+      to: AssetKind::Local(ASSET_A),
+      amount_out: MIN_AMOUNT_OUT,
+      max_amount_in: SWAP_AMOUNT,
+      recipient: ALICE,
+      deadline: 10,
+    });
+  assert!(crate::configs::RuntimeCallFilter::contains(
+    &router_exact_output
+  ));
+}
+
+#[test]
+fn protected_pool_balance_is_included_in_reserves() {
+  use polkadot_sdk::frame_support::traits::{
+    fungible::Inspect,
+    tokens::{Fortitude::Polite, Preservation::Preserve},
+  };
+
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(setup_test_environment());
+    let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &pair.0, &pair.1,
+    )
+    .expect("canonical pool identity");
+    let pool_account =
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::address(&pool_id)
+        .expect("canonical pool account");
+    let full_native = Balances::balance(&pool_account);
+    let preserve_reducible = Balances::reducible_balance(&pool_account, Preserve, Polite);
+    let (native_reserve, _) =
+      crate::AssetConversion::get_reserves(pair.0, pair.1).expect("pool reserves exist");
+    assert_eq!(native_reserve, full_native);
+    assert!(native_reserve > preserve_reducible);
+  });
+}
+
+#[test]
+fn unrelated_non_sufficient_asset_does_not_change_quote() {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(setup_test_environment());
+    let asset_in = AssetKind::Local(ASSET_A);
+    let asset_out = AssetKind::Native;
+    let amount_in = SWAP_AMOUNT;
+    let quote_before = crate::AssetConversion::quote_price_exact_tokens_for_tokens(
+      asset_in, asset_out, amount_in, true,
+    );
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &asset_in, &asset_out,
+    )
+    .expect("canonical pool identity");
+    let pool_account =
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::address(&pool_id)
+        .expect("canonical pool account");
+    const UNRELATED: u32 = 900_001;
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      UNRELATED,
+      ALICE.into(),
+      false,
+      1,
+    ));
+    assert_ok!(Assets::mint(
+      RuntimeOrigin::signed(ALICE),
+      UNRELATED,
+      ALICE.into(),
+      1_000,
+    ));
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      UNRELATED,
+      pool_account.into(),
+      1,
+    ));
+    assert_eq!(
+      crate::AssetConversion::quote_price_exact_tokens_for_tokens(
+        asset_in, asset_out, amount_in, true,
+      ),
+      quote_before
+    );
+  });
+}
+
+#[test]
+fn router_exact_output_swap_enforces_fee_conservation() {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(setup_test_environment());
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let amount_out = MIN_AMOUNT_OUT;
+    let quote = DeosRouter::quote_exact_out(ALICE, from, to, amount_out)
+      .expect("exact-output quote must exist for seeded direct pool");
+    let sender_before = Assets::balance(ASSET_A, ALICE);
+    let recipient_before = Balances::free_balance(ALICE);
+    let burn_before = Assets::balance(ASSET_A, burn_actor_account());
+
+    assert_ok!(DeosRouter::swap_exact_output(
+      RuntimeOrigin::signed(ALICE),
+      from,
+      to,
+      amount_out,
+      quote.amount_in,
+      ALICE,
+      1_000,
+    ));
+
+    let sender_input = sender_before - Assets::balance(ASSET_A, ALICE);
+    let burn_credit = Assets::balance(ASSET_A, burn_actor_account()) - burn_before;
+    assert_eq!(sender_input, quote.amount_in);
+    assert_eq!(sender_input, quote.router_fee + quote.amount_after_fee);
+    assert_eq!(burn_credit, quote.router_fee);
+    assert!(Balances::free_balance(ALICE) - recipient_before >= amount_out);
+  });
 }
 
 #[test]
@@ -519,7 +938,7 @@ fn test_deos_router_error_handling() {
         ALICE,
         1000,
       ),
-      pallet_deos_router::pallet::Error::<Runtime>::IdenticalAssets
+      pallet_deos_router::pallet::Error::<Runtime>::InvalidPoolPair
     );
     // Test zero amount error (caught by MinSwapForeign check)
     assert_noop!(

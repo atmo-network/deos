@@ -27,6 +27,7 @@ pub mod pallet_deos_actors;
 pub mod pallet_deos_router;
 pub mod pallet_governance;
 pub mod pallet_oracle;
+pub mod pallet_session_rotation;
 pub mod pallet_staking;
 pub mod pallet_xcm;
 

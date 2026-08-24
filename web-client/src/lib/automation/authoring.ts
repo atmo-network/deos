@@ -13,6 +13,7 @@ import {
   ACTORS_MAX_PREDICATES_PER_CLAUSE,
   ACTORS_MAX_PREDICATES_PER_STEP,
   ACTORS_MAX_RETRY_ATTEMPTS,
+  ACTORS_MAX_TEMPORAL_DELAY_TICKS,
 } from './actors-protocol-bounds.ts';
 import {
   type ActorContractArtifact,
@@ -212,6 +213,7 @@ export type ActorAuthoringTrigger =
       threshold: string;
       rearmThreshold: string;
     }
+  | { type: 'AtTime'; afterTicks: number }
   | { type: 'Cadenced'; everyTicks: number };
 
 export type ActorAuthoringCompletionPolicy =
@@ -233,7 +235,7 @@ export type ActorAuthoringContract = {
 export type ActorAuthoringLimits = {
   maxContractSteps: number;
   maxExecutionDelayBlocks: number;
-  maxCadenceTicks: number;
+  maxTemporalTicks: number;
   maxRetryAttempts: number;
   maxPreconditionClauses: number;
   maxPredicatesPerClause: number;
@@ -245,7 +247,7 @@ export type ActorAuthoringLimits = {
 export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
   maxContractSteps: ACTORS_MAX_CONTRACT_STEPS,
   maxExecutionDelayBlocks: ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
-  maxCadenceTicks: ACTORS_MAX_EXECUTION_DELAY_BLOCKS,
+  maxTemporalTicks: ACTORS_MAX_TEMPORAL_DELAY_TICKS,
   maxRetryAttempts: ACTORS_MAX_RETRY_ATTEMPTS,
   maxPreconditionClauses: ACTORS_MAX_PRECONDITION_CLAUSES,
   maxPredicatesPerClause: ACTORS_MAX_PREDICATES_PER_CLAUSE,
@@ -880,15 +882,27 @@ function validateTrigger(
       }
       return;
     }
+    case 'AtTime':
+      if (
+        !Number.isSafeInteger(trigger.afterTicks) ||
+        trigger.afterTicks <= 0 ||
+        trigger.afterTicks > limits.maxTemporalTicks
+      ) {
+        issues.push({
+          path: 'trigger.afterTicks',
+          message: `AtTime delay must be within 1..${limits.maxTemporalTicks} timestamp ticks`,
+        });
+      }
+      return;
     case 'Cadenced':
       if (
         !Number.isSafeInteger(trigger.everyTicks) ||
         trigger.everyTicks <= 0 ||
-        trigger.everyTicks > limits.maxCadenceTicks
+        trigger.everyTicks > limits.maxTemporalTicks
       ) {
         issues.push({
           path: 'trigger.everyTicks',
-          message: `Cadence must be within 1..${limits.maxCadenceTicks} timestamp ticks`,
+          message: `Cadence must be within 1..${limits.maxTemporalTicks} timestamp ticks`,
         });
       }
   }
@@ -920,10 +934,10 @@ export function validateActorAuthoringContract(
       message: 'Auto-close target must be a nonzero u64 logical-cycle nonce',
     });
   }
-  if (contract.steps.length === 0 || contract.steps.length > maxSteps) {
+  if (contract.steps.length > maxSteps) {
     issues.push({
       path: 'steps',
-      message: `Active ${contract.actorType} Actor Contract requires 1..${maxSteps} steps`,
+      message: `Active ${contract.actorType} Actor Contract allows 0..${maxSteps} steps`,
     });
   }
   if (
@@ -935,16 +949,24 @@ export function validateActorAuthoringContract(
       message: `Cooldown must be within 0..${limits.maxExecutionDelayBlocks} blocks`,
     });
   }
-  if (contract.trigger.type === 'Cadenced' && contract.cooldownBlocks !== 0) {
+  if (
+    (contract.trigger.type === 'AtTime' ||
+      contract.trigger.type === 'Cadenced') &&
+    contract.cooldownBlocks !== 0
+  ) {
     issues.push({
       path: 'cooldownBlocks',
-      message: 'Cadenced triggers require zero block cooldown',
+      message: 'Temporal triggers require zero block cooldown',
     });
   }
-  if (contract.trigger.type === 'Cadenced' && contract.scheduleWindow != null) {
+  if (
+    (contract.trigger.type === 'AtTime' ||
+      contract.trigger.type === 'Cadenced') &&
+    contract.scheduleWindow != null
+  ) {
     issues.push({
       path: 'scheduleWindow',
-      message: 'Cadenced triggers cannot use a block schedule window',
+      message: 'Temporal triggers cannot use a block schedule window',
     });
   }
   if (
@@ -1341,6 +1363,10 @@ function lowerTrigger(trigger: ActorAuthoringTrigger) {
         direction: runtimeVariant(trigger.direction),
         threshold: BigInt(trigger.threshold),
         rearm_threshold: BigInt(trigger.rearmThreshold),
+      });
+    case 'AtTime':
+      return runtimeVariant('AtTime', {
+        after_ticks: BigInt(trigger.afterTicks),
       });
     case 'Cadenced':
       return runtimeVariant('Cadenced', {

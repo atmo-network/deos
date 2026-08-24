@@ -191,19 +191,18 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
 #[test]
 fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_deos_actors::ActorContracts::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
-      let contract = maybe.as_mut().expect("Burn Actor contract exists");
-      contract.steps = alloc::vec![pallet_deos_actors::Step {
-        precondition: None,
-        task: pallet_deos_actors::Task::Transfer {
-          to: ALICE,
-          asset: AssetKind::Native,
-          amount: AmountResolution::Fixed(0),
-        },
-        on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
-      }]
-      .try_into()
-      .expect("malformed burn plan fits");
+    pallet_deos_actors::ActorContractHeads::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
+      maybe
+        .as_mut()
+        .expect("Burn Actor Contract head exists")
+        .first_step
+        .as_mut()
+        .expect("Burn Actor has inline Step 0")
+        .task = pallet_deos_actors::Task::Transfer {
+        to: ALICE,
+        asset: AssetKind::Native,
+        amount: AmountResolution::Fixed(0),
+      };
     });
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
@@ -566,7 +565,7 @@ fn router_oracle_burn_success_path_commits_once_without_scheduler_or_reward_resi
     let hot = Actors::actor_hot(burn_actor_id).expect("Burn Actor hot state exists");
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none());
-    assert!(Actors::continuation_state(burn_actor_id).is_none());
+    assert!(Actors::actor_run_state(burn_actor_id).is_none());
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
     assert_eq!(
       crate::Staking::native_security_reward_liability(),
@@ -850,6 +849,14 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     System::set_block_number(11);
     Actors::on_initialize(11);
     Actors::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
+    assert_eq!(
+      crate::Assets::balance(super::common::ASSET_A, &bm),
+      balance_before,
+      "stale Contract authority is replaced without same-block execution"
+    );
+    System::set_block_number(12);
+    Actors::on_initialize(12);
+    Actors::on_idle(12, Weight::from_parts(u64::MAX, u64::MAX));
     let balance_after = crate::Assets::balance(super::common::ASSET_A, &bm);
     assert!(
       balance_after > balance_before,
@@ -1915,6 +1922,17 @@ fn treasury_b_buyback_burns_bldr() {
     let native_before = Balances::free_balance(&treasury_b_sov);
     System::reset_events();
     for block in 11..=100 {
+      System::set_block_number(block);
+      set_consensus_timestamp(u64::from(block).saturating_mul(
+        primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,
+      ));
+      Actors::on_initialize(block);
+      Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+    }
+    for block in 101..=108 {
+      if Actors::actor_run_state(treasury_b_id).is_none() {
+        break;
+      }
       System::set_block_number(block);
       set_consensus_timestamp(u64::from(block).saturating_mul(
         primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS,

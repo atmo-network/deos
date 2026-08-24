@@ -1,6 +1,319 @@
 use super::*;
 
 #[test]
+fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let dormant_owner_before = native_balance(&ALICE);
+    assert_ok!(Actors::create_user_actor(
+      RuntimeOrigin::signed(ALICE),
+      Mutability::Mutable,
+      None,
+    ));
+    let dormant = Actors::actor_state_hold(0).expect("Dormant User hold exists");
+    assert!(dormant.breakdown.identity > 0);
+    assert_eq!(dormant.breakdown.contract_head, 0);
+    assert_eq!(dormant.breakdown.contract_body, 0);
+    assert_eq!(dormant.breakdown.detector, 0);
+    assert_eq!(dormant.breakdown.funding, 0);
+    assert_eq!(dormant.breakdown.run, 0);
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), 0));
+    assert!(Actors::actor_state_hold(0).is_none());
+    assert_eq!(
+      native_balance(&ALICE),
+      dormant_owner_before.saturating_sub(TestActorCreationFee::get())
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let one_step = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let five_steps = BoundedVec::try_from(
+      (0..5)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("five Steps fit");
+    let five_step = create_user_with(
+      CHARLIE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      five_steps,
+    );
+    let compact = Actors::actor_state_hold(one_step).expect("one-Step hold exists");
+    let chunked = Actors::actor_state_hold(five_step).expect("five-Step hold exists");
+    assert_eq!(compact.breakdown.contract_body, 0);
+    assert!(compact.breakdown.run > 0);
+    assert_eq!(chunked.breakdown.run, compact.breakdown.run);
+    assert!(chunked.breakdown.contract_body > 0);
+    assert!(chunked.breakdown.contract_head > 0);
+    assert!(chunked.breakdown.funding > 0);
+    let temporal = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      at_time_schedule(10),
+      None,
+      crate::ContractSteps::<Test>::default(),
+    );
+    assert!(
+      Actors::actor_state_hold(temporal)
+        .expect("temporal hold exists")
+        .breakdown
+        .detector
+        > 0
+    );
+
+    let system = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    assert!(Actors::actor_state_hold(system).is_none());
+  });
+}
+
+#[test]
+fn actor_state_hold_failure_and_lifecycle_deltas_are_atomic() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let underfunded_owner = 77u64;
+    let initial = TestActorCreationFee::get().saturating_add(1);
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&underfunded_owner, initial);
+    let sink_before = native_balance(&TestFeeSink::get());
+    assert_noop!(
+      Actors::create_user_actor(
+        RuntimeOrigin::signed(underfunded_owner),
+        Mutability::Mutable,
+        None,
+      ),
+      Error::<Test>::StateHoldUnavailable
+    );
+    assert_eq!(native_balance(&underfunded_owner), initial);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    assert_eq!(Actors::next_actor_id(), 0);
+    assert_eq!(Actors::actor_identity_count(), 0);
+
+    let owner = 78u64;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&owner, 1_000_000);
+    let actor_id = create_user_with(
+      owner,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let old_contract = Actors::actor_contract(actor_id).expect("one-Step Contract exists");
+    let old_hold = Actors::actor_state_hold(actor_id).expect("one-Step hold exists");
+    let free = native_balance(&owner);
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &owner,
+      &BOB,
+      free.saturating_sub(1),
+      polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+    ));
+    let five_steps = BoundedVec::try_from(
+      (0..5)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("five Steps fit");
+    let replacement = user_active_contract(manual_schedule(), None, five_steps)
+      .expect("replacement Contract exists");
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_noop!(
+      Actors::update_contract(RuntimeOrigin::signed(owner), actor_id, replacement.clone()),
+      Error::<Test>::StateHoldUnavailable
+    );
+    assert_eq!(Actors::actor_contract(actor_id), Some(old_contract));
+    assert_eq!(Actors::actor_state_hold(actor_id), Some(old_hold));
+
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&owner, 1_000_000);
+    assert_ok!(Actors::update_contract(
+      RuntimeOrigin::signed(owner),
+      actor_id,
+      replacement,
+    ));
+    let active_hold = Actors::actor_state_hold(actor_id).expect("expanded hold exists");
+    assert!(active_hold.breakdown.contract_body > 0);
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(Actors::deactivate_actor(
+      RuntimeOrigin::signed(owner),
+      actor_id,
+    ));
+    let dormant_hold = Actors::actor_state_hold(actor_id).expect("Dormant hold exists");
+    assert!(dormant_hold.breakdown.identity > 0);
+    assert_eq!(dormant_hold.breakdown.contract_head, 0);
+    assert_eq!(dormant_hold.breakdown.contract_body, 0);
+    assert_eq!(dormant_hold.breakdown.detector, 0);
+    assert_eq!(dormant_hold.breakdown.funding, 0);
+    assert_eq!(dormant_hold.breakdown.run, 0);
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(owner), actor_id));
+    assert!(Actors::actor_state_hold(actor_id).is_none());
+  });
+}
+
+#[test]
+fn funding_ingress_preflights_positive_state_hold_delta_as_temporary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let owner = 79u64;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&owner, 1_000_000);
+    let tracked_steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+    })])
+    .expect("tracked Step fits");
+    let actor_id = create_user_with(
+      owner,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      tracked_steps,
+    );
+    let sovereign = sovereign_account(actor_id);
+    let free = native_balance(&owner);
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &owner,
+      &BOB,
+      free.saturating_sub(1),
+      polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+    ));
+    let failure = Actors::preflight_ingress(&crate::AddressEvent {
+      destination: sovereign,
+      source: Some(owner),
+      asset: TestAsset::Native,
+      amount: 1,
+      provenance: Some(crate::FundingProvenance::Signed),
+    })
+    .expect_err("new funding entry needs additional owner hold capacity");
+    assert_eq!(failure.retry, RetryClass::Temporary);
+    assert_eq!(failure.error, Error::<Test>::StateHoldUnavailable.into());
+    assert!(
+      Actors::actor_funding(actor_id)
+        .expect("funding state exists")
+        .funding_accumulated
+        .is_empty()
+    );
+  });
+}
+
+#[test]
+fn actor_run_state_hold_is_reserved_for_the_active_installed_lifetime() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut retry_step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(Balance::MAX),
+    });
+    retry_step.on_error = RETRY_LATER;
+    let steps = BoundedVec::try_from(vec![retry_step]).expect("one retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    let installed_run_hold = Actors::actor_state_hold(actor_id)
+      .expect("idle hold exists")
+      .breakdown
+      .run;
+    assert!(installed_run_hold > 0);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_some());
+    assert_eq!(
+      Actors::actor_state_hold(actor_id)
+        .expect("Running hold exists")
+        .breakdown
+        .run,
+      installed_run_hold
+    );
+    frame_system::Pallet::<Test>::set_block_number(4);
+    assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      Actors::actor_state_hold(actor_id)
+        .expect("active installed hold remains")
+        .breakdown
+        .run,
+      installed_run_hold
+    );
+  });
+}
+
+#[test]
+fn active_lifetime_run_hold_preserves_autonomous_opening_after_owner_spends_free_balance() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut retry_step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(Balance::MAX),
+    });
+    retry_step.on_error = RETRY_LATER;
+    let steps = BoundedVec::try_from(vec![retry_step]).expect("one retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    let reserved = Actors::actor_state_hold(actor_id)
+      .expect("active installed hold exists")
+      .breakdown
+      .run;
+    assert!(reserved > 0);
+    fund_native(
+      actor_id,
+      user_prefunding_requirement(&inert_contract_steps()),
+    );
+    let owner_free = native_balance(&ALICE);
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &ALICE,
+      &BOB,
+      owner_free.saturating_sub(1),
+      polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+    ));
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+
+    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert!(Actors::actor_run_state(actor_id).is_some());
+    assert_eq!(
+      Actors::actor_state_hold(actor_id)
+        .expect("active installed hold remains")
+        .breakdown
+        .run,
+      reserved
+    );
+  });
+}
+
+#[test]
 fn create_user_charges_creation_fee_and_emits_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -17,7 +330,11 @@ fn create_user_charges_creation_fee_and_emits_event() {
     );
     let inst = Actors::active_actor_view(actor_id).expect("Actors must exist");
     assert_eq!(inst.actor_class, ActorClass::User { owner_slot: 0 });
-    assert_eq!(native_balance(&ALICE), owner_before.saturating_sub(fee));
+    let state_hold = actor_state_hold_total(actor_id);
+    assert_eq!(
+      native_balance(&ALICE),
+      owner_before.saturating_sub(fee).saturating_sub(state_hold)
+    );
     assert_eq!(native_balance(&fee_sink), sink_before.saturating_add(fee));
     assert_eq!(OwnerSlotBitmaps::<Test>::get(ALICE)[0], 0b0000_0001);
     assert!(has_actor_event(|event| {
@@ -61,8 +378,18 @@ fn both_user_creation_calls_charge_dormant_admission_fee_before_identity_mutatio
       None,
     ));
 
-    assert_eq!(native_balance(&ALICE), alice_before.saturating_sub(fee));
-    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_sub(fee));
+    assert_eq!(
+      native_balance(&ALICE),
+      alice_before
+        .saturating_sub(fee)
+        .saturating_sub(actor_state_hold_total(0))
+    );
+    assert_eq!(
+      native_balance(&CHARLIE),
+      charlie_before
+        .saturating_sub(fee)
+        .saturating_sub(actor_state_hold_total(1))
+    );
     assert_eq!(
       native_balance(&fee_sink),
       sink_before.saturating_add(fee.saturating_mul(2))
@@ -75,68 +402,595 @@ fn both_user_creation_calls_charge_dormant_admission_fee_before_identity_mutatio
 }
 
 #[test]
-fn user_active_creation_requires_prefunded_sovereign_before_opening_fee() {
+fn user_active_creation_charges_creation_fee_without_sovereign_service_prefunding() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    // An unfunded User Active creation fails InsufficientBalance before the opening fee
-    // or any identity/locator mutation (spec 7.1).
     let owner_before = native_balance(&ALICE);
     let sink_before = native_balance(&TestFeeSink::get());
-    assert_noop!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(ALICE),
-        Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
-      ),
-      Error::<Test>::InsufficientBalance
-    );
-    assert_eq!(Actors::next_actor_id(), 0);
-    assert_eq!(Actors::actor_identity_count(), 0);
-    assert_eq!(Actors::active_actor_count(), 0);
-    assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
-    assert_eq!(native_balance(&ALICE), owner_before);
-    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
-    assert!(fee_collections().is_empty());
+    let creation_fee = TestActorCreationFee::get();
+    let sovereign = Actors::sovereign_account_id(&ALICE, 0);
+    assert_eq!(native_balance(&sovereign), 0);
 
-    // Dormant creation remains unfunded and admits with no sovereign balance.
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
-      None,
+      user_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 1)),
     ));
-    assert_eq!(native_balance(&Actors::sovereign_account_id(&ALICE, 0)), 0);
+
+    let state_hold = actor_state_hold_total(0);
+    assert_eq!(
+      native_balance(&ALICE),
+      owner_before - creation_fee - state_hold
+    );
+    assert_eq!(
+      native_balance(&TestFeeSink::get()),
+      sink_before + creation_fee
+    );
+    assert_eq!(native_balance(&sovereign), 0);
+    assert_eq!(Actors::actor_identity_count(), 1);
+    assert_eq!(Actors::active_actor_count(), 1);
   });
 }
 
 #[test]
-fn user_active_creation_prefunding_boundary_is_exact_floor_plus_envelope() {
+fn user_active_creation_requires_no_sovereign_activation_prefunding() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = transfer_contract_steps(BOB, 1);
-    let requirement = user_prefunding_requirement(&plan);
-    // requirement - 1 still fails closed before any opening-fee mutation.
-    fund_native_raw(
-      &Actors::sovereign_account_id(&ALICE, 0),
-      requirement.saturating_sub(1),
-    );
-    assert_noop!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(ALICE),
-        Mutability::Mutable,
-        user_active_contract(manual_schedule(), None, plan.clone()),
-      ),
-      Error::<Test>::InsufficientBalance
-    );
-    assert_eq!(Actors::actor_identity_count(), 0);
-    assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
-    // Exactly floor + envelope admits.
-    fund_native_raw(&Actors::sovereign_account_id(&ALICE, 0), 1);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+    ])
+    .expect("two Steps fit");
+    let sovereign = Actors::sovereign_account_id(&ALICE, 0);
+    assert_eq!(native_balance(&sovereign), 0);
+
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
       Mutability::Mutable,
       user_active_contract(manual_schedule(), None, plan),
     ));
+
+    assert_eq!(native_balance(&sovereign), 0);
+    let head = crate::ActorContractHeads::<Test>::get(0).expect("C6 head exists");
+    assert!(
+      head
+        .header
+        .pipeline_machine_envelope
+        .pipeline_machine_fee_upper
+        > 0
+    );
     assert_eq!(Actors::active_actor_count(), 1);
+  });
+}
+
+#[test]
+fn zero_step_user_opening_charges_pipeline_but_no_action_fee() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      BoundedVec::default(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    clear_fee_collections();
+    let fee_sink_before = native_balance(&TestFeeSink::get());
+
+    run_idle(Weight::MAX);
+
+    let pipeline_fee = pipeline_opening_fee(&BoundedVec::default());
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
+    assert_eq!(
+      native_balance(&TestFeeSink::get()),
+      fee_sink_before.saturating_add(pipeline_fee)
+    );
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged {
+        actor_id: id,
+        fee,
+      } if *id == actor_id && *fee == pipeline_fee
+    )));
+    assert_eq!(
+      Actors::actor_identities(actor_id)
+        .expect("persistent zero-Step User remains")
+        .cycle_nonce,
+      1
+    );
+    assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+  });
+}
+
+#[test]
+fn manual_trigger_charges_occurrence_before_pipeline_opening() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    clear_fee_collections();
+
+    let post = Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id)
+      .expect("funded Manual occurrence commits");
+
+    let fee = manual_trigger_fee();
+    assert_eq!(
+      post.pays_fee,
+      polkadot_sdk::frame_support::dispatch::Pays::No
+    );
+    assert_eq!(fee_collections(), vec![fee]);
+    assert_eq!(native_balance(&sovereign), sovereign_before - fee);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before + fee);
+    let instance = Actors::active_actor_view(actor_id).expect("Actor remains");
+    assert!(instance.pending_signal);
+    assert_eq!(instance.cycle_nonce, 0, "Trigger does not open a Pipeline");
+    assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::Manual,
+        fee: charged,
+      } if *id == actor_id && *charged == fee
+    )));
+
+    let pipeline_fee = pipeline_opening_fee(&instance.steps);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert_eq!(fee_collections().get(1), Some(&pipeline_fee));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged {
+        actor_id: id,
+        fee,
+      } if *id == actor_id && *fee == pipeline_fee
+    )));
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("persistent Actor remains")
+        .cycle_nonce,
+      1
+    );
+  });
+}
+
+#[test]
+fn repeated_pending_manual_occurrence_is_latched_without_trigger_fee() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    fund_native(actor_id, manual_trigger_fee());
+    clear_fee_collections();
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ticket = Actors::actor_hot(actor_id)
+      .expect("Actor hot state")
+      .queue_ticket;
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+
+    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    assert!(hot.pending_signal);
+    assert_eq!(
+      hot.queue_ticket, ticket,
+      "coalescing creates no second ticket"
+    );
+    assert_eq!(
+      System::events()
+        .iter()
+        .filter(|record| matches!(
+          &record.event,
+          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+            actor_id: id,
+            trigger_family: TriggerFamily::Manual,
+            ..
+          }) if *id == actor_id
+        ))
+        .count(),
+      1
+    );
+
+    run_idle(Weight::MAX);
+    assert_eq!(
+      System::events()
+        .iter()
+        .filter(|record| matches!(
+          &record.event,
+          RuntimeEvent::Actors(Event::PipelineFeeCharged { actor_id: id, .. })
+            if *id == actor_id
+        ))
+        .count(),
+      1
+    );
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("persistent Actor remains")
+        .cycle_nonce,
+      1
+    );
+  });
+}
+
+#[test]
+fn busy_manual_occurrence_charges_and_latches_only_the_future_pipeline() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+    ])
+    .expect("two Steps fit");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, plan);
+    fund_native(actor_id, 1_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
+    assert_eq!(run_before.cursor, 1);
+    clear_fee_collections();
+    frame_system::Pallet::<Test>::reset_events();
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+
+    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
+    )));
+    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    assert_eq!(hot.cycle_state, CycleState::Running);
+    assert!(hot.pending_signal);
+    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
+    assert_eq!(run_after.cursor, run_before.cursor);
+    assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
+    assert_eq!(
+      run_after.contract_authority.semantic_contract_id,
+      run_before.contract_authority.semantic_contract_id
+    );
+  });
+}
+
+#[test]
+fn underfunded_manual_occurrence_creates_no_fee_readiness_or_apoptosis() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let balance = native_balance(&sovereign);
+    deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
+    clear_fee_collections();
+
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::InsufficientFee
+    );
+
+    assert!(fee_collections().is_empty());
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    assert!(!hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert!(Actors::active_actor_view(actor_id).is_some());
+  });
+}
+
+#[test]
+fn manual_trigger_collection_failure_rolls_back_readiness_and_fee_movement() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    set_fail_fee_sink_transfer(true);
+
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::InsufficientFee
+    );
+    set_fail_fee_sink_transfer(false);
+
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    assert!(!hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn address_event_charges_occurrence_before_pipeline_opening() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      percentage_trigger_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    clear_fee_collections();
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+
+    let fee = address_event_trigger_fee();
+    assert_eq!(fee_collections(), vec![fee]);
+    assert_eq!(native_balance(&sovereign), sovereign_before - fee);
+    let instance = Actors::active_actor_view(actor_id).expect("Actor remains");
+    assert!(instance.pending_signal);
+    assert_eq!(instance.cycle_nonce, 0);
+    assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::AddressEvent,
+        fee: charged,
+      } if *id == actor_id && *charged == fee
+    )));
+  });
+}
+
+#[test]
+fn repeated_pending_address_event_is_latched_without_trigger_fee() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      percentage_trigger_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    fund_native(actor_id, address_event_trigger_fee());
+    clear_fee_collections();
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+    let ticket = Actors::actor_hot(actor_id)
+      .expect("Actor hot state")
+      .queue_ticket;
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+
+    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
+    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    assert!(hot.pending_signal);
+    assert_eq!(hot.queue_ticket, ticket);
+    assert_eq!(
+      System::events()
+        .iter()
+        .filter(|record| matches!(
+          &record.event,
+          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+            actor_id: id,
+            trigger_family: TriggerFamily::AddressEvent,
+            ..
+          }) if *id == actor_id
+        ))
+        .count(),
+      1
+    );
+  });
+}
+
+#[test]
+fn busy_address_event_charges_and_latches_only_the_future_pipeline() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+    ])
+    .expect("two Steps fit");
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      percentage_trigger_schedule(),
+      None,
+      plan,
+    );
+    fund_native(actor_id, 1_000_000);
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
+    clear_fee_collections();
+    frame_system::Pallet::<Test>::reset_events();
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+
+    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
+    )));
+    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    assert_eq!(hot.cycle_state, CycleState::Running);
+    assert!(hot.pending_signal);
+    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
+    assert_eq!(run_after.cursor, run_before.cursor);
+    assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
+  });
+}
+
+#[test]
+fn underfunded_address_event_advances_without_fee_readiness_or_apoptosis() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      percentage_trigger_schedule(),
+      None,
+      contract_steps_with_step(make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      })),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let balance = native_balance(&sovereign);
+    deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
+    clear_fee_collections();
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+
+    assert!(fee_collections().is_empty());
+    assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    assert!(!hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert_eq!(
+      actor_funding(actor_id)
+        .funding_accumulated
+        .get(&TestAsset::Native),
+      Some(&1)
+    );
+  });
+}
+
+#[test]
+fn address_event_collection_failure_preserves_source_progress_without_readiness() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      percentage_trigger_schedule(),
+      None,
+      contract_steps_with_step(make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      })),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    set_fail_fee_sink_transfer(true);
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+    set_fail_fee_sink_transfer(false);
+
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    assert!(!hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert_eq!(
+      actor_funding(actor_id)
+        .funding_accumulated
+        .get(&TestAsset::Native),
+      Some(&1)
+    );
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
   });
 }
 
@@ -455,36 +1309,61 @@ fn reserved_sovereign_account_rejects_creation_at_that_slot() {
 }
 
 #[test]
-fn create_user_at_slot_reuses_same_sovereign_after_close() {
+fn exact_slot_recovery_contract_accesses_residual_user_custody() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let target_slot = 3;
+    let asset = TestAsset::Local(7);
+    let recovery_steps = contract_steps_with_step(make_step(Task::Transfer {
+      to: BOB,
+      asset,
+      amount: AmountResolution::Fixed(333),
+    }));
     let first_id = create_user_with_slot(
       ALICE,
       target_slot,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_contract_steps(BOB, 1),
+      recovery_steps.clone(),
     );
-    let first = Actors::active_actor_view(first_id).expect("first Actors exists");
+    let first = Actors::active_actor_view(first_id).expect("first actor exists");
     assert_eq!(first.actor_class.owner_slot(), Some(target_slot));
     assert_eq!(
       first.sovereign_account,
       Actors::sovereign_account_id(&ALICE, target_slot)
     );
+    set_asset_balance(&first.sovereign_account, asset, 777);
+    let native_before_close = native_balance(&first.sovereign_account);
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), first_id));
+    assert_eq!(
+      native_balance(&first.sovereign_account),
+      native_before_close
+    );
+    assert_eq!(asset_balance(&first.sovereign_account, asset), 777);
+
     let second_id = create_user_with_slot(
       ALICE,
       target_slot,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_contract_steps(BOB, 1),
+      recovery_steps,
     );
-    let second = Actors::active_actor_view(second_id).expect("second Actors exists");
+    let second = Actors::active_actor_view(second_id).expect("recovery actor exists");
+    assert_ne!(second_id, first_id);
     assert_eq!(second.actor_class.owner_slot(), Some(target_slot));
     assert_eq!(second.sovereign_account, first.sovereign_account);
+    assert_eq!(asset_balance(&second.sovereign_account, asset), 777);
+
+    let bob_before = asset_balance(&BOB, asset);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      second_id
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(asset_balance(&BOB, asset), bob_before + 333);
+    assert_eq!(asset_balance(&second.sovereign_account, asset), 444);
   });
 }
 
@@ -544,7 +1423,6 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
       &ALICE,
     ));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     let queue_weight = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
       .saturating_add(Actors::scheduler_actor_probe_weight_upper())
       .saturating_add(
@@ -552,9 +1430,12 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
           .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
       );
     // Only the RefTime dimension is exhausted; ProofSize remains unlimited.
+    let resources = Actors::load_current_step_from_storage(actor_id, 0)
+      .expect("current Step resources exist")
+      .resources;
     let ref_time_limit = queue_weight
       .ref_time()
-      .saturating_add(Actors::attempt_weight_upper_bound(&instance, 0).ref_time())
+      .saturating_add(resources.control.saturating_add(resources.effect).ref_time())
       .saturating_sub(1);
     Actors::execute_cycle(Weight::from_parts(ref_time_limit, u64::MAX));
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
@@ -570,42 +1451,237 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
 }
 
 #[test]
-fn cycle_closes_with_fee_budget_exhausted_when_unfunded() {
+fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
-    let actor_id = create_user_with(
+    let actor_id = create_system_with(
       ALICE,
-      Mutability::Mutable,
       manual_schedule(),
       None,
-      transfer_contract_steps(BOB, 10),
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
+        task: Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }),
     );
-    deplete_user_sovereign(actor_id, prefunded);
-    fund_native(actor_id, TestMinUserBalance::get());
+    fund_native(actor_id, 100);
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    let resources = Actors::load_current_step_from_storage(actor_id, 0)
+      .expect("current Step resources exist")
+      .resources;
+    assert_ne!(resources.effect, Weight::zero());
+    let scan = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
+    let probe = Actors::scheduler_actor_probe_weight_upper();
+    let consume = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
+      .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
+
+    let bob_before = native_balance(&BOB);
+    let budget = TestBlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(1);
+    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.open_external_phase(), Ok(()));
+    assert_eq!(resource_state.begin_drain(), Ok(()));
+    let pass = Actors::execute_cycle_to_cutoff_with_resources(
+      Weight::MAX,
+      Actors::next_queue_ticket(),
+      &mut resource_state,
+      budget.limits(),
+      crate::BlockResourceDomain::ActorDrainEffect,
+      budget.limits().actor_control(),
+    );
+
+    assert_eq!(
+      pass.consumed,
+      scan
+        .saturating_mul(2)
+        .saturating_add(probe)
+        .saturating_add(consume)
+        .saturating_add(resources.control),
+    );
+    assert_eq!(
+      pass.reconciled_domains(),
+      Some((pass.consumed, Weight::zero()))
+    );
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert_eq!(resource_state.usage().actor_control_used(), pass.consumed);
+    assert_eq!(resource_state.usage().actor_effect_used(), Weight::zero());
+    assert_eq!(native_balance(&BOB), bob_before);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn successful_actor_pass_separates_actual_effect_from_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let task = Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(10),
+    };
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]),
+        task: task.clone(),
+        on_error: StepErrorPolicy::AbortCycle,
+      }),
+    );
+    fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| {
-      matches!(
-        event,
-        Event::ActorClosed {
-          actor_id: id,
-          reason: CloseReason::FeeBudgetExhausted,
-        } if *id == actor_id
+
+    let budget = TestBlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(1);
+    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.open_external_phase(), Ok(()));
+    assert_eq!(resource_state.begin_drain(), Ok(()));
+    let pass = Actors::execute_cycle_to_cutoff_with_resources(
+      Weight::MAX,
+      Actors::next_queue_ticket(),
+      &mut resource_state,
+      budget.limits(),
+      crate::BlockResourceDomain::ActorDrainEffect,
+      budget.limits().actor_control(),
+    );
+    let expected_effect =
+      <MockTaskEffectWeight as crate::TaskEffectWeightProvider<RuntimeTask>>::actual_effect_weight(
+        &task,
+        crate::TaskEffectExecution::Invoked,
       )
-    }));
+      .expect("mock invoked effect has actual evidence"); // deos-bypass: panic-owner — mock provider defines total actual evidence for every invoked task.
+    assert_eq!(pass.effect_consumed, expected_effect);
+    let (control, effect) = pass
+      .reconciled_domains()
+      .expect("successful pass has complete effect evidence"); // deos-bypass: panic-owner — successful commit returns typed actual control/effect evidence.
+    assert_eq!(effect, expected_effect);
+    assert_eq!(control.saturating_add(effect), pass.consumed);
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert_eq!(resource_state.usage().actor_control_used(), control);
+    assert_eq!(resource_state.usage().actor_effect_used(), effect);
   });
 }
 
 #[test]
-fn balance_exhausted_takes_precedence_over_fee_budget_exhausted() {
+fn valid_actual_control_replaces_the_maximum_in_pass_consumption() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
+        task: Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }),
+    );
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    let resources = Actors::load_current_step_from_storage(actor_id, 0)
+      .expect("current Step resources exist")
+      .resources;
+    let actual_control = resources
+      .control
+      .checked_sub(&Weight::from_parts(1, 1))
+      .expect("mock control maximum is nonzero");
+    set_step_control_actual_weight_override(Some(actual_control));
+    let scan = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
+    let probe = Actors::scheduler_actor_probe_weight_upper();
+    let consume = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
+      .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
+
+    let pass = Actors::execute_cycle(Weight::MAX);
+
+    assert_eq!(
+      pass.consumed,
+      scan
+        .saturating_mul(2)
+        .saturating_add(probe)
+        .saturating_add(consume)
+        .saturating_add(actual_control),
+    );
+  });
+}
+
+#[test]
+fn valid_zero_actual_control_charges_pipeline_but_no_action_fee() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      contract_steps_with_step(StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BlockNumberBelow { threshold: 0 }]),
+        task: Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }),
+    );
+    fund_native(actor_id, 1_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    set_step_control_actual_weight_override(Some(Weight::zero()));
+    clear_fee_collections();
+    let actor_before = native_balance(&sovereign_account(actor_id));
+
+    let pass = Actors::execute_cycle(Weight::MAX);
+
+    assert!(!pass.starved);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
+    assert_eq!(
+      native_balance(&sovereign_account(actor_id)),
+      actor_before.saturating_sub(pipeline_fee)
+    );
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::ActionFeeCharged { actor_id: id, .. } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
+fn valid_zero_actual_effect_releases_effect_fee_after_invocation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -613,31 +1689,54 @@ fn balance_exhausted_takes_precedence_over_fee_budget_exhausted() {
       None,
       transfer_contract_steps(BOB, 10),
     );
-    deplete_user_sovereign(actor_id, prefunded);
-    fund_native(actor_id, TestMinUserBalance::get() - 1);
+    fund_native(actor_id, 1_000);
+    let resources = Actors::load_current_step_from_storage(actor_id, 0)
+      .expect("current Step resources exist")
+      .resources;
+    let expected_action_fee = Actors::step_fee_for_resources(
+      ActorType::User,
+      crate::ActorStepResourceEnvelope {
+        control: resources.control,
+        effect: Weight::zero(),
+      },
+    )
+    .expect("actual Action fee is bounded")
+    .total_fee;
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| {
-      matches!(
-        event,
-        Event::ActorClosed {
-          actor_id: id,
-          reason: CloseReason::BalanceExhausted,
-        } if *id == actor_id
-      )
-    }));
+    set_task_effect_actual_weight_override(Some(Weight::zero()));
+    clear_fee_collections();
+    let bob_before = native_balance(&BOB);
+
+    let pass = Actors::execute_cycle(Weight::MAX);
+
+    assert!(!pass.starved);
+    assert_eq!(expected_action_fee, 0);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(10));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ActionFeeCharged {
+        actor_id: id,
+        cycle_nonce: 1,
+        step_index: 0,
+        actual_effect_weight,
+        fee: 0,
+      } if *id == actor_id && *actual_effect_weight == Weight::zero()
+    )));
   });
 }
 
-#[test]
-fn fee_insufficiency_is_terminal_without_deferral_guard() {
+fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_control: bool) {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 10));
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -645,19 +1744,142 @@ fn fee_insufficiency_is_terminal_without_deferral_guard() {
       None,
       transfer_contract_steps(BOB, 10),
     );
-    deplete_user_sovereign(actor_id, prefunded);
-    fund_native(actor_id, TestMinUserBalance::get());
+    fund_native(actor_id, 1_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    if missing_control {
+      set_missing_step_control_actual_weight(true);
+    } else {
+      set_missing_task_effect_actual_weight(true);
+    }
+    frame_system::Pallet::<Test>::reset_events();
+    clear_fee_collections();
+    let bob_before = native_balance(&BOB);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    let budget = TestBlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(1);
+    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    assert_eq!(resource_state.open_external_phase(), Ok(()));
+    assert_eq!(resource_state.begin_drain(), Ok(()));
+    let pass = Actors::execute_cycle_to_cutoff_with_resources(
+      Weight::MAX,
+      Actors::next_queue_ticket(),
+      &mut resource_state,
+      budget.limits(),
+      crate::BlockResourceDomain::ActorDrainEffect,
+      budget.limits().actor_control(),
+    );
+
+    assert!(pass.starved);
+    assert_eq!(pass.reconciled_domains(), None);
+    assert!(resource_state.optional_actor_work_halted());
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+    );
+    assert_eq!(native_balance(&BOB), bob_before);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
+    assert!(frame_system::Pallet::<Test>::events().is_empty());
   });
 }
 
 #[test]
-fn condition_skip_fee_route_failure_aborts_before_skip_event() {
+fn missing_actual_effect_weight_rolls_back_without_fee_collection() {
+  assert_missing_actual_weight_rolls_back_without_fee_collection(false);
+}
+
+#[test]
+fn missing_actual_control_weight_rolls_back_without_fee_collection() {
+  assert_missing_actual_weight_rolls_back_without_fee_collection(true);
+}
+
+#[test]
+fn greater_than_reserved_actual_effect_weight_rolls_back_the_complete_attempt() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 10),
+    );
+    fund_native(actor_id, 100);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    set_task_effect_actual_weight_override(Some(Weight::from_parts(34, 44)));
+    frame_system::Pallet::<Test>::reset_events();
+    let bob_before = native_balance(&BOB);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    let pass = Actors::execute_cycle(Weight::MAX);
+
+    assert!(pass.starved);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+    );
+    assert_eq!(native_balance(&BOB), bob_before);
+    assert!(frame_system::Pallet::<Test>::events().is_empty());
+    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+  });
+}
+
+#[test]
+fn greater_than_reserved_actual_control_weight_rolls_back_the_complete_attempt() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 10),
+    );
+    fund_native(actor_id, 100);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let reserved = Actors::load_current_step_from_storage(actor_id, 0)
+      .expect("current Step resources exist")
+      .resources
+      .control;
+    set_step_control_actual_weight_override(Some(Weight::from_parts(
+      reserved.ref_time().saturating_add(1),
+      reserved.proof_size(),
+    )));
+    frame_system::Pallet::<Test>::reset_events();
+    let bob_before = native_balance(&BOB);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    let pass = Actors::execute_cycle(Weight::MAX);
+
+    assert!(pass.starved);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+    );
+    assert_eq!(native_balance(&BOB), bob_before);
+    assert!(frame_system::Pallet::<Test>::events().is_empty());
+    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+  });
+}
+
+#[test]
+fn condition_skip_pipeline_fee_failure_aborts_before_skip_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
@@ -681,18 +1903,23 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
     );
     fund_native(actor_id, 1_000_000_000);
     let bob_before = native_balance(&BOB);
-    let fee_sink_before = native_balance(&TestFeeSink::get());
-    clear_fee_collections();
-    set_fail_fee_sink_transfer(true);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let fee_sink_before = native_balance(&TestFeeSink::get());
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    clear_fee_collections();
+    set_fail_fee_sink_transfer(true);
     run_idle(Weight::MAX);
     set_fail_fee_sink_transfer(false);
     assert_eq!(native_balance(&BOB), bob_before);
     assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
-    assert_eq!(fee_collections(), vec![Actors::compute_eval_fee(1)]);
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
     assert!(!has_actor_event(|event| {
       matches!(event, Event::StepFailed { actor_id: id, step_index: 0, .. } if *id == actor_id)
     }));
@@ -709,7 +1936,7 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
 }
 
 #[test]
-fn combined_step_fee_route_failure_aborts_before_task_execution() {
+fn pipeline_fee_route_failure_aborts_before_task_execution() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let task = Task::Transfer {
@@ -726,21 +1953,23 @@ fn combined_step_fee_route_failure_aborts_before_task_execution() {
     );
     fund_native(actor_id, 1_000_000_000);
     let bob_before = native_balance(&BOB);
-    let fee_sink_before = native_balance(&TestFeeSink::get());
-    clear_fee_collections();
-    set_fail_fee_sink_transfer(true);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let fee_sink_before = native_balance(&TestFeeSink::get());
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    clear_fee_collections();
+    set_fail_fee_sink_transfer(true);
     run_idle(Weight::MAX);
     set_fail_fee_sink_transfer(false);
     assert_eq!(native_balance(&BOB), bob_before);
     assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
-    let expected = Actors::compute_eval_fee(0).saturating_add(TestWeightToFee::weight_to_fee(
-      &Actors::weight_upper_bound(&task),
-    ));
-    assert_eq!(fee_collections(), vec![expected]);
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
     assert!(!has_actor_event(|event| {
       matches!(event, Event::StepFailed { actor_id: id, step_index: 0, .. } if *id == actor_id)
     }));
@@ -852,13 +2081,12 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
     fund_native(actor_id, 100_000);
-    let sink_before = native_balance(&TestFeeSink::get());
-    set_fail_fee_sink_transfer(true);
-
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let sink_before = native_balance(&TestFeeSink::get());
+    set_fail_fee_sink_transfer(true);
     run_idle(Weight::MAX);
 
     assert!(!has_actor_event(|event| matches!(
@@ -885,10 +2113,10 @@ fn stop_cycle_fee_failure_rolls_back_before_step_policy_or_stop() {
     ));
     run_idle(Weight::MAX);
 
-    let task: TaskOf<Test> = Task::StopCycle;
-    let task_weight = Actors::weight_upper_bound(&task);
-    let expected_fee = Actors::compute_eval_fee(0).saturating_add(
-      <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(&task_weight),
+    let expected_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
     );
     assert_eq!(
       native_balance(&TestFeeSink::get()),
@@ -969,7 +2197,7 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    let suspended = Actors::continuation_state(actor_id).expect("funding retry persists");
+    let suspended = Actors::actor_run_state(actor_id).expect("funding retry persists");
     assert_eq!(suspended.cursor, 0);
     assert_eq!(suspended.cumulative_outcomes.failed_steps, 0);
     assert_eq!(
@@ -985,7 +2213,7 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
     let completed = Actors::active_actor_view(actor_id).expect("actor completes");
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.cycle_state, CycleState::Idle);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 50);
   });
 }
@@ -1105,11 +2333,19 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
       actor_id
     ));
     run_idle(Weight::MAX);
+    let suspended = Actors::active_actor_view(actor_id).expect("suspended");
+    assert_eq!(suspended.cycle_state, CycleState::Suspended);
+    assert_eq!(suspended.cycle_nonce, 0);
+    let run_state = Actors::actor_run_state(actor_id).expect("funding suspension persists");
+    assert_eq!(run_state.cycle_nonce, 1);
+    assert!(run_state.funding_snapshot.is_empty());
     assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("suspended")
-        .cycle_state,
-      CycleState::Suspended
+      run_state.last_step_outcome,
+      Some(StepOutcome::FundingUnavailable)
+    );
+    assert_eq!(
+      run_state.suspension,
+      Some(SuspensionReason::FundingUnavailable)
     );
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1135,6 +2371,12 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
     assert_eq!(
       funding.funding_accumulated.get(&TestAsset::Native),
       Some(&7)
+    );
+    assert!(
+      Actors::actor_run_state(actor_id)
+        .expect("later funding does not mutate the open snapshot")
+        .funding_snapshot
+        .is_empty()
     );
     assert_eq!(
       Actors::actor_hot(actor_id)
@@ -1181,7 +2423,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     ));
     set_temporary_dex_failure(true);
     run_idle(Weight::MAX);
-    let continuation = Actors::continuation_state(actor_id).expect("suspended");
+    let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert!(continuation.opening_snapshot.is_empty());
     assert_eq!(continuation.funding_snapshot.get(&asset_in), Some(&100));
 
@@ -1195,7 +2437,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(
-      Actors::continuation_state(actor_id)
+      Actors::actor_run_state(actor_id)
         .expect("still suspended")
         .funding_snapshot
         .get(&asset_in),
@@ -1210,7 +2452,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(4);
     run_idle(Weight::MAX);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
       actor_funding(actor_id).funding_accumulated.get(&asset_in),
       Some(&30)
@@ -1271,7 +2513,7 @@ fn update_contract_prunes_stale_funding_accumulators() {
 }
 
 #[test]
-fn permissionless_sweep_closes_user_below_min_balance() {
+fn permissionless_sweep_preserves_user_below_future_pipeline_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let prefunded = user_prefunding_requirement(&transfer_contract_steps(BOB, 1));
@@ -1287,21 +2529,16 @@ fn permissionless_sweep_closes_user_below_min_balance() {
       RuntimeOrigin::signed(BOB),
       actor_id
     ));
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| {
-      matches!(
-        event,
-        Event::ActorClosed {
-          actor_id: id,
-          reason: CloseReason::BalanceExhausted,
-        } if *id == actor_id
-      )
-    }));
+    assert!(Actors::active_actor_view(actor_id).is_some());
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
+    )));
   });
 }
 
 #[test]
-fn user_resolution_skip_charges_only_eval_fee() {
+fn user_resolution_skip_charges_pipeline_but_no_action_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
@@ -1318,16 +2555,21 @@ fn user_resolution_skip_charges_only_eval_fee() {
     );
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 1_000);
-    let before = native_balance(&actor);
-    clear_fee_collections();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let before = native_balance(&actor);
+    clear_fee_collections();
     run_idle(Weight::MAX);
     let after = native_balance(&actor);
-    assert_eq!(after, before.saturating_sub(Actors::compute_eval_fee(0)));
-    assert_eq!(fee_collections(), vec![Actors::compute_eval_fee(0)]);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(after, before.saturating_sub(pipeline_fee));
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -1343,7 +2585,7 @@ fn user_resolution_skip_charges_only_eval_fee() {
 }
 
 #[test]
-fn condition_skip_charges_one_evaluation_fee() {
+fn condition_skip_charges_pipeline_but_no_action_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
@@ -1366,13 +2608,18 @@ fn condition_skip_charges_one_evaluation_fee() {
       contract_steps_with_step(step),
     );
     fund_native(actor_id, 1_000);
-    clear_fee_collections();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
-    assert_eq!(fee_collections(), vec![Actors::compute_eval_fee(1)]);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::StepSkipped {
@@ -1442,13 +2689,18 @@ fn true_balance_condition_can_precede_funding_unavailable_resolution() {
       }),
     );
     fund_native(actor_id, 1_000);
-    clear_fee_collections();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
-    assert_eq!(fee_collections(), vec![Actors::compute_eval_fee(1)]);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee]);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::StepSkipped {
@@ -1461,7 +2713,7 @@ fn true_balance_condition_can_precede_funding_unavailable_resolution() {
 }
 
 #[test]
-fn executable_task_charges_eval_and_execution_fees() {
+fn executable_task_charges_pipeline_and_independent_action_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let task = Task::Transfer {
@@ -1479,29 +2731,42 @@ fn executable_task_charges_eval_and_execution_fees() {
     );
     let actor = sovereign_account(actor_id);
     fund_native(actor_id, 1_000);
-    let actor_before = native_balance(&actor);
-    let fee_sink_before = native_balance(&TestFeeSink::get());
     let task_weight = Actors::weight_upper_bound(&task);
     assert!(task_weight.ref_time() > 0);
-    let expected_fee =
-      Actors::compute_eval_fee(0).saturating_add(TestWeightToFee::weight_to_fee(&task_weight));
+    let expected_action_fee = TestWeightToFee::weight_to_fee(&task_weight);
     let instance = Actors::active_actor_view(actor_id).expect("user actor");
-    assert_eq!(Actors::attempt_fee_upper_bound(&instance, 0), expected_fee);
-    clear_fee_collections();
+    let current_fee =
+      Actors::maximum_contract_step_fee(instance.actor_class.actor_type(), &instance.steps, 0)
+        .expect("current-Step fee is bounded")
+        .total_fee;
+    assert_eq!(current_fee, expected_action_fee);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let actor_before = native_balance(&actor);
+    let fee_sink_before = native_balance(&TestFeeSink::get());
+    clear_fee_collections();
     run_idle(Weight::MAX);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
     assert_eq!(
       native_balance(&actor),
-      actor_before.saturating_sub(expected_fee).saturating_sub(1)
+      actor_before
+        .saturating_sub(pipeline_fee)
+        .saturating_sub(expected_action_fee)
+        .saturating_sub(1)
     );
     assert_eq!(
       native_balance(&TestFeeSink::get()),
-      fee_sink_before.saturating_add(expected_fee)
+      fee_sink_before
+        .saturating_add(pipeline_fee)
+        .saturating_add(expected_action_fee)
     );
-    assert_eq!(fee_collections(), vec![expected_fee]);
+    assert_eq!(fee_collections(), vec![pipeline_fee, expected_action_fee]);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -1523,7 +2788,7 @@ fn executable_task_charges_eval_and_execution_fees() {
 }
 
 #[test]
-fn adapter_failure_retains_one_combined_step_fee() {
+fn adapter_failure_retains_pipeline_and_one_action_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign = TestAsset::Local(77);
@@ -1546,23 +2811,28 @@ fn adapter_failure_retains_one_combined_step_fee() {
     );
     let actor = sovereign_account(actor_id);
     fund_native_raw(&actor, 1_000);
-    let actor_before = native_balance(&actor);
     let pool_before = native_balance(&pool_account);
-    let expected = Actors::compute_eval_fee(0).saturating_add(TestWeightToFee::weight_to_fee(
-      &Actors::weight_upper_bound(&task),
-    ));
-    clear_fee_collections();
+    let expected_action_fee = TestWeightToFee::weight_to_fee(&Actors::weight_upper_bound(&task));
     set_fail_dex_after_input_transfer(true);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let actor_before = native_balance(&actor);
+    clear_fee_collections();
     run_idle(Weight::MAX);
     set_fail_dex_after_input_transfer(false);
-    assert_eq!(fee_collections(), vec![expected]);
+    let pipeline_fee = pipeline_opening_fee(
+      &Actors::active_actor_view(actor_id)
+        .expect("Actor remains")
+        .steps,
+    );
+    assert_eq!(fee_collections(), vec![pipeline_fee, expected_action_fee]);
     assert_eq!(
       native_balance(&actor),
-      actor_before.saturating_sub(expected)
+      actor_before
+        .saturating_sub(pipeline_fee)
+        .saturating_sub(expected_action_fee)
     );
     assert_eq!(native_balance(&pool_account), pool_before);
     assert!(has_actor_event(|event| {
@@ -1580,7 +2850,6 @@ fn cycle_summary_fee_fairness_property_matrix() {
       (1_000u128, Perbill::from_percent(10), false),
       (10_000u128, Perbill::from_percent(50), false),
     ];
-    let eval_fee = Actors::compute_eval_fee(0);
     for (idx, (funding, pct, expect_skip)) in cases.into_iter().enumerate() {
       let task = Task::Transfer {
         to: BOB,
@@ -1588,6 +2857,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
         amount: AmountResolution::PercentageOfCurrent(pct),
       };
       let contract_steps = contract_steps_with_step(make_step(task.clone()));
+      let pipeline_fee = pipeline_opening_fee(&contract_steps);
       let actor_id = create_user_with(
         ALICE,
         Mutability::Mutable,
@@ -1596,11 +2866,11 @@ fn cycle_summary_fee_fairness_property_matrix() {
         contract_steps,
       );
       fund_native(actor_id, funding);
-      let fee_sink_before = native_balance(&TestFeeSink::get());
       assert_ok!(Actors::manual_trigger(
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
+      let fee_sink_before = native_balance(&TestFeeSink::get());
       run_idle(Weight::MAX);
       let fee_sink_after = native_balance(&TestFeeSink::get());
       let fee_delta = fee_sink_after.saturating_sub(fee_sink_before);
@@ -1628,7 +2898,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
         assert_eq!(summary.2, 1);
         assert_eq!(summary.3, 0);
         assert_eq!(summary.4, 0);
-        assert_eq!(fee_delta, eval_fee);
+        assert_eq!(fee_delta, pipeline_fee);
       } else {
         let exec_fee = <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(
           &Actors::weight_upper_bound(&task),
@@ -1638,7 +2908,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
         assert_eq!(summary.2, 0);
         assert_eq!(summary.3, 0);
         assert_eq!(summary.4, 0);
-        assert_eq!(fee_delta, eval_fee.saturating_add(exec_fee));
+        assert_eq!(fee_delta, pipeline_fee.saturating_add(exec_fee));
       }
       frame_system::Pallet::<Test>::set_block_number((idx as u64).saturating_add(2));
     }
@@ -1767,7 +3037,7 @@ fn system_keeps_running_on_last_funding_exhaustion_and_accepts_refill() {
 }
 
 #[test]
-fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
+fn paid_readiness_closes_only_when_pipeline_charge_cannot_fit_above_floor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
@@ -1776,6 +3046,7 @@ fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
     }));
     let prefunded = user_prefunding_requirement(&contract_steps);
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -1790,16 +3061,15 @@ fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
       TestAsset::Native,
       500
     ));
+    fund_native(actor_id, manual_trigger_fee().saturating_add(pipeline_fee));
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     run_idle(Weight::MAX);
-    // After the first run transfers 250 and charges the fee envelope (~101), the
-    // remaining balance cannot fit the full envelope above MinUserBalance, so the
-    // second run is NOT admitted and the actor closes with FeeBudgetExhausted
-    // instead of running with a step skip (spec 5.2.1).
+    // The first Pipeline and Action leave exactly enough for another Trigger occurrence,
+    // but not enough to admit another complete Pipeline above MinUserBalance.
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -1811,7 +3081,7 @@ fn user_closes_when_the_full_fee_envelope_cannot_fit_above_the_floor() {
         event,
         Event::ActorClosed {
           actor_id: id,
-          reason: CloseReason::FeeBudgetExhausted,
+          reason: CloseReason::CycleAdmissionInsufficient,
           ..
         } if *id == actor_id
       )
@@ -1926,7 +3196,7 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     ));
     let sys_inst = actor_funding(system_actor);
     assert!(matches!(
-      ActorContracts::<Test>::get(system_actor)
+      Actors::load_actor_contract(system_actor)
         .expect("system Actor Contract")
         .funding,
       FundingSourcePolicy::RuntimePolicy
@@ -1937,7 +3207,7 @@ fn default_funding_policies_authorize_system_runtime_sources_but_only_user_owner
     );
     let user_inst = actor_funding(user_actor);
     assert!(matches!(
-      ActorContracts::<Test>::get(user_actor)
+      Actors::load_actor_contract(user_actor)
         .expect("user Actor Contract")
         .funding,
       FundingSourcePolicy::OwnerOnly
@@ -2331,7 +3601,7 @@ fn funding_policy_replacement_preserves_placement_without_continuation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(10), None, inert_contract_steps());
     let before = Actors::actor_hot(actor_id).expect("actor hot state exists");
-    assert!(before.wakeup_pointer.is_some());
+    assert!(before.trigger_wakeup_pointer.is_some());
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
@@ -2340,6 +3610,7 @@ fn funding_policy_replacement_preserves_placement_without_continuation() {
     let after = Actors::actor_hot(actor_id).expect("actor hot state exists");
     assert_eq!(after.queue_ticket, before.queue_ticket);
     assert_eq!(after.wakeup_pointer, before.wakeup_pointer);
+    assert_eq!(after.trigger_wakeup_pointer, before.trigger_wakeup_pointer);
   });
 }
 
@@ -2499,6 +3770,7 @@ fn overspend_resolves_to_funding_unavailable_for_user_without_closing() {
       amount: AmountResolution::Fixed(1_000_000),
     }));
     let prefunded = user_prefunding_requirement(&contract_steps);
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -2508,7 +3780,7 @@ fn overspend_resolves_to_funding_unavailable_for_user_without_closing() {
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
-    fund_native(actor_id, 1_000);
+    fund_native(actor_id, 1_000 + manual_trigger_fee() + pipeline_fee);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -2526,15 +3798,12 @@ fn overspend_resolves_to_funding_unavailable_for_user_without_closing() {
       )
     }));
     assert!(Actors::active_actor_view(actor_id).is_some());
-    assert_eq!(
-      native_balance(&actor),
-      1_000u128.saturating_sub(Actors::compute_eval_fee(0))
-    );
+    assert_eq!(native_balance(&actor), 1_000);
   });
 }
 
 #[test]
-fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
+fn funding_unavailable_releases_action_fee_reservation_for_later_step_spend() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = BoundedVec::try_from(vec![
@@ -2551,6 +3820,7 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
     ])
     .expect("execution plan must fit");
     let prefunded = user_prefunding_requirement(&contract_steps);
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -2561,12 +3831,12 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
     let bob_before = native_balance(&BOB);
-    fund_native(actor_id, 1_000);
-    clear_fee_collections();
+    fund_native(actor_id, 1_000 + manual_trigger_fee() + pipeline_fee);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
     assert!(has_actor_event(|event| {
       matches!(
@@ -2585,32 +3855,30 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(650),
     };
-    let expected_attempt_fee = Actors::compute_eval_fee(0).saturating_add(
-      TestWeightToFee::weight_to_fee(&Actors::weight_upper_bound(&transfer)),
-    );
-    assert_eq!(
-      fee_collections(),
-      vec![Actors::compute_eval_fee(0), expected_attempt_fee]
-    );
+    let expected_attempt_fee =
+      TestWeightToFee::weight_to_fee(&Actors::weight_upper_bound(&transfer));
+    assert_eq!(fee_collections(), vec![pipeline_fee, expected_attempt_fee]);
     assert_eq!(
       native_balance(&actor),
-      50,
-      "later step can spend the execution-fee reservation released by the funding skip"
+      250,
+      "later Step spends custody released by the non-invoked first Action reservation"
     );
   });
 }
 
 #[test]
-fn failed_executable_step_charges_eval_and_exec_fee_without_refund() {
+fn failed_invoked_action_charges_effect_fee_without_refund() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::SwapIn {
+    let task = Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(99),
       amount_in: AmountResolution::Fixed(10),
       slippage_tolerance: Perbill::zero(),
-    }));
+    };
+    let contract_steps = contract_steps_with_step(make_step(task.clone()));
     let prefunded = user_prefunding_requirement(&contract_steps);
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -2620,24 +3888,23 @@ fn failed_executable_step_charges_eval_and_exec_fee_without_refund() {
     );
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
-    fund_native(actor_id, 1_000);
+    fund_native(actor_id, 1_000 + manual_trigger_fee() + pipeline_fee);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     run_idle(Weight::MAX);
-    let expected_fee = Actors::compute_eval_fee(0).saturating_add(TestWeightToFee::weight_to_fee(
-      &Actors::weight_upper_bound(&Task::SwapIn {
-        asset_in: TestAsset::Native,
-        asset_out: TestAsset::Local(99),
-        amount_in: AmountResolution::Fixed(10),
-        slippage_tolerance: Perbill::zero(),
-      }),
-    ));
+    let expected_weight =
+      <MockTaskEffectWeight as crate::TaskEffectWeightProvider<RuntimeTask>>::actual_effect_weight(
+        &task,
+        crate::TaskEffectExecution::Invoked,
+      )
+      .expect("invoked Action actual Weight exists");
+    let expected_fee = TestWeightToFee::weight_to_fee(&expected_weight);
     assert_eq!(
       native_balance(&actor),
       1_000u128.saturating_sub(expected_fee),
-      "failed executable path should charge exactly eval+exec fee with no refund"
+      "failed invoked Action charges exactly its effect fee with no refund"
     );
     assert!(has_actor_event(|event| {
       matches!(
@@ -2649,26 +3916,29 @@ fn failed_executable_step_charges_eval_and_exec_fee_without_refund() {
         } if *id == actor_id
       )
     }));
+    let receipt = System::events()
+      .iter()
+      .find_map(|record| match &record.event {
+        RuntimeEvent::Actors(Event::ActionFeeCharged {
+          actor_id,
+          cycle_nonce,
+          step_index,
+          actual_effect_weight,
+          fee,
+        }) => Some((
+          *actor_id,
+          *cycle_nonce,
+          *step_index,
+          *actual_effect_weight,
+          *fee,
+        )),
+        _ => None,
+      });
+    assert_eq!(
+      receipt,
+      Some((actor_id, 1, 0, expected_weight, expected_fee))
+    );
   });
-}
-
-#[test]
-fn condition_fee_depends_only_on_total_atomic_count() {
-  let forward = all_conditions(vec![
-    Predicate::BlockNumberAbove { threshold: 1 },
-    Predicate::BlockNumberBelow { threshold: 10 },
-  ]);
-  let reverse = any_conditions(vec![
-    Predicate::BlockNumberBelow { threshold: 10 },
-    Predicate::BlockNumberAbove { threshold: 1 },
-  ]);
-  let forward = forward.expect("bounded precondition");
-  let reverse = reverse.expect("bounded precondition");
-  assert_eq!(forward.predicate_count(), reverse.predicate_count());
-  assert_eq!(
-    Actors::compute_eval_fee(forward.predicate_count()),
-    Actors::compute_eval_fee(reverse.predicate_count())
-  );
 }
 
 #[test]
@@ -2875,7 +4145,7 @@ fn percentage_of_current_uses_native_preservable_balance_as_its_base() {
 }
 
 #[test]
-fn user_all_available_preserves_current_floor_but_no_future_cycle_fee() {
+fn user_all_available_preserves_floor_and_underfunded_future_trigger_keeps_process() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let task = Task::Transfer {
@@ -2885,8 +4155,9 @@ fn user_all_available_preserves_current_floor_but_no_future_cycle_fee() {
     };
     let contract_steps = contract_steps_with_step(make_step(task));
     let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
-      .expect("User fee envelope")
+      .expect("User Action fee envelope")
       .total;
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
@@ -2898,36 +4169,32 @@ fn user_all_available_preserves_current_floor_but_no_future_cycle_fee() {
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
     let floor = TestMinUserBalance::get();
-    let initial = floor.saturating_add(fee).saturating_add(50);
-    fund_native(actor_id, initial);
+    let pipeline_balance = floor.saturating_add(fee).saturating_add(50);
+    fund_native(
+      actor_id,
+      pipeline_balance
+        .saturating_add(manual_trigger_fee())
+        .saturating_add(pipeline_fee),
+    );
     let bob_before = native_balance(&BOB);
-    clear_fee_collections();
-
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
 
     assert_eq!(native_balance(&actor), floor);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(fee_collections(), vec![fee]);
+    assert_eq!(fee_collections(), vec![pipeline_fee, fee]);
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::InsufficientFee
+    );
+    assert!(Actors::active_actor_view(actor_id).is_some());
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed {
-        actor_id: id,
-        reason: CloseReason::FeeBudgetExhausted,
-      } if *id == actor_id
-    )));
   });
 }
 
@@ -2940,14 +4207,11 @@ fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     }));
-    let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
-      .expect("User fee envelope")
-      .total;
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let floor = TestMinUserBalance::get();
 
-    // floor + envelope - 1: the complete envelope cannot fit above the floor, so
-    // the User attempt is NOT admitted and the actor closes with FeeBudgetExhausted
-    // even though the raw balance covers the envelope (spec 5.2.1).
+    // Floor + Pipeline charge - 1 pays the Trigger occurrence but cannot consume the
+    // resulting readiness into a Cycle.
     let prefunded = user_prefunding_requirement(&contract_steps);
     let short = create_user_with(
       ALICE,
@@ -2957,20 +4221,36 @@ fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
       contract_steps.clone(),
     );
     deplete_user_sovereign(short, prefunded);
-    fund_native(short, floor.saturating_add(fee).saturating_sub(1));
+    fund_native(
+      short,
+      floor
+        .saturating_add(pipeline_fee)
+        .saturating_sub(1)
+        .saturating_add(manual_trigger_fee()),
+    );
+    let short_sovereign = sovereign_account(short);
+    clear_fee_collections();
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), short));
+    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    let short_after_trigger = native_balance(&short_sovereign);
     run_idle(Weight::MAX);
+    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    assert_eq!(native_balance(&short_sovereign), short_after_trigger);
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::PipelineFeeCharged { actor_id, .. } if *actor_id == short
+    )));
     assert!(Actors::active_actor_view(short).is_none());
     assert!(has_actor_event(|e| matches!(
       e,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::FeeBudgetExhausted,
+        reason: CloseReason::CycleAdmissionInsufficient,
         ..
       } if *id == short
     )));
 
-    // floor + envelope: the envelope fits exactly above the floor and the run admits.
+    // floor + Pipeline charge admits exactly and leaves the protected floor for Actions.
     let prefunded = user_prefunding_requirement(&contract_steps);
     let exact = create_user_with(
       BOB,
@@ -2980,9 +4260,16 @@ fn user_fee_admission_boundary_is_exact_floor_plus_envelope() {
       contract_steps,
     );
     deplete_user_sovereign(exact, prefunded);
-    fund_native(exact, floor.saturating_add(fee));
+    fund_native(
+      exact,
+      floor
+        .saturating_add(pipeline_fee)
+        .saturating_add(manual_trigger_fee()),
+    );
+    clear_fee_collections();
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(BOB), exact));
     run_idle(Weight::MAX);
+    assert_eq!(fee_collections(), vec![manual_trigger_fee(), pipeline_fee]);
     // The attempt is admitted (the envelope fits exactly above the floor); the
     // transfer itself is floor-limited, so assert admission via the nonce advance.
     assert_eq!(
@@ -3009,8 +4296,9 @@ fn user_swap_out_native_input_cap_preserves_fee_native_floor_after_failed_attemp
     set_pool_reserves(TestAsset::Native, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let contract_steps = contract_steps_with_step(make_step(task));
-    let fee_envelope =
-      Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0).expect("User fee envelope");
+    let fee_envelope = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
+      .expect("User Action fee envelope");
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
@@ -3022,22 +4310,26 @@ fn user_swap_out_native_input_cap_preserves_fee_native_floor_after_failed_attemp
     deplete_user_sovereign(actor_id, prefunded);
     let actor = sovereign_account(actor_id);
     let floor = TestMinUserBalance::get();
-    let initial = floor.saturating_add(fee_envelope.total).saturating_add(50);
-    fund_native(actor_id, initial);
-    clear_fee_collections();
-
+    let pipeline_balance = floor.saturating_add(fee_envelope.total).saturating_add(50);
+    fund_native(
+      actor_id,
+      pipeline_balance
+        .saturating_add(manual_trigger_fee())
+        .saturating_add(pipeline_fee),
+    );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
 
     assert_eq!(
       native_balance(&actor),
-      initial.saturating_sub(fee_envelope.total)
+      pipeline_balance.saturating_sub(fee_envelope.total)
     );
     assert!(native_balance(&actor) >= floor);
-    assert_eq!(fee_collections(), vec![fee_envelope.total]);
+    assert_eq!(fee_collections(), vec![pipeline_fee, fee_envelope.total]);
     assert!(has_actor_event(|event| {
       matches!(event, Event::StepFailed { actor_id: id, step_index: 0, .. } if *id == actor_id)
     }));
@@ -3253,7 +4545,7 @@ fn unstake_last_funding_fails_closed_if_share_mapping_disappears_mid_lifetime() 
 
     assert_eq!(asset_balance(&actor, asset), 100);
     assert_eq!(unstaked_shares(actor, asset), 0);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::StepFailed { actor_id: id, step_index: 0, .. } if *id == actor_id
@@ -3277,8 +4569,9 @@ fn donate_liquidity_user_fee_native_b_side_preserves_protected_floor() {
       max_ratio_error: Perbill::from_percent(1),
     }));
     let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
-      .expect("User fee envelope")
+      .expect("User Action fee envelope")
       .total;
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
     let prefunded = user_prefunding_requirement(&contract_steps);
     let actor_id = create_user_with(
       ALICE,
@@ -3291,13 +4584,19 @@ fn donate_liquidity_user_fee_native_b_side_preserves_protected_floor() {
     let actor = sovereign_account(actor_id);
     let floor = TestMinUserBalance::get();
     set_asset_balance(&actor, asset_a, 1_000);
-    // Fund the floor plus the reserved User fee plus a spendable donation budget.
-    fund_native(actor_id, floor.saturating_add(fee).saturating_add(60));
-    clear_fee_collections();
+    // Fund one Trigger occurrence, then the protected floor, current Action fee, and donation.
+    let pipeline_balance = floor.saturating_add(fee).saturating_add(60);
+    fund_native(
+      actor_id,
+      pipeline_balance
+        .saturating_add(manual_trigger_fee())
+        .saturating_add(pipeline_fee),
+    );
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    clear_fee_collections();
     run_idle(Weight::MAX);
     let (used_a, used_b) = donated_liquidity(actor, asset_a, asset_b);
     assert!(
@@ -3306,11 +4605,7 @@ fn donate_liquidity_user_fee_native_b_side_preserves_protected_floor() {
     );
     assert_eq!(
       native_balance(&actor),
-      floor
-        .saturating_add(fee)
-        .saturating_add(60)
-        .saturating_sub(used_b)
-        .saturating_sub(fee),
+      pipeline_balance.saturating_sub(used_b).saturating_sub(fee),
       "the fee-native protected floor is preserved by the asset-b cap"
     );
     assert!(native_balance(&actor) >= floor);
@@ -3506,42 +4801,6 @@ fn condition_balance_not_equals_skips_when_equal() {
 }
 
 #[test]
-fn insufficient_fee_closes_cycle_immediately() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::Fixed(10),
-    }));
-    let prefunded = user_prefunding_requirement(&contract_steps);
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      contract_steps,
-    );
-    deplete_user_sovereign(actor_id, prefunded);
-    // Fund above MinUserBalance(50) but below fee threshold (eval=1 + exec=100 = 101)
-    fund_native(actor_id, 60);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|e| matches!(
-      e,
-      Event::ActorClosed {
-        actor_id: id,
-        reason: CloseReason::FeeBudgetExhausted,
-      } if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn condition_sees_spendable_not_raw_balance_for_user_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3614,7 +4873,7 @@ fn condition_sees_full_balance_for_system_actor() {
 }
 
 #[test]
-fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
+fn user_pipeline_admission_combines_adapter_lock_with_machine_charge() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
@@ -3643,22 +4902,26 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
     let sovereign = Actors::active_actor_view(actor_id)
       .expect("user actor")
       .sovereign_account;
-    // A transfer lock reduces the native reducible balance below what the full fee
-    // envelope needs above MinUserBalance, so the User attempt is not admitted and
-    // the actor closes with FeeBudgetExhausted (spec 5.2.1) rather than running.
+    let residual_asset = TestAsset::Local(8);
+    set_asset_balance(&sovereign, residual_asset, 808);
+    // A transfer lock leaves enough reducible balance for the Trigger occurrence but not
+    // the complete Pipeline charge above MinUserBalance, so no Step is attempted.
     set_native_transfer_lock(&sovereign, 150);
     let bob_before = native_balance(&BOB);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let native_after_trigger = native_balance(&sovereign);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before);
+    assert_eq!(native_balance(&sovereign), native_after_trigger);
+    assert_eq!(asset_balance(&sovereign, residual_asset), 808);
     assert!(has_actor_event(|e| matches!(
       e,
       Event::ActorClosed {
         actor_id: id,
-        reason: CloseReason::FeeBudgetExhausted,
+        reason: CloseReason::CycleAdmissionInsufficient,
         ..
       } if *id == actor_id
     )));
@@ -3716,6 +4979,9 @@ fn user_portfolio_rebalancer_both_directions() {
     frame_system::Pallet::<Test>::set_block_number(6);
     Actors::on_initialize(6);
     Actors::on_idle(6, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(7);
+    Actors::on_initialize(7);
+    Actors::on_idle(7, Weight::MAX);
     assert!(
       has_actor_event(|e| matches!(
         e,
@@ -3724,14 +4990,18 @@ fn user_portfolio_rebalancer_both_directions() {
       )),
       "Step 0 should execute when spendable native > 5000"
     );
-    // Second evaluation: slash native so spendable < 500, keep raw > fee_reserve (202)
-    // Set raw native to 600: spendable = 600 - 202 = 398 < 500 ✓
+    frame_system::Pallet::<Test>::set_block_number(7);
+    Actors::on_idle(7, Weight::MAX);
+    // Second evaluation: slash native so spendable < 500 while preserving Pipeline admission.
+    // Raw 600 pays the complete Pipeline at Opening; the current Action reserve leaves < 500.
     let actor_native = native_balance(&actor);
     let _ = <Balances as Currency<AccountId>>::slash(&actor, actor_native.saturating_sub(600));
     let charlie_before = asset_balance(&CHARLIE, foreign);
     frame_system::Pallet::<Test>::set_block_number(11);
     Actors::on_initialize(11);
     Actors::on_idle(11, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(12);
+    Actors::on_idle(12, Weight::MAX);
     assert!(
       asset_balance(&CHARLIE, foreign) > charlie_before,
       "Step 1 should execute when spendable native < 500 AND foreign > 500"

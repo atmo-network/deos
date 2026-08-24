@@ -180,7 +180,7 @@ lines.push(
   '',
   '- Regenerate: `./.agents/skills/release-assurance/scripts/weight-delta-ledger.sh`',
   '- Verify freshness: `./.agents/skills/release-assurance/scripts/weight-delta-ledger.sh --check`',
-  '- Reproduce production weights through `./scripts/benchmarks.sh` and the owning Benchmarking Skill; focused outputs do not replace complete generated pallet files.',
+  '- Reproduce production weights through `./scripts/benchmarks.sh` and the owning Architecture Experiments Skill; focused outputs do not replace complete generated pallet files.',
   '',
   `Candidate weight source identity: \`${createHash('sha256').update(sourceHashes.join('\n')).digest('hex')}\`.`,
   '',

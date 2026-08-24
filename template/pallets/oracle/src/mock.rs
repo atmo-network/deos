@@ -18,6 +18,7 @@ pub type AccountId = u64;
 std::thread_local! {
   static HOOK_FAILURE: RefCell<bool> = const { RefCell::new(false) };
   static HOOK_CALLS: RefCell<Vec<(u32, u64, Option<u128>, u128)>> = const { RefCell::new(Vec::new()) };
+  static HOOK_PROVENANCE: RefCell<Vec<crate::ObservationCauseProvenance>> = const { RefCell::new(Vec::new()) };
 }
 
 pub struct TestObservationHook;
@@ -27,6 +28,7 @@ impl crate::OnObservationChanged<u32> for TestObservationHook {
     revision: crate::Revision,
     previous: Option<crate::OracleValue>,
     current: crate::OracleValue,
+    cause_provenance: crate::ObservationCauseProvenance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult {
     if HOOK_FAILURE.with(|value| *value.borrow()) {
       return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
@@ -34,8 +36,13 @@ impl crate::OnObservationChanged<u32> for TestObservationHook {
       ));
     }
     HOOK_CALLS.with(|calls| calls.borrow_mut().push((feed, revision, previous, current)));
+    HOOK_PROVENANCE.with(|causes| causes.borrow_mut().push(cause_provenance));
     Ok(())
   }
+}
+
+pub fn take_hook_provenance() -> Vec<crate::ObservationCauseProvenance> {
+  HOOK_PROVENANCE.with(|causes| core::mem::take(&mut *causes.borrow_mut()))
 }
 
 pub fn set_hook_failure(fail: bool) {
@@ -109,6 +116,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   let mut ext = polkadot_sdk::sp_io::TestExternalities::new(storage);
   HOOK_FAILURE.with(|value| *value.borrow_mut() = false);
   HOOK_CALLS.with(|calls| calls.borrow_mut().clear());
+  HOOK_PROVENANCE.with(|causes| causes.borrow_mut().clear());
   ext.execute_with(|| System::set_block_number(1));
   ext
 }

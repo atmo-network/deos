@@ -19,6 +19,10 @@ targets = ["x86_64-unknown-linux-gnu"]
 docify = { workspace = true }
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
 
+[dev-dependencies]
+cumulus-primitives-parachain-inherent = "0.26.0"
+cumulus-test-relay-sproof-builder = "0.27.0"
+
 [dependencies]
 codec = { workspace = true }
 cumulus-pallet-parachain-system.workspace = true
@@ -30,6 +34,7 @@ pallet-asset-registry.workspace = true
 pallet-deos-router.workspace = true
 pallet-governance.workspace = true
 pallet-oracle.workspace = true
+pallet-session-rotation.workspace = true
 pallet-staking.workspace = true
 pallet-tmc.workspace = true
 primitives.workspace = true
@@ -83,6 +88,7 @@ std = [
   "pallet-deos-router/std",
   "pallet-governance/std",
   "pallet-oracle/std",
+  "pallet-session-rotation/std",
   "pallet-staking/std",
   "pallet-tmc/std",
   "primitives/std",
@@ -101,6 +107,7 @@ runtime-benchmarks = [
   "pallet-deos-router/runtime-benchmarks",
   "pallet-governance/runtime-benchmarks",
   "pallet-oracle/runtime-benchmarks",
+  "pallet-session-rotation/runtime-benchmarks",
   "pallet-staking/runtime-benchmarks",
   "pallet-tmc/runtime-benchmarks",
   "primitives/runtime-benchmarks",
@@ -115,6 +122,7 @@ try-runtime = [
   "pallet-deos-router/try-runtime",
   "pallet-governance/try-runtime",
   "pallet-oracle/try-runtime",
+  "pallet-session-rotation/try-runtime",
   "pallet-staking/try-runtime",
   "pallet-tmc/try-runtime",
 

@@ -1,7 +1,7 @@
 ---
 type: overview
 title: DEOS Router
-description: DEOS Router is the framework's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
+description: DEOS Router selects bounded exact-input and exact-output routes, publishes pre-execution pool samples to typed standalone observations, and is the required public gateway for XYK execution.
 locale: en
 canonical_page_id: router
 translation_status: source
@@ -11,6 +11,7 @@ available_locales:
 sources:
   - resource: ../../template/pallets/router/docs/architecture.en.md
   - resource: ../../docs/oracle.integration.en.md
+  - resource: ../../docs/asset-conversion.integration.en.md
   - resource: ../../docs/core.architecture.en.md
   - resource: ../../template/pallets/router/docs/specification.en.md
 status: stable
@@ -35,9 +36,9 @@ related:
 
 DEOS Router is the runtime's route-selection engine. Its job is not to be a general-purpose DEX aggregator, but to make a bounded protocol decision about how a swap should execute inside a DEOS-style economy.
 
-In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the route that delivers the most output to the swap recipient. That is pure max-output selection: no additional policy weight influences the result.
+In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity. Exact-input selection maximizes recipient output, while exact-output selection minimizes total caller input including the Router fee. No additional policy weight influences either ranking.
 
-Just as important, the protocol's canonical swap path goes through the router. Swapping around it is not part of the DEOS contract, because bypassing the router would bypass route selection, fee capture, and the protocol's own economic coordination logic.
+Just as important, public XYK execution goes through the router. A direct signed Asset Conversion swap is not part of the DEOS contract, because it would bypass route selection, fee capture, and the protocol's own economic coordination logic.
 
 ## What Makes It Different
 
@@ -58,7 +59,15 @@ It ranks exact-input routes by maximum recipient output and exact-output routes 
 
 Directional pool observations live in the standalone Oracle pallet. Canonical pool admission creates both typed directions with immutable producer, scale, aggregation, and provenance; the Router publishes each actual XYK leg immediately before executing it in canonical order. Direct TMC mint publishes no XYK observation. Router-local EMA and tracked-asset storage no longer exist. Generalized feeds and unbounded on-chain history remain out of scope.
 
-The router is not optional glue around canonical product swaps. It is the reference protocol gateway for fee-bearing route comparison, while the runtime does not claim that every lower-level Asset Conversion call is technically unreachable.
+The router is not optional glue around canonical product swaps. It is the public protocol gateway for fee-bearing route comparison. The runtime call filter rejects raw Asset Conversion swaps, so signed users cannot bypass Router fee collection or route policy.
+
+## Pool Identity and Creation
+
+Asset identity has two layers. `AssetKind` states semantic meaning, while `LedgerAssetKey` identifies the physical balance ledger. Every pool endpoint must use its one canonical semantic representation, and the two endpoints must resolve to different physical ledgers. This prevents apparently distinct Local and Foreign values from creating a pool over the same balances.
+
+Permissionless pool creation also enters through DEOS Router. One transaction validates the canonical pair and expected LP identity, creates the underlying XYK pool, verifies and indexes the actual LP asset, and creates both directional DEOS Oracle feeds. Failure restores all Pool, LP, account, event, and Oracle changes. Raw Asset Conversion pool creation and post-dispatch topology repair are unavailable.
+
+Pool quotes, liquidity changes, and execution use full physical pool balances. Swap LP fees, liquidity-withdrawal fees, and the Router fee remain independent domains; the reference launch uses `0%`, `0%`, and `0.5%` respectively.
 
 ## Why It Matters to TMCTOL
 

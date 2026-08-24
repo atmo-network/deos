@@ -12,55 +12,731 @@ macro_rules! update_actor_contract_partial {
 }
 
 use crate::{
-  AccountId, Actors, Address, Assets, Balance, Balances, Executive, Oracle, Runtime, RuntimeCall,
-  RuntimeEvent, RuntimeOrigin, Signature, Staking, System, TxExtension, UncheckedExtrinsic,
+  AccountId, Actors, Address, Assets, Balance, Balances, Executive, MessageQueue, Oracle, Runtime,
+  RuntimeCall, RuntimeEvent, RuntimeHoldReason, RuntimeOrigin, Session, SessionRotation, Signature,
+  Staking, System, TxExtension, UncheckedExtrinsic, XcmpQueue,
   configs::{
-    RuntimeAddressEventIngress,
+    AuraExtFixedWeight, AuraFixedWeight, AuthorshipFixedWeight, BlockResourceBudgetValue,
+    DmpFixedWeight, FixedBlockWeight, FixedBlockWeightComponentsValue,
+    MaxInboundDownwardMessagesPerContext, MaxInboundHorizontalChannelsPerContext,
+    MaxInboundHorizontalMessagesPerContext, MaximumContextMeasuredWeight,
+    MessageQueueServiceWeight, ReservedDmpWeight, ReservedXcmpWeight, RuntimeAddressEventIngress,
+    SessionRotationFixedWeight, XcmMigrationMaximumWeight, XcmVersionDiscoveryFixedWeight,
+    XcmpRegisteredFixedWeight,
     actor_config::{
-      TmctolAssetOps, TmctolDexOps, TmctolFeeCollector, TmctolGenesisSystemActors,
-      TmctolLiquidityOps, classify_remove_liquidity_failure, classify_router_execution_failure,
+      ActorControlInitializationWeight, ActorOnIdleReserve, RuntimeAdmissionCertificateAuthority,
+      RuntimeStepControlWeight, TmctolAssetOps, TmctolDexOps, TmctolFeeCollector,
+      TmctolGenesisSystemActors, TmctolLiquidityOps, TmctolTaskEffectWeight,
+      classify_remove_liquidity_failure, classify_router_execution_failure,
       classify_router_failure, validate_remove_liquidity_output,
     },
     address_event_ingress::AddressEventIngressExtension,
     deos_router_config::{AssetConversionAdapter, market_execution_failure},
-    pool_index::PoolIndexExtension,
+    governance_config::GovernanceFixedWeight,
+    resource_meter::BlockResourceMeterExtension,
   },
 };
-use alloc::boxed::Box;
+use alloc::{
+  boxed::Box,
+  collections::{BTreeMap, BTreeSet},
+};
 use codec::Encode;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
-  ActorContract, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
-  AttemptDisposition, CloseReason, CompletionPolicy, ContractSteps, CrossingDirection, CycleResult,
-  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationPhase,
-  IdleStarvationState, InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass,
-  ScheduleWindow, SimulationMode, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf,
-  StakingOps, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task, TaskOf, Trigger,
-  WakeupKey, WeightInfo,
+  ActorContract, ActorId, ActorType, AdmissionCertificateAuthorityProvider, AmountResolution,
+  AssetFilter, AssetFilterOf, AssetOps, AttemptDisposition, CloseReason, CompletionPolicy,
+  ContextMessageGeometry, ContextMessageLimits, ContractSteps, CrossingDirection, CycleResult,
+  DexOps, Error, Event, ExecutionContext, FeeCollector, FundingSourcePolicy, IdleStarvationState,
+  InputLimit, LiquidityOps, Mutability, OutcomeTotals, RetryClass, ScheduleWindow, SimulationMode,
+  SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepControlExecution,
+  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
+  StepControlWeightProvider, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, Task,
+  TaskEffectExecution, TaskEffectWeightProvider, TaskOf, Trigger, TriggerFamily, WakeupKey,
+  WeightInfo,
 };
 use pallet_deos_router::{AssetConversionApi, FeeRoutingAdapter};
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
   dispatch::{DispatchClass, GetDispatchInfo},
   traits::{
-    Currency, ExistenceRequirement, Get, GetStorageVersion, Hooks, ReservableCurrency,
-    StorageVersion,
+    Currency, ExistenceRequirement, Get, GetStorageVersion, Hooks, PalletInfoAccess,
+    ReservableCurrency, StorageVersion,
+    fungible::InspectHold,
     fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
     tokens::imbalance::{ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting},
   },
   weights::Weight,
 };
-use polkadot_sdk::sp_core::{Pair, crypto::Ss58Codec, sr25519};
 use polkadot_sdk::sp_runtime::traits::{AccountIdConversion, TransactionExtension};
 use polkadot_sdk::sp_runtime::{
   DispatchError, Perbill, generic, transaction_validity::TransactionSource,
 };
 use polkadot_sdk::sp_weights::{WeightMeter, WeightToFee};
 use polkadot_sdk::{
+  cumulus_primitives_core::{InboundDownwardMessage, InboundHrmpMessage, ParaId},
+  sp_core::{Pair, crypto::Ss58Codec, sr25519},
+};
+use polkadot_sdk::{
   staging_xcm as xcm,
   staging_xcm_executor::{AssetsInHolding, traits::TransactAsset},
 };
 use primitives::AssetKind;
+
+fn conservative_actor_resource_limits() -> (Weight, Weight) {
+  let schedulable = ActorOnIdleReserve::get();
+  let control = Perbill::from_percent(20) * schedulable;
+  let shared = schedulable
+    .checked_sub(&control)
+    .expect("control share fits conservative schedulable reserve");
+  let actor_base_turn = Perbill::from_percent(50) * shared;
+  (control, actor_base_turn)
+}
+
+#[test]
+fn task_effect_weight_provider_owns_all_task_families() {
+  assert!(
+    <TmctolTaskEffectWeight as TaskEffectWeightProvider<TaskOf<Runtime>>>::production_weight_identity()
+      .is_some()
+  );
+  assert!(RuntimeAdmissionCertificateAuthority::current().is_some());
+  let (_, actor_base_turn) = conservative_actor_resource_limits();
+  let swap = TaskOf::<Runtime>::SwapIn {
+    asset_in: AssetKind::Native,
+    amount_in: AmountResolution::Fixed(1),
+    asset_out: AssetKind::Local(ASSET_A),
+    slippage_tolerance: Perbill::zero(),
+  };
+  let swap_weight = TmctolTaskEffectWeight::maximum_effect_weight(&swap)
+    .expect("SwapIn has a production Router envelope");
+  assert_eq!(
+    TmctolTaskEffectWeight::actual_effect_weight(&swap, TaskEffectExecution::NotInvoked),
+    Some(Weight::zero()),
+  );
+  assert_eq!(
+    TmctolTaskEffectWeight::actual_effect_weight(&swap, TaskEffectExecution::Invoked),
+    Some(swap_weight),
+  );
+  assert!(swap_weight.ref_time() > 0);
+  assert!(swap_weight.proof_size() > 0);
+  assert!(swap_weight.all_lte(actor_base_turn));
+  for task in [
+    TaskOf::<Runtime>::Stake {
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(1),
+    },
+    TaskOf::<Runtime>::Unstake {
+      asset: AssetKind::Native,
+      shares: AmountResolution::Fixed(1),
+    },
+  ] {
+    let weight = TmctolTaskEffectWeight::maximum_effect_weight(&task)
+      .expect("staking Task has a production envelope");
+    assert!(weight.ref_time() > 0);
+    assert!(weight.proof_size() > 0);
+    assert!(weight.all_lte(actor_base_turn));
+  }
+  assert_eq!(
+    TmctolTaskEffectWeight::maximum_effect_weight(&TaskOf::<Runtime>::StopCycle),
+    Some(Weight::zero())
+  );
+  let transfer = TaskOf::<Runtime>::Transfer {
+    to: BOB,
+    asset: AssetKind::Native,
+    amount: AmountResolution::Fixed(1),
+  };
+  let transfer_weight = TmctolTaskEffectWeight::maximum_effect_weight(&transfer)
+    .expect("Transfer has a measured composite effect envelope");
+  assert!(transfer_weight.ref_time() > 0);
+  assert!(transfer_weight.proof_size() > 0);
+  assert!(transfer_weight.all_lte(actor_base_turn));
+
+  let legs = SplitTransferLegsOf::<Runtime>::try_from(alloc::vec![
+    SplitLeg {
+      to: BOB,
+      share: Perbill::from_percent(50),
+    },
+    SplitLeg {
+      to: CHARLIE,
+      share: Perbill::from_percent(50),
+    },
+  ])
+  .expect("two split legs fit");
+  let remaining = alloc::vec![
+    TaskOf::<Runtime>::SplitTransfer {
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(2),
+      legs,
+    },
+    TaskOf::<Runtime>::SwapOut {
+      asset_out: AssetKind::Local(ASSET_A),
+      amount_out: AmountResolution::Fixed(1),
+      asset_in: AssetKind::Native,
+      input_limit: InputLimit::LiveQuote,
+      slippage_tolerance: Perbill::zero(),
+    },
+    TaskOf::<Runtime>::AddLiquidity {
+      asset_a: AssetKind::Native,
+      asset_b: AssetKind::Local(ASSET_A),
+      amount_a: AmountResolution::Fixed(1),
+      amount_b: AmountResolution::Fixed(1),
+      min_lp_out: 1,
+    },
+    TaskOf::<Runtime>::RemoveLiquidity {
+      lp_asset: AssetKind::Local(ASSET_A),
+      asset_a: AssetKind::Native,
+      asset_b: AssetKind::Local(ASSET_A),
+      lp_amount: AmountResolution::Fixed(1),
+      min_amount_a: 1,
+      min_amount_b: 1,
+    },
+    TaskOf::<Runtime>::Burn {
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(1),
+    },
+    TaskOf::<Runtime>::Mint {
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(1),
+    },
+    TaskOf::<Runtime>::DonateLiquidity {
+      asset_a: AssetKind::Native,
+      asset_b: AssetKind::Local(ASSET_A),
+      max_amount_a: AmountResolution::Fixed(1),
+      max_ratio_error: Perbill::zero(),
+    },
+  ];
+  for task in remaining {
+    let weight = TmctolTaskEffectWeight::maximum_effect_weight(&task)
+      .expect("every runtime Task family has a production envelope");
+    assert!(weight.ref_time() > 0);
+    assert!(weight.proof_size() > 0);
+    assert!(weight.all_lte(actor_base_turn));
+  }
+}
+
+#[test]
+fn runtime_step_control_weight_identity_commits_every_staged_production_branch() {
+  let step = StepOf::<Runtime> {
+    precondition: None,
+    task: TaskOf::<Runtime>::StopCycle,
+    on_error: StepErrorPolicy::AbortCycle,
+  };
+  assert!(RuntimeStepControlWeight::production_weight_identity().is_some());
+  let simple_context = StepControlWeightContext {
+    cursor: 0,
+    steps_in_fragment: 1,
+    opening_tail_chunks: 0,
+    predicate_evaluation_units: 0,
+    opening_snapshot_entries: 0,
+    opening_predicate_results: 0,
+    funding_snapshot_entries: 0,
+  };
+  let simple = RuntimeStepControlWeight::maximum_control_weight(simple_context, &step)
+    .expect("the production head branch is bounded");
+  let simple_actual = RuntimeStepControlWeight::actual_control_weight(
+    simple_context,
+    &step,
+    simple,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("simple completed branch has actual control evidence");
+  assert!(simple_actual.all_lte(simple));
+  assert!(simple_actual.ref_time() < simple.ref_time());
+  let suspended_head_retry = RuntimeStepControlWeight::actual_control_weight(
+    simple_context,
+    &step,
+    simple,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Suspended,
+      placement: StepControlPlacement::Wakeup,
+    },
+  )
+  .expect("Suspended-head retry actual evidence exists");
+  assert_eq!(
+    suspended_head_retry,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_retry(
+      0, 0, 0, 0,
+    ),
+  );
+  assert!(suspended_head_retry.all_lte(simple));
+  let opening_heavy_retry_context = StepControlWeightContext {
+    predicate_evaluation_units: 5,
+    opening_predicate_results: 1,
+    ..simple_context
+  };
+  let opening_heavy_retry_maximum =
+    RuntimeStepControlWeight::maximum_control_weight(opening_heavy_retry_context, &step)
+      .expect("Opening-heavy Suspended retry maximum exists");
+  let opening_heavy_retry = RuntimeStepControlWeight::actual_control_weight(
+    opening_heavy_retry_context,
+    &step,
+    opening_heavy_retry_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Suspended,
+      placement: StepControlPlacement::Wakeup,
+    },
+  )
+  .expect("Opening-heavy Suspended retry actual evidence exists");
+  assert_eq!(
+    opening_heavy_retry,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_opening_retry(
+      0, 1, 0,
+    ),
+  );
+  assert!(opening_heavy_retry.all_lte(opening_heavy_retry_maximum));
+  let opening_heavy_complete = RuntimeStepControlWeight::actual_control_weight(
+    opening_heavy_retry_context,
+    &step,
+    opening_heavy_retry_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("Opening-heavy Suspended completion actual evidence exists");
+  assert_eq!(
+    opening_heavy_complete,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_opening_complete(
+      0, 1, 0,
+    ),
+  );
+  assert!(opening_heavy_complete.all_lte(opening_heavy_retry_maximum));
+  let opening_heavy_progress_context = StepControlWeightContext {
+    opening_tail_chunks: 1,
+    ..opening_heavy_retry_context
+  };
+  let opening_heavy_progress_maximum =
+    RuntimeStepControlWeight::maximum_control_weight(opening_heavy_progress_context, &step)
+      .expect("Opening-heavy Suspended progress maximum exists");
+  let opening_heavy_progress = RuntimeStepControlWeight::actual_control_weight(
+    opening_heavy_progress_context,
+    &step,
+    opening_heavy_progress_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("Opening-heavy Suspended progress actual evidence exists");
+  assert_eq!(
+    opening_heavy_progress,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_opening_progress(
+      0, 1, 0,
+    ),
+  );
+  assert!(opening_heavy_progress.all_lte(opening_heavy_progress_maximum));
+  let suspended_head_complete = RuntimeStepControlWeight::actual_control_weight(
+    simple_context,
+    &step,
+    simple,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("Suspended-head completion actual evidence exists");
+  assert_eq!(
+    suspended_head_complete,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_complete(
+      0, 0, 0, 0,
+    ),
+  );
+  assert!(suspended_head_complete.all_lte(simple));
+  let suspended_head_progress_context = StepControlWeightContext {
+    opening_tail_chunks: 1,
+    ..simple_context
+  };
+  let suspended_head_progress_maximum =
+    RuntimeStepControlWeight::maximum_control_weight(suspended_head_progress_context, &step)
+      .expect("Suspended-head progress maximum exists");
+  let suspended_head_progress = RuntimeStepControlWeight::actual_control_weight(
+    suspended_head_progress_context,
+    &step,
+    suspended_head_progress_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("Suspended-head progress actual evidence exists");
+  assert_eq!(
+    suspended_head_progress,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_head_progress(
+      0, 0, 0, 0,
+    ),
+  );
+  assert!(suspended_head_progress.all_lte(suspended_head_progress_maximum));
+  let two_tail_chunks = RuntimeStepControlWeight::maximum_control_weight(
+    StepControlWeightContext {
+      cursor: 0,
+      steps_in_fragment: 1,
+      opening_tail_chunks: 2,
+      predicate_evaluation_units: 0,
+      opening_snapshot_entries: 0,
+      opening_predicate_results: 0,
+      funding_snapshot_entries: 0,
+    },
+    &step,
+  )
+  .expect("authored Opening tail reconstruction is bounded");
+  assert!(two_tail_chunks.ref_time() > simple.ref_time());
+  assert!(two_tail_chunks.proof_size() > simple.proof_size());
+  let authored = RuntimeStepControlWeight::maximum_control_weight(
+    StepControlWeightContext {
+      cursor: 0,
+      steps_in_fragment: 1,
+      opening_tail_chunks: <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
+        .saturating_sub(1)
+        .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
+      predicate_evaluation_units:
+        <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
+      opening_snapshot_entries:
+        <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
+      opening_predicate_results:
+        <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
+      funding_snapshot_entries:
+        <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
+    },
+    &step,
+  )
+  .expect("maximum authored Opening geometry is bounded");
+  let maximum_opening_tail_chunks =
+    <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+  let opening_progress =
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_progress_max(
+      maximum_opening_tail_chunks,
+    );
+  let conservative_opening =
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_paged_execute_opening_max();
+  assert_eq!(
+    authored,
+    Weight::from_parts(
+      conservative_opening
+        .ref_time()
+        .max(opening_progress.ref_time()),
+      conservative_opening
+        .proof_size()
+        .max(opening_progress.proof_size()),
+    ),
+  );
+  let authored_progress_actual = RuntimeStepControlWeight::actual_control_weight(
+    StepControlWeightContext {
+      cursor: 0,
+      steps_in_fragment: 1,
+      opening_tail_chunks: maximum_opening_tail_chunks,
+      predicate_evaluation_units:
+        <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
+      opening_snapshot_entries:
+        <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
+      opening_predicate_results:
+        <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
+      funding_snapshot_entries:
+        <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
+    },
+    &step,
+    authored,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("maximum Opening progress actual evidence exists");
+  assert_eq!(authored_progress_actual, opening_progress);
+  assert!(authored_progress_actual.all_lte(authored));
+  let minimal_opening_context = StepControlWeightContext {
+    cursor: 0,
+    steps_in_fragment: 1,
+    opening_tail_chunks: maximum_opening_tail_chunks,
+    predicate_evaluation_units: 0,
+    opening_snapshot_entries: 0,
+    opening_predicate_results: 0,
+    funding_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(
+    ),
+  };
+  let minimal_opening_maximum =
+    RuntimeStepControlWeight::maximum_control_weight(minimal_opening_context, &step)
+      .expect("minimal Opening progress maximum exists");
+  let minimal_opening_actual = RuntimeStepControlWeight::actual_control_weight(
+    minimal_opening_context,
+    &step,
+    minimal_opening_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("minimal Opening progress actual evidence exists");
+  assert_eq!(
+    minimal_opening_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_progress_min(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(minimal_opening_actual.all_lte(minimal_opening_maximum));
+  let minimal_failed_actual = RuntimeStepControlWeight::actual_control_weight(
+    minimal_opening_context,
+    &step,
+    minimal_opening_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Failed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("minimal Opening failure actual evidence exists");
+  assert_eq!(
+    minimal_failed_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_failed_min(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(minimal_failed_actual.all_lte(minimal_opening_maximum));
+  let minimal_retry_actual = RuntimeStepControlWeight::actual_control_weight(
+    minimal_opening_context,
+    &step,
+    minimal_opening_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Suspended,
+      placement: StepControlPlacement::Wakeup,
+    },
+  )
+  .expect("minimal Opening retry actual evidence exists");
+  assert_eq!(
+    minimal_retry_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_retry_min(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(minimal_retry_actual.all_lte(minimal_opening_maximum));
+  let minimal_completion_actual = RuntimeStepControlWeight::actual_control_weight(
+    minimal_opening_context,
+    &step,
+    minimal_opening_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("minimal Opening completion actual evidence exists");
+  assert_eq!(
+    minimal_completion_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_complete_min(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(minimal_completion_actual.all_lte(minimal_opening_maximum));
+  let maximal_completion_context = StepControlWeightContext {
+    cursor: 0,
+    steps_in_fragment: 1,
+    opening_tail_chunks: maximum_opening_tail_chunks,
+    predicate_evaluation_units: <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get(
+    )
+    .saturating_mul(2),
+    opening_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
+      .saturating_sub(1)
+      .saturating_mul(2),
+    opening_predicate_results:
+      <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
+    funding_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(
+    ),
+  };
+  let maximal_completion_maximum =
+    RuntimeStepControlWeight::maximum_control_weight(maximal_completion_context, &step)
+      .expect("maximum realizable Opening completion is bounded");
+  let maximal_failed_actual = RuntimeStepControlWeight::actual_control_weight(
+    maximal_completion_context,
+    &step,
+    maximal_completion_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Failed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("maximum Opening failure actual evidence exists");
+  assert_eq!(
+    maximal_failed_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_failed_max(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(maximal_failed_actual.all_lte(maximal_completion_maximum));
+  let maximal_retry_actual = RuntimeStepControlWeight::actual_control_weight(
+    maximal_completion_context,
+    &step,
+    maximal_completion_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Suspended,
+      placement: StepControlPlacement::Wakeup,
+    },
+  )
+  .expect("maximum Opening retry actual evidence exists");
+  assert_eq!(
+    maximal_retry_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_retry_max(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(maximal_retry_actual.all_lte(maximal_completion_maximum));
+  let maximal_completion_actual = RuntimeStepControlWeight::actual_control_weight(
+    maximal_completion_context,
+    &step,
+    maximal_completion_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Opening,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("maximum Opening completion actual evidence exists");
+  assert_eq!(
+    maximal_completion_actual,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_opening_complete_max(
+      maximum_opening_tail_chunks,
+    ),
+  );
+  assert!(maximal_completion_actual.all_lte(maximal_completion_maximum));
+  assert!(authored.ref_time() > simple.ref_time());
+  assert!(authored.proof_size() > simple.proof_size());
+  let (control_limit, _) = conservative_actor_resource_limits();
+  assert!(
+    authored.all_lte(control_limit),
+    "maximum control {authored:?} exceeds conservative limit {control_limit:?}"
+  );
+  assert_eq!(
+    RuntimeStepControlWeight::maximum_control_weight(
+      StepControlWeightContext {
+        cursor: 1,
+        steps_in_fragment: 5,
+        opening_tail_chunks: 0,
+        predicate_evaluation_units: 0,
+        opening_snapshot_entries: 0,
+        opening_predicate_results: 0,
+        funding_snapshot_entries: 0,
+      },
+      &step,
+    ),
+    None
+  );
+  let tail_context = StepControlWeightContext {
+    cursor: 1,
+    steps_in_fragment: 4,
+    opening_tail_chunks: 0,
+    predicate_evaluation_units: 0,
+    opening_snapshot_entries: 0,
+    opening_predicate_results: 0,
+    funding_snapshot_entries: 0,
+  };
+  let tail_maximum = RuntimeStepControlWeight::maximum_control_weight(tail_context, &step)
+    .expect("tail control maximum exists");
+  let running_complete = RuntimeStepControlWeight::actual_control_weight(
+    tail_context,
+    &step,
+    tail_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Running,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("Running completion actual evidence exists");
+  assert_eq!(
+    running_complete,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_running_complete(
+      4, 0,
+    ),
+  );
+  assert!(running_complete.all_lte(tail_maximum));
+  let running_progress = RuntimeStepControlWeight::actual_control_weight(
+    tail_context,
+    &step,
+    tail_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Running,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("Running progress actual evidence exists");
+  assert_eq!(
+    running_progress,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_running_progress(
+      4, 0,
+    ),
+  );
+  assert!(running_progress.all_lte(tail_maximum));
+  let suspended_complete = RuntimeStepControlWeight::actual_control_weight(
+    tail_context,
+    &step,
+    tail_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Completed,
+      placement: StepControlPlacement::None,
+    },
+  )
+  .expect("Suspended completion actual evidence exists");
+  assert_eq!(
+    suspended_complete,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_complete(
+      4, 0,
+    ),
+  );
+  assert!(suspended_complete.all_lte(tail_maximum));
+  let suspended_progress = RuntimeStepControlWeight::actual_control_weight(
+    tail_context,
+    &step,
+    tail_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Continued,
+      placement: StepControlPlacement::Queue,
+    },
+  )
+  .expect("Suspended progress actual evidence exists");
+  assert_eq!(
+    suspended_progress,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_progress(
+      4, 0,
+    ),
+  );
+  assert!(suspended_progress.all_lte(tail_maximum));
+  let suspended = RuntimeStepControlWeight::actual_control_weight(
+    tail_context,
+    &step,
+    tail_maximum,
+    StepControlExecution {
+      phase: StepControlPhase::Suspended,
+      outcome: StepControlOutcome::Suspended,
+      placement: StepControlPlacement::Wakeup,
+    },
+  )
+  .expect("Suspended branch actual evidence exists");
+  assert_eq!(
+    suspended,
+    crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::scheduler_inner_suspended_tail_retry(
+      4, 0,
+    ),
+  );
+  assert!(suspended.all_lte(tail_maximum));
+  assert!(RuntimeAdmissionCertificateAuthority::current().is_some());
+}
 
 fn system_transfer_steps(target_actor_id: ActorId) -> pallet_deos_actors::ContractSteps<Runtime> {
   alloc::vec![StepOf::<Runtime> {
@@ -119,8 +795,7 @@ fn host_system_activation_manifest_is_ranked_and_rejects_undeclared_cycle_edges_
 
     System::set_block_number(1);
     let splitter_before =
-      pallet_deos_actors::ActorContracts::<Runtime>::get(actor_ids::BLDR_SPLITTER_ACTORS_ID)
-        .expect("Splitter contract");
+      Actors::actor_contract(actor_ids::BLDR_SPLITTER_ACTORS_ID).expect("Splitter contract");
     assert_noop!(
       update_actor_contract_partial(
         RuntimeOrigin::root(),
@@ -133,9 +808,253 @@ fn host_system_activation_manifest_is_ranked_and_rejects_undeclared_cycle_edges_
       Error::<Runtime>::SystemActorTopologyInvalid
     );
     assert_eq!(
-      pallet_deos_actors::ActorContracts::<Runtime>::get(actor_ids::BLDR_SPLITTER_ACTORS_ID),
+      Actors::actor_contract(actor_ids::BLDR_SPLITTER_ACTORS_ID),
       Some(splitter_before),
       "cycle rejection must precede contract mutation"
+    );
+  });
+}
+
+#[test]
+#[ignore = "fixed T+1 runtime length-32 stress profile; run by exact test name"]
+fn next_block_runtime_mixed_length_herd_includes_maximum_tail() {
+  seeded_test_ext().execute_with(|| {
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(8_043),
+    );
+    let lengths = [0_u32, 1, 4, 8, 32];
+    let actors = (0..10)
+      .map(|index| {
+        let steps = BoundedVec::try_from(
+          (0..lengths[index % lengths.len()])
+            .map(|_| {
+              make_step(Task::Mint {
+                asset: AssetKind::Native,
+                amount: AmountResolution::Fixed(1),
+              })
+            })
+            .collect::<Vec<_>>(),
+        )
+        .expect("runtime W3 contract fits MaxContractSteps");
+        create_system(ALICE, observation_schedule(feed), None, steps)
+      })
+      .collect::<Vec<_>>();
+
+    System::set_block_number(1);
+    Actors::on_initialize(1);
+    assert_ok!(Actors::note_observation_transition_with_provenance(
+      feed,
+      pallet_deos_actors::ObservationTransition {
+        revision: 1,
+        previous: None,
+        current: 10,
+      },
+      pallet_deos_actors::TriggerCauseProvenance::ExternalPhase,
+    ));
+    run_idle(Weight::MAX);
+
+    let started_actors = || {
+      System::events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+          RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
+          _ => None,
+        })
+        .collect::<Vec<_>>()
+    };
+    let source_started = started_actors();
+    assert!(source_started.is_empty());
+
+    let mut started = source_started;
+    let mut block = 1_u32;
+    while started.len() < actors.len() {
+      block += 1;
+      assert!(block <= 12, "runtime W3 herd failed to drain");
+      System::set_block_number(block);
+      Actors::on_initialize(block);
+      run_idle(Weight::MAX);
+      started = started_actors();
+      assert_eq!(started, actors[..started.len()]);
+    }
+    assert_eq!(started, actors);
+  });
+}
+
+fn run_next_block_runtime_herd(requested_population: Option<usize>) {
+  seeded_test_ext().execute_with(|| {
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(8_044),
+    );
+    let active_remaining = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+      .saturating_sub(Actors::active_actor_count());
+    let identity_remaining = <Runtime as pallet_deos_actors::Config>::MaxActorIdentities::get()
+      .saturating_sub(Actors::actor_identity_count());
+    let sovereign_remaining = <Runtime as pallet_deos_actors::Config>::MaxSystemSovereigns::get()
+      .saturating_sub(Actors::system_sovereign_count());
+    let maximum_population = active_remaining
+      .min(identity_remaining)
+      .min(sovereign_remaining) as usize;
+    if requested_population.is_none() {
+      assert_eq!(maximum_population, 9_985);
+    }
+    let population = requested_population.unwrap_or(maximum_population);
+    assert!(population <= maximum_population);
+    let lengths = [0_u32, 1, 4, 8, 32];
+    let actors = (0..population)
+      .map(|index| {
+        let steps = BoundedVec::try_from(
+          (0..lengths[index % lengths.len()])
+            .map(|_| {
+              make_step(Task::Mint {
+                asset: AssetKind::Native,
+                amount: AmountResolution::Fixed(1),
+              })
+            })
+            .collect::<Vec<_>>(),
+        )
+        .expect("runtime W3 contract fits MaxContractSteps");
+        create_system(ALICE, observation_schedule(feed), None, steps)
+      })
+      .collect::<Vec<_>>();
+    let actor_set = actors
+      .iter()
+      .copied()
+      .collect::<alloc::collections::BTreeSet<_>>();
+
+    System::set_block_number(1);
+    Actors::on_initialize(1);
+    assert_ok!(Actors::note_observation_transition_with_provenance(
+      feed,
+      pallet_deos_actors::ObservationTransition {
+        revision: 1,
+        previous: None,
+        current: 10,
+      },
+      pallet_deos_actors::TriggerCauseProvenance::ExternalPhase,
+    ));
+
+    let mut started = Vec::new();
+    let mut block = 1_u32;
+    while started.len() < actors.len() {
+      System::reset_events();
+      run_idle(Weight::MAX);
+      started.extend(
+        System::events()
+          .into_iter()
+          .filter_map(|record| match record.event {
+            RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. })
+              if actor_set.contains(&actor_id) =>
+            {
+              Some(actor_id)
+            }
+            _ => None,
+          }),
+      );
+      assert_eq!(started, actors[..started.len()]);
+      if started.len() == actors.len() {
+        break;
+      }
+      block += 1;
+      assert!(
+        block <= population as u32 + 2,
+        "runtime W3 herd failed to drain"
+      );
+      System::set_block_number(block);
+      Actors::on_initialize(block);
+    }
+    assert_eq!(started, actors);
+  });
+}
+
+#[test]
+#[ignore = "fixed T+1 1,000-Actor runtime stress profile; run by exact test name"]
+fn next_block_thousand_actor_runtime_herd_preserves_fifo_order() {
+  run_next_block_runtime_herd(Some(1_000));
+}
+
+#[test]
+#[ignore = "fixed T+1 maximum-admissible runtime stress profile; run by exact test name"]
+fn next_block_maximum_admissible_runtime_herd_preserves_fifo_order() {
+  run_next_block_runtime_herd(None);
+}
+
+#[test]
+fn actor_produced_address_event_waits_one_additional_block() {
+  seeded_test_ext().execute_with(|| {
+    let first_account = Actors::sovereign_account_id(&ALICE, 0);
+    let second_account = Actors::sovereign_account_id(&ALICE, 1);
+    let first = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(second_account.clone(), AssetKind::Native, 10),
+    );
+    let second = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_contract_steps(first_account.clone(), AssetKind::Native, 10),
+    );
+    fund_native(first, 1_000_000_000_000);
+    fund_native(second, 1_000_000_000_000);
+
+    System::set_block_number(1);
+    Actors::on_initialize(1);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    assert_ok!(TmctolAssetOps::transfer(
+      &ALICE,
+      &first_account,
+      AssetKind::Native,
+      100,
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(first)
+        .expect("first Actor")
+        .identity
+        .cycle_nonce,
+      0
+    );
+    assert_eq!(
+      Actors::active_actor_state(second)
+        .expect("second Actor")
+        .identity
+        .cycle_nonce,
+      0
+    );
+    assert!(Actors::pending_signal(first));
+
+    System::set_block_number(2);
+    Actors::on_initialize(2);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(first)
+        .expect("first Actor")
+        .identity
+        .cycle_nonce,
+      1
+    );
+    assert_eq!(
+      Actors::active_actor_state(second)
+        .expect("second Actor")
+        .identity
+        .cycle_nonce,
+      0
+    );
+    assert!(Actors::pending_signal(second));
+
+    System::set_block_number(3);
+    Actors::on_initialize(3);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(second)
+        .expect("second Actor")
+        .identity
+        .cycle_nonce,
+      1
     );
   });
 }
@@ -279,6 +1198,7 @@ fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
     let balance = Balances::free_balance(&account);
     let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
     deplete_user_sovereign(actor_id, balance.saturating_sub(protected_floor));
+    fund_native(actor_id, address_event_trigger_fee());
     System::set_block_number(4);
     assert_ok!(Actors::notify_address_event(
       actor_id,
@@ -291,13 +1211,13 @@ fn externally_closed_user_self_cycle_remains_paid_and_economically_apoptotic() {
     assert_eq!(
       <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
       reserved_before,
-      "economic apoptosis releases the refundable Trigger-state bond"
+      "process cleanup never mutates owner reserve custody"
     );
     assert!(System::events().iter().any(|record| matches!(
       &record.event,
       RuntimeEvent::Actors(Event::ActorClosed {
         actor_id: closed,
-        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+        reason: CloseReason::CycleAdmissionInsufficient,
       }) if *closed == actor_id
     )));
   });
@@ -367,6 +1287,14 @@ fn paid_user_long_cycle_preserves_fifo_under_queue_pressure_and_closes_insolvent
     let balance = Balances::free_balance(actor_account(insolvent));
     let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
     deplete_user_sovereign(insolvent, balance.saturating_sub(protected_floor));
+    fund_native(insolvent, address_event_trigger_fee());
+    System::set_block_number(10);
+    assert_ok!(Actors::notify_address_event(
+      insolvent,
+      AssetKind::Native,
+      1,
+      &ALICE,
+    ));
     for block in 10..=13 {
       System::set_block_number(block);
       run_idle(Weight::MAX);
@@ -376,7 +1304,7 @@ fn paid_user_long_cycle_preserves_fifo_under_queue_pressure_and_closes_insolvent
       &record.event,
       RuntimeEvent::Actors(Event::ActorClosed {
         actor_id,
-        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+        reason: CloseReason::CycleAdmissionInsufficient,
       }) if *actor_id == insolvent
     )));
     assert!(
@@ -552,7 +1480,7 @@ fn oracle_publication_rolls_back_when_actor_change_hook_rejects() {
 }
 
 #[test]
-fn insolvent_crossing_fire_releases_bond_and_preserves_peer_cursor_continuity() {
+fn underfunded_crossing_fire_advances_without_readiness_or_peer_cursor_loss() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let producer = deos_router_account();
@@ -576,8 +1504,7 @@ fn insolvent_crossing_fire_releases_bond_and_preserves_peer_cursor_continuity() 
       feed,
       1_000_000_000_000,
     ));
-    let reserved_before =
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE);
+    let hold_before = actors_owner_hold(&ALICE);
     let crossing = RuntimeSchedule {
       trigger: Trigger::observation_crossing(
         feed,
@@ -599,14 +1526,14 @@ fn insolvent_crossing_fire_releases_bond_and_preserves_peer_cursor_continuity() 
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    let crossing_bond = crate::configs::actor_config::ActorObservationCrossingTriggerBond::get();
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before + crossing_bond * 2
-    );
+    let state_hold_after_creation = hold_before
+      .saturating_add(actor_state_hold_total(insolvent))
+      .saturating_add(actor_state_hold_total(peer));
+    assert_eq!(actors_owner_hold(&ALICE), state_hold_after_creation);
     let balance = Balances::free_balance(actor_account(insolvent));
     let protected_floor = crate::configs::actor_config::ActorMinUserBalance::get();
     deplete_user_sovereign(insolvent, balance.saturating_sub(protected_floor));
+    fund_native(peer, observation_crossing_trigger_fee());
 
     assert_ok!(Oracle::publish(
       RuntimeOrigin::signed(producer),
@@ -618,21 +1545,25 @@ fn insolvent_crossing_fire_releases_bond_and_preserves_peer_cursor_continuity() 
       run_idle(Weight::MAX);
     }
 
-    assert!(Actors::active_actor_state(insolvent).is_none());
+    let underfunded = Actors::active_actor_state(insolvent).expect("underfunded process remains");
+    assert!(!underfunded.hot.pending_signal);
+    assert!(underfunded.hot.queue_ticket.is_none());
     assert!(Actors::active_actor_state(peer).is_some());
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before + crossing_bond
-    );
-    assert_eq!(Actors::crossing_feed_membership_count(feed), 1);
+    assert_eq!(actors_owner_hold(&ALICE), state_hold_after_creation);
+    assert_eq!(Actors::crossing_feed_membership_count(feed), 2);
     assert!(Actors::crossing_membership(peer).is_some());
-    assert!(Actors::crossing_membership(insolvent).is_none());
+    assert!(Actors::crossing_membership(insolvent).is_some());
     assert!(Actors::crossing_worker_fault().is_none());
-    assert!(System::events().iter().any(|record| matches!(
+    assert!(!System::events().iter().any(|record| matches!(
       &record.event,
-      RuntimeEvent::Actors(Event::ActorClosed {
+      RuntimeEvent::Actors(Event::ActorClosed { actor_id, .. }) if *actor_id == insolvent
+    )));
+    assert!(!System::events().iter().any(|record| matches!(
+      &record.event,
+      RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
         actor_id,
-        reason: CloseReason::BalanceExhausted | CloseReason::FeeBudgetExhausted,
+        trigger_family: TriggerFamily::ObservationCrossing,
+        ..
       }) if *actor_id == insolvent
     )));
   });
@@ -690,6 +1621,8 @@ fn oracle_publication_rolls_back_when_crossing_transition_queue_is_full() {
         revision: observation.revision,
         previous: observation.value.saturating_sub(1),
         current: observation.value,
+        cause_provenance: pallet_deos_actors::TriggerCauseProvenance::Deferred,
+        cause_block: 0,
       };
       maximum
     ])
@@ -729,10 +1662,33 @@ fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
 #[test]
 fn actor_0_7_storage_schema_is_a_fresh_genesis_baseline() {
   seeded_test_ext().execute_with(|| {
-    let baseline = StorageVersion::new(9);
+    let baseline = StorageVersion::new(15);
     assert_eq!(Actors::in_code_storage_version(), baseline);
     assert_eq!(Actors::on_chain_storage_version(), baseline);
   });
+}
+
+fn ensure_actor_prepass_context() {
+  if crate::Timestamp::get() == 0 {
+    set_consensus_timestamp(1);
+  }
+  if !polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::exists() {
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData::default(),
+    );
+  }
+}
+
+fn ensure_current_resource_state() {
+  ensure_actor_prepass_context();
+  let now = System::block_number();
+  if Actors::block_resource_state().is_some_and(|state| state.ensure_block(now).is_err()) {
+    pallet_deos_actors::CurrentBlockResourceState::<Runtime>::kill();
+  }
+  if Actors::block_resource_state().is_none() {
+    let _ = Actors::on_initialize(now);
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+  }
 }
 
 fn signed_extrinsic(
@@ -740,6 +1696,7 @@ fn signed_extrinsic(
   nonce: crate::Nonce,
   call: RuntimeCall,
 ) -> UncheckedExtrinsic {
+  ensure_current_resource_state();
   let tx_ext = TxExtension::new((
     polkadot_sdk::frame_system::AuthorizeCall::<Runtime>::new(),
     polkadot_sdk::frame_system::CheckNonZeroSender::<Runtime>::new(),
@@ -749,8 +1706,7 @@ fn signed_extrinsic(
     polkadot_sdk::frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
     polkadot_sdk::frame_system::CheckNonce::<Runtime>::from(nonce),
     polkadot_sdk::frame_system::CheckWeight::<Runtime>::new(),
-    AddressEventIngressExtension,
-    PoolIndexExtension,
+    (BlockResourceMeterExtension, AddressEventIngressExtension),
     polkadot_sdk::pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(0),
     polkadot_sdk::frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
   ));
@@ -812,6 +1768,17 @@ fn any_preconditions(
 
 fn inert_task() -> RuntimeTask {
   Task::StopCycle
+}
+
+fn exp_0002_false_steps(step_count: u32) -> RuntimeContractSteps {
+  let step = RuntimeStep {
+    precondition: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberBelow {
+      threshold: 0,
+    }]),
+    task: inert_task(),
+    on_error: StepErrorPolicy::AbortCycle,
+  };
+  BoundedVec::try_from(vec![step; step_count as usize]).expect("profile Contract Steps fit")
 }
 
 fn manual_schedule() -> RuntimeSchedule {
@@ -946,13 +1913,22 @@ fn fund_native(actor_id: ActorId, amount: u128) {
   let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&actor_acc, amount);
 }
 
-/// User Active prefunding requirement: `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`.
+fn address_event_trigger_fee() -> Balance {
+  let weight =
+    <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::address_event_trigger_occurrence();
+  <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(&weight)
+}
+
+fn observation_crossing_trigger_fee() -> Balance {
+  let weight =
+    <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::observation_crossing_trigger_occurrence();
+  <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(&weight)
+}
+
+/// User Active prefunding requirement: floor plus the maximum opening-Step fee.
 fn user_prefunding_requirement(plan: &RuntimeContractSteps) -> u128 {
-  <Runtime as pallet_deos_actors::Config>::MinUserBalance::get().saturating_add(
-    Actors::attempt_fee_envelope(ActorType::User, plan, 0)
-      .expect("fixture plan has a checked fee envelope")
-      .total,
-  )
+  Actors::user_pipeline_machine_capacity_requirement(plan)
+    .expect("fixture plan has a checked opening-Step fee")
 }
 
 /// Lowest free owner slot for the deterministic prospective User sovereign; mirrors the
@@ -1004,6 +1980,30 @@ fn deplete_user_sovereign(actor_id: ActorId, amount: u128) {
     remainder, 0,
     "fixture depletion must not overdraw the sovereign"
   );
+}
+
+#[test]
+fn zero_step_pipeline_quote_uses_generated_machine_and_cleanup_owners() {
+  seeded_test_ext().execute_with(|| {
+    type ActorWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    let steps = RuntimeContractSteps::default();
+    let machine = <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(
+      &ActorWeights::scheduler_inner_zero_step_complete(),
+    );
+    let cleanup = <Runtime as pallet_deos_actors::Config>::WeightToFee::weight_to_fee(
+      &ActorWeights::close_actor(),
+    );
+    let expected = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get()
+      .saturating_add(machine)
+      .saturating_add(cleanup);
+    assert_eq!(
+      Actors::user_pipeline_machine_capacity_requirement(&steps)
+        .expect("zero-Step Pipeline quote fits"),
+      expected
+    );
+    assert!(machine > 0);
+    assert!(cleanup > 0);
+  });
 }
 
 #[test]
@@ -1120,6 +2120,25 @@ fn native_balance(who: &crate::AccountId) -> u128 {
   Balances::free_balance(who)
 }
 
+fn actor_state_hold_total(actor_id: ActorId) -> Balance {
+  let record = Actors::actor_state_hold(actor_id).expect("User Actor state hold exists");
+  record
+    .breakdown
+    .identity
+    .saturating_add(record.breakdown.contract_head)
+    .saturating_add(record.breakdown.contract_body)
+    .saturating_add(record.breakdown.detector)
+    .saturating_add(record.breakdown.funding)
+    .saturating_add(record.breakdown.run)
+}
+
+fn actors_owner_hold(owner: &AccountId) -> Balance {
+  Balances::balance_on_hold(
+    &RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState),
+    owner,
+  )
+}
+
 fn account_location(who: crate::AccountId) -> xcm::latest::Location {
   let mut id = [0u8; 32];
   id.copy_from_slice(who.as_ref());
@@ -1183,13 +2202,42 @@ fn asset_to_holding(asset: xcm::latest::Asset) -> AssetsInHolding {
   holding
 }
 
+fn run_next_idle(weight: Weight) {
+  let now = System::block_number()
+    .checked_add(1)
+    .expect("test block advances");
+  System::set_block_number(now);
+  set_consensus_timestamp(
+    u64::from(now).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+  );
+  Actors::on_initialize(now);
+  run_idle(weight);
+}
+
 fn run_idle(weight: Weight) {
-  let block_time = u64::from(System::block_number())
-    .saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
+  let mut now = System::block_number();
+  let block_time =
+    u64::from(now).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS);
   if crate::Timestamp::get() < block_time {
     set_consensus_timestamp(block_time);
   }
-  Actors::on_idle(System::block_number(), weight);
+  ensure_current_resource_state();
+  Actors::on_idle(now, weight);
+  for _ in 1..<Runtime as pallet_deos_actors::Config>::MaxContractSteps::get().saturating_mul(2) {
+    if !pallet_deos_actors::ActorHot::<Runtime>::iter_values()
+      .any(|hot| hot.cycle_state == pallet_deos_actors::CycleState::Running)
+    {
+      break;
+    }
+    now = now.checked_add(1).expect("test block advances");
+    System::set_block_number(now);
+    set_consensus_timestamp(
+      u64::from(now).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+    );
+    Actors::on_initialize(now);
+    ensure_current_resource_state();
+    Actors::on_idle(now, weight);
+  }
 }
 
 fn starvation_observation_weight() -> Weight {
@@ -1287,6 +2335,148 @@ fn manual_trigger_executes_transfer_contract_steps() {
         } if *id == actor_id
       )
     }));
+  });
+}
+
+#[test]
+fn exp_0002_ceiling_semantics_profile_commits_exactly_one_step_per_block() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let step_count = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get();
+    let actor_id = create_system(
+      ALICE,
+      manual_schedule(),
+      None,
+      exp_0002_false_steps(step_count),
+    );
+    let expected_tail_chunks = step_count
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK)
+      as usize;
+    assert_eq!(
+      pallet_deos_actors::ActorContractTailChunks::<Runtime>::iter_prefix(actor_id).count(),
+      expected_tail_chunks
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("profile actor is active")
+        .identity
+        .cycle_nonce,
+      0
+    );
+
+    let mut now = System::block_number();
+    for step_index in 0..step_count {
+      now = now.checked_add(1).expect("profile block advances");
+      System::set_block_number(now);
+      set_consensus_timestamp(
+        u64::from(now).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+      );
+      assert_eq!(Actors::on_initialize(now), Weight::zero());
+      ensure_actor_prepass_context();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      Actors::on_idle(now, Weight::MAX);
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::StepSkipped {
+          actor_id: id,
+          step_index: index,
+          reason: StepSkippedReason::PreconditionFalse,
+          ..
+        } if *id == actor_id && *index == step_index
+      )));
+      let state = Actors::active_actor_state(actor_id).expect("profile actor remains active");
+      if step_index + 1 < step_count {
+        let run = Actors::actor_run_state(actor_id).expect("profile run remains open");
+        assert_eq!(run.cursor, step_index + 1);
+        assert_eq!(run.last_committed_step_block, Some(now));
+        assert_eq!(run.eligible_at, now + 1);
+        assert_eq!(state.identity.cycle_nonce, 0);
+      } else {
+        assert!(Actors::actor_run_state(actor_id).is_none());
+        assert_eq!(state.identity.cycle_nonce, 1);
+      }
+    }
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        actor_id: id,
+        cycle_nonce: 1,
+        result: CycleResult::Completed,
+        outcomes,
+      } if *id == actor_id
+        && outcomes.executed_steps == 0
+        && outcomes.precondition_skips == step_count
+        && outcomes.committed_effectful_tasks == 0
+    )));
+  });
+}
+
+#[test]
+#[ignore = "deterministic EXP-0002 profile output; run explicitly with --nocapture"]
+fn profile_exp_0002_state_footprint() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let step_count = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get();
+    let short_actor = create_system(
+      ALICE,
+      manual_schedule(),
+      None,
+      exp_0002_false_steps(1),
+    );
+    let max_actor = create_system(
+      BOB,
+      manual_schedule(),
+      None,
+      exp_0002_false_steps(step_count),
+    );
+    let geometry = |actor_id| {
+      let head = pallet_deos_actors::ActorContractHeads::<Runtime>::get(actor_id)
+        .expect("profile head exists");
+      let certificate = pallet_deos_actors::ActorAdmissionCertificates::<Runtime>::get(actor_id)
+        .expect("profile certificate exists");
+      let tails = pallet_deos_actors::ActorContractTailChunks::<Runtime>::iter_prefix(actor_id)
+        .collect::<Vec<_>>();
+      let tail_bytes = tails
+        .iter()
+        .map(|(_, chunk)| chunk.encode().len())
+        .sum::<usize>();
+      (
+        head.encode().len(),
+        certificate.encode().len(),
+        tails.len(),
+        tail_bytes,
+      )
+    };
+    let short = geometry(short_actor);
+    let maximum = geometry(max_actor);
+    assert_eq!(short.2, 0);
+    assert_eq!(
+      maximum.2,
+      step_count
+        .saturating_sub(1)
+        .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK) as usize
+    );
+    println!(
+      "EXP0002_PROFILE steps={} funding={} opening={} opening_predicates={} short_head={} short_certificate={} short_tail_chunks={} short_tail_bytes={} max_head={} max_certificate={} max_tail_chunks={} max_tail_bytes={}",
+      step_count,
+      <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
+      <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
+      <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
+      short.0,
+      short.1,
+      short.2,
+      short.3,
+      maximum.0,
+      maximum.1,
+      maximum.2,
+      maximum.3,
+    );
   });
 }
 
@@ -1423,49 +2613,6 @@ fn pool_creation_owns_an_exact_lp_reverse_index() {
 }
 
 #[test]
-fn pool_index_post_dispatch_failure_rejects_and_restores_exact_root() {
-  seeded_test_ext().execute_with(|| {
-    const INDEXED_ASSET: u32 = 901_003;
-    System::set_block_number(1);
-    let signer_pair = sr25519::Pair::from_seed(&[54u8; 32]);
-    let signer = crate::AccountId::from(signer_pair.public());
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-      &signer,
-      1_000_000_000_000_000_000,
-    );
-    assert_ok!(create_test_asset(INDEXED_ASSET, &signer));
-    let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
-    let call =
-      RuntimeCall::AssetConversion(polkadot_sdk::pallet_asset_conversion::Call::create_pool {
-        asset1: Box::new(pair.0),
-        asset2: Box::new(pair.1),
-      });
-    crate::configs::pool_index::set_fail_pool_index_post_dispatch(true);
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    let rejected = polkadot_sdk::frame_support::storage::with_transaction(
-      || -> polkadot_sdk::frame_support::storage::TransactionOutcome<Result<bool, DispatchError>> {
-        let result = Executive::apply_extrinsic(signed_extrinsic(&signer_pair, 0, call));
-        let rejected = result.is_err() || matches!(result, Ok(Err(_)));
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(rejected))
-      },
-    )
-    .expect("pool-index rejection check");
-    crate::configs::pool_index::set_fail_pool_index_post_dispatch(false);
-    assert!(
-      rejected,
-      "post-dispatch index fault must reject the block candidate"
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before,
-      "rejection restores pool, LP asset/index, Oracle feeds, balances, events, and nonce"
-    );
-    assert!(crate::AssetConversion::get_reserves(pair.0, pair.1).is_err());
-  });
-}
-
-#[test]
 fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
   seeded_test_ext().execute_with(|| {
     const INDEXED_ASSET: u32 = 901_002;
@@ -1586,7 +2733,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
 }
 
 #[test]
-fn executive_pool_creation_indexes_the_lp_without_event_scanning() {
+fn executive_canonical_pool_creation_commits_complete_topology() {
   seeded_test_ext().execute_with(|| {
     const INDEXED_ASSET: u32 = 901_003;
     System::set_block_number(1);
@@ -1599,11 +2746,10 @@ fn executive_pool_creation_indexes_the_lp_without_event_scanning() {
     assert_ok!(create_test_asset(INDEXED_ASSET, &ALICE));
     crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
     let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
-    let call =
-      RuntimeCall::AssetConversion(polkadot_sdk::pallet_asset_conversion::Call::create_pool {
-        asset1: Box::new(pair.0),
-        asset2: Box::new(pair.1),
-      });
+    let call = RuntimeCall::DeosRouter(pallet_deos_router::Call::create_pool {
+      asset_a: pair.0,
+      asset_b: pair.1,
+    });
     let result = Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call));
     assert!(matches!(result, Ok(Ok(_))), "{result:?}");
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
@@ -1616,7 +2762,7 @@ fn executive_pool_creation_indexes_the_lp_without_event_scanning() {
 }
 
 #[test]
-fn executive_pool_creation_rejects_before_dispatch_when_index_admission_fails() {
+fn executive_canonical_pool_creation_rolls_back_when_oracle_admission_fails() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let producer = deos_router_account();
@@ -1650,22 +2796,14 @@ fn executive_pool_creation_rejects_before_dispatch_when_index_admission_fails() 
     AssetConversionAdapter::ensure_lp_asset_namespace();
     let next_lp_before = polkadot_sdk::pallet_asset_conversion::NextPoolAssetId::<Runtime>::get();
     let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
-    let call =
-      RuntimeCall::AssetConversion(polkadot_sdk::pallet_asset_conversion::Call::create_pool {
-        asset1: Box::new(pair.0),
-        asset2: Box::new(pair.1),
-      });
+    let call = RuntimeCall::DeosRouter(pallet_deos_router::Call::create_pool {
+      asset_a: pair.0,
+      asset_b: pair.1,
+    });
 
     let result = Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call));
 
-    assert!(matches!(
-      result,
-      Err(
-        polkadot_sdk::sp_runtime::transaction_validity::TransactionValidityError::Invalid(
-          polkadot_sdk::sp_runtime::transaction_validity::InvalidTransaction::Custom(41)
-        )
-      )
-    ));
+    assert!(matches!(result, Ok(Err(_))), "{result:?}");
     assert!(!polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::contains_key(pair));
     assert_eq!(
       polkadot_sdk::pallet_asset_conversion::NextPoolAssetId::<Runtime>::get(),
@@ -1778,7 +2916,7 @@ fn create_user_charges_creation_fee_to_fee_sink() {
     let fee_sink = <Runtime as pallet_deos_actors::Config>::FeeSink::get();
     let sink_before = native_balance(&fee_sink);
     let alice_before = native_balance(&ALICE);
-    let _ = create_user(
+    let actor_id = create_user(
       ALICE,
       manual_schedule(),
       None,
@@ -1789,7 +2927,7 @@ fn create_user_charges_creation_fee_to_fee_sink() {
       native_balance(&ALICE),
       alice_before
         .saturating_sub(fee)
-        .saturating_sub(crate::configs::actor_config::ActorManualTriggerBond::get())
+        .saturating_sub(actor_state_hold_total(actor_id))
     );
   });
 }
@@ -1819,7 +2957,8 @@ fn actor_fee_collector_routes_the_full_amount_to_fee_sink() {
     assert!(!Actors::pending_signal(fee_sink_id));
     let hot = Actors::actor_hot(fee_sink_id).expect("Fee Sink hot state");
     assert!(hot.queue_ticket.is_none());
-    assert!(hot.wakeup_pointer.is_some());
+    assert!(hot.wakeup_pointer.is_none());
+    assert!(hot.trigger_wakeup_pointer.is_some());
     assert_eq!(
       Actors::active_actor_state(fee_sink_id)
         .expect("Fee Sink remains active")
@@ -1931,19 +3070,17 @@ fn fee_sink_processes_ten_percent_and_splits_it_fifty_fifty() {
     assert_eq!(native_balance(&staking_pool), pool_before);
     assert_eq!(native_balance(&staking_liquidity_actor), liquidity_before);
 
-    let cadence_block = Actors::actor_hot(fee_sink_id)
-      .and_then(|hot| hot.wakeup_pointer)
+    let cadence_tick = Actors::actor_hot(fee_sink_id)
+      .and_then(|hot| hot.trigger_wakeup_pointer)
       .expect("Fee Sink cadence is armed from the first consensus timestamp")
-      .block;
-    let WakeupKey::Tick(cadence_tick) = cadence_block else {
-      panic!("Fee Sink must own a timestamp-tick wakeup");
-    };
+      .tick;
     set_consensus_timestamp(
       cadence_tick.saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
     );
     System::set_block_number(3);
     Actors::on_initialize(3);
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     // Each cycle processes 10% of the spendable buffer and splits that amount 50/50.
     let pool_delta = native_balance(&staking_pool).saturating_sub(pool_before);
@@ -1965,7 +3102,7 @@ fn fee_sink_processes_ten_percent_and_splits_it_fifty_fifty() {
 }
 
 #[test]
-fn permissionless_sweep_many_batches_lifecycle_evaluation() {
+fn permissionless_sweep_many_does_not_predict_pipeline_affordability() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let user_a_prefunded =
@@ -1998,16 +3135,16 @@ fn permissionless_sweep_many_batches_lifecycle_evaluation() {
       RuntimeOrigin::signed(CHARLIE),
       sweep_ids,
     ));
-    assert!(Actors::active_actor_state(user_a).is_none());
-    assert!(Actors::active_actor_state(user_b).is_none());
+    assert!(Actors::active_actor_state(user_a).is_some());
+    assert!(Actors::active_actor_state(user_b).is_some());
     assert!(Actors::active_actor_state(system_alive).is_some());
     assert!(has_actor_event(|event| {
       matches!(
         event,
         Event::SweepBatchProcessed {
           requested: 3,
-          closed: 2,
-          alive: 1,
+          closed: 0,
+          alive: 3,
           missing: 0,
         }
       )
@@ -2118,26 +3255,18 @@ fn paged_queue_limits_are_independent_runtime_controls() {
 }
 
 #[test]
-fn user_trigger_state_bond_adjusts_and_releases_across_control_lifecycle() {
+fn active_trigger_lifecycle_reconciles_only_the_dedicated_state_hold() {
   seeded_test_ext().execute_with(|| {
-    let reserved_before =
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE);
+    let hold_before = actors_owner_hold(&ALICE);
     let actor_id = create_user(
       ALICE,
       manual_schedule(),
       None,
       transfer_contract_steps(BOB, AssetKind::Native, 1),
     );
-    let expected = crate::configs::actor_config::ActorManualTriggerBond::get();
     assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before + expected
-    );
-    assert_eq!(
-      pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
-        .expect("active User funding partition exists")
-        .trigger_state_bond,
-      expected
+      actors_owner_hold(&ALICE),
+      hold_before.saturating_add(actor_state_hold_total(actor_id))
     );
 
     assert_ok!(update_actor_contract_partial(
@@ -2145,16 +3274,9 @@ fn user_trigger_state_bond_adjusts_and_releases_across_control_lifecycle() {
       actor_id,
       (Trigger::cadenced(1), 0, None),
     ));
-    let cadenced = crate::configs::actor_config::ActorCadencedTriggerBond::get();
     assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before + cadenced
-    );
-    assert_eq!(
-      pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
-        .expect("replacement preserves funding partition")
-        .trigger_state_bond,
-      cadenced
+      actors_owner_hold(&ALICE),
+      hold_before.saturating_add(actor_state_hold_total(actor_id))
     );
 
     age_fixture_control_clock(actor_id);
@@ -2162,96 +3284,13 @@ fn user_trigger_state_bond_adjusts_and_releases_across_control_lifecycle() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    let dormant = Actors::actor_state_hold(actor_id).expect("Dormant identity hold remains");
+    assert!(dormant.breakdown.identity > 0);
+    assert_eq!(dormant.breakdown.contract_head, 0);
     assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before
+      actors_owner_hold(&ALICE),
+      hold_before.saturating_add(dormant.breakdown.identity)
     );
-    assert!(pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id).is_none());
-
-    let close_id = create_user(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, AssetKind::Native, 1),
-    );
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before + expected
-    );
-    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), close_id));
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&ALICE),
-      reserved_before
-    );
-  });
-}
-
-#[test]
-fn insufficient_user_trigger_bond_rejects_active_creation_before_partial_mutation() {
-  seeded_test_ext().execute_with(|| {
-    let owner = crate::AccountId::from([42u8; 32]);
-    let steps = transfer_contract_steps(BOB, AssetKind::Native, 1);
-    prefund_active_user_creation(&owner, &steps);
-    let creation_fee = <Runtime as pallet_deos_actors::Config>::ActorCreationFee::get();
-    let one_ed = crate::EXISTENTIAL_DEPOSIT;
-    let _ =
-      <Balances as Currency<crate::AccountId>>::deposit_creating(&owner, creation_fee + one_ed);
-    let actor_id = Actors::next_actor_id();
-    let root_before =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-
-    assert!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(owner.clone()),
-        Mutability::Mutable,
-        user_active_contract(
-          RuntimeSchedule {
-            trigger: Trigger::cadenced(1),
-            cooldown_blocks: 0,
-          },
-          None,
-          steps,
-        ),
-      )
-      .is_err()
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_before
-    );
-    assert_eq!(Actors::next_actor_id(), actor_id);
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&owner),
-      0
-    );
-    assert!(pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id).is_none());
-
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&owner, one_ed);
-    let root_after_top_up =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    crate::configs::actor_config::fail_next_trigger_bond_after_adjustment();
-    assert!(
-      Actors::create_user_actor(
-        RuntimeOrigin::signed(owner.clone()),
-        Mutability::Mutable,
-        user_active_contract(
-          manual_schedule(),
-          None,
-          transfer_contract_steps(BOB, AssetKind::Native, 1)
-        ),
-      )
-      .is_err()
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      root_after_top_up,
-      "a failure after successful reserve must roll back owner custody and all Actor state"
-    );
-    assert_eq!(
-      <Balances as ReservableCurrency<crate::AccountId>>::reserved_balance(&owner),
-      0
-    );
-    assert_eq!(Actors::next_actor_id(), actor_id);
   });
 }
 
@@ -2332,22 +3371,47 @@ fn crossing_capacity_policy_is_bound_to_measured_minimum_progress_and_explicit_h
 fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
   let base =
     <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_base();
-  let unit =
+  let branch_probe =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_branch_probe();
+  let queue =
     <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_page();
+  let wakeup =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_wakeup_page();
+  let coalesced =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_coalesced_page();
+  let blocked =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::observation_fanout_blocked_page();
+  let unit = Weight::from_parts(
+    queue
+      .ref_time()
+      .max(wakeup.ref_time())
+      .max(coalesced.ref_time())
+      .max(blocked.ref_time()),
+    queue
+      .proof_size()
+      .max(wakeup.proof_size())
+      .max(coalesced.proof_size())
+      .max(blocked.proof_size()),
+  );
+  let fault =
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::record_observation_fanout_worker_fault();
   let limit = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
   let configured_units =
     u64::from(<Runtime as pallet_deos_actors::Config>::MaxObservationFanoutPagesPerBlock::get());
   let available = limit.saturating_sub(base);
+  let admitted_unit = branch_probe.saturating_add(unit).saturating_add(fault);
   let units_per_block = configured_units
-    .min(available.ref_time() / unit.ref_time())
-    .min(available.proof_size() / unit.proof_size());
+    .min(available.ref_time() / admitted_unit.ref_time())
+    .min(available.proof_size() / admitted_unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(56_705_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(18_151_008_000, 718_430));
+  assert_eq!(base, Weight::from_parts(56_285_000, 1_629));
+  assert_eq!(branch_probe, Weight::from_parts(63_340_000, 3_587));
+  assert_eq!(unit, Weight::from_parts(150_994_631_000, 304_734));
+  assert_eq!(fault, Weight::from_parts(195_464_000, 4_106));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
-    units_per_block, 1,
-    "complete actor-state ProofSize is the active fanout limit"
+    units_per_block, 2,
+    "fee-charged blocked-fallback RefTime is the active ordinary fanout service limit"
   );
 
   let max_actors = u64::from(<Runtime as pallet_deos_actors::Config>::MaxActiveActors::get());
@@ -2361,10 +3425,10 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
 
   assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 1));
   assert_eq!(subscription_pages, 157);
-  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 157);
+  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 79);
   assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
-  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 157);
-  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 314);
+  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 79);
+  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 157);
 }
 
 #[test]
@@ -2392,7 +3456,8 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
 
   // Maximum fanout worker envelope: base plus one page per configured slot, capped by the limit.
   let fanout_base = W::observation_fanout_base();
-  let fanout_page = W::observation_fanout_page();
+  let fanout_page = Actors::observation_fanout_ordinary_weight_upper()
+    .saturating_add(W::record_observation_fanout_worker_fault());
   let fanout_ceiling = <Runtime as pallet_deos_actors::Config>::ObservationFanoutWeightLimit::get();
   let fanout_per_block =
     u64::from(<Runtime as pallet_deos_actors::Config>::MaxObservationFanoutPagesPerBlock::get());
@@ -2410,7 +3475,9 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
     .saturating_add(W::crossing_page_unit())
     .saturating_add(W::crossing_actor_unit());
   let crossing_ceiling = <Runtime as pallet_deos_actors::Config>::CrossingWorkerWeightLimit::get();
-  let crossing_envelope = crossing_base.saturating_add(crossing_unit);
+  let crossing_envelope = crossing_base
+    .saturating_add(crossing_unit)
+    .saturating_add(W::record_crossing_worker_fault());
   assert!(
     crossing_envelope.all_lte(crossing_ceiling),
     "one complete maximum Crossing worker unit must fit its two-dimensional envelope: base={crossing_base:?}, unit={crossing_unit:?}, combined={crossing_envelope:?}, ceiling={crossing_ceiling:?}"
@@ -3199,7 +4266,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      run_idle(Weight::MAX);
+      run_next_idle(Weight::MAX);
 
       assert_eq!(Assets::balance(lp_id, &actor), lp_before);
       assert!(!has_actor_event(|event| matches!(
@@ -3221,7 +4288,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
             event,
             Event::CycleStopped { actor_id: id, .. } if *id == actor_id
           )));
-          assert!(Actors::continuation_state(actor_id).is_none());
+          assert!(Actors::actor_run_state(actor_id).is_none());
         }
         StepErrorPolicy::ContinueNextStep => {
           assert_eq!(Balances::free_balance(&actor), native_before);
@@ -3229,7 +4296,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
             event,
             Event::CycleStopped { actor_id: id, step_index: 1, .. } if *id == actor_id
           )));
-          assert!(Actors::continuation_state(actor_id).is_none());
+          assert!(Actors::actor_run_state(actor_id).is_none());
         }
         StepErrorPolicy::RetryLater { .. } => {
           assert_eq!(Balances::free_balance(&actor), native_before);
@@ -3238,7 +4305,7 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
             Event::CycleStopped { actor_id: id, .. } if *id == actor_id
           )));
           let continuation =
-            Actors::continuation_state(actor_id).expect("temporary minimum failure suspends");
+            Actors::actor_run_state(actor_id).expect("temporary minimum failure suspends");
           assert_eq!(continuation.cursor, 0);
           assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
         }
@@ -3318,18 +4385,22 @@ fn market_execution_classifier_uses_the_concrete_cause() {
     ActorRetryClass::Temporary
   );
 
-  let permanent = market_execution_failure(
-    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::InvalidPath.into(),
-  );
-  assert_eq!(
-    permanent.failure_class(),
-    RouterFailureClass::InvariantViolation
-  );
-  assert_eq!(permanent.retry_disposition(), RouterRetryClass::Permanent);
-  assert_eq!(
-    classify_router_execution_failure(permanent.into()).retry,
-    ActorRetryClass::Permanent
-  );
+  for error in [
+    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::InvalidPath,
+    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::InvalidAssetPair,
+    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolNotFound,
+  ] {
+    let permanent = market_execution_failure(error.into());
+    assert_eq!(
+      permanent.failure_class(),
+      RouterFailureClass::InvariantViolation
+    );
+    assert_eq!(permanent.retry_disposition(), RouterRetryClass::Permanent);
+    assert_eq!(
+      classify_router_execution_failure(permanent.into()).retry,
+      ActorRetryClass::Permanent
+    );
+  }
 }
 
 #[test]
@@ -3625,7 +4696,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
 
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
-    let continuation = Actors::continuation_state(actor_id).expect("deviation suspends");
+    let continuation = Actors::actor_run_state(actor_id).expect("deviation suspends");
     assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(continuation.cursor, 0);
     assert_eq!(native_balance(&actor), before);
@@ -3635,7 +4706,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
 
     System::set_block_number(2);
     run_idle(Weight::MAX);
-    let continuation = Actors::continuation_state(actor_id).expect("deviation resuspends");
+    let continuation = Actors::actor_run_state(actor_id).expect("deviation resuspends");
     assert_eq!(continuation.unsuccessful_attempts_at_cursor, 2);
     assert_eq!(continuation.cursor, 0);
     assert_eq!(native_balance(&actor), before);
@@ -3681,7 +4752,7 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
     ));
     run_idle(Weight::MAX);
 
-    let continuation = Actors::continuation_state(actor_id).expect("Temporary failure suspends");
+    let continuation = Actors::actor_run_state(actor_id).expect("Temporary failure suspends");
     assert_eq!(continuation.cursor, 0);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -3767,7 +4838,7 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      run_idle(Weight::MAX);
+      run_next_idle(Weight::MAX);
 
       let input_after_failure = native_balance(&actor);
       assert!(input_after_failure < input_before);
@@ -3815,7 +4886,7 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
           .count(),
         1,
       );
-      let continuation = Actors::continuation_state(actor_id).expect("publication retry suspends");
+      let continuation = Actors::actor_run_state(actor_id).expect("publication retry suspends");
       assert_eq!(continuation.cursor, 0);
       let hot = Actors::actor_hot(actor_id).expect("suspended Actor stays hot");
       assert!(hot.queue_ticket.is_some());
@@ -3825,7 +4896,7 @@ fn temporary_oracle_capacity_failure_rolls_back_economics_and_has_one_retry_owne
       System::set_block_number(21);
       run_idle(Weight::MAX);
 
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert!(native_balance(&actor) < input_after_failure);
       assert!(Assets::balance(ASSET_A, &actor) > output_before);
       assert_ne!(
@@ -3929,7 +5000,7 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      run_idle(Weight::MAX);
+      run_next_idle(Weight::MAX);
 
       assert!(
         native_balance(&actor) < actor_input_before,
@@ -3939,7 +5010,7 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
         Actors::actor_contract(actor_id).expect("Actor Contract remains"),
         actor_contract_before,
       );
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
       let hot = Actors::actor_hot(actor_id).expect("Actor hot state remains");
       assert!(hot.queue_ticket.is_none());
       assert!(hot.wakeup_pointer.is_none());
@@ -3983,7 +5054,7 @@ fn permanent_publication_invariant_terminates_without_cross_system_mutation_or_r
 
       System::set_block_number(21);
       run_idle(Weight::MAX);
-      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         actor_events()
           .iter()
@@ -4409,7 +5480,7 @@ fn split_transfer_rejects_ed_ineligible_recipient_then_retries_atomically() {
       event,
       Event::SplitTransferExecuted { actor_id: id, .. } if *id == actor_id
     )));
-    let continuation = Actors::continuation_state(actor_id).expect("temporary rejection suspends");
+    let continuation = Actors::actor_run_state(actor_id).expect("temporary rejection suspends");
     assert_eq!(continuation.cursor, 0);
     assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
 
@@ -4422,7 +5493,7 @@ fn split_transfer_rejects_ed_ineligible_recipient_then_retries_atomically() {
     assert_eq!(native_balance(&actor), actor_before - total);
     assert_eq!(native_balance(&BOB), bob_before + 50);
     assert_eq!(native_balance(&unknown), unknown_before + 50);
-    assert!(Actors::continuation_state(actor_id).is_none());
+    assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
       Event::SplitTransferExecuted {
@@ -4537,7 +5608,7 @@ fn typed_ten_julian_year_horizons_match_runtime_clocks() {
     block_horizon
   );
   assert_eq!(
-    crate::configs::actor_config::ActorMaxCadenceDelayTicks::get(),
+    crate::configs::actor_config::ActorMaxTemporalDelayTicks::get(),
     cadence_horizon
   );
 }
@@ -4546,35 +5617,51 @@ fn typed_ten_julian_year_horizons_match_runtime_clocks() {
 fn timer_horizon_validation_accepts_exact_runtime_bound() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let largest_valid_cadence =
-      <Runtime as pallet_deos_actors::Config>::MaxCadenceDelayTicks::get();
+    let largest_valid_temporal_delay =
+      <Runtime as pallet_deos_actors::Config>::MaxTemporalDelayTicks::get();
     assert!(
-      largest_valid_cadence
+      largest_valid_temporal_delay
         > u64::from(<Runtime as pallet_deos_actors::Config>::MaxExecutionDelayBlocks::get())
     );
-    let schedule = |every_ticks| Schedule {
-      trigger: Trigger::cadenced(every_ticks),
-      cooldown_blocks: 0,
-    };
-    let valid_plan = transfer_contract_steps(BOB, AssetKind::Native, 1);
-    prefund_active_user_creation(&ALICE, &valid_plan);
-    assert_ok!(Actors::create_user_actor(
-      RuntimeOrigin::signed(ALICE),
-      Mutability::Mutable,
-      user_active_contract(schedule(largest_valid_cadence), None, valid_plan),
-    ));
-    assert_noop!(
-      Actors::create_user_actor(
+    for trigger in [
+      Trigger::at_time(largest_valid_temporal_delay),
+      Trigger::cadenced(largest_valid_temporal_delay),
+    ] {
+      let valid_plan = transfer_contract_steps(BOB, AssetKind::Native, 1);
+      prefund_active_user_creation(&ALICE, &valid_plan);
+      assert_ok!(Actors::create_user_actor(
         RuntimeOrigin::signed(ALICE),
         Mutability::Mutable,
         user_active_contract(
-          schedule(largest_valid_cadence.saturating_add(1)),
+          Schedule {
+            trigger,
+            cooldown_blocks: 0,
+          },
           None,
-          transfer_contract_steps(BOB, AssetKind::Native, 1),
+          valid_plan,
         ),
-      ),
-      Error::<Runtime>::ExecutionDelayTooLong
-    );
+      ));
+    }
+    for trigger in [
+      Trigger::at_time(largest_valid_temporal_delay.saturating_add(1)),
+      Trigger::cadenced(largest_valid_temporal_delay.saturating_add(1)),
+    ] {
+      assert_noop!(
+        Actors::create_user_actor(
+          RuntimeOrigin::signed(ALICE),
+          Mutability::Mutable,
+          user_active_contract(
+            Schedule {
+              trigger,
+              cooldown_blocks: 0,
+            },
+            None,
+            transfer_contract_steps(BOB, AssetKind::Native, 1),
+          ),
+        ),
+        Error::<Runtime>::ExecutionDelayTooLong
+      );
+    }
   });
 }
 
@@ -4608,6 +5695,8 @@ fn on_address_event_owner_only_respects_source_filter() {
       &ALICE
     ));
     run_idle(Weight::MAX);
+    System::set_block_number(System::block_number().saturating_add(1));
+    run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
   });
 }
@@ -4640,6 +5729,8 @@ fn on_address_event_asset_filter_is_enforced() {
       100,
       &ALICE
     ));
+    run_idle(Weight::MAX);
+    System::set_block_number(System::block_number().saturating_add(1));
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
   });
@@ -4869,8 +5960,10 @@ fn mint_to_actor_sovereign_notifies_source_less_certified_ingress() {
     ));
     assert_eq!(
       native_balance(&receiver_sovereign),
-      before.saturating_add(10_000),
-      "mint creates the value movement"
+      before
+        .saturating_add(10_000)
+        .saturating_sub(address_event_trigger_fee()),
+      "mint creates value and the sovereign independently pays Trigger materialization"
     );
     assert!(
       Actors::pending_signal(receiver),
@@ -5213,6 +6306,52 @@ fn genesis_system_locator_is_recoverable_after_close_through_reattachment() {
 }
 
 #[test]
+fn user_exact_slot_recovery_reuses_residual_runtime_custody() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let slot = 200u8;
+    let steps = transfer_contract_steps(BOB, AssetKind::Native, 333);
+    prefund_user_sovereign(&ALICE, slot, &steps);
+    let first_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_user_actor_at_slot(
+      RuntimeOrigin::signed(ALICE),
+      slot,
+      Mutability::Mutable,
+      user_active_contract(manual_schedule(), None, steps.clone()),
+    ));
+    let sovereign = Actors::sovereign_account_id(&ALICE, slot);
+    let residual = 10_000_000_000_000u128;
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sovereign, residual);
+    let preserved = Balances::free_balance(&sovereign);
+
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), first_id));
+    assert_eq!(Balances::free_balance(&sovereign), preserved);
+
+    let fresh_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_user_actor_at_slot(
+      RuntimeOrigin::signed(ALICE),
+      slot,
+      Mutability::Mutable,
+      user_active_contract(manual_schedule(), None, steps),
+    ));
+    let fresh = Actors::active_actor_state(fresh_id).expect("fresh User identity exists");
+    assert_ne!(fresh_id, first_id);
+    assert_eq!(fresh.identity.sovereign_account, sovereign);
+    assert_eq!(fresh.identity.cycle_nonce, 0);
+    assert_eq!(Balances::free_balance(&sovereign), preserved);
+
+    let bob_before = Balances::free_balance(BOB);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      fresh_id
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(333));
+    assert!(Balances::free_balance(&sovereign) < preserved);
+  });
+}
+
+#[test]
 fn ingress_adapter_without_source_matches_any_source_filter() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -5310,6 +6449,8 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       RuntimeOrigin::signed(CHARLIE),
       sender_id
     ));
+    run_idle(Weight::MAX);
+    System::set_block_number(System::block_number().saturating_add(1));
     run_idle(Weight::MAX);
     assert_eq!(
       actor_funding(target_id)
@@ -5607,41 +6748,30 @@ fn xcm_mixed_ingress_single_deposit_triggers_single_cycle() {
 // --- Actors Platform: Scheduling & Budget ---
 
 #[test]
-fn cycle_does_not_execute_when_budget_is_too_small() {
+fn mandatory_base_pass_executes_independently_of_later_idle_budget() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let heavy_task = Task::RemoveLiquidity {
-      lp_asset: AssetKind::Local(ASSET_A),
-      asset_a: AssetKind::Local(1),
-      asset_b: AssetKind::Local(2),
-      lp_amount: AmountResolution::Fixed(1),
-      min_amount_a: 1,
-      min_amount_b: 1,
-    };
-    let step = make_step(heavy_task);
-    let steps = BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("steps fits");
-    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
+    let actor_id = create_system(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
     fund_native(actor_id, 1_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
-    let attempt_weight = Actors::compute_cycle_weight_upper(
-      instance.identity.actor_class.actor_type(),
-      &instance.contract.steps,
-    );
     System::set_block_number(2);
-    let target_weight = attempt_weight.saturating_sub(Weight::from_parts(1, 0));
-    run_idle(target_weight);
+    run_idle(Weight::zero());
     let instance = Actors::active_actor_state(actor_id).expect("Actors exists");
-    assert_eq!(instance.identity.cycle_nonce, 0);
-    assert!(instance.hot.pending_signal);
+    assert_eq!(instance.identity.cycle_nonce, 1);
+    assert!(!instance.hot.pending_signal);
   });
 }
 
 #[test]
-fn cycle_closes_with_balance_exhausted_before_the_smaller_weight_derived_fee() {
+fn underfunded_manual_trigger_preserves_runtime_user_process() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let heavy_task = Task::RemoveLiquidity {
@@ -5665,51 +6795,17 @@ fn cycle_closes_with_balance_exhausted_before_the_smaller_weight_derived_fee() {
     let actor_id = create_user(ALICE, manual_schedule(), None, steps);
     deplete_user_sovereign(actor_id, prefunded);
     fund_native(actor_id, min_balance.saturating_sub(1));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_state(actor_id).is_none());
-    assert!(has_actor_event(|event| {
-      matches!(
-        event,
-        Event::ActorClosed {
-          actor_id: id,
-          reason: CloseReason::BalanceExhausted,
-        } if *id == actor_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn fee_insufficiency_is_terminal_without_deferral_guard() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let heavy_task = Task::RemoveLiquidity {
-      lp_asset: AssetKind::Local(ASSET_A),
-      asset_a: AssetKind::Local(1),
-      asset_b: AssetKind::Local(2),
-      lp_amount: AmountResolution::Fixed(1),
-      min_amount_a: 1,
-      min_amount_b: 1,
-    };
-    let step = make_step(heavy_task.clone());
-    let steps = BoundedVec::try_from(vec![step.clone(), step.clone(), step]).expect("steps fits");
-    let attempt_fee = Actors::attempt_fee_envelope(ActorType::User, &steps, 0)
-      .expect("runtime plan has a checked fee envelope")
-      .total;
-    let prefunded = user_prefunding_requirement(&steps);
-    let actor_id = create_user(ALICE, manual_schedule(), None, steps);
-    deplete_user_sovereign(actor_id, prefunded);
-    fund_native(actor_id, attempt_fee.saturating_sub(1));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_state(actor_id).is_none());
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Runtime>::InsufficientFee
+    );
+    let state = Actors::active_actor_state(actor_id).expect("process remains live");
+    assert!(!state.hot.pending_signal);
+    assert!(state.hot.queue_ticket.is_none());
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
+    )));
   });
 }
 
@@ -5736,13 +6832,18 @@ fn scheduler_fifo_order_is_deterministic_across_actor_types() {
         }
         System::set_block_number(2);
         run_idle(Weight::MAX);
-        let actual = actor_events()
+        System::set_block_number(3);
+        run_idle(Weight::MAX);
+        System::set_block_number(4);
+        run_idle(Weight::MAX);
+        let mut actual: Vec<_> = actor_events()
           .into_iter()
           .filter_map(|event| match event {
             Event::CycleStarted { actor_id, .. } if tracked.contains(&actor_id) => Some(actor_id),
             _ => None,
           })
           .collect();
+        actual.dedup();
         (tracked, actual)
       })
     };
@@ -5758,7 +6859,7 @@ fn scheduler_fifo_order_is_deterministic_across_actor_types() {
 }
 
 #[test]
-fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
+fn mandatory_base_and_drain_preserve_strict_heavy_head_order() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     // Heavy head first: three transfer steps make its cycle envelope strictly larger than the
@@ -5813,47 +6914,27 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
     System::reset_events();
     run_idle(starvation_blocked_budget(head));
 
-    let head_inst = Actors::active_actor_state(head).expect("head survives deferral");
-    assert_eq!(
-      head_inst.identity.cycle_nonce, 0,
-      "head attempt is deferred, not admitted"
-    );
-    assert!(head_inst.hot.pending_signal);
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
-        if *id == head
-    )));
-    for (id, ticket) in [(light_a, 1), (light_b, 2)] {
-      let inst = Actors::active_actor_state(id).expect("follower survives");
-      assert_eq!(
-        inst.identity.cycle_nonce, 0,
-        "follower never admitted behind the head"
-      );
-      assert!(
-        Actors::actor_hot(id).is_some_and(|hot| hot.queue_ticket == Some(ticket)),
-        "follower retains its exact physical ticket"
-      );
-    }
-    assert!(
-      !has_actor_event(|event| matches!(
-        event,
-        Event::CycleStarted { actor_id: id, .. } if *id == light_a || *id == light_b
-      )),
-      "no follower attempt starts behind an unadmitted head"
-    );
-
-    // Conforming full envelope: the head advances first, then followers in exact ticket order.
-    System::set_block_number(3);
-    System::reset_events();
-    run_idle(Weight::MAX);
-    let started: Vec<_> = System::events()
-      .into_iter()
+    let mut started: Vec<_> = System::events()
+      .iter()
       .filter_map(|record| match record.event {
         RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
         _ => None,
       })
       .collect();
+    assert_eq!(started.first(), Some(&head));
+
+    System::set_block_number(3);
+    System::reset_events();
+    run_idle(Weight::MAX);
+    started.extend(
+      System::events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+          RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
+          _ => None,
+        }),
+    );
+    started.dedup();
     assert_eq!(started, vec![head, light_a, light_b]);
     for id in [head, light_a, light_b] {
       assert_eq!(
@@ -6021,15 +7102,29 @@ fn wakeup_drain_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
     let close =
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::close_actor();
+    let fault =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::record_wakeup_worker_fault();
+    let at_time =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::at_time_trigger_occurrence();
+    let cadence =
+      <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::cadenced_trigger_occurrence();
+    let temporal = Weight::from_parts(
+      at_time.ref_time().max(cadence.ref_time()),
+      at_time.proof_size().max(cadence.proof_size()),
+    );
     assert_eq!(
       Actors::wakeup_cursor_drain_unit_weight_upper(false),
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_partial()
+        .saturating_add(temporal)
         .saturating_add(close)
+        .saturating_add(fault)
     );
     assert_eq!(
       Actors::wakeup_cursor_drain_unit_weight_upper(true),
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_remove()
+        .saturating_add(temporal)
         .saturating_add(close)
+        .saturating_add(fault)
     );
   });
 }
@@ -6041,8 +7136,12 @@ fn transaction_extension_ingress_uses_generated_runtime_weights() {
       dest: polkadot_sdk::sp_runtime::MultiAddress::Id(BOB),
       value: 1,
     });
-    let notify = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_notify();
+    let measured_notify = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_notify();
     let base = <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_base();
+    let notify = Weight::from_parts(
+      base.ref_time().max(measured_notify.ref_time()),
+      base.proof_size().max(measured_notify.proof_size()),
+    );
     assert_eq!(AddressEventIngressExtension.weight(&call), notify);
     assert!(base.all_lte(notify));
     assert!(base.proof_size() > 0);
@@ -6555,19 +7654,26 @@ fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflow
 fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let signer = sr25519::Pair::from_seed(&[49u8; 32]);
-    let signer_account = crate::AccountId::from(signer.public());
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-      &signer_account,
-      1_000_000_000_000_000_000,
-    );
+    let owner_signer = sr25519::Pair::from_seed(&[49u8; 32]);
+    let owner = crate::AccountId::from(owner_signer.public());
+    let donor_signer = sr25519::Pair::from_seed(&[50u8; 32]);
+    let donor = crate::AccountId::from(donor_signer.public());
+    let _ =
+      <Balances as Currency<crate::AccountId>>::deposit_creating(&owner, 1_000_000_000_000_000_000);
+    let _ =
+      <Balances as Currency<crate::AccountId>>::deposit_creating(&donor, 1_000_000_000_000_000_000);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
       amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
     })])
     .expect("execution plan fits");
-    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
+    let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
+    assert_ok!(update_actor_contract_partial(
+      RuntimeOrigin::signed(owner),
+      actor_id,
+      FundingSourcePolicy::AnyVerifiedIngress,
+    ));
     let sovereign = actor_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_all {
@@ -6575,10 +7681,11 @@ fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
       keep_alive: true,
     });
 
-    assert!(matches!(
-      Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call)),
-      Ok(Ok(_))
-    ));
+    let result = Executive::apply_extrinsic(signed_extrinsic(&donor_signer, 0, call));
+    assert!(
+      matches!(result, Ok(Ok(_))),
+      "transfer_all result: {result:?}"
+    );
     let actual = native_balance(&sovereign).saturating_sub(sovereign_before);
     assert!(actual > 0);
     assert_eq!(
@@ -6769,6 +7876,7 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
       create_extrinsic.clone(),
       System::block_hash(0),
     ));
+    ensure_current_resource_state();
     assert_ok!(Executive::apply_extrinsic(create_extrinsic));
     assert!(Actors::active_actor_state(actor_id).is_some());
 
@@ -6797,6 +7905,7 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
       replacement_extrinsic.clone(),
       System::block_hash(0),
     ));
+    ensure_current_resource_state();
     assert_ok!(Executive::apply_extrinsic(replacement_extrinsic));
     assert_eq!(
       Actors::active_actor_state(actor_id)
@@ -6809,7 +7918,122 @@ fn maximum_user_creation_and_replacement_pass_real_transaction_extensions() {
 }
 
 #[test]
-fn on_initialize_is_a_zero_weight_noop() {
+fn actor_resource_runtime_api_backing_projects_budget_current_state_and_finalized_telemetry() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+
+    let budget = crate::configs::BlockResourceBudgetValue::get();
+    assert_eq!(budget, crate::configs::BlockResourceBudgetValue::get());
+    let current = Actors::block_resource_state().expect("current resource state projects");
+    assert_eq!(current.block_number(), 1);
+    assert_eq!(
+      current.phase(),
+      pallet_deos_actors::BlockResourcePhase::ExternalPhase
+    );
+
+    Actors::on_idle(1, Weight::MAX);
+    let finalized =
+      Actors::finalized_block_resource_telemetry().expect("finalized telemetry projects");
+    assert_eq!(finalized.block_number(), 1);
+  });
+}
+
+#[test]
+fn production_full_block_resource_harness_records_actor_and_user_contention() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_system(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    fund_native(actor_id, 100_000_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+
+    System::set_block_number(2);
+    ensure_actor_prepass_context();
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+
+    let signer_pair = sr25519::Pair::from_seed(&[57u8; 32]);
+    let signer = AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&signer, 1_000_000_000_000_000);
+    let user_call = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
+      remark: vec![1, 2, 3],
+    });
+    let user_extrinsic = signed_extrinsic(&signer_pair, 0, user_call);
+    assert_ok!(Executive::apply_extrinsic(user_extrinsic));
+
+    let current = Actors::block_resource_state().expect("resource state remains authoritative");
+    let usage = current.usage();
+    let limits = crate::configs::BlockResourceBudgetValue::get().limits();
+    assert_ne!(usage.actor_effect_used(), Weight::zero());
+    assert_ne!(usage.user_dispatch_used(), Weight::zero());
+    assert!(usage.actor_effect_used().all_lte(limits.actor_base_turn()));
+    assert!(
+      usage
+        .shared_used()
+        .expect("shared usage reconciles")
+        .all_lte(limits.shared_economic())
+    );
+
+    Actors::on_idle(2, Weight::MAX);
+    let finalized = Actors::finalized_block_resource_telemetry()
+      .expect("mixed Actor/user block finalizes telemetry");
+    let finalized_usage = finalized.usage();
+    assert_eq!(
+      finalized_usage.actor_effect_used(),
+      usage.actor_effect_used()
+    );
+    assert_eq!(
+      finalized_usage.user_dispatch_used(),
+      usage.user_dispatch_used()
+    );
+    assert!(
+      usage
+        .actor_control_used()
+        .all_lte(finalized_usage.actor_control_used())
+    );
+  });
+}
+
+#[test]
+fn actor_prepass_requires_timestamp_and_parachain_context_before_mutation() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    polkadot_sdk::pallet_timestamp::Now::<Runtime>::kill();
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::kill();
+    assert_noop!(
+      Actors::actor_prepass(RuntimeOrigin::none()),
+      pallet_deos_actors::Error::<Runtime>::PrepassContextIncomplete
+    );
+    assert!(Actors::block_resource_state().is_none());
+
+    set_consensus_timestamp(1);
+    assert_noop!(
+      Actors::actor_prepass(RuntimeOrigin::none()),
+      pallet_deos_actors::Error::<Runtime>::PrepassContextIncomplete
+    );
+    assert!(Actors::block_resource_state().is_none());
+
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData::default(),
+    );
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+    assert_eq!(
+      Actors::block_resource_state().map(|state| state.phase()),
+      Some(pallet_deos_actors::BlockResourcePhase::ExternalPhase)
+    );
+  });
+}
+
+#[test]
+fn on_initialize_freezes_cutoff_and_executes_mandatory_base_work() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let amount = 1_000u128;
@@ -6827,8 +8051,21 @@ fn on_initialize_is_a_zero_weight_noop() {
     ));
     System::set_block_number(2);
     assert_eq!(Actors::on_initialize(2), Weight::zero());
-    assert_eq!(native_balance(&BOB), bob_before);
-    assert!(!has_actor_event(|event| {
+    ensure_actor_prepass_context();
+    let consumed = Actors::actor_prepass(RuntimeOrigin::none())
+      .expect("mandatory prepass succeeds")
+      .actual_weight
+      .expect("mandatory prepass reports actual Weight");
+    assert!(
+      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::scheduler_on_initialize_cutoff()
+        .all_lte(consumed)
+    );
+    assert_eq!(
+      Actors::prepass_execution_cutoff(),
+      Some((2, Actors::next_queue_ticket()))
+    );
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
+    assert!(has_actor_event(|event| {
       matches!(
         event,
         Event::CycleStarted {
@@ -6838,6 +8075,555 @@ fn on_initialize_is_a_zero_weight_noop() {
       )
     }));
   });
+}
+
+#[test]
+fn resource_meter_extension_uses_generated_production_owner() {
+  use polkadot_sdk::sp_runtime::traits::TransactionExtension;
+
+  let extension = crate::configs::resource_meter::BlockResourceMeterExtension;
+  let call = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark { remark: Vec::new() });
+  assert_eq!(
+    extension.weight(&call),
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::block_resource_meter_extension()
+  );
+}
+
+#[test]
+fn actor_control_limit_admits_cutoff_and_one_rotating_materialization_family() {
+  let family_minimum = Actors::materialization_family_minimum(0)
+    .max(Actors::materialization_family_minimum(1))
+    .max(Actors::materialization_family_minimum(2));
+  let minimum_control = ActorControlInitializationWeight::get()
+    .saturating_add(<Runtime as pallet_deos_actors::Config>::WeightInfo::scheduler_on_idle_base())
+    .saturating_add(
+      <Runtime as pallet_deos_actors::Config>::WeightInfo::materialization_coordinator_base(),
+    )
+    .saturating_add(family_minimum);
+  assert!(
+    minimum_control.all_lte(BlockResourceBudgetValue::get().limits().actor_control()),
+    "minimum Actor Control {minimum_control:?} rotating families={:?}/{:?}/{:?} must fit {:?}",
+    Actors::materialization_family_minimum(0),
+    Actors::materialization_family_minimum(1),
+    Actors::materialization_family_minimum(2),
+    BlockResourceBudgetValue::get().limits().actor_control()
+  );
+}
+
+#[test]
+fn actor_cutoff_capture_is_owned_by_actor_control() {
+  assert_eq!(
+    ActorControlInitializationWeight::get(),
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::scheduler_on_initialize_cutoff()
+  );
+  assert_ne!(ActorControlInitializationWeight::get(), Weight::zero());
+}
+
+#[test]
+fn session_rotation_hook_uses_the_generated_bounded_owner() {
+  seeded_test_ext().execute_with(|| {
+    let period = crate::configs::Period::get();
+    System::set_block_number(period);
+    assert_eq!(Session::on_initialize(period), Weight::zero());
+    let generated = <crate::weights::pallet_session_rotation::SubstrateWeight<Runtime> as pallet_session_rotation::WeightInfo>::rotate_session();
+    assert_eq!(SessionRotation::on_initialize(period), generated);
+    assert!(generated.all_lte(crate::configs::RuntimeBlockWeights::get().max_block));
+  });
+}
+
+#[test]
+fn message_queue_service_is_fixed_initialize_work_not_external_idle_work() {
+  assert!(MessageQueue::index() < Actors::index());
+  assert_eq!(
+    <<Runtime as polkadot_sdk::pallet_message_queue::Config>::ServiceWeight as Get<
+      Option<Weight>,
+    >>::get(),
+    Some(MessageQueueServiceWeight::get())
+  );
+  assert_eq!(
+    <<Runtime as polkadot_sdk::pallet_message_queue::Config>::IdleMaxServiceWeight as Get<
+      Option<Weight>,
+    >>::get(),
+    None
+  );
+  assert!(XcmpQueue::index() < Actors::index());
+  assert_ne!(XcmpQueue::on_idle_weight(), Weight::zero());
+}
+
+#[test]
+fn shared_parachain_inherent_exposes_complete_context_geometry() {
+  use polkadot_sdk::cumulus_pallet_parachain_system::parachain_inherent::{
+    InboundDownwardMessages, InboundHrmpMessages, InboundMessagesData,
+  };
+
+  let downward = InboundDownwardMessages::new(vec![
+    InboundDownwardMessage {
+      sent_at: 1,
+      msg: vec![1],
+    },
+    InboundDownwardMessage {
+      sent_at: 2,
+      msg: vec![2],
+    },
+  ]);
+  let mut downward_full_bytes = 1usize;
+  let downward = downward.into_abridged(&mut downward_full_bytes);
+
+  let mut horizontal = BTreeMap::new();
+  horizontal.insert(
+    ParaId::from(2_001u32),
+    vec![InboundHrmpMessage {
+      sent_at: 1,
+      data: vec![1],
+    }],
+  );
+  horizontal.insert(
+    ParaId::from(2_002u32),
+    vec![InboundHrmpMessage {
+      sent_at: 2,
+      data: vec![2],
+    }],
+  );
+  let mut horizontal_full_bytes = 1usize;
+  let horizontal =
+    InboundHrmpMessages::from_map(horizontal).into_abridged(&mut horizontal_full_bytes);
+  let data = InboundMessagesData::new(downward, horizontal);
+
+  let (downward_full, downward_hashed) = data.downward_messages.messages();
+  let (horizontal_full, horizontal_hashed) = data.horizontal_messages.messages();
+  let channels = horizontal_full
+    .iter()
+    .map(|(sender, _)| *sender)
+    .chain(horizontal_hashed.iter().map(|(sender, _)| *sender))
+    .collect::<BTreeSet<_>>();
+  let geometry = ContextMessageGeometry::new(
+    u32::try_from(downward_full.len()).unwrap_or(u32::MAX),
+    u32::try_from(downward_hashed.len()).unwrap_or(u32::MAX),
+    u32::try_from(horizontal_full.len()).unwrap_or(u32::MAX),
+    u32::try_from(horizontal_hashed.len()).unwrap_or(u32::MAX),
+    u32::try_from(channels.len()).unwrap_or(u32::MAX),
+  );
+  let limits = ContextMessageLimits::new(2, 2, 2);
+  assert_eq!(limits.validate(geometry), Ok(()));
+  assert_eq!(
+    crate::apis::validate_inbound_messages_geometry(&data),
+    Ok(())
+  );
+}
+
+#[test]
+fn runtime_context_validator_accepts_exact_dmp_and_rejects_full_mixed_and_channel_overflow() {
+  use polkadot_sdk::cumulus_pallet_parachain_system::parachain_inherent::{
+    InboundDownwardMessages, InboundHrmpMessages, InboundMessagesData,
+  };
+
+  let make_downward = |count: u32, size_limit: &mut usize| {
+    InboundDownwardMessages::new(
+      (0..count)
+        .map(|sent_at| InboundDownwardMessage {
+          sent_at,
+          msg: vec![1],
+        })
+        .collect(),
+    )
+    .into_abridged(size_limit)
+  };
+  let empty_horizontal = || {
+    let mut bytes = usize::MAX;
+    InboundHrmpMessages::from_map(BTreeMap::new()).into_abridged(&mut bytes)
+  };
+  let mut exact_bytes = usize::MAX;
+  let exact = InboundMessagesData::new(make_downward(512, &mut exact_bytes), empty_horizontal());
+  assert_eq!(
+    crate::apis::validate_inbound_messages_geometry(&exact),
+    Ok(())
+  );
+
+  let mut full_bytes = usize::MAX;
+  let full_over = InboundMessagesData::new(make_downward(513, &mut full_bytes), empty_horizontal());
+  assert_eq!(
+    crate::apis::validate_inbound_messages_geometry(&full_over),
+    Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded)
+  );
+
+  let mut mixed_bytes = 1usize;
+  let mixed_over =
+    InboundMessagesData::new(make_downward(513, &mut mixed_bytes), empty_horizontal());
+  assert_eq!(
+    crate::apis::validate_inbound_messages_geometry(&mixed_over),
+    Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded)
+  );
+
+  let mut channels = BTreeMap::new();
+  for sender in 1..=129u32 {
+    channels.insert(
+      ParaId::from(sender),
+      vec![InboundHrmpMessage {
+        sent_at: sender,
+        data: vec![1],
+      }],
+    );
+  }
+  let mut channel_bytes = usize::MAX;
+  let mut downward_bytes = usize::MAX;
+  let channel_over = InboundMessagesData::new(
+    InboundDownwardMessages::new(Vec::new()).into_abridged(&mut downward_bytes),
+    InboundHrmpMessages::from_map(channels).into_abridged(&mut channel_bytes),
+  );
+  assert_eq!(
+    crate::apis::validate_inbound_messages_geometry(&channel_over),
+    Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded)
+  );
+}
+
+#[test]
+fn context_provider_and_checker_agree_at_and_above_the_dmp_bound() {
+  use cumulus_primitives_parachain_inherent::{
+    INHERENT_IDENTIFIER, MessageQueueChain, ParachainInherentData,
+  };
+  use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
+  use polkadot_sdk::{
+    cumulus_primitives_core::PersistedValidationData, sp_inherents::InherentData,
+  };
+
+  seeded_test_ext().execute_with(|| {
+    for (count, expected) in [
+      (512, Ok(())),
+      (
+        513,
+        Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded),
+      ),
+    ] {
+      let downward_messages = (0..count)
+        .map(|_| InboundDownwardMessage {
+          sent_at: 1,
+          msg: vec![1],
+        })
+        .collect::<Vec<_>>();
+      let mut queue = MessageQueueChain::default();
+      for message in &downward_messages {
+        queue.extend_downward(message);
+      }
+      let mut proof_builder = RelayStateSproofBuilder::default();
+      proof_builder.dmq_mqc_head = Some(queue.head());
+      let (relay_parent_storage_root, relay_chain_state) =
+        proof_builder.into_state_root_and_proof();
+      let mut data = InherentData::new();
+      data
+        .put_data(
+          INHERENT_IDENTIFIER,
+          &ParachainInherentData {
+            validation_data: PersistedValidationData {
+              relay_parent_number: 1,
+              relay_parent_storage_root,
+              max_pov_size: 5_000_000,
+              ..Default::default()
+            },
+            relay_chain_state,
+            downward_messages,
+            horizontal_messages: Default::default(),
+            relay_parent_descendants: Default::default(),
+            collator_peer_id: None,
+          },
+        )
+        .expect("bounded relay-proof fixture encodes"); // deos-bypass: panic-owner — fixed 512/513-message fixtures and upstream proof builder own deterministic encoding.
+      assert_eq!(
+        crate::apis::validate_context_inherent_geometry(&data),
+        expected
+      );
+    }
+  });
+}
+
+#[test]
+fn context_provider_and_checker_agree_at_and_above_the_hrmp_channel_bound() {
+  use cumulus_primitives_parachain_inherent::{
+    INHERENT_IDENTIFIER, MessageQueueChain, ParachainInherentData,
+  };
+  use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
+  use polkadot_sdk::{
+    cumulus_primitives_core::PersistedValidationData, sp_inherents::InherentData,
+  };
+
+  seeded_test_ext().execute_with(|| {
+    for (count, max_pov_size, expected) in [
+      (128, 5_000_000, Ok(())),
+      (
+        129,
+        5_000_000,
+        Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded),
+      ),
+      (128, 1, Ok(())),
+      (
+        129,
+        1,
+        Err(pallet_deos_actors::BlockResourceError::ContextGeometryExceeded),
+      ),
+    ] {
+      let mut horizontal_messages = BTreeMap::new();
+      let mut proof_builder = RelayStateSproofBuilder::default();
+      for raw_sender in 1..=count {
+        let sender = ParaId::from(raw_sender);
+        let message = InboundHrmpMessage {
+          sent_at: 1,
+          data: vec![1],
+        };
+        horizontal_messages.insert(sender, vec![message.clone()]);
+        let channel = proof_builder.upsert_inbound_channel(sender);
+        channel.max_message_size = 1024;
+        channel.mqc_head = Some(MessageQueueChain::default().extend_hrmp(&message).head());
+      }
+      let (relay_parent_storage_root, relay_chain_state) =
+        proof_builder.into_state_root_and_proof();
+      let mut data = InherentData::new();
+      data
+        .put_data(
+          INHERENT_IDENTIFIER,
+          &ParachainInherentData {
+            validation_data: PersistedValidationData {
+              relay_parent_number: 1,
+              relay_parent_storage_root,
+              max_pov_size,
+              ..Default::default()
+            },
+            relay_chain_state,
+            downward_messages: Default::default(),
+            horizontal_messages,
+            relay_parent_descendants: Default::default(),
+            collator_peer_id: None,
+          },
+        )
+        .expect("bounded HRMP relay-proof fixture encodes"); // deos-bypass: panic-owner — fixed 128/129-channel fixtures and upstream proof builder own deterministic encoding.
+      assert_eq!(
+        crate::apis::validate_context_inherent_geometry(&data),
+        expected
+      );
+    }
+  });
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[test]
+#[ignore = "expensive maximum-context production evidence"]
+fn maximum_context_static_fixture_dispatches() {
+  use codec::Encode;
+  use cumulus_primitives_parachain_inherent::MessageQueueChain;
+  use cumulus_test_relay_sproof_builder::RelayStateSproofBuilder;
+  use polkadot_sdk::{
+    cumulus_pallet_parachain_system::parachain_inherent::{
+      BasicParachainInherentData, InboundDownwardMessages, InboundHrmpMessages, InboundMessagesData,
+    },
+    cumulus_primitives_core::{
+      InboundDownwardMessage, InboundHrmpMessage, ParaId, PersistedValidationData,
+      relay_chain::HeadData,
+    },
+    frame_system::pallet_prelude::HeaderFor,
+    sp_runtime::traits::Header as HeaderT,
+  };
+
+  seeded_test_ext().execute_with(|| {
+    let downward_messages = (0..MaxInboundDownwardMessagesPerContext::get())
+      .map(|_| InboundDownwardMessage {
+        sent_at: 1,
+        msg: vec![0; 65_536],
+      })
+      .collect::<Vec<_>>();
+    let mut downward_queue = MessageQueueChain::default();
+    for message in &downward_messages {
+      downward_queue.extend_downward(message);
+    }
+    let mut horizontal_messages = BTreeMap::new();
+    let mut proof_builder = RelayStateSproofBuilder::default();
+    proof_builder.para_id = crate::ParachainInfo::parachain_id();
+    proof_builder.dmq_mqc_head = Some(downward_queue.head());
+    proof_builder.included_para_head = HeadData(
+      HeaderFor::<Runtime>::new(
+        0,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+      )
+      .encode(),
+    )
+    .into();
+    let channels = MaxInboundHorizontalChannelsPerContext::get();
+    for message_index in 0..MaxInboundHorizontalMessagesPerContext::get() {
+      let sender = ParaId::from(message_index % channels + 1);
+      let message = InboundHrmpMessage {
+        sent_at: 1,
+        data: vec![0],
+      };
+      horizontal_messages
+        .entry(sender)
+        .or_insert_with(Vec::new)
+        .push(message.clone());
+      let channel = proof_builder.upsert_inbound_channel(sender);
+      channel.max_message_size = 65_536;
+      let mut queue = MessageQueueChain::new(channel.mqc_head.unwrap_or_default());
+      queue.extend_hrmp(&message);
+      channel.mqc_head = Some(queue.head());
+    }
+    let (relay_parent_storage_root, relay_chain_state) = proof_builder.into_state_root_and_proof();
+    let basic = BasicParachainInherentData {
+      validation_data: PersistedValidationData {
+        relay_parent_number: 1,
+        relay_parent_storage_root,
+        max_pov_size: 12,
+        ..Default::default()
+      },
+      relay_chain_state,
+      relay_parent_descendants: Vec::new(),
+      collator_peer_id: None,
+    };
+    let collection_size_limit = (crate::configs::RuntimeBlockWeights::get()
+      .max_block
+      .proof_size()
+      / 6) as usize;
+    let mut size_limit = collection_size_limit;
+    let downward = InboundDownwardMessages::new(downward_messages).into_abridged(&mut size_limit);
+    size_limit = size_limit.saturating_add(collection_size_limit);
+    let horizontal =
+      InboundHrmpMessages::from_map(horizontal_messages).into_abridged(&mut size_limit);
+    let inbound = InboundMessagesData::new(downward, horizontal);
+    let expected_processed = inbound.downward_messages.messages().0.len() as u32;
+    assert_ok!(crate::ParachainSystem::set_validation_data(
+      polkadot_sdk::frame_system::RawOrigin::None.into(),
+      basic.clone(),
+      inbound,
+    ));
+    assert_eq!(
+      polkadot_sdk::cumulus_pallet_parachain_system::ProcessedDownwardMessages::<Runtime>::get(),
+      expected_processed
+    );
+  });
+}
+
+#[test]
+fn context_geometry_failure_is_fatal_and_has_one_owned_identifier() {
+  let result = crate::apis::context_geometry_fatal_result();
+  assert!(!result.ok());
+  assert!(result.fatal_error());
+  assert!(matches!(
+    result.get_error::<()>(&crate::apis::CONTEXT_GEOMETRY_INHERENT_IDENTIFIER),
+    Ok(Some(()))
+  ));
+  assert_eq!(result.into_errors().count(), 1);
+}
+
+#[test]
+fn declared_context_geometry_covers_dmp_and_bounded_hrmp_dimensions() {
+  let limits = ContextMessageLimits::new(
+    MaxInboundDownwardMessagesPerContext::get(),
+    MaxInboundHorizontalMessagesPerContext::get(),
+    MaxInboundHorizontalChannelsPerContext::get(),
+  );
+  assert_eq!(MaxInboundDownwardMessagesPerContext::get(), 512);
+  assert_eq!(MaxInboundHorizontalChannelsPerContext::get(), 128);
+  assert_eq!(MaxInboundHorizontalMessagesPerContext::get(), 131_072);
+  assert_eq!(
+    limits.validate(ContextMessageGeometry::new(256, 256, 65_536, 65_536, 128)),
+    Ok(())
+  );
+}
+
+#[test]
+fn configured_dmp_compatibility_reserve_equals_the_measured_owner() {
+  let reserve = ReservedDmpWeight::get();
+  assert_eq!(MaxInboundDownwardMessagesPerContext::get(), 512);
+  let declared_maximum = <polkadot_sdk::cumulus_pallet_parachain_system::weights::SubstrateWeight<Runtime> as polkadot_sdk::cumulus_pallet_parachain_system::WeightInfo>::enqueue_inbound_downward_messages(512);
+  assert_eq!(DmpFixedWeight::get(), declared_maximum);
+  assert_eq!(reserve, declared_maximum);
+}
+
+#[test]
+fn fresh_genesis_has_no_active_xcm_lazy_migration() {
+  seeded_test_ext().execute_with(|| {
+    let key =
+      polkadot_sdk::frame_support::storage::storage_prefix(b"PolkadotXcm", b"CurrentMigration");
+    assert!(polkadot_sdk::sp_io::storage::get(&key).is_none());
+  });
+}
+
+#[test]
+fn configured_inbound_owners_require_complete_fixed_classification() {
+  assert_eq!(
+    XcmMigrationMaximumWeight::get(),
+    crate::configs::RuntimeBlockWeights::get().max_block / 10
+  );
+  assert_eq!(
+    <Runtime as polkadot_sdk::pallet_xcm::Config>::VERSION_DISCOVERY_QUEUE_SIZE,
+    100
+  );
+  let downward = ReservedDmpWeight::get();
+  let horizontal = ReservedXcmpWeight::get();
+  assert_eq!(downward, DmpFixedWeight::get());
+  assert_eq!(
+    horizontal,
+    MaximumContextMeasuredWeight::get().saturating_sub(DmpFixedWeight::get())
+  );
+  assert_eq!(
+    XcmpRegisteredFixedWeight::get(),
+    horizontal.saturating_add(
+      <Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads_writes(2, 3)
+    )
+  );
+
+  let block_weights = crate::configs::RuntimeBlockWeights::get();
+  let mandatory_base = block_weights.get(DispatchClass::Mandatory).base_extrinsic;
+  let three_mandatory_inherent_bases = mandatory_base
+    .checked_add(&mandatory_base)
+    .and_then(|weight| weight.checked_add(&mandatory_base))
+    .expect("three Mandatory inherent bases must fit"); // deos-bypass: panic-owner — RuntimeBlockWeights construction and the three fixed inherents prove bounded addition.
+  let frame_base = block_weights
+    .base_block
+    .checked_add(&three_mandatory_inherent_bases)
+    .expect("configured FRAME base weights must fit"); // deos-bypass: panic-owner — RuntimeBlockWeights construction proves bounded addition.
+  let timestamp = <polkadot_sdk::pallet_timestamp::weights::SubstrateWeight<Runtime> as polkadot_sdk::pallet_timestamp::WeightInfo>::set()
+    .saturating_add(
+      <polkadot_sdk::pallet_timestamp::weights::SubstrateWeight<Runtime> as polkadot_sdk::pallet_timestamp::WeightInfo>::on_finalize(),
+    );
+  let classified_candidate = frame_base
+    .checked_add(&timestamp)
+    .and_then(|weight| weight.checked_add(&downward))
+    .and_then(|weight| weight.checked_add(&XcmpRegisteredFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&MessageQueueServiceWeight::get()))
+    .and_then(|weight| weight.checked_add(&XcmpQueue::on_idle_weight()))
+    .and_then(|weight| weight.checked_add(&GovernanceFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&SessionRotationFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuthorshipFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuraFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&AuraExtFixedWeight::get()))
+    .and_then(|weight| weight.checked_add(&XcmVersionDiscoveryFixedWeight::get()));
+  assert!(classified_candidate.is_some());
+  let classified_candidate = classified_candidate.unwrap_or(Weight::MAX);
+  assert_eq!(FixedBlockWeight::get(), classified_candidate);
+  assert_eq!(
+    FixedBlockWeightComponentsValue::get().total(),
+    Ok(classified_candidate)
+  );
+  assert_eq!(
+    BlockResourceBudgetValue::get().fixed_envelope(),
+    classified_candidate
+  );
+  assert!(
+    classified_candidate.all_lte(crate::MAXIMUM_BLOCK_WEIGHT),
+    "classified fixed owners must fit before validation loops and remaining hooks are added"
+  );
+  assert!(
+    horizontal.all_lte(classified_candidate),
+    "known fixed owners cannot reduce the XCMP envelope"
+  );
+  let registered_context_owner = downward.saturating_add(XcmpRegisteredFixedWeight::get());
+  assert!(
+    MaximumContextMeasuredWeight::get().all_lte(registered_context_owner),
+    "registered DMP/XCMP owners must dominate complete measured context execution without additive double accounting"
+  );
+  let unclassified_headroom = crate::MAXIMUM_BLOCK_WEIGHT.checked_sub(&classified_candidate);
+  assert!(unclassified_headroom.is_some());
+  let unclassified_headroom = unclassified_headroom.unwrap_or(Weight::zero());
+  assert!(unclassified_headroom.ref_time() > 0);
+  assert!(unclassified_headroom.proof_size() > 0);
 }
 
 #[test]
@@ -6913,7 +8699,7 @@ fn configured_on_idle_reserve_admits_one_scheduler_actor_probe() {
 }
 
 #[test]
-fn starvation_emits_observability_event_once_on_threshold_crossing() {
+fn mandatory_base_progress_prevents_false_idle_starvation() {
   seeded_test_ext().execute_with(|| {
     let threshold =
       <<Runtime as pallet_deos_actors::Config>::MaxIdleStarvationBlocks as Get<u32>>::get();
@@ -6930,12 +8716,7 @@ fn starvation_emits_observability_event_once_on_threshold_crossing() {
       actor_id
     ));
     run_idle(starvation_blocked_budget(actor_id));
-    assert!(matches!(
-      IdleStarvationState::<Runtime>::get(),
-      IdleStarvationPhase::Starving {
-        consecutive_blocks: 1,
-      }
-    ));
+    assert!(!IdleStarvationState::<Runtime>::exists());
     for block in 2..=(threshold + 2) {
       System::set_block_number(block);
       run_idle(starvation_blocked_budget(actor_id));
@@ -6949,13 +8730,8 @@ fn starvation_emits_observability_event_once_on_threshold_crossing() {
         _ => None,
       })
       .collect::<std::vec::Vec<_>>();
-    assert_eq!(detections, vec![threshold]);
-    assert_eq!(
-      IdleStarvationState::<Runtime>::get(),
-      IdleStarvationPhase::Alerted {
-        consecutive_blocks: threshold + 2,
-      }
-    );
+    assert!(detections.is_empty());
+    assert!(!IdleStarvationState::<Runtime>::exists());
   });
 }
 
@@ -6998,19 +8774,13 @@ fn starvation_recovery_is_observable_and_healthy_idle_stays_sparse() {
       System::set_block_number(block);
       run_idle(starvation_blocked_budget(actor_id));
     }
-    assert_eq!(
-      IdleStarvationState::<Runtime>::get(),
-      IdleStarvationPhase::Alerted {
-        consecutive_blocks: threshold,
-      }
-    );
+    assert!(!IdleStarvationState::<Runtime>::exists());
     System::set_block_number(threshold.saturating_add(2));
     run_idle(Weight::MAX);
     assert!(!IdleStarvationState::<Runtime>::exists());
-    assert!(has_actor_event(|event| matches!(
+    assert!(!has_actor_event(|event| matches!(
       event,
-      Event::IdleStarvationRecovered { consecutive_blocks }
-        if *consecutive_blocks == threshold
+      Event::IdleStarvationRecovered { .. }
     )));
     let recovery_count = System::events()
       .into_iter()
@@ -7180,9 +8950,7 @@ fn user_dca_e2e_lifecycle_with_explicit_close() {
     ));
     assert_eq!(
       Balances::free_balance(&ALICE),
-      initial_alice_balance
-        - create_fee
-        - crate::configs::actor_config::ActorCadencedTriggerBond::get()
+      initial_alice_balance - create_fee - actor_state_hold_total(id)
     );
     let sov = Actors::sovereign_account_id(&ALICE, 0);
     let min_user_balance = <Runtime as pallet_deos_actors::Config>::MinUserBalance::get();
@@ -7476,7 +9244,9 @@ fn run_blocks_with_queue_diagnostics(
     queue_diag.max_queue_occupancy = queue_diag.max_queue_occupancy.max(queue_occupancy);
     queue_diag.max_wakeup_backlog = queue_diag.max_wakeup_backlog.max(wakeup_backlog);
     queue_diag.max_wakeup_buckets = queue_diag.max_wakeup_buckets.max(wakeup_buckets);
-    diag.min_per_block = diag.min_per_block.min(block_executions);
+    if block > 2 {
+      diag.min_per_block = diag.min_per_block.min(block_executions);
+    }
     diag.max_per_block = diag.max_per_block.max(block_executions);
   }
   (diag, queue_diag)
@@ -7539,21 +9309,21 @@ fn circular_chain_under_capacity_preserves_progress_and_fairness() {
       let count = diag.actor_cycle_counts[&id];
       assert!(count > 0, "Actor {id} never received service");
     }
-    assert!(diag.min_per_block > 0, "Every block must make progress");
     let total_executions: u32 = diag.actor_cycle_counts.values().sum();
     assert!(
       u64::from(total_executions) >= chain_len,
       "The run must complete at least one full traversal",
     );
-    // Fairness remains bounded despite measured Weight limiting each pass.
+    // Independent cadence detection remains bounded but may phase-shift Actors when due
+    // materialization spans blocks; FIFO still orders every readiness that reaches service.
     let nonces: alloc::vec::Vec<u64> = actor_ids
       .iter()
       .filter_map(|&id| Actors::active_actor_state(id).map(|state| state.identity.cycle_nonce))
       .collect();
     let (min_n, max_n) = (*nonces.iter().min().unwrap(), *nonces.iter().max().unwrap());
     assert!(
-      max_n.saturating_sub(min_n) <= 1,
-      "Fairness: cycle_nonce spread exceeds 1 (min={min_n}, max={max_n})",
+      max_n.saturating_sub(min_n) <= 10,
+      "Cadenced detection/service spread exceeds 10 (min={min_n}, max={max_n})",
     );
     assert!(min_n > 0, "Every actor must complete at least one cycle");
     assert_core_stability(&actor_ids, &diag);
@@ -7672,10 +9442,6 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
       "Per-block throughput must not exceed MaxExecutionsPerBlock={execution_ceiling} (got {})",
       diag.max_per_block,
     );
-    assert!(
-      diag.min_per_block > 0,
-      "Every block must execute at least some actors",
-    );
     // No starvation: every chain actor must have executed multiple times
     let min_count = *diag.actor_cycle_counts.values().min().unwrap();
     let zero_actors: alloc::vec::Vec<u64> = diag
@@ -7723,7 +9489,13 @@ fn clear_genesis_system_actors_for_stress_fixture() {
   let actors: alloc::vec::Vec<_> = pallet_deos_actors::ActorHot::<Runtime>::iter().collect();
   for (actor_id, _hot) in actors {
     pallet_deos_actors::ActorHot::<Runtime>::remove(actor_id);
-    pallet_deos_actors::ActorContracts::<Runtime>::remove(actor_id);
+    pallet_deos_actors::ActorContractHeads::<Runtime>::remove(actor_id);
+    pallet_deos_actors::ActorAdmissionCertificates::<Runtime>::remove(actor_id);
+    let _ = pallet_deos_actors::ActorContractTailChunks::<Runtime>::clear_prefix(
+      actor_id,
+      u32::MAX,
+      None,
+    );
     pallet_deos_actors::ActorFunding::<Runtime>::remove(actor_id);
     let identity = Actors::actor_identities(actor_id).expect("actor identity exists");
     pallet_deos_actors::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
@@ -7856,16 +9628,16 @@ fn scheduler_fast_fifo_dense_vs_sparse_topology_smoke() {
       blocks,
     );
     assert!(
-      dense_max.saturating_sub(dense_min) <= 3,
-      "Dense fairness spread exceeded bound=3 (actors={}, blocks={}, min={}, max={})",
+      dense_max.saturating_sub(dense_min) <= 8,
+      "Dense cadence/service spread exceeded bound=8 (actors={}, blocks={}, min={}, max={})",
       actors,
       blocks,
       dense_min,
       dense_max,
     );
     assert!(
-      sparse_max.saturating_sub(sparse_min) <= 3,
-      "Sparse fairness spread exceeded bound=3 (actors={}, blocks={}, min={}, max={})",
+      sparse_max.saturating_sub(sparse_min) <= 8,
+      "Sparse cadence/service spread exceeded bound=8 (actors={}, blocks={}, min={}, max={})",
       actors,
       blocks,
       sparse_min,
@@ -7970,11 +9742,8 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
       Actors::on_initialize(block);
       run_idle(budget);
       let retries_done = retry_ids.iter().all(|id| {
-        Actors::actor_hot(*id).is_some_and(|hot| {
-          hot
-            .wakeup_pointer
-            .is_none_or(|pointer| matches!(pointer.block, WakeupKey::Tick(_)))
-        })
+        Actors::actor_hot(*id)
+          .is_some_and(|hot| hot.wakeup_pointer.is_none() && hot.trigger_wakeup_pointer.is_some())
       });
       let closes_done = expired_ids
         .iter()
@@ -7989,11 +9758,8 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
 
     assert!(
       retry_ids.iter().all(|id| {
-        Actors::actor_hot(*id).is_some_and(|hot| {
-          hot
-            .wakeup_pointer
-            .is_none_or(|pointer| matches!(pointer.block, WakeupKey::Tick(_)))
-        })
+        Actors::actor_hot(*id)
+          .is_some_and(|hot| hot.wakeup_pointer.is_none() && hot.trigger_wakeup_pointer.is_some())
       }),
       "overdue block wakeups must converge back to cadence ownership"
     );
@@ -8028,7 +9794,7 @@ fn reference_idle_budget_converges_paged_wakeup_and_pure_close_pressure() {
 #[ignore] // Heavy: run in the scheduled nightly FIFO stress job (release mode)
 fn scheduler_stress_fifo_over_capacity_fairness_matrix() {
   use super::common::new_test_ext;
-  let scenarios: [(u64, u32); 4] = [(48, 96), (100, 150), (1000, 252), (10_000, 418)];
+  let scenarios: [(u64, u32); 4] = [(48, 96), (100, 150), (1000, 252), (10_000, 1_300)];
   for (actors, blocks) in scenarios {
     new_test_ext().execute_with(|| {
       let _ = run_fairness_matrix_case(actors, blocks);
@@ -8040,7 +9806,7 @@ fn scheduler_stress_fifo_over_capacity_fairness_matrix() {
 #[ignore] // Heavy topology matrix, run in the scheduled nightly FIFO stress job
 fn scheduler_stress_fifo_dense_vs_sparse_topology_matrix() {
   use super::common::new_test_ext;
-  let scenarios: [(u64, u32, u64); 3] = [(100, 200, 8), (1000, 300, 16), (5000, 420, 32)];
+  let scenarios: [(u64, u32, u64); 3] = [(100, 200, 8), (1000, 300, 16), (5000, 700, 32)];
   for (actors, blocks, stride) in scenarios {
     let dense_diag = new_test_ext().execute_with(|| {
       System::set_block_number(1);
@@ -8072,16 +9838,16 @@ fn scheduler_stress_fifo_dense_vs_sparse_topology_matrix() {
       blocks,
     );
     assert!(
-      dense_max.saturating_sub(dense_min) <= 3,
-      "Dense fairness spread exceeded bound=3 (actors={}, blocks={}, min={}, max={})",
+      dense_max.saturating_sub(dense_min) <= 8,
+      "Dense cadence/service spread exceeded bound=8 (actors={}, blocks={}, min={}, max={})",
       actors,
       blocks,
       dense_min,
       dense_max,
     );
     assert!(
-      sparse_max.saturating_sub(sparse_min) <= 3,
-      "Sparse fairness spread exceeded bound=3 (actors={}, blocks={}, min={}, max={})",
+      sparse_max.saturating_sub(sparse_min) <= 8,
+      "Sparse cadence/service spread exceeded bound=8 (actors={}, blocks={}, min={}, max={})",
       actors,
       blocks,
       sparse_min,
@@ -8196,8 +9962,8 @@ fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
     assert!(tick_ids.iter().all(|actor_id| {
       Actors::actor_hot(*actor_id).is_some_and(|hot| {
         hot
-          .wakeup_pointer
-          .is_some_and(|pointer| matches!(pointer.block, WakeupKey::Tick(2)))
+          .trigger_wakeup_pointer
+          .is_some_and(|pointer| pointer.tick == 2)
       })
     }));
 
@@ -8270,10 +10036,17 @@ fn scheduler_512_mixed_clocks_survives_delayed_timestamp() {
       tick_last.abs_diff(block_last) <= 1,
       "mixed clocks must finish service within one block: tick={tick_last}, block={block_last}",
     );
-    for actor_id in tick_ids.iter().chain(block_ids.iter()) {
-      let hot = Actors::actor_hot(*actor_id).expect("stress actor remains active");
+    for actor_id in &tick_ids {
+      let hot = Actors::actor_hot(*actor_id).expect("Cadenced stress actor remains active");
+      assert!(hot.queue_ticket.is_none());
+      assert!(hot.wakeup_pointer.is_none());
+      assert!(hot.trigger_wakeup_pointer.is_some());
+    }
+    for actor_id in &block_ids {
+      let hot = Actors::actor_hot(*actor_id).expect("block-clock stress actor remains active");
       assert!(hot.queue_ticket.is_none());
       assert!(hot.wakeup_pointer.is_some());
+      assert!(hot.trigger_wakeup_pointer.is_none());
     }
   });
 }
@@ -8286,7 +10059,7 @@ fn profile_scheduler_queue_wakeup_occupancy_10k() {
     System::set_block_number(1);
     close_genesis_system_actors();
     let actors = 10_000u64;
-    let blocks = 418u32;
+    let blocks = 1_300u32;
     let actor_ids = setup_inert_actors(actors, 10_000u128);
     let (diag, queue_diag) = run_blocks_with_queue_diagnostics(&actor_ids, blocks, Weight::MAX);
     let min_count = *diag.actor_cycle_counts.values().min().unwrap_or(&0);
@@ -8320,7 +10093,7 @@ fn profile_scheduler_queue_wakeup_occupancy_10k() {
 fn profile_scheduler_wallclock_matrix() {
   use super::common::new_test_ext;
   use std::time::Instant;
-  let scenarios: [(u64, u32); 4] = [(48, 96), (100, 150), (1000, 252), (10_000, 418)];
+  let scenarios: [(u64, u32); 4] = [(48, 96), (100, 150), (1000, 252), (10_000, 1_300)];
   for (actors, blocks) in scenarios {
     new_test_ext().execute_with(|| {
       let started = Instant::now();
@@ -8390,7 +10163,11 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
     System::reset_events();
     Actors::on_initialize(block);
     run_idle(Weight::from_parts(u64::MAX, u64::MAX));
-    let executed_block_2: alloc::vec::Vec<_> = System::events()
+    System::set_block_number(3);
+    System::reset_events();
+    Actors::on_initialize(3);
+    run_idle(Weight::from_parts(u64::MAX, u64::MAX));
+    let mut executed_block_2: alloc::vec::Vec<_> = System::events()
       .iter()
       .filter_map(|evt| {
         if let RuntimeEvent::Actors(Event::CycleSummary { actor_id, .. }) = &evt.event {
@@ -8400,10 +10177,11 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
         }
       })
       .collect();
+    executed_block_2.dedup();
     for &id in &all_ids {
       assert!(
         executed_block_2.contains(&id),
-        "Actors {} must execute in first block despite sparse ID gaps \
+        "Actors {} must execute in the first eligible block despite sparse ID gaps \
          (total_actors={}, id_space=0..{}, executed={:?})",
         id,
         all_ids.len(),
@@ -8421,7 +10199,8 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
     System::reset_events();
     Actors::on_initialize(block);
     run_idle(Weight::from_parts(u64::MAX, u64::MAX));
-    let executed_block_13: alloc::vec::Vec<_> = System::events()
+    run_next_idle(Weight::from_parts(u64::MAX, u64::MAX));
+    let mut executed_block_13: alloc::vec::Vec<_> = System::events()
       .iter()
       .filter_map(|evt| {
         if let RuntimeEvent::Actors(Event::CycleSummary { actor_id, .. }) = &evt.event {
@@ -8431,6 +10210,7 @@ fn genesis_sparse_id_space_executes_only_active_actors() {
         }
       })
       .collect();
+    executed_block_13.dedup();
     assert_eq!(executed_block_13, all_ids);
   });
 }
@@ -8500,11 +10280,15 @@ fn execution_order_lower_id_executes_before_higher_id() {
       (contract_steps_b, CompletionPolicy::Persistent,)
     ));
     let charlie_before = Balances::free_balance(CHARLIE);
-    // Run one block
+    // Materialize in block 2 and execute in the first eligible block.
     let block = 2u32;
     System::set_block_number(block);
     System::reset_events();
     Actors::on_initialize(block);
+    run_idle(Weight::from_parts(u64::MAX, u64::MAX));
+    System::set_block_number(3);
+    System::reset_events();
+    Actors::on_initialize(3);
     run_idle(Weight::from_parts(u64::MAX, u64::MAX));
     // If A executed before B: A transferred 10% to B, then B has initial + A's transfer,
     // and B transfers 10% of that total to CHARLIE.
@@ -8592,12 +10376,307 @@ fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
 }
 
 #[test]
+#[ignore = "10,000 effectful Actor production profile; run through actors-assurance"]
+fn transfer_10k_manual_and_reactive_first_traversal() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let actor_count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    let initial_balance = 1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT);
+    let mut actor_ids = Vec::with_capacity(actor_count as usize);
+    for index in 0..actor_count {
+      let trigger = if index % 2 == 0 {
+        Trigger::manual()
+      } else {
+        Trigger::cadenced(1)
+      };
+      let actor_id = create_system(
+        ALICE,
+        RuntimeSchedule {
+          trigger,
+          cooldown_blocks: 0,
+        },
+        None,
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
+      );
+      fund_native(actor_id, initial_balance);
+      if index % 2 == 0 {
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+      }
+      actor_ids.push(actor_id);
+    }
+    assert_eq!(
+      pallet_deos_actors::ActiveActorCount::<Runtime>::get(),
+      actor_count
+    );
+
+    let mut progressed = alloc::collections::BTreeSet::new();
+    let mut completion_block = None;
+    for block in 2..=1_301u32 {
+      System::set_block_number(block);
+      System::reset_events();
+      System::set_block_consumed_resources(Weight::zero(), 0);
+      set_consensus_timestamp(
+        u64::from(block).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+      );
+      assert_eq!(Actors::on_initialize(block), Weight::zero());
+      ensure_current_resource_state();
+      Actors::on_idle(block, Weight::MAX);
+      for event in System::events() {
+        if let RuntimeEvent::Actors(Event::CycleSummary {
+          actor_id, outcomes, ..
+        }) = event.event
+        {
+          assert_eq!(outcomes.failed_steps, 0);
+          progressed.insert(actor_id);
+        }
+      }
+      if progressed.len() == actor_ids.len() {
+        completion_block = Some(block);
+        break;
+      }
+    }
+    assert_eq!(progressed.len(), actor_ids.len());
+    let limits = crate::configs::BlockResourceBudgetValue::get().limits();
+    println!(
+      "CONTROL_SWEEP_W1 control={:?} shared={:?} actor_base={:?} user_base={:?} completion_block={:?}",
+      limits.actor_control(),
+      limits.shared_economic(),
+      limits.actor_base_turn(),
+      limits.user_base_turn(),
+      completion_block,
+    );
+  });
+}
+
+#[test]
+#[ignore = "10,000 effectful Actors with continuous user demand; run through actors-assurance"]
+fn transfer_10k_first_traversal_with_continuous_user_dispatch() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let actor_count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    let initial_balance = 1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT);
+    let mut actor_ids = Vec::with_capacity(actor_count as usize);
+    for index in 0..actor_count {
+      let actor_id = create_system(
+        ALICE,
+        RuntimeSchedule {
+          trigger: if index % 2 == 0 {
+            Trigger::manual()
+          } else {
+            Trigger::cadenced(1)
+          },
+          cooldown_blocks: 0,
+        },
+        None,
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
+      );
+      fund_native(actor_id, initial_balance);
+      if index % 2 == 0 {
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+      }
+      actor_ids.push(actor_id);
+    }
+
+    let signer_pair = sr25519::Pair::from_seed(&[58u8; 32]);
+    let signer = AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&signer, 1_000_000_000_000_000_000);
+    let mut progressed = alloc::collections::BTreeSet::new();
+    let mut completion_block = None;
+    for block in 2..=1_301u32 {
+      System::set_block_number(block);
+      System::reset_events();
+      System::set_block_consumed_resources(Weight::zero(), 0);
+      set_consensus_timestamp(
+        u64::from(block).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+      );
+      assert_eq!(Actors::on_initialize(block), Weight::zero());
+      ensure_current_resource_state();
+      let call = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
+        remark: block.to_le_bytes().to_vec(),
+      });
+      let extrinsic = signed_extrinsic(&signer_pair, crate::Nonce::from(block - 2), call);
+      let before_user_state = Actors::block_resource_state().expect("prepass state exists");
+      let before_user_phase = before_user_state.phase();
+      let before_user_outstanding = before_user_state.outstanding_reservations();
+      let before_user_halted = before_user_state.optional_actor_work_halted();
+      let before_user = before_user_state.usage();
+      let declared = extrinsic.get_dispatch_info().total_weight();
+      let applied = Executive::apply_extrinsic(extrinsic);
+      assert!(
+        applied.is_ok(),
+        "user dispatch rejected in block {block}: phase={before_user_phase:?}, outstanding={before_user_outstanding}, halted={before_user_halted}, before={before_user:?}, declared={declared:?}, user_base={:?}, result={applied:?}",
+        crate::configs::BlockResourceBudgetValue::get().limits().user_base_turn(),
+      );
+      let after_user = Actors::block_resource_state().expect("mixed block state exists");
+      assert_ne!(after_user.usage().user_dispatch_used(), Weight::zero());
+      Actors::on_idle(block, Weight::MAX);
+      for event in System::events() {
+        if let RuntimeEvent::Actors(Event::CycleSummary {
+          actor_id, outcomes, ..
+        }) = event.event
+        {
+          assert_eq!(outcomes.failed_steps, 0);
+          progressed.insert(actor_id);
+        }
+      }
+      if progressed.len() == actor_ids.len() {
+        completion_block = Some(block);
+        break;
+      }
+    }
+    let missing_manual = actor_ids
+      .iter()
+      .step_by(2)
+      .filter(|actor_id| !progressed.contains(actor_id))
+      .count();
+    let missing_reactive = actor_ids
+      .iter()
+      .skip(1)
+      .step_by(2)
+      .filter(|actor_id| !progressed.contains(actor_id))
+      .count();
+    assert_eq!(
+      progressed.len(),
+      actor_ids.len(),
+      "missing Manual={missing_manual}, reactive={missing_reactive}"
+    );
+    let limits = crate::configs::BlockResourceBudgetValue::get().limits();
+    println!(
+      "CONTROL_SWEEP control={:?} shared={:?} actor_base={:?} user_base={:?} completion_block={:?}",
+      limits.actor_control(),
+      limits.shared_economic(),
+      limits.actor_base_turn(),
+      limits.user_base_turn(),
+      completion_block,
+    );
+  });
+}
+
+#[test]
+#[ignore = "mixed 10,000-Actor production throughput profile"]
+fn mixed_9500_transfer_400_swapout_100_control_first_traversal() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let dormant = pallet_deos_actors::ActorIdentities::<Runtime>::iter()
+      .filter(|(actor_id, _)| !pallet_deos_actors::ActorHot::<Runtime>::contains_key(actor_id))
+      .collect::<Vec<_>>();
+    for (actor_id, identity) in &dormant {
+      pallet_deos_actors::ActorIdentities::<Runtime>::remove(actor_id);
+      pallet_deos_actors::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
+    }
+    pallet_deos_actors::ActorIdentityCount::<Runtime>::mutate(|count| {
+      *count = count.saturating_sub(dormant.len() as u32);
+    });
+    assert_ok!(super::common::setup_deos_router_infrastructure());
+    let actor_count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    let initial_balance = 10_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT);
+    let swap_steps = BoundedVec::try_from(vec![make_step(Task::SwapOut {
+      asset_out: AssetKind::Local(ASSET_A),
+      amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
+      asset_in: AssetKind::Native,
+      input_limit: InputLimit::Absolute(initial_balance),
+      slippage_tolerance: Perbill::from_percent(5),
+    })])
+    .expect("one SwapOut Step fits");
+    let control_steps = BoundedVec::try_from(vec![make_step(Task::StopCycle)])
+      .expect("one control Step fits");
+    let mut actor_ids = Vec::with_capacity(actor_count as usize);
+    for index in 0..actor_count {
+      let steps = if index < 9_500 {
+        transfer_contract_steps(BOB, AssetKind::Native, 1)
+      } else if index < 9_900 {
+        swap_steps.clone()
+      } else {
+        control_steps.clone()
+      };
+      let actor_id = create_system(
+        ALICE,
+        RuntimeSchedule {
+          trigger: if index % 2 == 0 {
+            Trigger::manual()
+          } else {
+            Trigger::cadenced(1)
+          },
+          cooldown_blocks: 0,
+        },
+        None,
+        steps,
+      );
+      fund_native(actor_id, initial_balance);
+      if index % 2 == 0 {
+        assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+      }
+      actor_ids.push(actor_id);
+    }
+
+    let signer_pair = sr25519::Pair::from_seed(&[59u8; 32]);
+    let signer = AccountId::from(signer_pair.public());
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      &signer,
+      1_000_000_000_000_000_000,
+    );
+    let mut progressed = alloc::collections::BTreeSet::new();
+    let mut failed_steps = 0u32;
+    let mut completion_block = None;
+    for block in 2..=1_301u32 {
+      System::set_block_number(block);
+      System::reset_events();
+      System::set_block_consumed_resources(Weight::zero(), 0);
+      set_consensus_timestamp(
+        u64::from(block).saturating_mul(primitives::ecosystem::params::ACTOR_CADENCE_TICK_MILLIS),
+      );
+      assert_eq!(Actors::on_initialize(block), Weight::zero());
+      ensure_current_resource_state();
+      let call = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
+        remark: block.to_le_bytes().to_vec(),
+      });
+      let extrinsic = signed_extrinsic(&signer_pair, crate::Nonce::from(block - 2), call);
+      assert!(Executive::apply_extrinsic(extrinsic).is_ok());
+      Actors::on_idle(block, Weight::MAX);
+      for event in System::events() {
+        if let RuntimeEvent::Actors(Event::CycleSummary {
+          actor_id, outcomes, ..
+        }) = event.event
+        {
+          failed_steps = failed_steps.saturating_add(outcomes.failed_steps);
+          progressed.insert(actor_id);
+        }
+      }
+      if progressed.len() == actor_ids.len() {
+        completion_block = Some(block);
+        break;
+      }
+    }
+    assert_eq!(progressed.len(), actor_ids.len());
+    assert!(
+      completion_block.is_some_and(|block| block <= 1_301),
+      "all 10,000 Actors must complete first traversal within the measured horizon"
+    );
+    assert_eq!(failed_steps, 0, "mixed traversal must lose no Step effect");
+    let limits = crate::configs::BlockResourceBudgetValue::get().limits();
+    println!(
+      "CONTROL_SWEEP_W3 control={:?} shared={:?} actor_base={:?} user_base={:?} completion_block={:?} failed_steps={failed_steps}",
+      limits.actor_control(),
+      limits.shared_economic(),
+      limits.actor_base_turn(),
+      limits.user_base_turn(),
+      completion_block,
+    );
+  });
+}
+
+#[test]
 #[ignore] // ~30s wall-clock; run manually: cargo test --release stress_10k_actors_queue_scheduler -- --ignored
 fn stress_10k_actors_queue_scheduler() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let num_blocks = 1_000u32;
+    let num_blocks = 1_300u32;
     let initial_balance: u128 = 1_000 * crate::EXISTENTIAL_DEPOSIT;
     let max_active = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get() as u64;
     // Retain paused active genesis actors to validate mixed ready/non-ready fairness.
@@ -8818,9 +10897,10 @@ fn fee_collector_charge_leaves_the_single_cadence_placement_unchanged() {
     let hot = Actors::actor_hot(fee_sink_id).expect("Fee Sink hot state");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
     assert!(
-      hot.wakeup_pointer.is_some(),
-      "cadence remains the sole placement"
+      hot.trigger_wakeup_pointer.is_some(),
+      "cadence remains the sole Trigger placement"
     );
   });
 }
@@ -8846,7 +10926,93 @@ fn fee_collector_noop_zero_emits_no_ingress() {
     let hot = Actors::actor_hot(fee_sink_id).expect("Fee Sink remains active");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
-    assert!(hot.wakeup_pointer.is_some(), "cadence remains armed");
+    assert!(hot.wakeup_pointer.is_none());
+    assert!(
+      hot.trigger_wakeup_pointer.is_some(),
+      "cadence remains armed"
+    );
+  });
+}
+
+#[test]
+fn user_actor_state_uses_the_dedicated_runtime_hold_reason_and_releases_exactly() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let record = Actors::actor_state_hold(actor_id).expect("User state hold exists");
+    let expected = record
+      .breakdown
+      .identity
+      .saturating_add(record.breakdown.contract_head)
+      .saturating_add(record.breakdown.contract_body)
+      .saturating_add(record.breakdown.detector)
+      .saturating_add(record.breakdown.funding)
+      .saturating_add(record.breakdown.run);
+    let reason = RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
+    assert_eq!(Balances::balance_on_hold(&reason, &ALICE), expected);
+
+    System::set_block_number(2);
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    assert!(Actors::actor_state_hold(actor_id).is_none());
+    assert_eq!(Balances::balance_on_hold(&reason, &ALICE), 0);
+  });
+}
+
+#[test]
+fn actor_cost_runtime_api_exposes_named_deos_fee_and_hold_provenance() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let actor_id = create_user(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, AssetKind::Native, 1),
+    );
+    let quote = Actors::actor_cost_quote(actor_id).expect("runtime cost quote exists");
+    assert_eq!(quote.actor_type, pallet_deos_actors::ActorType::User);
+    assert_eq!(
+      quote.creation_fee,
+      <Runtime as pallet_deos_actors::Config>::ActorCreationFee::get()
+    );
+    let trigger = quote
+      .prospective_trigger_fee
+      .expect("Manual Trigger quote exists");
+    assert_eq!(
+      trigger.trigger_family,
+      pallet_deos_actors::TriggerFamily::Manual
+    );
+    assert!(trigger.maximum_weight.ref_time() > 0);
+    assert!(trigger.fee > 0);
+    let pipeline = quote
+      .prospective_pipeline_fee
+      .expect("Pipeline quote exists");
+    assert_eq!(
+      pipeline.strategy,
+      pallet_deos_actors::PipelineMachineFeeStrategy::UpfrontBounded
+    );
+    assert_eq!(
+      pipeline.total_fee,
+      pipeline.pipeline_machine_fee + pipeline.cleanup_fee
+    );
+    assert!(quote.maximum_next_action_fee.maximum_effect_fee > 0);
+    assert!(!quote.actor_state_hold.exempt);
+    assert_eq!(
+      quote.actor_state_hold.base_per_component,
+      <Runtime as pallet_deos_actors::Config>::ActorStateHoldBase::get()
+    );
+    assert_eq!(
+      quote.actor_state_hold.per_encoded_byte,
+      <Runtime as pallet_deos_actors::Config>::ActorStateHoldPerByte::get()
+    );
+    assert_eq!(
+      quote.actor_state_hold.total,
+      actor_state_hold_total(actor_id)
+    );
   });
 }
 

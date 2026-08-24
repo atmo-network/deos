@@ -19,12 +19,12 @@ function graphNode(path) {
   );
 }
 
-test('metadata exposes the current eight-step execution-plan baseline', () => {
+test('metadata exposes the current thirty-two-step execution-plan baseline', () => {
   const bound = manifest.pallet.constants.find(
     (constant) => constant.name === 'MaxContractSteps',
   );
   assert(bound, 'MaxContractSteps must remain public metadata');
-  assert.equal(bound.value, '0x08000000');
+  assert.equal(bound.value, '0x20000000');
 });
 
 test('metadata exposes the protocol-fixed retry-attempt bound', () => {

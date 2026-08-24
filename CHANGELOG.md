@@ -4,6 +4,17 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.24: Topology Scaling and Block-Paced Execution
+
+- `Actors / Block-Paced Execution`: Added the mandatory payload-free Actor Prepass, fixed prepass cutoff, explicit block phases, one committed Step per Actor per block, and `N -> N+1-or-later` causal eligibility while preserving strict class-neutral FIFO and progress-preserving Continuation.
+- `Runtime / Economic Zipper`: Partitioned schedulable Weight component-wise into a one-third Actor Control ceiling and equal Actor-effect/user base turns over Shared Economic capacity, with work-conserving idle borrowing, maximum reservation, valid-actual reclaim, independent RefTime/ProofSize fragmentation, three Mandatory bases including Actor Prepass, fail-closed reconciliation, and reserved-envelope telemetry that is not mislabeled as actual usage.
+- `Actors / Active Frontier`: Bounded production identity and Active Actor capacity at 10,000 without dormant scans; separated hot scheduling/run authority from cold Contract bodies and Step chunks; retained the 32-Step ceiling after measured C24/C16 sweeps; and added exact active-lifetime User RunState holds.
+- `Actors / Trigger Scaling`: Retained useful-transition-only charging and latching, authoritative re-arm, P128 Crossing membership and tail/preflight, N64 non-tail work, independent P64 broad fanout, bounded family rotation, and one active plus one deferred Pipeline without stale or duplicate semantic authority.
+- `Actors / Evidence and Assurance`: Added fee-free prepaid apoptosis for underfunded one-shot AtTime and unfundable retries, with per-attempt maximum liability and actual-cost settlement; regenerated Weight, vectors, metadata, descriptors, ABI and bounds; completed mixed 10,000-Actor traversal at block 679 with zero failures; and passed package/runtime, heavy scaling, Clippy, no-std, TryRuntime, embedding, identity, provenance and threat gates.
+- `Asset Conversion / Trust Closure`: Separated semantic and physical asset identity; rejected ledger aliases at the pool boundary; made Router the only public XYK and atomic permissionless pool-lifecycle surface; removed post-dispatch LP repair; integrated full-balance reserves; separated fee domains; and proved pool/LP/Oracle rollback and bidirectional integrity.
+- `Architecture / Experiments`: Closed Step-centric memory, Contract-ceiling, allocation, and active-lifetime hold experiments; retained direct FIFO/A0 where gains were sub-material; excluded external successor staging by interleaved-order proof; embedded all CSV/TSV evidence in owning records; and made retained delimited evidence fail validation.
+- `Documentation / Wiki`: Synchronized Actors, Oracle, Router, embedding, resource-policy, and integration truth; projected Economic Zipper, block pacing, Hot/Cold Contract, active frontier, and state holds into strict bilingual OKF pages; and passed structural, graph, localization, and independent semantic-parity review.
+
 ## 0.7.23: Reactive Topology Closure and Cohort Throughput
 
 - `Actors / Declarative Trigger Topology`: Moved Crossing phase/revision and cadence into canonical `ActorHot` Trigger state, reduced locators to generation-checked physical authority, and routed create/activate/replace/deactivate/close/genesis through one transactional transition compiler with exact no-op, full family matrix, rollback, fresh-genesis storage version 9, and refundable family-based User bonds while System Actors remain exempt.

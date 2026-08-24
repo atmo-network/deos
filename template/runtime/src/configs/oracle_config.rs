@@ -1,5 +1,7 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
-use pallet_deos_actors::{ObservationTransition, ObservationTransitionIngress};
+use pallet_deos_actors::{
+  ObservationTransition, ObservationTransitionIngress, TriggerCauseProvenance,
+};
 use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional},
@@ -52,8 +54,8 @@ pub(crate) fn preflight_deos_router_pool_feeds(
   asset_b: AssetKind,
 ) -> DispatchResult {
   ensure!(
-    asset_a != asset_b,
-    DispatchError::Other("Identical oracle feed assets")
+    asset_a.is_valid_market_pair(asset_b),
+    DispatchError::Other("Invalid oracle pool assets")
   );
   let forward = deos_router_pool_feed(asset_a, asset_b);
   let reverse = forward.reverse();
@@ -150,6 +152,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
           previous: None,
           current: 1_000_000_000,
         },
+        TriggerCauseProvenance::Deferred,
       )?;
     }
     if topology == pallet_oracle::ChangedHookBenchmarkTopology::SecondaryExisting {
@@ -160,6 +163,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
           previous: None,
           current: 1_000_000_000,
         },
+        TriggerCauseProvenance::Deferred,
       )?;
     }
     Ok(())
@@ -177,6 +181,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
         previous: None,
         current,
       },
+      TriggerCauseProvenance::Deferred,
     )?;
     let capacity = <<Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerFeed as polkadot_sdk::frame_support::traits::Get<u32>>::get();
     for offset in 0..capacity {
@@ -191,6 +196,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
           previous: Some(previous),
           current,
         },
+        TriggerCauseProvenance::Deferred,
       )?;
     }
     Ok((u64::from(capacity).saturating_add(1), current, true))
@@ -211,6 +217,7 @@ impl pallet_oracle::OnObservationChanged<OracleFeedId> for ActorObservationChang
     revision: pallet_oracle::Revision,
     previous: Option<pallet_oracle::OracleValue>,
     current: pallet_oracle::OracleValue,
+    cause_provenance: pallet_oracle::ObservationCauseProvenance,
   ) -> DispatchResult {
     <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
       feed,
@@ -218,6 +225,12 @@ impl pallet_oracle::OnObservationChanged<OracleFeedId> for ActorObservationChang
         revision,
         previous,
         current,
+      },
+      match cause_provenance {
+        pallet_oracle::ObservationCauseProvenance::ExternalPhase => {
+          TriggerCauseProvenance::ExternalPhase
+        }
+        pallet_oracle::ObservationCauseProvenance::Deferred => TriggerCauseProvenance::Deferred,
       },
     )
   }

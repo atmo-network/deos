@@ -41,7 +41,7 @@ parameter_types! {
     polkadot_sdk::sp_runtime::Perbill::from_percent(1);
   pub const ProposalMinimumTurnout: u64 = 200;
   pub const MaxGovernanceEpochCatchUpPerBlock: u32 = 1;
-  pub const MaxGovernanceMaturingProposalsPerBlock: u32 = 3;
+  pub const MaxGovernanceMaturingProposalsPerBlock: u32 = 2;
   pub const MaxGovernancePendingEnactmentsPerBlock: u32 = 4;
   pub const MaxGovernanceFinalizedOutcomesPerBlock: u32 = 1024;
   pub const MaxGovernanceExpiringAccountsPerBlock: u32 = 512;
@@ -49,6 +49,35 @@ parameter_types! {
   pub const MaxFinalizedProposalOutcomesPerEpoch: u32 = 1024;
   pub const MaxRecentFinalizedProposalsPerDomain: u32 = 16 * 1024;
   pub const MaxExpiringAccountsPerEpoch: u32 = 1024;
+}
+
+parameter_types! {
+  /// Worst reachable one-block Governance hook branch: catch-up plus one bounded service phase.
+  pub GovernanceFixedWeight: Weight = {
+    type W = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
+    let phase = [
+      <W as pallet_governance::WeightInfo>::service_maturing_proposals(
+        MaxGovernanceMaturingProposalsPerBlock::get(),
+      ),
+      <W as pallet_governance::WeightInfo>::service_pending_enactments(
+        MaxGovernancePendingEnactmentsPerBlock::get(),
+      ),
+      <W as pallet_governance::WeightInfo>::service_finalized_proposal_outcomes(
+        MaxGovernanceFinalizedOutcomesPerBlock::get(),
+      ),
+      <W as pallet_governance::WeightInfo>::service_expiring_accounts(
+        MaxGovernanceExpiringAccountsPerBlock::get(),
+      ),
+    ]
+    .into_iter()
+    .fold(Weight::zero(), |left, right| {
+      Weight::from_parts(
+        left.ref_time().max(right.ref_time()),
+        left.proof_size().max(right.proof_size()),
+      )
+    });
+    <W as pallet_governance::WeightInfo>::service_epoch_catch_up().saturating_add(phase)
+  };
 }
 
 pub struct RuntimeGovernanceEpochProvider;

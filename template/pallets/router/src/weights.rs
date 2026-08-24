@@ -22,11 +22,25 @@ pub trait WeightInfo {
 		let direct = Self::direct_xyk_exact_input();
 		let mint = Self::direct_mint_exact_input();
 		let anchored = Self::native_anchored_exact_input();
+		let direct_output = Self::direct_xyk_exact_output();
+		let anchored_output = Self::native_anchored_exact_output();
 		Weight::from_parts(
-			direct.ref_time().max(mint.ref_time()).max(anchored.ref_time()),
-			direct.proof_size().max(mint.proof_size()).max(anchored.proof_size()),
+			direct
+				.ref_time()
+				.max(mint.ref_time())
+				.max(anchored.ref_time())
+				.max(direct_output.ref_time())
+				.max(anchored_output.ref_time()),
+			direct
+				.proof_size()
+				.max(mint.proof_size())
+				.max(anchored.proof_size())
+				.max(direct_output.proof_size())
+				.max(anchored_output.proof_size()),
 		)
 	}
+	/// Temporary conservative envelope until canonical pool creation is benchmarked on the host.
+	fn create_pool() -> Weight { Weight::from_parts(1_500_000_000, 100_000) }
 	fn direct_xyk_exact_input() -> Weight;
 	fn direct_mint_exact_input() -> Weight;
 	fn native_anchored_exact_input() -> Weight;

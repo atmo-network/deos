@@ -15,7 +15,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     transactionVersion: 1,
   },
   inventorySha256:
-    'c475cd18d522736f9cbd36a8a56098ba7385743bf84deb3038b3c413cef155f2',
+    'e92869720bad326c9400f73e59b12d95fccfb3511366bb399e147e1c13654fb1',
   certifiedProducers: [
     {
       id: 'AddressEventIngressExtension::signed_transfer',

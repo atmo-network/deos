@@ -227,7 +227,6 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       <IconButton
         label={`Remove step ${index + 1}`}
         onclick={onRemove}
-        disabled={total === 1}
         class="ml-1"
       >
         <Trash2 size={14} />

@@ -196,7 +196,19 @@ function decodeUnsignedConstant(manifest, name, bytes) {
     );
   }
   const encoded = Buffer.from(constant.value.slice(2), 'hex');
-  return bytes === 1 ? encoded.readUInt8(0) : encoded.readUInt32LE(0);
+  const decoded =
+    bytes === 1
+      ? BigInt(encoded.readUInt8(0))
+      : bytes === 4
+        ? BigInt(encoded.readUInt32LE(0))
+        : encoded.readBigUInt64LE(0);
+  const value = Number(decoded);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(
+      `Actors constant ${name} exceeds browser-safe integer range`,
+    );
+  }
+  return value;
 }
 
 const manifest = await buildManifest();
@@ -205,6 +217,7 @@ const generatedBounds = await format(
   `/* Generated from Actors runtime metadata ${manifest.metadata.sha256}; do not edit. */\n` +
     `export const ACTORS_MAX_CONTRACT_STEPS = ${decodeUnsignedConstant(manifest, 'MaxContractSteps', 4)};\n` +
     `export const ACTORS_MAX_EXECUTION_DELAY_BLOCKS = ${decodeUnsignedConstant(manifest, 'MaxExecutionDelayBlocks', 4)};\n` +
+    `export const ACTORS_MAX_TEMPORAL_DELAY_TICKS = ${decodeUnsignedConstant(manifest, 'MaxTemporalDelayTicks', 8)};\n` +
     `export const ACTORS_MAX_RETRY_ATTEMPTS = ${decodeUnsignedConstant(manifest, 'MaxRetryAttempts', 4)};\n` +
     `export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = ${decodeUnsignedConstant(manifest, 'MaxOpeningSnapshotEntries', 4)};\n` +
     `export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = ${decodeUnsignedConstant(manifest, 'MaxOpeningPredicateResults', 4)};\n` +

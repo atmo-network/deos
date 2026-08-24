@@ -10,6 +10,7 @@ use polkadot_sdk::{
     BuildStorage, Perbill,
     traits::{BlakeTwo256, IdentityLookup},
   },
+  sp_weights::Weight,
 };
 
 use alloc::vec;
@@ -149,6 +150,14 @@ thread_local! {
 
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
+  static STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
+    RefCell::new(None);
+  static LAST_STEP_CONTROL_EXECUTION: RefCell<Option<crate::StepControlExecution>> =
+    RefCell::new(None);
+  static MISSING_STEP_CONTROL_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
+  static TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE: RefCell<Option<polkadot_sdk::sp_weights::Weight>> =
+    RefCell::new(None);
+  static MISSING_TASK_EFFECT_ACTUAL_WEIGHT: RefCell<bool> = RefCell::new(false);
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
@@ -227,6 +236,11 @@ pub fn reset_mock_adapters() {
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
+  STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  LAST_STEP_CONTROL_EXECUTION.with(|v| *v.borrow_mut() = None);
+  MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
+  TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE.with(|v| *v.borrow_mut() = None);
+  MISSING_TASK_EFFECT_ACTUAL_WEIGHT.with(|v| *v.borrow_mut() = false);
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
@@ -932,6 +946,19 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     Ok(())
   }
 
+  type MaximumContextInherent = ();
+  fn prepare_maximum_context_inherent() {}
+  fn execute_maximum_context_inherent(_: ()) -> DispatchResult {
+    Ok(())
+  }
+  fn verify_maximum_context_inherent() {}
+  fn prepare_maximum_xcm_version_discovery() {}
+  fn execute_maximum_xcm_version_discovery() {}
+  fn verify_maximum_xcm_version_discovery() {}
+  fn prepare_block_resource_meter_extension() {}
+  fn execute_block_resource_meter_extension() {}
+  fn verify_block_resource_meter_extension() {}
+
   fn setup_remove_liquidity(
     owner: &AccountId,
   ) -> Result<(TestAsset, TestAsset, TestAsset, Balance), DispatchError> {
@@ -987,8 +1014,8 @@ impl Get<u64> for TestMaxExecutionDelayBlocks {
   }
 }
 
-pub struct TestMaxCadenceDelayTicks;
-impl Get<u64> for TestMaxCadenceDelayTicks {
+pub struct TestMaxTemporalDelayTicks;
+impl Get<u64> for TestMaxTemporalDelayTicks {
   fn get() -> u64 {
     631_152_000
   }
@@ -1054,6 +1081,17 @@ impl Get<Balance> for TestMinUserBalance {
   }
 }
 
+pub struct TestBlockResourceBudget;
+impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
+  fn get() -> crate::BlockResourceBudget {
+    crate::BlockResourceBudget::new(
+      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      Weight::zero(),
+    )
+    .unwrap_or_else(|_| crate::BlockResourceBudget::fail_closed(Weight::zero()))
+  }
+}
+
 pub struct TestMaxSweepBatch;
 impl Get<u32> for TestMaxSweepBatch {
   fn get() -> u32 {
@@ -1100,6 +1138,108 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
   }
 }
 
+pub struct MockAdmissionCertificateAuthority;
+
+impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
+  fn current() -> Option<crate::AdmissionCertificateAuthority> {
+    Some(crate::AdmissionCertificateAuthority {
+      runtime_actor_semantics_version: 1,
+      production_weight_identity:
+        crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32]),
+      body_geometry_version: 1,
+      configured_bounds_commitment: [6; 32],
+      maximum_lifecycle_weight: Weight::from_parts(77, 88),
+    })
+  }
+}
+
+pub fn set_step_control_actual_weight_override(weight: Option<Weight>) {
+  STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE.with(|value| *value.borrow_mut() = weight);
+}
+
+pub fn last_step_control_execution() -> Option<crate::StepControlExecution> {
+  LAST_STEP_CONTROL_EXECUTION.with(|value| *value.borrow())
+}
+
+pub fn set_missing_step_control_actual_weight(missing: bool) {
+  MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub struct MockStepControlWeight;
+
+impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWeight {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    Some([41; 32])
+  }
+
+  fn maximum_control_weight(
+    context: crate::StepControlWeightContext,
+    _: &crate::StepOf<Test>,
+  ) -> Option<Weight> {
+    Some(Weight::from_parts(
+      100_000_011u64
+        .saturating_add(u64::from(context.cursor))
+        .saturating_add(u64::from(context.opening_tail_chunks))
+        .saturating_add(u64::from(context.predicate_evaluation_units))
+        .saturating_add(u64::from(context.opening_snapshot_entries))
+        .saturating_add(u64::from(context.opening_predicate_results))
+        .saturating_add(u64::from(context.funding_snapshot_entries)),
+      100_022u64.saturating_add(u64::from(context.steps_in_fragment)),
+    ))
+  }
+
+  fn actual_control_weight(
+    _: crate::StepControlWeightContext,
+    _: &crate::StepOf<Test>,
+    maximum: Weight,
+    execution: crate::StepControlExecution,
+  ) -> Option<Weight> {
+    LAST_STEP_CONTROL_EXECUTION.with(|value| *value.borrow_mut() = Some(execution));
+    if MISSING_STEP_CONTROL_ACTUAL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    STEP_CONTROL_ACTUAL_WEIGHT_OVERRIDE
+      .with(|override_weight| (*override_weight.borrow()).or(Some(maximum)))
+  }
+}
+
+pub fn set_task_effect_actual_weight_override(weight: Option<Weight>) {
+  TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE.with(|value| *value.borrow_mut() = weight);
+}
+
+pub fn set_missing_task_effect_actual_weight(missing: bool) {
+  MISSING_TASK_EFFECT_ACTUAL_WEIGHT.with(|value| *value.borrow_mut() = missing);
+}
+
+pub struct MockTaskEffectWeight;
+
+impl crate::TaskEffectWeightProvider<crate::TaskOf<Test>> for MockTaskEffectWeight {
+  fn production_weight_identity() -> Option<[u8; 32]> {
+    Some([42; 32])
+  }
+
+  fn maximum_effect_weight(_: &crate::TaskOf<Test>) -> Option<Weight> {
+    Some(Weight::from_parts(33, 44))
+  }
+
+  fn actual_effect_weight(
+    _: &crate::TaskOf<Test>,
+    execution: crate::TaskEffectExecution,
+  ) -> Option<Weight> {
+    if MISSING_TASK_EFFECT_ACTUAL_WEIGHT.with(|missing| *missing.borrow()) {
+      return None;
+    }
+    TASK_EFFECT_ACTUAL_WEIGHT_OVERRIDE.with(|override_weight| {
+      override_weight.borrow().or_else(|| {
+        Some(match execution {
+          crate::TaskEffectExecution::NotInvoked => Weight::zero(),
+          crate::TaskEffectExecution::Invoked => Weight::from_parts(33, 44),
+        })
+      })
+    })
+  }
+}
+
 pub struct MockTime;
 
 impl Time for MockTime {
@@ -1115,6 +1255,9 @@ impl pallet_deos_actors::Config for Test {
   type Balance = Balance;
   type FeeNativeAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
+  type AdmissionCertificateAuthority = MockAdmissionCertificateAuthority;
+  type StepControlWeight = MockStepControlWeight;
+  type TaskEffectWeight = MockTaskEffectWeight;
   type ObservationFeedId = u32;
   type ObservationProvider = MockObservationProvider;
   type FundingAuthority = MockFundingAuthority;
@@ -1142,6 +1285,7 @@ impl pallet_deos_actors::Config for Test {
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
   type ObservationPageSize = ConstU32<16>;
+  type CrossingPageSize = ConstU32<16>;
   type MaxCrossingTransitionsPerFeed = ConstU32<4>;
   type MaxCrossingMembersPerFeed = ConstU32<10_000>;
   type MaxUserCrossingMembersPerFeed = ConstU32<8>;
@@ -1160,7 +1304,7 @@ impl pallet_deos_actors::Config for Test {
   type MaxSplitTransferLegs = ConstU32<8>;
   type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
-  type MaxCadenceDelayTicks = TestMaxCadenceDelayTicks;
+  type MaxTemporalDelayTicks = TestMaxTemporalDelayTicks;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
   type ActorOnIdleReserve = TestActorOnIdleReserve;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
@@ -1168,14 +1312,19 @@ impl pallet_deos_actors::Config for Test {
   type MaxActorIdentities = ConstU32<10_000>;
   type MaxSystemSovereigns = ConstU32<10_000>;
   type ActorCreationFee = TestActorCreationFee;
+  type RuntimeHoldReason = RuntimeHoldReason;
+  type StateHoldCurrency = Balances;
+  type ActorStateHoldBase = ConstU128<1>;
+  type ActorStateHoldPerByte = ConstU128<1>;
   type WeightToFee = TestWeightToFee;
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
-  type TriggerStateBond = ();
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = TestMinUserBalance;
   type WeightInfo = crate::weights::TestWeightInfo;
+  type BlockResourceBudget = TestBlockResourceBudget;
+  type PrepassContext = ();
   type GenesisSystemActors = ();
   type SystemActorContractValidator = ();
   #[cfg(feature = "runtime-benchmarks")]

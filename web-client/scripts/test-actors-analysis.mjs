@@ -877,6 +877,7 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
   assert.equal(observation.completionPolicy, 'Persistent');
   assert.deepEqual(observation.trigger, {
     kind: 'ObservationChange',
+    afterTicks: null,
     everyTicks: null,
     sourceKinds: ['ObservationChange'],
     observationFeeds: [
@@ -919,6 +920,7 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
   );
   assert.deepEqual(crossing.trigger, {
     kind: 'ObservationCrossing',
+    afterTicks: null,
     everyTicks: null,
     sourceKinds: ['ObservationCrossing'],
     observationFeeds: observation.trigger.observationFeeds,
@@ -956,6 +958,29 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     ),
   );
 
+  const oneShot = analyze(
+    artifactFor({
+      contract: contractWithTrigger({
+        type: 'AtTime',
+        value: { after_ticks: 10n },
+      }),
+    }),
+  );
+  assert.deepEqual(oneShot.trigger, {
+    kind: 'AtTime',
+    afterTicks: 10,
+    everyTicks: null,
+    sourceKinds: [],
+    observationFeeds: [],
+  });
+  assert(
+    oneShot.findings.some(
+      (finding) =>
+        finding.kind === 'OneShotTemporalAdmission' &&
+        finding.afterTicks === 10,
+    ),
+  );
+
   const periodic = analyze(
     artifactFor({
       contract: contractWithTrigger({
@@ -966,6 +991,7 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
   );
   assert.deepEqual(periodic.trigger, {
     kind: 'Cadenced',
+    afterTicks: null,
     everyTicks: 10,
     sourceKinds: [],
     observationFeeds: [],

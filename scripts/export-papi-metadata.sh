@@ -92,7 +92,7 @@ main() {
     run_shell_step \
         "Export DEOS runtime metadata v$METADATA_VERSION" \
         "" \
-        "cd '$TEMPLATE_DIR' && cargo run --locked -p deos-runtime --example export_metadata -- '$OUTPUT_PATH' '$METADATA_VERSION'"
+        "cd '$TEMPLATE_DIR' && CARGO_TARGET_DIR='$TEMPLATE_DIR/target/metadata-export' cargo run --locked -p deos-runtime --example export_metadata -- '$OUTPUT_PATH' '$METADATA_VERSION'"
     if [[ "$GENERATE_DESCRIPTORS" == "1" ]]; then
         phase_banner "Generate PAPI descriptors"
         run_shell_step \

@@ -1,6 +1,6 @@
 <!--
 Domain: Actors trigger authoring
-Owns: One scalar Manual, AddressEvent, ObservationChange, ObservationCrossing, or Cadenced trigger control.
+Owns: One scalar Manual, AddressEvent, ObservationChange, ObservationCrossing, AtTime, or Cadenced trigger control.
 Excludes: Runtime admission, scheduler execution, conditions, graph control, and artifact encoding.
 Zone: Automation presentation helper; edits the canonical trigger draft without inventing another trigger model.
 -->
@@ -14,7 +14,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     DEOS_ACTORS_AUTHORING_LIMITS,
   } from '$lib/automation/authoring';
   import { actorReactiveCapacityFailureMessage } from '$lib/automation/capacity-failure';
-  import { actorTriggerStateBond } from '$lib/automation/trigger-bond-vectors';
   import {
     Badge,
     Button,
@@ -33,7 +32,6 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   };
 
   let { trigger = $bindable(), compact = false }: Props = $props();
-  const triggerStateBond = $derived(actorTriggerStateBond(trigger.type));
   const crossingCapacityCopy = [
     actorReactiveCapacityFailureMessage('CrossingUserCapacityExceeded'),
     actorReactiveCapacityFailureMessage('CrossingIndexCapacityExceeded'),
@@ -75,6 +73,9 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
           threshold: '1000000000000',
           rearmThreshold: '900000000000',
         };
+        return;
+      case 'AtTime':
+        trigger = { type, afterTicks: 1 };
         return;
       case 'Cadenced':
         trigger = { type, everyTicks: 1 };
@@ -226,29 +227,29 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
       <option value="AddressEvent">Address event</option>
       <option value="ObservationChange">Observation change</option>
       <option value="ObservationCrossing">Observation crossing</option>
+      <option value="AtTime">At time</option>
       <option value="Cadenced">Cadenced</option>
     </SelectField>
-    {#if trigger.type === 'Cadenced'}
+    {#if trigger.type === 'AtTime'}
+      <NumberInput
+        label="After 500 ms ticks"
+        min={1}
+        max={DEOS_ACTORS_AUTHORING_LIMITS.maxTemporalTicks}
+        step={1}
+        bind:value={trigger.afterTicks}
+        class="h-9 py-1.5 text-xs tabnum"
+      />
+    {:else if trigger.type === 'Cadenced'}
       <NumberInput
         label="Every 500 ms ticks"
         min={1}
-        max={DEOS_ACTORS_AUTHORING_LIMITS.maxCadenceTicks}
+        max={DEOS_ACTORS_AUTHORING_LIMITS.maxTemporalTicks}
         step={1}
         bind:value={trigger.everyTicks}
         class="h-9 py-1.5 text-xs tabnum"
       />
     {/if}
   </div>
-
-  <p
-    class="flex flex-wrap items-center gap-1.5 text-[10px] text-(--mono-muted)"
-  >
-    <Badge variant="info">Refundable bond</Badge>
-    <span class="tabnum"
-      >{triggerStateBond.toLocaleString()} native base units</span
-    >
-    <span>· finalized runtime quote remains authoritative</span>
-  </p>
 
   {#if trigger.type === 'Manual'}
     <p class="rounded-xl bg-(--mono-bg) p-2.5 text-[10px] text-(--mono-muted)">

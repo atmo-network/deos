@@ -14,6 +14,7 @@ polkadot_sdk::frame_benchmarking::define_benchmarks!(
   [pallet_asset_registry, AssetRegistry]
   [pallet_governance, Governance]
   [pallet_oracle, Oracle]
+  [pallet_session_rotation, SessionRotation]
   [pallet_staking, Staking]
   [pallet_deos_actors, Actors]
 );

@@ -121,7 +121,7 @@ function matchingOutcome(resultScale) {
     closeReason: 'ProductiveCycleCompleted',
     cycleNonce: 1n,
     startCursor: 0,
-    continuationCursor: null,
+    runCursor: null,
     unsuccessfulAttemptsAtCursor: null,
     cumulativeOutcomes: {
       executedSteps: 1,
@@ -264,7 +264,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
   });
   assert.equal(suspended.status, 'Suspended');
   assert.equal(suspended.state.nativeBalance, 100n);
-  assert.equal(suspended.continuationCursor, 0);
+  assert.equal(suspended.runCursor, 0);
   assert.equal(suspended.unsuccessfulAttemptsAtCursor, 1);
 
   const closed = simulateActorLocally({
@@ -297,7 +297,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
       },
       cycle_nonce: 1n,
       start_cursor: 0,
-      continuation_cursor: undefined,
+      run_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
       cumulative_outcomes: {
         executed_steps: 1,
@@ -319,7 +319,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
   const response = await runActorMatchingWasmSimulation({
     artifact,
     actorId: 9n,
-    mode: 'CurrentContinuation',
+    mode: 'CurrentRun',
     metadataBytes,
     runtime,
     runtimeCodeBytes: Uint8Array.of(1, 2, 3),
@@ -370,15 +370,16 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
   );
   const source = sources.join('\n');
   assert(sources[1].includes('ACTORS_AUTHORING_CONDITION_TYPES'));
+  assert(!sources[3].includes('disabled={total === 1}'));
   for (const control of [
     'ObservationChange',
     'SwapIn',
     'RetryLater',
     'Close after productive cycle',
+    'Opening-only Contract',
     'Persistent',
     'CrossingUserCapacityExceeded',
     'CrossingIndexCapacityExceeded',
-    'Refundable bond',
     'Service cost scales boundedly with subscribed pages',
     'Repeated fires while already latched coalesce',
     'backpressure may defer service',

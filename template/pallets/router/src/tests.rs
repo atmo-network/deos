@@ -638,6 +638,28 @@ fn lp_reverse_index_is_canonical_bounded_and_collision_safe() {
       DeosRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Native)),
       Error::<Test>::InvalidPoolPair
     );
+    let foreign_id = primitives::TYPE_FOREIGN | 9;
+    assert_noop!(
+      DeosRouter::register_lp_pair(
+        8,
+        (AssetKind::Local(foreign_id), AssetKind::Foreign(foreign_id)),
+      ),
+      Error::<Test>::InvalidPoolPair
+    );
+    assert_noop!(
+      DeosRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Local(foreign_id))),
+      Error::<Test>::InvalidPoolPair
+    );
+    assert_noop!(
+      DeosRouter::register_lp_pair(
+        8,
+        (
+          AssetKind::Native,
+          AssetKind::Foreign(primitives::TYPE_PROTOCOL | 9)
+        ),
+      ),
+      Error::<Test>::InvalidPoolPair
+    );
 
     for index in 1..500u32 {
       assert_ok!(DeosRouter::register_lp_pair(
@@ -1135,7 +1157,20 @@ fn circular_swap_protection_test() {
         user,
         u64::MAX
       ),
-      Error::<Test>::IdenticalAssets
+      Error::<Test>::InvalidPoolPair
+    );
+    let foreign_id = primitives::TYPE_FOREIGN | 1;
+    assert_noop!(
+      DeosRouter::swap(
+        RuntimeOrigin::signed(user),
+        AssetKind::Local(foreign_id),
+        AssetKind::Foreign(foreign_id),
+        amount,
+        0,
+        user,
+        u64::MAX
+      ),
+      Error::<Test>::InvalidPoolPair
     );
   });
 }

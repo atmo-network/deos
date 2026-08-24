@@ -18,7 +18,10 @@ use crate::{
   System, configs::AssetKind,
 };
 use alloc::{boxed::Box, vec::Vec};
-use polkadot_sdk::frame_support::{assert_ok, dispatch::DispatchResult};
+use polkadot_sdk::{
+  frame_support::{assert_ok, dispatch::DispatchResult, traits::fungibles::Inspect},
+  pallet_asset_conversion::PoolLocator,
+};
 
 /// Helper to swap exact tokens for tokens along a specified path.
 fn swap_exact_tokens_for_tokens(
@@ -67,7 +70,7 @@ fn test_pool_creation_success() {
     assert_ok!(create_pool(
       RuntimeOrigin::signed(admin.clone()),
       AssetKind::Native,
-      AssetKind::Local(asset_id)
+      AssetKind::Foreign(asset_id)
     ));
     // Verify that AssetConversion events were emitted (simplified check)
     assert!(
@@ -210,18 +213,24 @@ fn test_token_swap_success() {
     ));
     // Mint swap tokens to trader
     assert_ok!(mint_tokens(asset_id, &admin, &trader, swap_amount));
-    // Perform swap
+    // Quote and execution consume the same full physical reserve source.
+    let quoted = AssetConversion::quote_price_exact_tokens_for_tokens(
+      local_asset,
+      native_asset,
+      swap_amount,
+      true,
+    )
+    .expect("seeded full-balance reserves are quotable");
     let initial_native_balance = Balances::free_balance(&trader);
     assert_ok!(swap_exact_tokens_for_tokens(
       RuntimeOrigin::signed(trader.clone()),
       vec![local_asset, native_asset],
       swap_amount,
-      1,
+      quoted,
       trader.clone(),
     ));
-    // Verify swap was successful
     let final_native_balance = Balances::free_balance(&trader);
-    assert!(final_native_balance > initial_native_balance);
+    assert_eq!(final_native_balance - initial_native_balance, quoted);
     // Verify that AssetConversion events were emitted (simplified check)
     assert!(
       System::events()
@@ -363,17 +372,43 @@ fn test_liquidity_removal_success() {
       1,
       &lp
     ));
-    // Remove some liquidity
+    // Removal math uses the same full reserves reported by the runtime API.
+    let burn = safe_liquidity_amount / 4;
+    let pool_id =
+      <crate::Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+        &native_asset,
+        &local_asset,
+      )
+      .expect("canonical pool identity");
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<crate::Runtime>::get(pool_id)
+      .expect("pool exists");
+    let (native_reserve, asset_reserve) =
+      AssetConversion::get_reserves(native_asset, local_asset).expect("full reserves exist");
+    let total_lp = Assets::total_issuance(pool.lp_token);
+    let expected_native = burn
+      .checked_mul(native_reserve)
+      .expect("fixture product fits")
+      / total_lp;
+    let expected_asset = burn
+      .checked_mul(asset_reserve)
+      .expect("fixture product fits")
+      / total_lp;
+    let native_before = Balances::free_balance(&lp);
+    let asset_before = Assets::balance(asset_id, &lp);
     assert_ok!(AssetConversion::remove_liquidity(
       RuntimeOrigin::signed(lp.clone()),
       Box::new(native_asset),
       Box::new(local_asset),
-      safe_liquidity_amount / 4, // Remove 25% of liquidity
-      1,
-      1,
+      burn,
+      expected_native,
+      expected_asset,
       lp.clone(),
     ));
-    // Verify removal was successful (balances may not change in simplified test environment)
+    assert_eq!(Balances::free_balance(&lp) - native_before, expected_native);
+    assert_eq!(
+      Assets::balance(asset_id, &lp) - asset_before,
+      expected_asset
+    );
     // Verify that AssetConversion events were emitted (simplified check)
     assert!(
       System::events()

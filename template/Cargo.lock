@@ -4097,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "deos-primitives"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -4109,9 +4109,11 @@ dependencies = [
 
 [[package]]
 name = "deos-runtime"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "cumulus-pallet-parachain-system",
+ "cumulus-primitives-parachain-inherent",
+ "cumulus-test-relay-sproof-builder",
  "deos-primitives",
  "docify",
  "hex-literal",
@@ -4121,6 +4123,7 @@ dependencies = [
  "pallet-deos-governance",
  "pallet-deos-oracle",
  "pallet-deos-router",
+ "pallet-deos-session-rotation",
  "pallet-deos-staking",
  "pallet-deos-tmc",
  "parity-scale-codec",
@@ -8677,8 +8680,6 @@ dependencies = [
 [[package]]
 name = "pallet-asset-conversion"
 version = "31.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9372e01886c4a9b625929c2549ac50d67cfe0f8e4daf232d884aecc843fe2557"
 dependencies = [
  "frame-benchmarking",
  "frame-support",
@@ -9403,7 +9404,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-actors"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9417,7 +9418,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-actors-embedding-fixture"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "pallet-deos-actors",
  "parity-scale-codec",
@@ -9427,7 +9428,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-asset-registry"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "deos-primitives",
  "parity-scale-codec",
@@ -9439,7 +9440,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-governance"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9449,7 +9450,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-oracle"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9459,7 +9460,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-router"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "deos-primitives",
  "pallet-deos-tmc",
@@ -9474,7 +9475,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-router-embedding-fixture"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "pallet-deos-router",
  "parity-scale-codec",
@@ -9483,8 +9484,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-deos-session-rotation"
+version = "0.7.24"
+dependencies = [
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "polkadot-sdk-frame",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-deos-staking"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9494,7 +9505,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-tmc"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "deos-primitives",
  "parity-scale-codec",
@@ -10091,7 +10102,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-oracle-embedding-fixture"
-version = "0.7.23"
+version = "0.7.24"
 dependencies = [
  "pallet-deos-oracle",
  "parity-scale-codec",

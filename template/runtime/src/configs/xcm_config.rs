@@ -817,11 +817,9 @@ mod tests {
 
     let asset_id = LocationToAssetId::convert(relay_location);
     // Should return ID directly
-    let asset_kind = primitives::AssetKind::Local(asset_id);
-    assert!(
-      asset_kind.is_foreign(),
-      "Relay token should be in Foreign namespace (0xF...)"
-    );
+    let asset_kind = primitives::AssetKind::Foreign(asset_id);
+    assert!(asset_kind.is_canonical());
+    assert!(asset_kind.is_foreign());
   }
 
   #[test]
@@ -832,11 +830,9 @@ mod tests {
 
     let asset_id = LocationToAssetId::convert(sibling_location);
 
-    let asset_kind = primitives::AssetKind::Local(asset_id);
-    assert!(
-      asset_kind.is_foreign(),
-      "Sibling token should be in Foreign namespace (0xF...)"
-    );
+    let asset_kind = primitives::AssetKind::Foreign(asset_id);
+    assert!(asset_kind.is_canonical());
+    assert!(asset_kind.is_foreign());
   }
 
   #[test]

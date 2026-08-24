@@ -136,6 +136,10 @@ fn signed_extrinsic(
   nonce: crate::Nonce,
   call: RuntimeCall,
 ) -> UncheckedExtrinsic {
+  let now = System::block_number();
+  if !Actors::block_resource_state().is_some_and(|state| state.ensure_block(now).is_ok()) {
+    let _ = Actors::on_initialize(now);
+  }
   let tx_ext = TxExtension::new((
     polkadot_sdk::frame_system::AuthorizeCall::<Runtime>::new(),
     polkadot_sdk::frame_system::CheckNonZeroSender::<Runtime>::new(),
@@ -145,8 +149,10 @@ fn signed_extrinsic(
     polkadot_sdk::frame_system::CheckEra::<Runtime>::from(generic::Era::Immortal),
     polkadot_sdk::frame_system::CheckNonce::<Runtime>::from(nonce),
     polkadot_sdk::frame_system::CheckWeight::<Runtime>::new(),
-    crate::configs::address_event_ingress::AddressEventIngressExtension,
-    crate::configs::pool_index::PoolIndexExtension,
+    (
+      crate::configs::resource_meter::BlockResourceMeterExtension,
+      crate::configs::address_event_ingress::AddressEventIngressExtension,
+    ),
     polkadot_sdk::pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(0),
     polkadot_sdk::frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
   ));
@@ -1519,12 +1525,52 @@ fn maximum_signed_governance_proposal_passes_real_check_weight_validation() {
       .expect("signed Governance class must define max_extrinsic");
     assert!(dispatch_info.call_weight.all_lte(max_extrinsic));
     let extrinsic = signed_extrinsic(&signer_pair, 0, call);
+    let extrinsic_weight = extrinsic.get_dispatch_info().total_weight();
+    assert!(
+      extrinsic_weight.all_lte(
+        crate::configs::BlockResourceBudgetValue::get()
+          .limits()
+          .shared_economic()
+      ),
+      "extrinsic {extrinsic_weight:?} must fit shared {:?}",
+      crate::configs::BlockResourceBudgetValue::get()
+        .limits()
+        .shared_economic()
+    );
+    let now = System::block_number();
+    let validation_block = now.saturating_add(1);
+    let mut validation_state = pallet_deos_actors::BlockResourceState::new(validation_block);
+    validation_state
+      .begin_prepass()
+      .expect("validation phase opens");
+    validation_state
+      .open_external_phase()
+      .expect("validation external phase opens");
+    pallet_deos_actors::CurrentBlockResourceState::<Runtime>::put(validation_state);
     assert_ok!(Executive::validate_transaction(
       TransactionSource::External,
       extrinsic.clone(),
       System::block_hash(0),
     ));
+    pallet_deos_actors::CurrentBlockResourceState::<Runtime>::kill();
+    polkadot_sdk::pallet_timestamp::Now::<Runtime>::put(1);
+    polkadot_sdk::cumulus_pallet_parachain_system::ValidationData::<Runtime>::put(
+      polkadot_sdk::cumulus_primitives_core::PersistedValidationData::default(),
+    );
+    let _ = Actors::on_initialize(now);
+    assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
     assert_ok!(Executive::apply_extrinsic(extrinsic));
+    let resource_state =
+      Actors::block_resource_state().expect("resource meter remains authoritative");
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert!(
+      resource_state.usage().user_dispatch_used()
+        != polkadot_sdk::frame_support::weights::Weight::zero()
+    );
+    assert_eq!(
+      resource_state.phase(),
+      pallet_deos_actors::BlockResourcePhase::ExternalPhase
+    );
     assert_eq!(
       Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 113),
       Some(signer),

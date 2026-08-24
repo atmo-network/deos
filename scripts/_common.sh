@@ -74,14 +74,19 @@ activate_pinned_node() {
         return 0
     fi
     local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-    if [[ ! -s "$nvm_dir/nvm.sh" ]]; then
-        log_error "Node $expected is required and nvm is unavailable at $nvm_dir/nvm.sh"
+    if [[ -s "$nvm_dir/nvm.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$nvm_dir/nvm.sh"
+        nvm install "$expected"
+        nvm use "$expected" >/dev/null
+    elif command -v fnm >/dev/null 2>&1; then
+        eval "$(fnm env --shell bash)"
+        fnm install "$expected"
+        fnm use "$expected" >/dev/null
+    else
+        log_error "Node $expected is required and neither nvm nor fnm is available"
         exit 1
     fi
-    # shellcheck disable=SC1090
-    source "$nvm_dir/nvm.sh"
-    nvm install "$expected"
-    nvm use "$expected" >/dev/null
     actual="$(node --version)"
     actual="${actual#v}"
     [[ "$actual" == "$expected" ]] || { log_error "Unable to activate Node $expected"; exit 1; }

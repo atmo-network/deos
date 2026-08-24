@@ -248,15 +248,13 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance>
       native_asset_id,
       mint_amount / 2,
     )?;
-    crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
     let base_asset = primitives::AssetKind::Local(native_asset_id);
     let staked_asset = primitives::AssetKind::Local(staked_asset_id);
-    let _ = crate::AssetConversion::create_pool(
+    crate::DeosRouter::create_pool(
       crate::RuntimeOrigin::signed(account.clone()),
-      Box::new(base_asset),
-      Box::new(staked_asset),
-    );
-    crate::configs::assets_config::register_pool_lp_pair(base_asset, staked_asset)?;
+      base_asset,
+      staked_asset,
+    )?;
     crate::AssetConversion::add_liquidity(
       crate::RuntimeOrigin::signed(account.clone()),
       Box::new(base_asset),

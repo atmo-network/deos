@@ -8,13 +8,15 @@ The Router does not require DEOS Actor accounts or concrete DEOS market policy. 
 
 ## Required Guarantees
 
-- `AssetConversionApi` identifies and executes exactly one canonical pool per call.
+- `AssetConversionApi` identifies and executes exactly one canonical physical-ledger pool per call and reports full-balance reserves.
+- `PoolLifecycleApi` atomically owns permissionless underlying creation, actual LP verification, reverse binding, required observation topology, and rollback.
+- The host call filter denies raw XYK swaps and raw pool creation so Router fee and lifecycle policy cannot be bypassed.
 - Execution reports measured recipient output and, for exact output, measured caller spend.
 - `TmcInterface` reports recipient allocation rather than total issuance.
 - `FeeRoutingAdapter` participates in the Router transaction.
 - `PriceOracle` validates directional references and publishes pre-execution observations.
 - `MaxLpPairs` bounds the reverse LP index.
-- `LpPairIntegrity` optionally reconciles each Router LP binding and complete index cardinality against host pool/LP-asset storage during try-state; use `()` only when the host has no such cross-pallet topology.
+- `LpPairIntegrity` optionally reconciles both pool/index directions, LP assets, physical-pair uniqueness, required observation topology, cardinality, and genesis admission; use `()` only when the host has no such cross-pallet topology.
 - `WeightInfo` covers the host's worst-case bounded execution. The packaged `SubstrateWeight` and `()` are hand-written placeholders that report zero ProofSize and no database access, while the DEOS reference runtime measures a direct XYK swap at 13998 ProofSize with 25 reads and 12 writes. Generate weights against your own runtime and bind those.
 
 ## Evidence
