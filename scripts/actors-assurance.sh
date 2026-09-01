@@ -11,6 +11,8 @@ EVIDENCE_SOURCE_IDENTITY=""
 EVIDENCE_WEIGHT_IDENTITY=""
 EVIDENCE_WASM_IDENTITY=""
 EVIDENCE_METADATA_IDENTITY=""
+WASM_ARTIFACT="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+WASM_SNAPSHOT=""
 
 REQUIRED_HEAVY_PROFILES=(
     "scheduler_stress_fifo_over_capacity_fairness_matrix"
@@ -18,6 +20,11 @@ REQUIRED_HEAVY_PROFILES=(
     "scheduler_stress_fifo_sparse_topology_long_run_liveness"
     "stress_10k_actors_queue_scheduler"
     "checkpoint_a_s6_dense_10k_wakeups_converge_without_drops"
+    "control_only_10k_first_traversal_with_continuous_user_dispatch"
+    "transfer_10k_homogeneous_predicate_attribution"
+    "swapout_10k_manual_and_reactive_first_traversal"
+    "swapout_10k_first_traversal_with_continuous_user_dispatch"
+    "swapout_10k_first_traversal_with_ref_time_heavy_user_dispatch"
     "transfer_10k_manual_and_reactive_first_traversal"
     "transfer_10k_first_traversal_with_continuous_user_dispatch"
     "mixed_9500_transfer_400_swapout_100_control_first_traversal"
@@ -34,8 +41,18 @@ DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
 usage() {
     cat <<'EOF'
 Usage: actors-assurance.sh [OPTIONS]
+       actors-assurance.sh self-test
 
 Runs the DEOS Actors assurance contract across the package archive, external-consumer fixture, and deos-runtime.
+
+Source identity hashes tracked and untracked source bytes and executable mode in
+template, scripts, web-client, simulator, docs, .github, .cargo, and root build configuration.
+It includes staged changes and committed content, is independent of checkout path
+and commit packaging, and excludes build outputs, .papi metadata/descriptors, and Skills.
+Weight, production Wasm, and metadata retain their separate artifact identities.
+
+self-test checks source identity in an isolated temporary Git repository, without
+Cargo, network access, or build artifacts. The assurance gate also runs it automatically.
 
 Options:
   --skip-occupancy-profile   Skip the gating 10k occupancy profile
@@ -87,7 +104,7 @@ check_prerequisites() {
         return 1
     }
     if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
-        [[ -f "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" ]] || {
+        [[ -f "$WASM_ARTIFACT" ]] || {
             log_error "Production runtime Wasm not found"
             return 1
         }
@@ -102,19 +119,101 @@ check_prerequisites() {
 }
 
 worktree_evidence_identity() {
-    {
-        git -C "$PROJECT_ROOT" diff --binary --no-ext-diff
-        while IFS= read -r -d '' path; do
-            sha256sum "$PROJECT_ROOT/$path"
-        done < <(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -z | sort -z)
-    } | sha256sum | awk '{print $1}'
+    (
+        cd "$PROJECT_ROOT" || exit 1
+        git ls-files --cached --others --exclude-standard -z -- \
+            template scripts web-client simulator docs .github .cargo \
+            ':/*.toml' ':/*.json' .gitignore .gitattributes .npmrc \
+            ':(exclude,glob)**/target/**' ':(exclude,glob)**/node_modules/**' \
+            ':(exclude,glob)**/build/**' ':(exclude,glob)**/dist/**' \
+            ':(exclude,glob)**/.svelte-kit/**' ':(exclude)web-client/.papi' \
+            ':(exclude)template/chain_spec.json' \
+            | LC_ALL=C sort -zu \
+            | while IFS= read -r -d '' path; do
+                if [[ -L "$path" ]]; then
+                    log_error "Source identity cannot certify a symlink: $path" >&2
+                    exit 1
+                fi
+                # A tracked deletion has the same source tree before and after staging.
+                [[ -e "$path" ]] || continue
+                if [[ -x "$path" ]]; then
+                    printf 'executable\0'
+                else
+                    printf 'regular\0'
+                fi
+                sha256sum --zero -- "$path" || exit 1
+            done \
+            | sha256sum | awk '{print $1}'
+    )
 }
+
+run_self_test() (
+    local fixture
+    require_commands bash git sha256sum sort mktemp
+    fixture="$(mktemp -d "${TMPDIR:-/tmp}/deos-source-identity.XXXXXX")"
+    trap 'rm -rf -- "$fixture"' EXIT
+
+    source_identity() { PROJECT_ROOT="$fixture" worktree_evidence_identity; }
+    assert_equal() { [[ "$1" == "$2" ]] || { log_error "$3"; exit 1; }; }
+    assert_changed() { [[ "$1" != "$2" ]] || { log_error "$3"; exit 1; }; }
+
+    git -C "$fixture" init -q
+    git -C "$fixture" config user.name 'Source identity test'
+    git -C "$fixture" config user.email 'source-identity@example.invalid'
+    mkdir -p "$fixture/template/runtime/src"
+    local source="$fixture/template/runtime/src/lib.rs"
+    printf 'baseline\n' > "$source"
+    git -C "$fixture" add .
+    git -C "$fixture" -c commit.gpgsign=false commit -qm baseline
+    local baseline committed staged unstaged untracked deleted
+    baseline="$(source_identity)"
+    printf 'committed successor\n' > "$source"
+    git -C "$fixture" add .
+    git -C "$fixture" -c commit.gpgsign=false commit -qm successor
+    committed="$(source_identity)"
+    assert_changed "$baseline" "$committed" 'Different clean committed sources shared an identity'
+    git -C "$fixture" -c commit.gpgsign=false commit --allow-empty -qm packaging
+    assert_equal "$committed" "$(source_identity)" 'Commit packaging changed identical source bytes'
+    printf 'staged successor\n' > "$source"
+    git -C "$fixture" add .
+    staged="$(source_identity)"
+    assert_changed "$committed" "$staged" 'Staged source change was omitted'
+    printf 'unstaged successor\n' > "$source"
+    unstaged="$(source_identity)"
+    assert_changed "$staged" "$unstaged" 'Unstaged source change was omitted'
+    local unusual="$fixture/template/runtime/src/line"$'\n'"break.rs"
+    printf 'untracked bytes\n' > "$unusual"
+    untracked="$(source_identity)"
+    assert_changed "$unstaged" "$untracked" 'Untracked source change was omitted'
+    git -C "$fixture" add .
+    assert_equal "$untracked" "$(source_identity)" 'Staging identical source bytes changed identity'
+    rm -- "$unusual"
+    deleted="$(source_identity)"
+    assert_changed "$untracked" "$deleted" 'Deleted source remained in identity'
+    git -C "$fixture" add -u
+    assert_equal "$deleted" "$(source_identity)" 'Staging deletion changed identical source tree'
+    mkdir -p "$fixture/template/target" "$fixture/web-client/.papi" "$fixture/.agents/skills"
+    printf 'artifact\n' > "$fixture/template/target/runtime.wasm"
+    printf 'metadata\n' > "$fixture/web-client/.papi/deos.scale"
+    printf 'skill\n' > "$fixture/.agents/skills/SKILL.md"
+    assert_equal "$deleted" "$(source_identity)" 'Excluded artifacts or Skills changed source identity'
+    chmod +x "$source"
+    assert_changed "$deleted" "$(source_identity)" 'Executable-mode source change was omitted'
+    chmod -x "$source"
+    assert_equal "$deleted" "$(source_identity)" 'Restoring executable mode changed source identity'
+    ln -s lib.rs "$fixture/template/runtime/src/link.rs"
+    if source_identity >/dev/null 2>&1; then
+        log_error 'Symlink source must fail closed instead of certifying external bytes'
+        exit 1
+    fi
+    log_success 'Actors source identity self-test passed'
+)
 
 capture_evidence_identity() {
     EVIDENCE_SOURCE_IDENTITY="$(worktree_evidence_identity)"
     EVIDENCE_WEIGHT_IDENTITY="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
     if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
-        EVIDENCE_WASM_IDENTITY="$(sha256sum "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" | awk '{print $1}')"
+        EVIDENCE_WASM_IDENTITY="$(sha256sum "$WASM_ARTIFACT" | awk '{print $1}')"
     else
         EVIDENCE_WASM_IDENTITY="not-required"
     fi
@@ -125,12 +224,31 @@ capture_evidence_identity() {
     log_info "Evidence metadata: $EVIDENCE_METADATA_IDENTITY"
 }
 
+snapshot_wasm_artifact() {
+    if [[ "$REQUIRE_WASM_IDENTITY" != "1" ]]; then
+        return
+    fi
+    WASM_SNAPSHOT="$(mktemp)"
+    cp "$WASM_ARTIFACT" "$WASM_SNAPSHOT"
+}
+
+restore_wasm_artifact() {
+    if [[ -z "$WASM_SNAPSHOT" || ! -f "$WASM_SNAPSHOT" ]]; then
+        return
+    fi
+    local replacement="${WASM_ARTIFACT}.assurance-restore"
+    cp "$WASM_SNAPSHOT" "$replacement"
+    mv "$replacement" "$WASM_ARTIFACT"
+    rm -f "$WASM_SNAPSHOT"
+    WASM_SNAPSHOT=""
+}
+
 verify_evidence_identity_unchanged() {
     local source_identity weight_identity wasm_identity metadata_identity
     source_identity="$(worktree_evidence_identity)"
     weight_identity="$(sha256sum "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" | awk '{print $1}')"
     if [[ "$REQUIRE_WASM_IDENTITY" == "1" ]]; then
-        wasm_identity="$(sha256sum "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm" | awk '{print $1}')"
+        wasm_identity="$(sha256sum "$WASM_ARTIFACT" | awk '{print $1}')"
     else
         wasm_identity="not-required"
     fi
@@ -200,7 +318,8 @@ verify_heavy_profiles_resolve_exactly_once() {
 }
 
 run_gate() {
-    run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
+    run_self_test
+    run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --metadata ../web-client/.papi/metadata/deos.scale --weights runtime/src/weights/pallet_deos_actors.rs --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
     run_shell_step "Actors gate: runtime cost vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p deos-runtime --example actor_cost_vectors -- --check ../web-client/src/lib/automation/actors-cost-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
@@ -271,14 +390,27 @@ main() {
     phase_banner "DEOS Actors assurance"
     check_prerequisites
     capture_evidence_identity
+    snapshot_wasm_artifact
+    trap restore_wasm_artifact EXIT
     log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | occupancy: $INCLUDE_OCCUPANCY_PROFILE"
     run_gate
+    restore_wasm_artifact
+    trap - EXIT
     verify_evidence_identity_unchanged
     phase_banner "Summary"
     log_success "Actors scheduler assurance completed successfully"
 }
 
 run_entrypoint() {
+    if [[ "${1:-}" == "self-test" ]]; then
+        shift
+        case "$#:${1:-}" in
+            0:) run_self_test ;;
+            1:--help|1:-h) usage ;;
+            *) usage >&2; return 2 ;;
+        esac
+        return
+    fi
     if [[ "${1:-}" == "--internal" ]]; then
         shift
         main "$@"

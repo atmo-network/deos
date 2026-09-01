@@ -21,7 +21,9 @@ substrate-wasm-builder = { optional = true, workspace = true, default-features =
 
 [dev-dependencies]
 cumulus-primitives-parachain-inherent = "0.26.0"
+cumulus-primitives-proof-size-hostfunction = "=0.20.0"
 cumulus-test-relay-sproof-builder = "0.27.0"
+sc-executor = "=0.50.0"
 
 [dependencies]
 codec = { workspace = true }

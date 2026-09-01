@@ -37,7 +37,7 @@ related:
 
 ## Summary
 
-DEOS has several linked domains: framework identity, Economic Physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates. You do not need to read everything in one pass.
+DEOS has several linked domains: framework identity, Economic Physics, autonomous actors, routing, governance, staking, read models, client, tooling, and current limitations. You do not need to read everything in one pass.
 
 If you only need the shortest entry, use [Start Here](start-here.en.md) first. Use this page when you need a broader role-based reading route after choosing the right onboarding path.
 
@@ -131,7 +131,7 @@ Client work should preserve UI Kit reuse, Domain DAG ownership, read-model prove
 4. [Generated Wiki](../concepts/generated-wiki.en.md)
 5. [Core Terms](../glossary/core-terms.en.md)
 
-Status work should separate shipped baseline, open backlog, completed delivery, and future-gated work. The wiki explains that boundary without becoming release notes itself.
+The wiki describes the implemented baseline and its current limitations. Open work belongs in `BACKLOG.md` and completed delivery in `CHANGELOG.md`, not in wiki pages.
 
 ## If you are operating scripts or local tooling
 

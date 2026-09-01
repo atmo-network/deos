@@ -50,7 +50,7 @@ The complete DEOS deterministic System account map follows.
 | 9 | Treasury D | `0x1a01084c8c17375cf01299a8f492de6023bc29b78e56024510630be56b5c38f3` | `5CeoQfeA6zkG7yToYZm3L8g5gjR5aMikm4b1gVLK69CgYzsC` |
 | 10 | BLDR Splitter | `0xdc201c83f1db632704da438c2fe7e6212c4a25921c48cd9294f6dde633ef1d85` | `5H3KvwhcEmU5QZNcXWjwwmtduXdrKTrR5WYZqjrJm23KK14u` |
 | 11 | BLDR Liquidity Actor | `0x2e699b4acc26bcf078237dc13eda2470505c8bd99450269eeb7eb4c5f5472968` | `5D7ZRz4hMphgVdq9UYBA9Gtk1q2cBjKTgoDCqpBETQi6Ziq4` |
-| 12 | BLDR Bucket A | `0x791ec3fe30f34d005232cdf3bb5abdc0ae14e51fe3caeb62914d35f7c81ae544` | `5EoWnoVuB925BHs9UwHUfLkcm5rSbmqzrHgFZRzY5nA4M5B6` |
+| 12 | BLDR Anchor | `0x791ec3fe30f34d005232cdf3bb5abdc0ae14e51fe3caeb62914d35f7c81ae544` | `5EoWnoVuB925BHs9UwHUfLkcm5rSbmqzrHgFZRzY5nA4M5B6` |
 | 13 | BLDR Treasury | `0x07297bfba697b7593a93b6bc2c52f7dc4452d968c1e2c3badb09f2fafb8d1709` | `5CE6WsJ12vyyjAPMuvaqf2cdSQMVzAAxVjZDvXZK99VswFGe` |
 | 14 | Native staking LP provisioning actor | `0x14292af3e9e70acb4c39cfe83317039c1f2111b475b99e660d87b16948edc339` | `5CX93X5agA9cbvbv4JKpXmR8RF9ywdLbyg6WR9qY15evri5L` |
 
@@ -61,20 +61,20 @@ The complete DEOS deterministic System account map follows.
 | Core | Burn Actor | 0 | Active burn plan |
 | Core | Fee Sink | 1 | Active 120-tick/60-second 10% buffer allocation |
 | Core | Liquidity Actor | 2 | Dormant |
-| TOL | Bucket A | 3 | Custody-only |
+| TOL | Bucket A | 3 | Dormant Immutable Anchor |
 | TOL | Buckets B/C/D | 4–6 | Dormant |
 | Treasury | Treasuries B/C/D | 7–9 | Dormant |
-| BLDR | BLDR Splitter | 10 | Active 50/50 split |
-| BLDR | BLDR Liquidity Actor | 11 | Dormant |
-| BLDR | BLDR Bucket A | 12 | Custody-only |
-| BLDR | BLDR Treasury | 13 | Dormant |
+| `$BLDR` | BLDR Splitter | 10 | Active 50/50 split |
+| `$BLDR` | BLDR Liquidity Actor | 11 | Dormant |
+| `$BLDR` | BLDR Anchor | 12 | Dormant Immutable Anchor |
+| `$BLDR` | BLDR Treasury | 13 | Dormant |
 | Staking | Native staking LP provisioning actor | 14 | Dormant |
 
-Active genesis actors use the runtime System cooldown, `ActorType::System`, `Mutability::Mutable`, and no schedule window. Fee Sink's tick-zero bootstrap wakeup anchors its 120-tick period from the first consensus timestamp without executing allocation. Dormant entries occupy `ActorIdentities` and `SovereignIndex` without hot program, queue, wakeup, funding, fee, or Active-epoch state. Custody-only accounts occupy no actor identity.
+Active genesis actors use the runtime System cooldown, `ActorType::System`, `Mutability::Mutable`, and no schedule window. Fee Sink's tick-zero bootstrap wakeup anchors its 120-tick period from the first consensus timestamp without executing allocation. Twelve dormant entries occupy `ActorIdentities` and `SovereignIndex` without hot program, queue, wakeup, funding, fee, or Active-epoch state: ten are Mutable activation candidates, while Bucket A and BLDR Anchor are sealed Immutable identities that reject activation, mutation, deactivation, and close. The runtime LP freezer admits incoming LP to both Anchors, exposes zero reducible LP balance to ordinary, admin-forced, and internal transfer/burn paths, and blocks destruction of every LP asset class.
 
-The reference runtime configures no System Immutable actor, so it has no actor-specific emergency migration or custody disposition to execute. A downstream runtime that admits an indefinite System Immutable actor must ship its migration-specific source/target actor set, bounded Close or Deactivate disposition, custody handling, terminal invariant, and Continuation policy with the same upgrade. The ordinary DEOS Governance path exposes 3-day lead-in, 7-day vote, 7-day protection, and 3-day enactment delay—20 days before bounded maturity/operational delay. Protocol `L1RootAction` can use the separately governed 24-hour urgent path only with unanimous raw protection-track `Pass`; Actors promises neither path completes within a finite time.
+The reference runtime configures two sealed dormant System Immutable identities and no active System Immutable Contract. Bucket A and BLDR Anchor therefore have no Actor-level emergency close, deactivation, or custody disposition: changing their identity or LP-freeze contract requires an explicit runtime upgrade or fork. A downstream runtime that admits an indefinite active System Immutable actor must ship its migration-specific source/target actor set, bounded Close or Deactivate disposition, custody handling, terminal invariant, and Continuation policy with the same upgrade. The ordinary DEOS Governance path exposes 3-day lead-in, 7-day vote, 7-day protection, and 3-day enactment delay—20 days before bounded maturity/operational delay. Protocol `L1RootAction` can use the separately governed 24-hour urgent path only with unanimous raw protection-track `Pass`; Actors promises neither path completes within a finite time.
 
-`ActorIdentityCount` covers thirteen active plus dormant identities. `NextActorId = 15` preserves the reserved address range. Every expected small-native-flow System or custody account receives one persistent free-balance ED anchor because a provider or reserved balance alone does not make a zero-free account eligible for sub-ED native ingress under `pallet-balances` v50.
+`ActorIdentityCount` covers all fifteen active plus dormant identities. `NextActorId = 15` preserves the reserved address range. Every expected small-native-flow System sovereign account receives one persistent free-balance ED anchor because a provider or reserved balance alone does not make a zero-free account eligible for sub-ED native ingress under `pallet-balances` v50.
 
 ## Actor Contract Families
 
@@ -87,12 +87,16 @@ The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs
 | `build_zap_contract_steps` | Liquidity Actor | Add LP → surplus swap → split LP to buckets |
 | `build_bucket_lp_transfer_contract_steps` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
 | `build_treasury_lp_unwind_contract_steps` | Treasuries B/C/D | Return typed failure unless the asset is a registered local LP; otherwise remove it into Treasury custody |
-| `build_bldr_splitter_contract_steps` | BLDR Splitter | Split minted BLDR share between liquidity and treasury lanes |
-| `build_bldr_liquidity_contract_steps` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
-| `build_treasury_b_buyback_contract_steps` | Treasury B | Optional NTVE buyback → burn acquired target |
-| `build_native_staking_liquidity_contract_steps` | Native Staking Liquidity Actor | Donate balanced `NTVE/stNTVE` without minting LP |
+| `build_bldr_splitter_contract_steps` | BLDR Splitter | Split minted `$BLDR` share between liquidity and treasury lanes |
+| `build_bldr_liquidity_contract_steps` | BLDR Liquidity Actor | Add `$NTVE/$BLDR` liquidity → transfer LP to BLDR Anchor |
+| `build_treasury_b_buyback_contract_steps` | Treasury B | Optional `$NTVE` buyback → burn acquired target |
+| `build_native_staking_liquidity_contract_steps` | Native Staking Liquidity Actor | Donate balanced `$NTVE/stNTVE` without minting LP |
 
 These builders configure the reusable task language; they do not create pallet-level roles or Actors-id policy branches.
+
+The Builder Economy contract classifies BLDR Treasury as a Mutable System Actor treasury whose sovereign account may be debited by domain governance without mutating its Actor Contract. Genesis currently retains actor id `13` as a Dormant System identity, so a later activation may install an independent bounded treasury plan while governance and Actor execution remain serialized consumers of the same custody. Governance architecture owns the current invoice-settlement convergence gap.
+
+The current Treasury B builder is narrower than the [Builder Economy contract](./builder-economy.contract.en.md): it consumes only a bounded percentage of Native and burns all target output. The target composition preserves gradual Bucket B LP transfer and paired Treasury unwind, then routes both resulting reserve assets into `$BLDR` and divides recipient output equally between burn and BLDR Treasury. Because existing Steps commit independently, the runtime change must specify route order, retained-prefix custody, retry behavior, liveness inspection, and Weight before this integration document can describe that target as shipped.
 
 ## System Activation DAG
 
@@ -104,8 +108,7 @@ The DEOS runtime owns one bounded System activation manifest over known ids `0..
 | Liquidity Actor | TOL Buckets A/B/C/D |
 | TOL Buckets B/C/D | Treasuries B/C/D respectively |
 | BLDR Splitter | BLDR Liquidity Actor; BLDR Treasury |
-| BLDR Liquidity Actor | BLDR Bucket A |
-| BLDR Bucket A | BLDR Treasury |
+| BLDR Liquidity Actor | BLDR Anchor |
 
 `DeosSystemActorContractValidator` checks every Active System installation and replacement against this manifest before Contract mutation. The runtime integrity gate ranks all manifest nodes with bounded Kahn traversal, rejects a cycle, and validates every genesis System Contract. The derived projection scans only the bounded known catalog, includes edges whose target currently has an active `AddressEvent` Contract, and remains read-only; runtime tests require every projected edge to belong to the manifest and prove an undeclared back-edge is rejected without changing the stored Contract.
 
@@ -119,7 +122,7 @@ The package architecture owns the exhaustive public reachability matrix. DEOS pr
 
 `Foreign asset + TOL lane`: register the foreign asset, create the Native/foreign pool, extend the Burn Actor, activate the Liquidity Actor, then optionally activate paired Bucket transfer and Treasury unwind plans.
 
-`BLDR lane`: retain the BLDR Splitter at genesis, create the NTVE/BLDR pool, activate the BLDR Liquidity Actor, then optionally activate Treasury buyback/burn policy.
+`$BLDR lane`: retain the BLDR Splitter at genesis, create the `$NTVE/$BLDR` pool, activate the BLDR Liquidity Actor, then optionally activate the current Native-only Treasury B buyback/burn policy. The dual-reserve burn/treasury bridge remains an explicit runtime convergence item.
 
 `Native staking LP lane`: register native staking, initialize `stNTVE`, create and seed the AMM, then call `activate_native_staking_liquidity_actor`. Activation fails until receipt asset, staking pool, actor, and nonempty AMM all exist.
 
@@ -215,6 +218,8 @@ Fee-collector ledger movements are intentionally excluded from certified Address
 
 ## Fee Composition
 
+`RuntimeStepControlWeight` reserves one generated `fee_collection` allowance in Actor Control for each non-StopCycle Step, independently of Actor class. Opening, Running and Suspended actual control settle it only when a nonzero User Action fee must be collected; System and non-invoked attempts reclaim it. The existing bounded Pipeline machine envelope prepays this control work, while Action fees still derive solely from Task-effect Weight. This is separate from Pipeline admission collection. Base-selector Opening identity and component-wise reservation checks remain fail-closed. Maximum Opening retains the composed bound; matching maximal Opening progress settles the admitted base envelope rather than substituting an under-covering direct profile. Control binding identity includes selection-policy version 3. Complete Weight/Wasm regeneration and remaining invocation overhead acceptance are still pending.
+
 Manual, AddressEvent, ObservationChange, ObservationCrossing fire, AtTime, and Cadenced are the implemented Trigger-fee families. Each family performs Actor-specific Trigger work and charges its generated occurrence owner only for a useful `pending_signal: false -> true` transition. Redundant latched activity performs no Actor-specific evaluation, fee, event, activation, or causal-history accumulation. Source-owned movement, funding accumulation, and authoritative Observation state may continue independently. Opening re-arms stateful Trigger families from current authority; AtTime remains one-shot consumed; Cadenced resumes from the first deadline strictly after the current authoritative tick. Underfunding or collector failure creates no readiness or apoptosis. A homogeneous Crossing batch whose collection cannot complete rolls back its aggregate attempt and advances through the already-admitted scalar owner, preventing a free retry loop without charging the publisher. The package-owned `PipelineMachineEnvelope` binds complete bounded control/cleanup pricing in the certified Contract head. When Idle paid readiness is consumable, the scheduler charges that total before Opening; one-unit shortfall selects `CycleAdmissionInsufficient` process cleanup without refunding prior Trigger fees. Running/Suspended service performs no machine affordability or collection. Current-Step resource admission still validates post-dispatch control/effect evidence component-wise, but `StepFeeBreakdown` reserves and settles only the current Action effect. Non-invoked effects, false predicates, skipped resolution, `FundingUnavailable`, and `StopCycle` produce no Action collection.
 
 Package-generated `actors-fee-envelope-vectors.json` constrains the browser's Action-only suffix reservation and protected-floor behavior. Runtime-generated `actors-cost-vectors.json` binds metadata and Actors Weight hashes to separate `ActorCostApi` owners across Manual `0/1/4/8/32` geometry, every Trigger family at one Step, dormant User absence, and explicit System exemption. `runtime/examples/actor_cost_vectors.rs`, `automation/cost-vectors.ts`, Actors assurance, and full regeneration own generation, fail-closed parsing, freshness, and drift evidence. Visible presentation remains open.
@@ -243,7 +248,7 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 | `MaxCrossingMembersPerFeed` | 10,000 total memberships |
 | `MaxUserCrossingMembersPerFeed` | 9,000 User memberships; remaining 1,000 positions are System-only |
 | `MaxCrossingActorsPerBlock` | Four candidates through two reachable homogeneous pair cohorts |
-| `MaxContractSteps` | Configured maximum remains within `0..=255`; each User or System Contract admits `0..=32` Steps under the DEOS production binding |
+| `MaxContractSteps` | Configured maximum remains within `0..=255`; each User or System Contract admits `0..=12` Steps under the DEOS production binding, while independent hosts may select another bounded value |
 | `MaxRetryAttempts` | 10 cursor-local unsuccessful attempts |
 | `MaxConsecutiveFailures` | 10 |
 | `MaxAutoCloseNonceHorizon` | 10,000 |
@@ -292,7 +297,7 @@ The current Actors production generation used `frame-omni-bencher 0.22.0`, bench
 
 `scripts/actors-assurance.sh` owns freshness checks for Actors semantic, fee-envelope, ABI, observation, ingress, weight, and metadata evidence. Production Wasm, metadata, descriptors, and generated client evidence remain owned by their build/export commands and checked directly by the `full` validation profile.
 
-`template/runtime/src/weights/pallet_deos_actors.rs` owns complete generated methods and storage annotations. The converged handoff binds generated Actors Weight `ac206ec06b3f2c2789da23540ca1ae87d343c8d2196f77b1c12c43569c0d3b9e`, production Wasm `484d7f9aa9eb4d767bb7ecaefce05d6c50c7d25b9b381454872e50ee35272fb6`, and metadata `27984891721c42acbce79d4e458e9b40dd6b9a046228438a072f4f2c1bd0f74e`. `scripts/actors-assurance.sh` reports and preserves those identities while running exact named heavy profiles. Architecture records only load-bearing admission values; benchmark-host timing never becomes a chain-throughput claim.
+`template/runtime/src/weights/pallet_deos_actors.rs` owns complete generated methods and storage annotations. The converged handoff binds generated Actors Weight `ac206ec06b3f2c2789da23540ca1ae87d343c8d2196f77b1c12c43569c0d3b9e`, production Wasm `f54ae4e3a9d9ad99fc25b61b262785c09338e3cf974ae889475354cf3e3d738f`, and metadata `0116be51f4994c77687d50d49418bcbf7d2b95f044404a8b091e33412be9653c`. `scripts/actors-assurance.sh` reports and preserves those identities while running exact named heavy profiles. Architecture records only load-bearing admission values; benchmark-host timing never becomes a chain-throughput claim.
 
 ### Generated Event Trace Corpus
 

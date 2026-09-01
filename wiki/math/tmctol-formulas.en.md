@@ -10,6 +10,8 @@ available_locales:
   - ru
 sources:
   - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../docs/builder-economy.contract.en.md
+  - resource: ../../simulator/README.md
 status: stable
 audience: developer
 tags:
@@ -67,6 +69,37 @@ When a mint occurs, the minted token output is distributed according to the conf
 
 The collateral payment is transferred separately to its resolved protocol destination; this ratio does not split the foreign collateral.
 
+## DEOS Reference: Second-Order `$BLDR` Allocation
+
+The anchor/treasury TOL component of second-order `$BLDR` TMCTOL divides the protocol mint allocation equally between anchor liquidity and BLDR Treasury. With total issuance `M`, recipient output `U`, protocol output `T = M - U`, anchor allocation `A`, and direct treasury allocation `D`:
+
+```text
+A = T - floor(T/2)
+D = floor(T/2)
+U + A + D = M
+```
+
+All `$NTVE` collateral is assigned to the anchor-liquidity lane. The first-order reference also assigns half of its two-thirds protocol issuance to Bucket A, so both orders direct approximately `M/3` issuance to immutable anchor liquidity. Their collateral rules differ: first-order Bucket A receives `C/2`, while BLDR Anchor receives all collateral `C`.
+
+Parent Bucket B recycling is route-dependent. If market acquisition returns `Q` existing `$BLDR`:
+
+```text
+burn = floor(Q/2)
+recycled_treasury = Q - burn
+net_issuance_change = -burn
+```
+
+If the Router selects the `$BLDR` TMC and full new issuance is `M` with recipient output `U`:
+
+```text
+burn = floor(U/2)
+recycled_treasury = U - burn
+net_issuance_change = M - burn
+treasury_change = direct_treasury_allocation + recycled_treasury
+```
+
+The same acquisition policy can therefore contract supply through XYK or expand collateralized supply through TMC while funding both the immutable anchor and treasury.
+
 ## XYK Constant Product (Floor Protection)
 
 In the idealized positive-reserve XYK model, protocol-owned liquidity creates an asymptotic price curve that stays above zero for any finite sale. This statement does not guarantee a market price or pool liveness.
@@ -82,6 +115,18 @@ Price = R_foreign' / R_native'
 ```
 
 Because $R_{foreign}'$ approaches zero asymptotically, the price can deteriorate indefinitely but never actually reaches zero for any finite $\Delta S$.
+
+## Canonical Reported Floor
+
+A public floor report applies a named sellable-pressure fraction `λ` to a stated supply basis and compares the stressed price with an explicit reference price:
+
+```text
+x_reported = λ_reported · S_support_scope
+P_stress(x) = k / (R_native + x)²
+reported_floor_ratio = P_stress(x_reported) / P_ceiling_ref
+```
+
+The report counts only the current proportional reserve claim of positive-LP anchor or explicitly active-support positions. Dormant LP does not count until explicitly activated. Historical contribution fields are cost-basis telemetry and cannot be added to the same live pool reserves. Missing live Bucket A anchor support sets `governance_state` to `degraded`. Named pressure presets derive from configured allocation shares rather than assumed default percentages.
 
 ## Equilibrium and Backing Metrics
 

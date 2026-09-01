@@ -94,8 +94,6 @@ pub trait WeightInfo {
   fn close_actor() -> Weight;
   fn fee_collection() -> Weight;
   fn predicate_set_evaluation(predicates: u32) -> Weight;
-  fn cycle_orchestration() -> Weight;
-  fn step_orchestration(steps: u32) -> Weight;
   fn task_transfer() -> Weight;
   fn task_burn() -> Weight;
   fn task_mint() -> Weight;
@@ -144,8 +142,6 @@ pub trait WeightInfo {
   fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
   fn scheduler_inner_zero_step_complete() -> Weight;
   fn scheduler_paged_execute_opening_max() -> Weight;
-  fn scheduler_inner_opening_close_min(tail_chunks: u32) -> Weight;
-  fn scheduler_inner_opening_close_max(tail_chunks: u32) -> Weight;
   fn scheduler_inner_opening_failed_min(tail_chunks: u32) -> Weight;
   fn scheduler_inner_opening_failed_max(tail_chunks: u32) -> Weight;
   fn scheduler_inner_opening_retry_min(tail_chunks: u32) -> Weight;
@@ -200,10 +196,8 @@ pub trait WeightInfo {
   fn funding_snapshot_open(assets: u32) -> Weight;
   fn run_progress() -> Weight;
   fn run_suspend() -> Weight;
-  fn run_retry() -> Weight;
   fn run_complete() -> Weight;
   fn run_cancel() -> Weight;
-  fn run_suffix_admission(steps: u32) -> Weight;
   fn update_contract() -> Weight;
   fn set_global_circuit_breaker() -> Weight;
   fn clear_crossing_worker_fault() -> Weight;
@@ -381,16 +375,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
-  }
-
-  fn cycle_orchestration() -> Weight {
-    Weight::from_parts(44_699_000, 9667).saturating_add(T::DbWeight::get().reads_writes(3, 2))
-  }
-
-  fn step_orchestration(steps: u32) -> Weight {
-    Weight::from_parts(44_555_323, 9667)
-      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(3, 2))
   }
 
   fn task_transfer() -> Weight {
@@ -647,13 +631,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(20_000_000_000, 600_000)
   }
 
-  fn scheduler_inner_opening_close_min(_: u32) -> Weight {
-    Weight::from_parts(20_000_000_000, 600_000)
-  }
-
-  fn scheduler_inner_opening_close_max(_: u32) -> Weight {
-    Weight::from_parts(20_000_000_000, 600_000)
-  }
 
   fn scheduler_inner_opening_failed_min(_: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
@@ -770,18 +747,11 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(28_668_868, 4_178)
       .saturating_add(T::DbWeight::get().reads_writes(2, 2))
   }
-  fn run_retry() -> Weight {
-    Weight::from_parts(22_070_000, 4_266).saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
   fn run_complete() -> Weight {
     Weight::from_parts(18_019_000, 4_030).saturating_add(T::DbWeight::get().reads_writes(1, 2))
   }
   fn run_cancel() -> Weight {
     Weight::from_parts(56_782_000, 8_120).saturating_add(T::DbWeight::get().reads_writes(6, 4))
-  }
-  fn run_suffix_admission(steps: u32) -> Weight {
-    Weight::from_parts(1_438_574, 0)
-      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
   }
 
   fn update_contract() -> Weight {
@@ -842,7 +812,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::MAX
   }
   fn block_resource_finalize() -> Weight {
-    Weight::MAX
+    Weight::from_parts(10_000_000, 1_560)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(2))
   }
 }
 
@@ -889,11 +861,6 @@ impl WeightInfo for TestWeightInfo {
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
 
-  }
-  fn cycle_orchestration() -> Weight { Weight::from_parts(44_699_000, 9667) }
-  fn step_orchestration(steps: u32) -> Weight {
-    Weight::from_parts(44_555_323, 9667)
-      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
   }
   fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
   fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
@@ -977,12 +944,6 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_paged_execute_opening_max() -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
-  fn scheduler_inner_opening_close_min(_: u32) -> Weight {
-    Weight::from_parts(20_000_000_000, 600_000)
-  }
-  fn scheduler_inner_opening_close_max(_: u32) -> Weight {
-    Weight::from_parts(20_000_000_000, 600_000)
-  }
   fn scheduler_inner_opening_failed_min(_: u32) -> Weight {
     Weight::from_parts(20_000_000_000, 600_000)
   }
@@ -1057,13 +1018,8 @@ impl WeightInfo for TestWeightInfo {
   }
   fn run_progress() -> Weight { Weight::from_parts(30_000_000, 8_000) }
   fn run_suspend() -> Weight { Weight::from_parts(28_668_868, 4_178) }
-  fn run_retry() -> Weight { Weight::from_parts(22_070_000, 4_266) }
   fn run_complete() -> Weight { Weight::from_parts(18_019_000, 4_030) }
   fn run_cancel() -> Weight { Weight::from_parts(56_782_000, 8_120) }
-  fn run_suffix_admission(steps: u32) -> Weight {
-    Weight::from_parts(1_438_574, 0)
-      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
-  }
   fn update_contract() -> Weight { Weight::from_parts(162_733_000, 10_181) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
   fn clear_crossing_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }

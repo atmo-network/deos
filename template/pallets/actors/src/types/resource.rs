@@ -1,6 +1,31 @@
 use frame::prelude::*;
 use polkadot_sdk::frame_support::weights::Weight;
 
+/// Explicit independent resource ceilings for one rollback-only Actor preview.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct SimulationBudget {
+  pub actor_control: Weight,
+  pub shared_economic: Weight,
+}
+
+impl SimulationBudget {
+  pub fn checked_limits(self) -> Result<BlockResourceLimits, BlockResourceError> {
+    let actor_base = weight_floor_div(self.shared_economic, 2);
+    let user_base = self
+      .shared_economic
+      .checked_sub(&actor_base)
+      .ok_or(BlockResourceError::ArithmeticOverflow)?;
+    BlockResourceLimits::new(
+      self.actor_control,
+      self.shared_economic,
+      actor_base,
+      user_base,
+    )
+  }
+}
+
 /// One authoritative block-resource domain.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
@@ -367,6 +392,20 @@ impl<BlockNumber: Copy + PartialEq> BlockResourceState<BlockNumber> {
     reservation.phase = self.phase;
     self.outstanding_reservations = outstanding;
     Ok(reservation)
+  }
+
+  /// Negative capacity probe only; real reservation retains phase and overflow handling.
+  pub(crate) fn capacity_exceeded(
+    &self,
+    limits: BlockResourceLimits,
+    domain: BlockResourceDomain,
+    maximum: Weight,
+  ) -> bool {
+    let mut probe = *self;
+    matches!(
+      probe.reserve(limits, domain, maximum),
+      Err(BlockResourceError::LimitExceeded)
+    )
   }
 
   pub fn reserve_actor_step(
@@ -785,6 +824,49 @@ impl BlockResourceUsage {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn simulation_budget_preserves_domain_ceilings_and_checked_sum() -> Result<(), BlockResourceError>
+  {
+    for (actor_control, shared_economic) in [
+      (Weight::zero(), Weight::zero()),
+      (Weight::MAX, Weight::zero()),
+      (Weight::from_parts(7, 11), Weight::from_parts(13, 17)),
+      (
+        Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
+        Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
+      ),
+    ] {
+      let limits = SimulationBudget {
+        actor_control,
+        shared_economic,
+      }
+      .checked_limits()?;
+      assert_eq!(limits.actor_control(), actor_control);
+      assert_eq!(limits.shared_economic(), shared_economic);
+      assert_eq!(
+        limits.actor_base_turn(),
+        weight_floor_div(shared_economic, 2)
+      );
+      assert_eq!(
+        limits
+          .actor_base_turn()
+          .checked_add(&limits.user_base_turn()),
+        Some(shared_economic),
+      );
+    }
+    for shared_economic in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      assert_eq!(
+        SimulationBudget {
+          actor_control: Weight::MAX,
+          shared_economic
+        }
+        .checked_limits(),
+        Err(BlockResourceError::ArithmeticOverflow),
+      );
+    }
+    Ok(())
+  }
 
   fn weight(ref_time: u64, proof_size: u64) -> Weight {
     Weight::from_parts(ref_time, proof_size)
@@ -1419,6 +1501,34 @@ mod tests {
       usage.reserve(limits(), BlockResourceDomain::ActorControl, weight(1, 0)),
       Err(BlockResourceError::ArithmeticOverflow)
     );
+  }
+
+  #[test]
+  fn capacity_probe_is_read_only_and_distinguishes_owner_errors() {
+    let domain = BlockResourceDomain::ActorDrainEffect;
+    let initial = BlockResourceState::new(1u64);
+    let mut active = initial;
+    active.phase = BlockResourcePhase::FreshDrain;
+    let mut halted = active;
+    halted.halt_optional_actor_work();
+    let mut overflow = active;
+    overflow.usage.actor_effect = Weight::MAX;
+    let mut reservation_overflow = active;
+    reservation_overflow.outstanding_reservations = u32::MAX;
+    for (state, maximum, exceeded) in [
+      (initial, Weight::MAX, false),
+      (active, Weight::zero(), false),
+      (active, weight(80, 80), false),
+      (active, weight(81, 0), true),
+      (active, weight(0, 81), true),
+      (halted, Weight::MAX, false),
+      (overflow, weight(1, 0), false),
+      (reservation_overflow, weight(1, 0), false),
+    ] {
+      let before = state;
+      assert_eq!(state.capacity_exceeded(limits(), domain, maximum), exceeded);
+      assert_eq!(state, before);
+    }
   }
 
   #[test]

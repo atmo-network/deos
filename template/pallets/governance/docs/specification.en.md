@@ -542,17 +542,26 @@ At minimum that payload MUST declare:
 - `beneficiary` — the account that receives the payout
 - `payout asset` — the asset in which the invoice is paid
 - `base amount` — the pre-scalar amount approved for evaluation
-- `funding source` — the treasury or other governance-declared controlled account from which payment is drawn
+- `treasury account` — the governance-declared controlled account from which payment is drawn
+- `invoice CID` — a required bounded content-addressed IPFS identifier for the canonical reason and supporting evidence
+
+The shared queryable `MaxCidBytes` bound applies; the reference bound is `96` bytes. The bytes MUST encode one canonical CIDv1 string in a runtime-supported multibase form. A mutable web URL is not a conforming canonical invoice identity, though the content-addressed document may contain ordinary external links.
+
+The canonical invoice settlement policy is `BaseFloorCapped`: approval defines a scalar target, while only the premium above the submitted base amount may be clipped by treasury capacity.
 
 Execution rules:
 
-1. The discrete winning scalar from Section 6.1 applies to the declared `base amount`
-2. `final payout = base amount * winning scalar`
-3. The funding source MUST be one of the domain's governance-declared executable treasury sources; payout MUST NOT be implicitly drawn from arbitrary protocol balances. On the current reference line, the tactical `$BLDR` domain declares exactly one executable treasury source: `BldrTreasury`
-4. The beneficiary is the explicit payload field, not automatically the proposer unless those identities are intentionally the same
-5. Invoice execution MUST be transactional: either the full payout executes, or no payout executes
-6. If the payload exceeds declared domain/payload caps or available spendable capacity at enactment, execution MUST fail explicitly rather than partially paying
-7. A successful invoice enactment MUST produce a bounded on-chain observability record that includes beneficiary, payout asset, base amount, winning scalar, final payout amount, and funding source
+1. The discrete winning scalar from Section 6.1 applies to the declared `base amount` and derives one checked `target amount`
+2. The runtime MUST validate the treasury account against the proposal's governance domain before admission and enactment; a payload MUST NOT select an arbitrary account or a treasury outside that domain's declared authority
+3. At enactment, the runtime MUST derive the treasury's `spendable amount` after host-ledger minimums and explicit holds
+4. The minimum payable amount is `min(base amount, target amount)`; this equals `base amount` for an above-base target and equals the complete target for a target at or below base
+5. If `spendable amount < minimum payable amount`, execution MUST record a typed `InsufficientTreasuryCapacity` failure and transfer nothing
+6. Otherwise `actual amount = min(target amount, spendable amount)`; `actual amount < target amount` is conforming only when the target exceeds base and actual remains at least the complete base amount
+7. Multiple live invoices create no implicit balance reservation or pro-rata entitlement; canonical execution order may reduce an above-base premium or leave a later approved invoice below its minimum payable capacity, in which case that invoice fails and requires a fresh proposal after treasury replenishment
+8. If the computed actual amount fails the host ledger's transfer admissibility rules, execution MUST fail explicitly with no payout
+9. The beneficiary is the explicit payload field, not automatically the proposer unless those identities are intentionally the same
+10. Invoice execution MUST be transactional: the complete computed `actual amount` transfers or no transfer occurs
+11. A successful invoice enactment MUST produce a bounded on-chain observability record containing beneficiary, payout asset, treasury account, invoice CID, base amount, winning scalar, target amount, actual amount, and capacity-limited status
 
 The protection lane MUST remain constitutionally separate from primary-track pricing:
 
@@ -771,7 +780,7 @@ At minimum, the event contract MUST cover:
 5. `Enactment scheduled` — domain, item identity, finalized epoch, enactment epoch
 6. `Enacted successfully` — domain, item identity, payload identity, execution authority, success marker
 7. `Execution failed` — domain, item identity, payload identity, execution authority, bounded failure reason
-8. `Invoice executed` when an `L2TreasurySpend` payload pays out — beneficiary, payout asset, base amount, scalar, final payout amount, funding source
+8. `Invoice executed` when an `L2TreasurySpend` payload pays out — beneficiary, payout asset, treasury account, invoice CID, base amount, scalar, target amount, actual amount, and capacity-limited status
 9. `Runtime upgrade executed` when an `L1RootAction` runtime-upgrade payload succeeds — code-update observability sufficient for operators and indexers to identify the upgrade event
 
 The event contract MAY be finer-grained than this minimum, but it MUST NOT be poorer than this minimum.
@@ -896,7 +905,7 @@ A conforming governance subsystem SHOULD realize the contract above through boun
 - Typed payload or preimage-backed payload handling for governance actions
 - Burned proposal-opening-fee handling for payload kinds that use it
 - Governance-driven runtime upgrade execution, including `set_code`
-- Invoice payout execution from declared funding sources
+- Base-floor-capped invoice payout execution from declared domain treasury accounts with typed below-floor capacity failure
 - Treasury actions, LP accounting, and streaming-state transitions
 - GovXP counter updates at declared lifecycle boundaries
 - The event/observability contract from Section 10.1

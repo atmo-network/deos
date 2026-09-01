@@ -8,4 +8,6 @@ pub struct StepExecutionPlan<Identity, Hot, Run, Funding, Admission, Ticket, Loa
   pub ticket: Ticket,
   pub loaded_step: LoadedStep,
   pub maximum_fee: Fee,
+  /// Transient outcome emitted by the current Step owner, never persisted as another Run owner.
+  pub last_step_outcome: Option<super::lifecycle::StepOutcome>,
 }

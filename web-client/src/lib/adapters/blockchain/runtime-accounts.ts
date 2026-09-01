@@ -50,7 +50,7 @@ export const KNOWN_SYSTEM_ACTORS: readonly KnownSystemActor[] = [
   { actorId: 9, label: 'Treasury D', role: 'Dormant treasury' },
   { actorId: 10, label: 'BLDR Splitter', role: 'BLDR distribution' },
   { actorId: 11, label: 'BLDR Liquidity Actor', role: 'NTVE/BLDR LP composer' },
-  { actorId: 12, label: 'BLDR Bucket A', role: 'BLDR anchor LP' },
+  { actorId: 12, label: 'BLDR Anchor', role: 'Immutable NTVE/BLDR LP custody' },
   { actorId: 13, label: 'BLDR Treasury', role: 'BLDR treasury' },
 ];
 

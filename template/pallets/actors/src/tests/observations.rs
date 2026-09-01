@@ -26,9 +26,17 @@ fn observation_activation_placement_snapshot(
         Actors::request_activation(actor_id)
       }
     };
-    let mut outcome = activate().expect("activation placement succeeds");
+    let mut outcome = activate().unwrap_or_else(|error| {
+      panic!(
+        "activation placement succeeds: compact={compact}, window={window:?}, block={activation_block}, error={error:?}"
+      )
+    });
     if repeat {
-      outcome = activate().expect("repeated activation placement succeeds");
+      outcome = activate().unwrap_or_else(|error| {
+        panic!(
+          "repeated activation placement succeeds: compact={compact}, window={window:?}, block={activation_block}, error={error:?}"
+        )
+      });
     }
     (
       outcome,
@@ -52,6 +60,111 @@ fn assert_compact_observation_classification_parity(
     .expect("generic classification succeeds");
   assert_eq!(compact_classification, generic_classification);
   compact_classification
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn observation_activation_uses_primary_pending_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_change(55),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_contract_steps(),
+    );
+    let loaded = Actors::load_observation_activation_state(actor_id, 55)
+      .expect("frame-owned observation state loads");
+    assert!(!loaded.hot.pending_signal);
+    assert_eq!(
+      Actors::request_observation_activation_compact(actor_id, 55),
+      Ok(ActivationOutcome::Latched)
+    );
+    let (_, _, frame_hot, _) =
+      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
+    assert!(frame_hot.pending_signal);
+    assert_eq!(
+      Actors::actor_hot(actor_id).expect("canonical primary remains live"),
+      frame_hot
+    );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn observation_change_execution_preserves_absent_scalar_control() {
+  for steps in [inert_contract_steps(), BoundedVec::default()] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let actor_id = create_system_with(
+        ALICE,
+        Schedule {
+          trigger: RuntimeTrigger::observation_change(55),
+          cooldown_blocks: 0,
+        },
+        None,
+        steps,
+      );
+
+      assert_eq!(
+        Actors::request_observation_activation_compact(actor_id, 55),
+        Ok(ActivationOutcome::Latched)
+      );
+      run_idle(Weight::MAX);
+
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::CycleSummary { actor_id: id, .. } if *id == actor_id
+      )));
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(crate::Pallet::<Test>::do_try_state());
+    });
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn observation_future_activation_moves_primary_to_waiting_without_scalar_bridge() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_change(55),
+        cooldown_blocks: 0,
+      },
+      Some(crate::ScheduleWindow {
+        start: 10,
+        end: 200,
+      }),
+      inert_contract_steps(),
+    );
+
+    assert_eq!(
+      Actors::request_observation_activation_compact(actor_id, 55),
+      Ok(ActivationOutcome::Latched)
+    );
+    assert!(matches!(
+      crate::ActorControlLocators::<Test>::get(actor_id),
+      Some(crate::ActorControlLocation::Waiting {
+        key: crate::WakeupKey::Block(10),
+        ..
+      })
+    ));
+    let state = Actors::active_actor_state(actor_id).expect("Waiting primary remains active");
+    assert!(state.hot.pending_signal);
+    assert_eq!(
+      state.hot.wakeup_pointer.map(|pointer| pointer.block),
+      Some(crate::WakeupKey::Block(10))
+    );
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
 }
 
 #[test]
@@ -148,9 +261,7 @@ fn compact_observation_classification_matches_terminal_precedence() {
       None,
       inert_contract_steps(),
     );
-    ActorIdentities::<Test>::mutate(nonce_actor, |maybe| {
-      maybe.as_mut().expect("identity exists").cycle_nonce = u64::MAX;
-    });
+    set_actor_cycle_nonce_coherent(nonce_actor, u64::MAX);
     assert_eq!(
       assert_compact_observation_classification_parity(nonce_actor, 9).terminal_reason,
       Some(CloseReason::CycleNonceExhausted)
@@ -243,11 +354,8 @@ fn compact_observation_classification_matches_failure_auto_close_pause_and_break
       None,
       inert_contract_steps(),
     );
-    ActorHot::<Test>::mutate(failure_actor, |maybe| {
-      maybe
-        .as_mut()
-        .expect("active Actor exists")
-        .unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
+    mutate_actor_hot_coherent(failure_actor, |hot| {
+      hot.unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
     });
     assert_eq!(
       assert_compact_observation_classification_parity(failure_actor, 12).terminal_reason,
@@ -334,7 +442,6 @@ fn compact_observation_activation_loads_only_current_authority_tiers() {
       Some(1)
     );
 
-    crate::ActorAdmissionCertificates::<Test>::remove(actor_id);
     crate::ActorFunding::<Test>::remove(actor_id);
     crate::ActorRunPayloads::<Test>::remove(actor_id);
     let compact = Actors::load_observation_activation_state(actor_id, 7)
@@ -380,7 +487,8 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
     let authority = crate::ActorActivationAuthorities::<Test>::get(actor_id)
       .expect("ObservationChange activation authority");
-    let certificate = crate::ActorAdmissionCertificates::<Test>::get(actor_id)
+    let certificate = Actors::actor_control_cell(actor_id)
+      .map(|(_, cell)| cell.admission)
       .expect("ObservationChange admission certificate");
     assert_eq!(authority.feed, 1);
     assert_eq!(
@@ -1062,9 +1170,7 @@ fn fanout_fault_captures_exact_page_position_actor_c6_authority_and_branch() {
       Actors::request_observation_activation_compact(first, 25),
       Ok(ActivationOutcome::Latched)
     );
-    ActorHot::<Test>::mutate(second, |hot| {
-      hot.as_mut().expect("second actor").last_cycle_block = Some(1);
-    });
+    mutate_actor_hot_coherent(second, |hot| hot.last_cycle_block = Some(1));
     Actors::test_fail_wakeup_placement_with_capacity();
     assert_ok!(Actors::note_observation_changed(25, 1));
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(true));
@@ -1075,16 +1181,7 @@ fn fanout_fault_captures_exact_page_position_actor_c6_authority_and_branch() {
     frame_system::Pallet::<Test>::set_block_number(2);
     let authority =
       crate::ActorActivationAuthorities::<Test>::get(second).expect("second activation authority");
-    crate::WakeupBuckets::<Test>::insert(
-      WakeupKey::Block(101),
-      crate::WakeupBucketState {
-        head_page: 0,
-        tail_page: 0,
-        next_page_id: 1,
-        live_entries: 1,
-        cursor_index: None,
-      },
-    );
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(101), 1);
     Actors::fanout_dirty_observations(Weight::MAX);
 
     assert_eq!(
@@ -1196,7 +1293,7 @@ fn observation_change_charges_occurrence_before_pipeline_opening() {
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_some());
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("identity remains")
         .cycle_nonce,
       0
@@ -1453,9 +1550,7 @@ fn contiguous_observation_wakeup_run_commits_once() {
       .map(|_| create_system_with(ALICE, schedule.clone(), None, inert_contract_steps()))
       .collect::<Vec<_>>();
     for actor_id in &actors {
-      ActorHot::<Test>::mutate(actor_id, |hot| {
-        hot.as_mut().expect("active actor").last_cycle_block = Some(1);
-      });
+      mutate_actor_hot_coherent(*actor_id, |hot| hot.last_cycle_block = Some(1));
     }
     assert_ok!(Actors::note_observation_changed(24, 1));
     Actors::test_reset_observation_wakeup_cohort_commits();
@@ -1475,6 +1570,42 @@ fn contiguous_observation_wakeup_run_commits_once() {
   });
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn observation_wakeup_cohort_preserves_absent_scalar_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let schedule = Schedule {
+      trigger: RuntimeTrigger::observation_change(24),
+      cooldown_blocks: 100,
+    };
+    let actors = (0..3)
+      .map(|_| create_system_with(ALICE, schedule.clone(), None, inert_contract_steps()))
+      .collect::<Vec<_>>();
+    for actor_id in &actors {
+      mutate_actor_hot_coherent(*actor_id, |hot| hot.last_cycle_block = Some(1));
+    }
+    assert_ok!(Actors::note_observation_changed(24, 1));
+    Actors::test_reset_observation_wakeup_cohort_commits();
+
+    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
+    assert_eq!(Actors::test_observation_wakeup_cohort_commits(), 1);
+    assert!(Actors::dirty_observation_feeds(24).is_none());
+    for actor_id in actors {
+      let state = Actors::active_actor_state(actor_id).expect("Waiting primary remains active");
+      assert!(state.hot.pending_signal);
+      assert!(state.hot.queue_ticket.is_none());
+      assert_eq!(
+        state.hot.wakeup_pointer.map(|pointer| pointer.block),
+        Some(WakeupKey::Block(101))
+      );
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
 #[test]
 fn saturated_queue_materializes_fanout_through_the_canonical_deferred_wakeup() {
   new_test_ext().execute_with(|| {
@@ -1485,28 +1616,7 @@ fn saturated_queue_materializes_fanout_through_the_canonical_deferred_wakeup() {
       None,
       inert_contract_steps(),
     );
-    let page_size: u32 = <Test as crate::Config>::QueuePageSize::get();
-    let capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
-    for page_id in 0..capacity.div_ceil(page_size) {
-      let first = page_id.saturating_mul(page_size);
-      let len = page_size.min(capacity.saturating_sub(first));
-      let entries = (0..len)
-        .map(|offset| {
-          queue_entry(
-            u64::from(first.saturating_add(offset)),
-            20_000_000u64.saturating_add(u64::from(first.saturating_add(offset))),
-          )
-        })
-        .collect::<Vec<_>>();
-      QueuePages::<Test>::insert(
-        u64::from(page_id),
-        BoundedVec::try_from(entries).expect("saturated queue page fits"),
-      );
-    }
-    QueueHead::<Test>::put(0);
-    QueueTail::<Test>::put(u64::from(capacity));
-    QueueOccupancy::<Test>::put(capacity);
-    crate::NextQueueTicket::<Test>::put(u64::from(capacity));
+    seed_saturated_tombstone_queue();
     assert_ok!(Actors::note_observation_changed(16, 1));
     let base =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_base();
@@ -1519,13 +1629,27 @@ fn saturated_queue_materializes_fanout_through_the_canonical_deferred_wakeup() {
     assert!(Actors::dirty_observation_feeds(16).is_none());
     assert!(Actors::pending_signal(actor_id));
     assert!(
-      Actors::actor_hot(actor_id)
+      Actors::active_actor_state(actor_id)
         .expect("actor")
+        .hot
         .queue_ticket
         .is_none()
     );
-
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .and_then(|state| state.hot.wakeup_pointer)
+        .and_then(|pointer| match pointer.block {
+          WakeupKey::Block(block) => Some(block),
+          WakeupKey::Tick(_) => None,
+        }),
+      Some(2)
+    );
+    #[cfg(not(feature = "runtime-benchmarks"))]
+    {
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -1543,9 +1667,7 @@ fn fanout_position_cursor_does_not_replay_a_committed_page_prefix() {
       Actors::request_observation_activation_compact(first, 18),
       Ok(ActivationOutcome::Latched)
     );
-    ActorHot::<Test>::mutate(second, |hot| {
-      hot.as_mut().expect("second actor").last_cycle_block = Some(1);
-    });
+    mutate_actor_hot_coherent(second, |hot| hot.last_cycle_block = Some(1));
     Actors::test_fail_wakeup_placement_with_capacity();
     assert_ok!(Actors::note_observation_changed(18, 1));
 
@@ -1620,7 +1742,7 @@ fn on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution() {
     );
     assert_ok!(Actors::note_observation_changed(14, 1));
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("identity")
         .cycle_nonce,
       0
@@ -1632,7 +1754,7 @@ fn on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution() {
     assert!(Actors::dirty_observation_feeds(14).is_none());
     let after = Actors::actor_hot(actor_id).expect("actor survives productive cycle");
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("identity")
         .cycle_nonce,
       1
@@ -1668,9 +1790,6 @@ fn newer_revision_during_fanout_restarts_from_the_first_subscriber_page() {
     assert_eq!(in_progress.next_subscriber_page, Some(1));
     let first = actors[0];
     let first_ticket = Actors::actor_hot(first).expect("first actor").queue_ticket;
-    crate::ActorHot::<Test>::mutate(first, |maybe| {
-      maybe.as_mut().expect("first actor").pending_signal = false;
-    });
 
     assert_ok!(Actors::note_observation_changed(12, 2));
     Actors::fanout_dirty_observations(base.saturating_add(unit).saturating_add(fault));
@@ -1678,10 +1797,10 @@ fn newer_revision_during_fanout_restarts_from_the_first_subscriber_page() {
     assert_eq!(restarted.latest_revision, 2);
     assert_eq!(restarted.fanout_revision, 2);
     assert_eq!(restarted.next_subscriber_page, Some(0));
-    assert!(!Actors::pending_signal(first));
+    assert!(Actors::pending_signal(first));
 
     Actors::fanout_dirty_observations(base.saturating_add(unit).saturating_add(fault));
-    assert!(!Actors::pending_signal(first));
+    assert!(Actors::pending_signal(first));
     assert_eq!(
       Actors::actor_hot(first).expect("first actor").queue_ticket,
       first_ticket
@@ -1749,12 +1868,6 @@ fn latest_revision_fanout_model_converges_across_seeded_races() {
       if seed.is_multiple_of(3) {
         latest_revision += 1;
         assert_ok!(Actors::note_observation_changed(15, latest_revision));
-      }
-      if seed.is_multiple_of(5) {
-        let index = (seed as usize) % actors.len();
-        crate::ActorHot::<Test>::mutate(actors[index], |maybe| {
-          maybe.as_mut().expect("model actor").pending_signal = false;
-        });
       }
       process_one(&mut delivered);
     }

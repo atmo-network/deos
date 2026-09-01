@@ -163,12 +163,12 @@ fn floor_price_proxy_after_tol_accumulation() {
       })
       .expect("BLDR pool must exist");
     let lp_id = pool_info.lp_token;
-    // Seed Bucket A with LP, simulating prior BLDR Liquidity Actor activity.
-    let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
+    // Seed BLDR Anchor with LP, simulating prior BLDR Liquidity Actor activity.
+    let bldr_anchor = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_ANCHOR_ACTORS_ID);
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
         lp_id,
-        &bucket_a,
+        &bldr_anchor,
         100 * PRECISION
       )
     );
@@ -416,9 +416,9 @@ fn heavy_use_invariants_preserved() {
     let splitter = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
     let liquidity = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_LIQUIDITY_ACTOR_ID);
     let treasury = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
-    let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
+    let anchor = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_ANCHOR_ACTORS_ID);
     let total_bldr_issued = Assets::total_issuance(bldr_id);
-    let known_holders = [ALICE, BOB, CHARLIE, splitter, liquidity, treasury, bucket_a];
+    let known_holders = [ALICE, BOB, CHARLIE, splitter, liquidity, treasury, anchor];
     let sum_known: u128 = known_holders
       .iter()
       .map(|a| Assets::balance(bldr_id, a))

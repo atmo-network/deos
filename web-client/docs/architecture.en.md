@@ -267,7 +267,7 @@ The widget consumes generated metadata:
 - `_meta/state.json` for explicit status and provenance;
 - `_meta/locales.json` for locale/page discovery.
 
-The wiki reader should keep page content primary and show related context/provenance as supporting information.
+The wiki reader keeps established facts and Wiki-to-Wiki navigation primary. Source-document provenance remains non-rendered metadata for validation, not a source-path panel or article navigation into repository documentation. Concrete non-document resources may remain linked.
 
 ## 10. Validation
 

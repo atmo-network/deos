@@ -92,11 +92,17 @@ Every experiment record is copied from `templates/EXP-NNNN.md`; its track-qualif
 
 Each track index is concise navigation plus its stable charter, not experiment evidence. Each prepared-or-later `EXP-NNNN.md` follows the canonical template and links any ID-prefixed sibling artifact. Rejected, Superseded, Invalidated, and Inconclusive records remain permanent and discoverable after candidate code is deleted.
 
+When a compound record obscures independent decisions, retain its bounded decision and necessary evidence, and transfer active questions to explicit successors. Do not create retrospective archives by default. Each track's `experiments.md` is its sole entrypoint and shared metadata owner, including its dependency overview and conditional portfolio; do not split those into separate map or meta-information files.
+
 ### Record Normalization
 
 [`templates/EXP-NNNN.md`](./templates/EXP-NNNN.md) is the executable normalization source for metadata field order and second-level section order. Every track record must match that shape exactly; record-specific third-level subsections remain permitted. The record's `Primary track` value must be a relative Markdown link whose label is the containing `<track>` and whose target is sibling `experiments.md`.
 
 Run `./.agents/skills/architecture-experiments/scripts/validate-record-normalization.sh` after creating, moving, or restructuring any Experiment Record or changing the template. The validator discovers every `tracks/<track>/EXP-NNNN.md`, derives the canonical shape from the template, and fails on metadata, section, primary-track drift, or any retained CSV/TSV under `tracks/`. It is private Skill-method validation and must not become a dependency of project validation or the completion gate.
+
+Relations follow the template's ordered fields. `Depends on` means required inputs and forms an acyclic graph; `Uses evidence from` may cite later negative findings without creating a prerequisite cycle. `Refines`, `Confirms`, `Invalidates` and `Supersedes` identify the exact claim and decision scope. `Transfers question to` assigns a question, while `Produces input for` names its downstream deliverable; neither is an automatic acceptance claim. Declare `Reopen trigger` explicitly. Every important claim must lead through its experiment to exact evidence and source/artifact identity, and every decision must expose downstream consequences. Use None when no relation exists rather than inventing causality.
+
+The same validator checks relation shape, experiment references and dependency cycles, and verifies the dependency graph inside the Actors `experiments.md`. After relation changes use `--write-index`, then the ordinary validation route. The graph is an inline projection of record Relations, not another entrypoint. Index-only Proposed IDs remain valid references, but have no inferred decision.
 
 ## Experiment Tracks
 
@@ -132,6 +138,8 @@ Cross-track dependencies must be directional and acyclic. When a proposed experi
 | Invalidated | Changed assumptions mean the evidence no longer supports its prior current claim | Terminal; create or relate a replacement experiment |
 
 Status describes evidence maturity, not code completion. Never jump from Measured to Accepted without an explicit Interpretation. Never rewrite an old decision to imitate later knowledge; append relations and transition it to Superseded or Invalidated with rationale.
+
+Accepted may be scoped to physical architecture: state `Decision scope: physical architecture only` and distinguish Architecture Freeze from later production/release Geometry Freeze. One materially distinct hypothesis has one experiment owner. A scoped acceptance neither proves Weight soundness nor meets a throughput target. Frozen architecture may reopen only under its declared evidence-backed invariant/impossibility trigger; a cost miss, stale artifact or unreachable fixture transfers to the relevant successor. Corrections preserving frozen invariants belong to that successor, and micro-optimizations require a measured production owner plus a dedicated falsifiable question.
 
 ## When to Open an Experiment
 

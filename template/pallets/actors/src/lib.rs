@@ -48,7 +48,7 @@ mod reactions;
 mod scheduler;
 mod subscriptions;
 
-pub use scheduler::EnqueueOutcome;
+pub use scheduler::{EnqueueOutcome, WakeupBucketDisposition};
 
 pub mod adapters;
 pub use adapters::{
@@ -83,6 +83,17 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  /// Change host account spendability through its authorized lifecycle without moving custody.
+  fn set_asset_account_frozen(
+    _owner: &AccountId,
+    _who: &AccountId,
+    _asset: AssetId,
+    _frozen: bool,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "BenchmarkAssetFreezeUnsupported",
+    ))
+  }
   fn setup_donate_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
@@ -95,6 +106,15 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
   fn setup_unstake(
     owner: &AccountId,
   ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  /// Remove an empty receipt through the host lifecycle after an Unstake Contract is admitted.
+  fn remove_empty_staking_receipt(
+    _owner: &AccountId,
+    _asset: AssetId,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "BenchmarkReceiptRemovalUnsupported",
+    ))
+  }
   fn setup_swap_exact_in(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
@@ -246,14 +266,20 @@ where
   Ok(AttemptFeeEnvelope { steps, total })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeeAssetClass {
+  FeeNative,
+  Other,
+}
+
 /// Returns the preserve-spend floor for a direct or adapter-reported debit surface.
 pub fn fee_native_protected_minimum<Balance: Ord>(
   actor_type: types::ActorType,
-  is_fee_native: bool,
+  asset_class: FeeAssetClass,
   asset_minimum: Balance,
   min_user_balance: Balance,
 ) -> Balance {
-  if actor_type == types::ActorType::User && is_fee_native {
+  if actor_type == types::ActorType::User && asset_class == FeeAssetClass::FeeNative {
     min_user_balance
   } else {
     asset_minimum
@@ -299,6 +325,7 @@ pub(crate) const fn contract_steps_bound_is_valid(bound: u32) -> bool {
 }
 
 sp_api::decl_runtime_apis! {
+  #[api_version(2)]
   pub trait ActorSimulationApi<Contract, Simulation>
   where
     Contract: codec::Codec,
@@ -310,6 +337,7 @@ sp_api::decl_runtime_apis! {
       expected_mutability: types::Mutability,
       expected_contract: Contract,
       mode: types::SimulationMode,
+      budget: types::SimulationBudget,
     ) -> Result<Simulation, types::SimulationError>;
   }
 
@@ -598,7 +626,6 @@ pub mod pallet {
   pub type AssetFilterOf<T> = AssetFilter<<T as Config>::AssetId, <T as Config>::MaxWhitelistSize>;
 
   pub type ActorObservationFeedsOf<T> = BoundedVec<<T as Config>::ObservationFeedId, ConstU32<1>>;
-  pub type SimulationResultOf<T> = SimulationResult<<T as Config>::MaxContractSteps>;
   pub type ObservationSubscriberPageOf<T> =
     ObservationSubscriberPage<<T as Config>::ObservationPageSize>;
   pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::ObservationPageSize>;
@@ -609,6 +636,18 @@ pub mod pallet {
     CrossingMembershipLocator<<T as Config>::ObservationFeedId>;
   pub type CrossingTransitionQueueOf<T> =
     BoundedVec<CrossingTransitionObligation, <T as Config>::MaxCrossingTransitionsPerFeed>;
+
+  #[derive(Clone, Copy)]
+  pub(crate) enum MaterializationMinimumReservation {
+    ReserveAllFamilies,
+    Unavailable,
+  }
+
+  impl MaterializationMinimumReservation {
+    fn reserves_all_families(self) -> bool {
+      matches!(self, Self::ReserveAllFamilies)
+    }
+  }
 
   #[derive(Clone, Copy)]
   pub(crate) enum TriggerTransitionIntent {
@@ -766,6 +805,132 @@ pub mod pallet {
   >;
 
   pub type QueuePageOf<T> = BoundedVec<QueueEntry<BlockNumberFor<T>>, <T as Config>::QueuePageSize>;
+
+  /// Canonical movable identity authority. Sovereign account is derived from owner/class and is not
+  /// duplicated in every control cell.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct ActorControlIdentity<AccountId, BlockNumber> {
+    pub owner: AccountId,
+    pub actor_class: ActorClass,
+    pub mutability: Mutability,
+    pub cycle_nonce: u64,
+    pub last_control_mutation_block: BlockNumber,
+  }
+
+  /// Canonical mutable control authority. Ready ticket is represented by physical location; both
+  /// wakeup pointers remain explicit because process and Trigger temporal memberships can coexist.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct ActorControlHotState<BlockNumber> {
+    pub lifecycle: ActiveLifecycle,
+    pub cycle_state: CycleState,
+    pub trigger_runtime_state: TriggerRuntimeState,
+    pub unsuccessful_attempt_streak: u32,
+    pub pending_signal: bool,
+    pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
+    pub trigger_wakeup_pointer: Option<TriggerWakeupPointer>,
+    pub terminal_at: Option<BlockNumber>,
+    pub schedule_anchor: BlockNumber,
+    pub last_cycle_block: Option<BlockNumber>,
+  }
+
+  /// Canonical single-owner control cell.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct ActorControlCell<AccountId, BlockNumber, Admission> {
+    pub actor_id: ActorId,
+    pub identity: ActorControlIdentity<AccountId, BlockNumber>,
+    pub hot: ActorControlHotState<BlockNumber>,
+    pub cursor: u32,
+    pub eligible_at: Option<BlockNumber>,
+    pub admission: Admission,
+    pub resources: ActorStepResourceEnvelope,
+  }
+
+  pub type ActorControlCellOf<T> = ActorControlCell<
+    <T as frame_system::Config>::AccountId,
+    BlockNumberFor<T>,
+    ActorAdmissionCertificateOf<T>,
+  >;
+  pub type ActorControlChunkOf<T> = BoundedVec<Option<ActorControlCellOf<T>>, ConstU32<32>>;
+
+  /// A deadline membership points at the single control owner without copying mutable authority.
+  /// Its clock is the containing Waiting key; the primary must carry the exact matching pointer.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct ActorWakeupReference {
+    pub actor_id: ActorId,
+    pub admission_identity: [u8; 32],
+  }
+
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub enum ActorWaitingEntry<Cell> {
+    Primary(Cell),
+    Reference(ActorWakeupReference),
+  }
+
+  impl<Cell> ActorWaitingEntry<Cell> {
+    pub fn primary(&self) -> Option<&Cell> {
+      match self {
+        Self::Primary(cell) => Some(cell),
+        Self::Reference(_) => None,
+      }
+    }
+
+    pub fn primary_mut(&mut self) -> Option<&mut Cell> {
+      match self {
+        Self::Primary(cell) => Some(cell),
+        Self::Reference(_) => None,
+      }
+    }
+
+    pub fn into_primary(self) -> Option<Cell> {
+      match self {
+        Self::Primary(cell) => Some(cell),
+        Self::Reference(_) => None,
+      }
+    }
+  }
+
+  pub type ActorWaitingChunkOf<T> =
+    BoundedVec<Option<ActorWaitingEntry<ActorControlCellOf<T>>>, ConstU32<32>>;
+  pub type ActorWaitingPageOf<T> = WakeupPage<ActorWaitingChunkOf<T>>;
+
+  /// External-boundary location; execution writes but never reads this index.
+  #[derive(
+    Clone,
+    Copy,
+    Debug,
+    Decode,
+    DecodeWithMemTracking,
+    Encode,
+    Eq,
+    MaxEncodedLen,
+    PartialEq,
+    TypeInfo,
+  )]
+  pub enum ActorControlLocation<BlockNumber> {
+    Unsignaled,
+    Waiting {
+      key: WakeupKey<BlockNumber>,
+      page: u64,
+      slot: u8,
+    },
+    Ready {
+      ticket: QueueTicket,
+    },
+  }
+
+  // Temporary source aliases remain only while the atomic cutover is assembled in this
+  // diagnostic worktree; the retained production patch removes them after caller conversion.
+
   pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
   pub type WakeupCursorPageOf<T> =
@@ -810,6 +975,7 @@ pub mod pallet {
     pub identity: ActorIdentityOf<T>,
     pub hot: ActorHotStateOf<T>,
     pub authority: ActorActivationAuthorityOf<T>,
+    pub admission: Option<ActorAdmissionCertificateOf<T>>,
     pub run_head: Option<ActorRunHeadOf<T>>,
     pub loaded_step: Option<LoadedActorStepOf<T>>,
   }
@@ -825,11 +991,6 @@ pub mod pallet {
   pub type NextActorId<T> = StorageValue<_, ActorId, ValueQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn actor_hot)]
-  pub type ActorHot<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorHotStateOf<T>, OptionQuery>;
-
-  #[pallet::storage]
   #[pallet::storage_prefix = "ActorContractHead"]
   pub type ActorContractHeads<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorContractHeadOf<T>, OptionQuery>;
@@ -838,11 +999,6 @@ pub mod pallet {
   #[pallet::storage_prefix = "ActorActivationAuthority"]
   pub type ActorActivationAuthorities<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorActivationAuthorityOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::storage_prefix = "ActorAdmissionCertificate"]
-  pub type ActorAdmissionCertificates<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorAdmissionCertificateOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::storage_prefix = "ActorContractTailChunk"]
@@ -1033,13 +1189,23 @@ pub mod pallet {
       let stored = if ActorContractHeads::<T>::contains_key(actor_id) {
         Self::replace_admitted_contract_geometry(actor_id, &contract, &certificate)
       } else {
-        Self::insert_admitted_contract_geometry(actor_id, &contract, &certificate)
+        let actor_type = Self::load_frame_control_authority(actor_id)
+          .map(|(_, identity, _, _)| identity.actor_class.actor_type())
+          .ok_or(Error::<T>::ActorInvariant)?;
+        Self::insert_admitted_contract_geometry_with_actor_type(
+          actor_id,
+          actor_type,
+          &contract,
+          &certificate,
+        )
       };
       ensure!(stored, Error::<T>::ActorInvariant);
       if CrossingMemberships::<T>::contains_key(actor_id)
         && let Some(crossing) = Self::crossing_from_trigger(&contract.trigger)
       {
-        let phase = match ActorHot::<T>::get(actor_id).map(|hot| hot.trigger_runtime_state) {
+        let phase = match Self::load_frame_control_authority(actor_id)
+          .map(|(_, _, hot, _)| hot.trigger_runtime_state)
+        {
           Some(TriggerRuntimeState::ObservationCrossing { phase, .. }) => phase,
           _ => return Err(Error::<T>::ActorInvariant.into()),
         };
@@ -1082,6 +1248,7 @@ pub mod pallet {
       }
     }
 
+    #[cfg(feature = "runtime-benchmarks")]
     pub(crate) fn remove_actor_contract(actor_id: ActorId) -> DispatchResult {
       ensure!(
         Self::remove_admitted_contract_geometry(actor_id).is_some(),
@@ -1090,21 +1257,56 @@ pub mod pallet {
       Ok(())
     }
 
+    #[cfg(all(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn control_remove_frame_owned_contract_geometry(
+      actor_id: ActorId,
+      contract: &ActorContractOf<T>,
+    ) -> bool {
+      if !ActorContractHeads::<T>::contains_key(actor_id) {
+        return false;
+      }
+      let Some(chunk_count) = u32::try_from(contract.steps.len())
+        .ok()
+        .map(|count| count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK))
+      else {
+        return false;
+      };
+      ActorActivationAuthorities::<T>::remove(actor_id);
+      ActorContractHeads::<T>::remove(actor_id);
+      for chunk_index in 0..chunk_count {
+        ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
+      }
+      true
+    }
+
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
     pub(crate) fn insert_admitted_contract_geometry(
       actor_id: ActorId,
       contract: &ActorContractOf<T>,
       certificate: &ActorAdmissionCertificateOf<T>,
     ) -> bool {
-      if ActorContractHeads::<T>::contains_key(actor_id)
-        || ActorAdmissionCertificates::<T>::contains_key(actor_id)
-      {
-        return false;
-      }
-      // An orphan Contract partition has no execution authority. System's zero-fee projection
-      // keeps corruption-mask tests and diagnostic geometry independent of identity state.
-      let actor_type = ActorIdentities::<T>::get(actor_id)
+      // Deliberately malformed storage fixtures may have no identity owner. They retain System's
+      // zero-fee projection solely as a package-test corruption seam.
+      let actor_type = Self::load_control_identity(actor_id)
         .map(|identity| identity.actor_class.actor_type())
         .unwrap_or(ActorType::System);
+      Self::insert_admitted_contract_geometry_with_actor_type(
+        actor_id,
+        actor_type,
+        contract,
+        certificate,
+      )
+    }
+
+    fn insert_admitted_contract_geometry_with_actor_type(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      contract: &ActorContractOf<T>,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> bool {
+      if ActorContractHeads::<T>::contains_key(actor_id) {
+        return false;
+      }
       let Some((head, chunks)) =
         Self::decompose_admitted_contract_geometry(actor_id, actor_type, contract, certificate)
       else {
@@ -1118,7 +1320,6 @@ pub mod pallet {
       {
         return false;
       }
-      ActorAdmissionCertificates::<T>::insert(actor_id, certificate);
       ActorContractHeads::<T>::insert(actor_id, head);
       for (chunk_index, chunk) in chunks {
         ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
@@ -1126,15 +1327,11 @@ pub mod pallet {
       true
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 bounded reconstruction is staged behind the centralized Contract owner"
-    )]
-    pub(crate) fn load_admitted_contract_geometry(
+    pub(crate) fn load_contract_geometry_with_admission(
       actor_id: ActorId,
-    ) -> Option<(ActorContractOf<T>, ActorAdmissionCertificateOf<T>)> {
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<ActorContractOf<T>> {
       let head = ActorContractHeads::<T>::get(actor_id)?;
-      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
       if !certificate.has_valid_identity()
         || certificate.semantic_contract_id != head.header.semantic_contract_id
         || certificate.body_commitment != head.header.body_commitment
@@ -1165,20 +1362,31 @@ pub mod pallet {
       if resource_count != head.header.step_count as usize {
         return None;
       }
-      let contract = Self::reconstruct_contract_geometry(actor_id, head, &chunks)?;
+      Self::reconstruct_contract_geometry(actor_id, head, &chunks)
+    }
+
+    pub(crate) fn load_admitted_contract_geometry(
+      actor_id: ActorId,
+    ) -> Option<(ActorContractOf<T>, ActorAdmissionCertificateOf<T>)> {
+      let certificate = Self::load_control_admission(actor_id)?;
+      let contract = Self::load_contract_geometry_with_admission(actor_id, &certificate)?;
       Some((contract, certificate))
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 lazy production loading is staged before current-Step scheduler wiring"
-    )]
     pub(crate) fn load_current_step_from_storage(
       actor_id: ActorId,
       cursor: u32,
     ) -> Option<LoadedActorStepOf<T>> {
+      let certificate = Self::load_control_admission(actor_id)?;
+      Self::load_current_step_with_admission(actor_id, cursor, &certificate)
+    }
+
+    pub(crate) fn load_current_step_with_admission(
+      actor_id: ActorId,
+      cursor: u32,
+      certificate: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<LoadedActorStepOf<T>> {
       let head = ActorContractHeads::<T>::get(actor_id)?;
-      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
       let tail_chunk = if cursor == 0 {
         None
       } else {
@@ -1191,7 +1399,7 @@ pub mod pallet {
       Self::load_current_step_from_geometry(
         actor_id,
         &head,
-        &certificate,
+        certificate,
         cursor,
         tail_chunk.as_ref().map(|(index, chunk)| (*index, chunk)),
       )
@@ -1202,12 +1410,15 @@ pub mod pallet {
       contract: &ActorContractOf<T>,
       certificate: &ActorAdmissionCertificateOf<T>,
     ) -> bool {
-      let Some((current_contract, _)) = Self::load_admitted_contract_geometry(actor_id) else {
+      let Some((_, identity, _, admission)) = Self::load_frame_control_authority(actor_id) else {
         return false;
       };
-      let actor_type = ActorIdentities::<T>::get(actor_id)
-        .map(|identity| identity.actor_class.actor_type())
-        .unwrap_or(ActorType::System);
+      let Some(current_contract) =
+        Self::load_contract_geometry_with_admission(actor_id, &admission)
+      else {
+        return false;
+      };
+      let actor_type = identity.actor_class.actor_type();
       let Some((head, chunks)) =
         Self::decompose_admitted_contract_geometry(actor_id, actor_type, contract, certificate)
       else {
@@ -1222,7 +1433,9 @@ pub mod pallet {
       let Ok(new_chunk_count) = u32::try_from(chunks.len()) else {
         return false;
       };
-      ActorAdmissionCertificates::<T>::insert(actor_id, certificate);
+      if !Self::replace_control_admission_for_transition(actor_id, certificate, contract) {
+        return false;
+      }
       ActorContractHeads::<T>::insert(actor_id, head);
       for (chunk_index, chunk) in chunks {
         ActorContractTailChunks::<T>::insert(actor_id, chunk_index, chunk);
@@ -1237,12 +1450,26 @@ pub mod pallet {
       actor_id: ActorId,
     ) -> Option<ActorContractOf<T>> {
       let (contract, _) = Self::load_admitted_contract_geometry(actor_id)?;
+      Self::remove_loaded_contract_geometry(actor_id, contract)
+    }
+
+    pub(crate) fn remove_admitted_contract_geometry_with_admission(
+      actor_id: ActorId,
+      admission: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<ActorContractOf<T>> {
+      let contract = Self::load_contract_geometry_with_admission(actor_id, admission)?;
+      Self::remove_loaded_contract_geometry(actor_id, contract)
+    }
+
+    fn remove_loaded_contract_geometry(
+      actor_id: ActorId,
+      contract: ActorContractOf<T>,
+    ) -> Option<ActorContractOf<T>> {
       let chunk_count = u32::try_from(contract.steps.len())
         .ok()?
         .saturating_sub(1)
         .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
       ActorActivationAuthorities::<T>::remove(actor_id);
-      ActorAdmissionCertificates::<T>::remove(actor_id);
       ActorContractHeads::<T>::remove(actor_id);
       for chunk_index in 0..chunk_count {
         ActorContractTailChunks::<T>::remove(actor_id, chunk_index);
@@ -1250,10 +1477,7 @@ pub mod pallet {
       Some(contract)
     }
 
-    #[allow(
-      dead_code,
-      reason = "I4 dual-meter admission is staged before scheduler plan wiring"
-    )]
+    #[cfg(test)]
     pub(crate) fn current_step_resources_fit(
       control_meter: &WeightMeter,
       effect_meter: &WeightMeter,
@@ -1505,33 +1729,32 @@ pub mod pallet {
         .precondition
         .as_ref()
         .map_or(0, Precondition::evaluation_units);
-      let (opening_snapshot_entries, opening_predicate_results) = if cursor == 0 {
-        if instance.cycle_state == CycleState::Idle {
-          Self::opening_control_geometry(&instance.steps)?
+      let (opening_snapshot_entries, opening_predicate_results, funding_snapshot_entries) =
+        if cursor == 0 {
+          if instance.cycle_state == CycleState::Idle {
+            let (snapshots, predicates) = Self::opening_control_geometry(&instance.steps)?;
+            (snapshots, predicates, T::MaxFundingTrackedAssets::get())
+          } else {
+            let run = run?;
+            (
+              u32::try_from(run.opening_snapshot.len()).ok()?,
+              u32::try_from(run.opening_predicate_results.len()).ok()?,
+              u32::try_from(run.funding_snapshot.len()).ok()?,
+            )
+          }
         } else {
-          let run = run?;
-          (
-            u32::try_from(run.opening_snapshot.len()).ok()?,
-            u32::try_from(run.opening_predicate_results.len()).ok()?,
-          )
-        }
-      } else {
-        (0, 0)
-      };
+          (0, 0, 0)
+        };
       Self::step_control_weight_context(
         step_count,
         cursor,
         predicate_evaluation_units,
         opening_snapshot_entries,
         opening_predicate_results,
-        T::MaxFundingTrackedAssets::get(),
+        funding_snapshot_entries,
       )
     }
 
-    #[allow(
-      dead_code,
-      reason = "I4 resource derivation is staged before the production control-Weight owner"
-    )]
     pub(crate) fn derive_step_resource_envelopes(
       contract: &ActorContractOf<T>,
     ) -> Option<ActorAdmissionResourcesOf<T>> {
@@ -1566,10 +1789,6 @@ pub mod pallet {
         .ok()
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 certificate construction is staged before centralized Contract persistence"
-    )]
     pub(crate) fn build_admission_certificate(
       contract: &ActorContractOf<T>,
     ) -> Option<ActorAdmissionCertificateOf<T>> {
@@ -1585,10 +1804,6 @@ pub mod pallet {
       ))
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 admitted geometry is staged before production storage wiring"
-    )]
     pub(crate) fn decompose_admitted_contract_geometry(
       actor_id: ActorId,
       actor_type: ActorType,
@@ -1739,6 +1954,7 @@ pub mod pallet {
         ticket,
         loaded_step,
         maximum_fee,
+        last_step_outcome: None,
       })
     }
 
@@ -1750,11 +1966,11 @@ pub mod pallet {
         return None;
       }
       let actor_id = ticket.actor_id;
-      let identity = ActorIdentities::<T>::get(actor_id)?;
-      let hot = ActorHot::<T>::get(actor_id)?;
+      let identity = Self::load_control_identity(actor_id)?;
+      let hot = Self::load_control_hot(actor_id)?;
       let run = ActorRunStateStore::<T>::get(actor_id);
       let funding = ActorFunding::<T>::get(actor_id)?;
-      let admission = ActorAdmissionCertificates::<T>::get(actor_id)?;
+      let admission = Self::load_control_admission(actor_id)?;
       let loaded_step = Self::load_current_step_from_storage(actor_id, ticket.cursor)?;
       let maximum_fee =
         Self::maximum_current_step_fee(identity.actor_class.actor_type(), loaded_step.resources)
@@ -1770,6 +1986,516 @@ pub mod pallet {
         loaded_step,
         maximum_fee,
       )
+    }
+
+    pub(crate) fn control_identity_from_scalar(
+      identity: ActorIdentityOf<T>,
+    ) -> Option<ActorControlIdentity<T::AccountId, BlockNumberFor<T>>> {
+      let sovereign_account = match identity.actor_class {
+        ActorClass::User { owner_slot } => Self::sovereign_account_id(&identity.owner, owner_slot),
+        ActorClass::System { sovereign_id } => Self::sovereign_account_id_system(sovereign_id),
+      };
+      if sovereign_account != identity.sovereign_account {
+        return None;
+      }
+      Some(ActorControlIdentity {
+        owner: identity.owner,
+        actor_class: identity.actor_class,
+        mutability: identity.mutability,
+        cycle_nonce: identity.cycle_nonce,
+        last_control_mutation_block: identity.last_control_mutation_block,
+      })
+    }
+
+    pub(crate) fn control_hot_from_scalar(
+      hot: ActorHotStateOf<T>,
+    ) -> ActorControlHotState<BlockNumberFor<T>> {
+      ActorControlHotState {
+        lifecycle: hot.lifecycle,
+        cycle_state: hot.cycle_state,
+        trigger_runtime_state: hot.trigger_runtime_state,
+        unsuccessful_attempt_streak: hot.unsuccessful_attempt_streak,
+        pending_signal: hot.pending_signal,
+        wakeup_pointer: hot.wakeup_pointer,
+        trigger_wakeup_pointer: hot.trigger_wakeup_pointer,
+        terminal_at: hot.terminal_at,
+        schedule_anchor: hot.schedule_anchor,
+        last_cycle_block: hot.last_cycle_block,
+      }
+    }
+
+    pub(crate) fn control_identity_to_scalar(
+      identity: &ActorControlIdentity<T::AccountId, BlockNumberFor<T>>,
+    ) -> ActorIdentityOf<T> {
+      let sovereign_account = match identity.actor_class {
+        ActorClass::User { owner_slot } => Self::sovereign_account_id(&identity.owner, owner_slot),
+        ActorClass::System { sovereign_id } => Self::sovereign_account_id_system(sovereign_id),
+      };
+      ActorIdentity {
+        sovereign_account,
+        owner: identity.owner.clone(),
+        actor_class: identity.actor_class,
+        mutability: identity.mutability,
+        cycle_nonce: identity.cycle_nonce,
+        last_control_mutation_block: identity.last_control_mutation_block,
+      }
+    }
+
+    pub(crate) fn control_hot_to_scalar(
+      hot: &ActorControlHotState<BlockNumberFor<T>>,
+      queue_ticket: Option<QueueTicket>,
+    ) -> ActorHotStateOf<T> {
+      ActorHotState {
+        lifecycle: hot.lifecycle,
+        cycle_state: hot.cycle_state,
+        trigger_runtime_state: hot.trigger_runtime_state.clone(),
+        unsuccessful_attempt_streak: hot.unsuccessful_attempt_streak,
+        pending_signal: hot.pending_signal,
+        queue_ticket,
+        wakeup_pointer: hot.wakeup_pointer,
+        trigger_wakeup_pointer: hot.trigger_wakeup_pointer,
+        terminal_at: hot.terminal_at,
+        schedule_anchor: hot.schedule_anchor,
+        last_cycle_block: hot.last_cycle_block,
+      }
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    pub(crate) fn control_cell_from_parts(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      loaded_step: &LoadedActorStepOf<T>,
+      eligible_at: Option<BlockNumberFor<T>>,
+    ) -> Option<ActorControlCellOf<T>> {
+      if !admission.has_valid_identity() {
+        return None;
+      }
+      Some(ActorControlCell {
+        actor_id,
+        identity: Self::control_identity_from_scalar(identity)?,
+        hot: Self::control_hot_from_scalar(hot),
+        cursor: loaded_step.cursor,
+        eligible_at,
+        admission,
+        resources: loaded_step.resources,
+      })
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    pub(crate) fn control_opening_cell_from_scalar(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      ticket: &ActorStepTicketOf<T>,
+      loaded_step: &LoadedActorStepOf<T>,
+    ) -> Option<ActorControlCellOf<T>> {
+      if hot.cycle_state != CycleState::Idle
+        || hot.queue_ticket != Some(ticket.ticket)
+        || ticket.actor_id != actor_id
+        || ticket.cursor != 0
+        || ticket.cycle_nonce != identity.cycle_nonce.checked_add(1)?
+        || ticket.eligible_at > frame_system::Pallet::<T>::block_number()
+        || !Self::validate_loaded_step_authority(
+          actor_id,
+          ticket.ticket,
+          &admission,
+          ticket,
+          loaded_step,
+        )
+      {
+        return None;
+      }
+      Self::control_cell_from_parts(
+        actor_id,
+        identity,
+        hot,
+        admission,
+        loaded_step,
+        Some(ticket.eligible_at),
+      )
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    #[allow(
+      dead_code,
+      reason = "zero-Step frame projection remains test-only until the atomic production cutover"
+    )]
+    pub(crate) fn control_zero_step_opening_cell_from_scalar(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      ticket: &ActorStepTicketOf<T>,
+    ) -> Option<ActorControlCellOf<T>> {
+      if hot.cycle_state != CycleState::Idle
+        || hot.queue_ticket != Some(ticket.ticket)
+        || ticket.actor_id != actor_id
+        || ticket.cursor != 0
+        || ticket.cycle_nonce != identity.cycle_nonce.checked_add(1)?
+        || ticket.eligible_at > frame_system::Pallet::<T>::block_number()
+        || !admission.has_valid_identity()
+      {
+        return None;
+      }
+      Some(ActorControlCell {
+        actor_id,
+        identity: Self::control_identity_from_scalar(identity)?,
+        hot: Self::control_hot_from_scalar(hot),
+        cursor: 0,
+        eligible_at: Some(ticket.eligible_at),
+        admission,
+        resources: ActorStepResourceEnvelope {
+          control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+          effect: Weight::zero(),
+        },
+      })
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    #[allow(
+      dead_code,
+      reason = "zero-Step frame projection remains test-only until the atomic production cutover"
+    )]
+    pub(crate) fn control_zero_step_unsignaled_cell_from_scalar(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+    ) -> Option<ActorControlCellOf<T>> {
+      if hot.cycle_state != CycleState::Idle
+        || hot.pending_signal
+        || hot.queue_ticket.is_some()
+        || hot.wakeup_pointer.is_some()
+        || hot.trigger_wakeup_pointer.is_some()
+        || !admission.has_valid_identity()
+      {
+        return None;
+      }
+      Some(ActorControlCell {
+        actor_id,
+        identity: Self::control_identity_from_scalar(identity)?,
+        hot: Self::control_hot_from_scalar(hot),
+        cursor: 0,
+        eligible_at: None,
+        admission,
+        resources: ActorStepResourceEnvelope {
+          control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+          effect: Weight::zero(),
+        },
+      })
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    pub(crate) fn control_unsignaled_cell_from_scalar(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      loaded_step: &LoadedActorStepOf<T>,
+    ) -> Option<ActorControlCellOf<T>> {
+      if hot.cycle_state != CycleState::Idle
+        || hot.pending_signal
+        || hot.queue_ticket.is_some()
+        || hot.wakeup_pointer.is_some()
+        || hot.trigger_wakeup_pointer.is_some()
+        || loaded_step.cursor != 0
+      {
+        return None;
+      }
+      Self::control_cell_from_parts(actor_id, identity, hot, admission, loaded_step, None)
+    }
+
+    pub(crate) fn project_control_cell(
+      cell: &ActorControlCellOf<T>,
+      location: ActorControlLocation<BlockNumberFor<T>>,
+    ) -> Option<(
+      ActorIdentityOf<T>,
+      ActorHotStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+    )> {
+      if !cell.admission.has_valid_identity() {
+        return None;
+      }
+      let queue_ticket = match location {
+        ActorControlLocation::Unsignaled => {
+          if cell.cursor != 0
+            || cell.eligible_at.is_some()
+            || (cell.hot.pending_signal && !cell.hot.lifecycle.is_paused())
+            || cell.hot.cycle_state != CycleState::Idle
+          {
+            return None;
+          }
+          if let Some(pointer) = cell.hot.wakeup_pointer {
+            let WakeupKey::Block(terminal_at) = pointer.block else {
+              return None;
+            };
+            if cell.hot.terminal_at != Some(terminal_at)
+              || !Self::wakeup_page_entry_matches(pointer, cell.actor_id)
+            {
+              return None;
+            }
+          }
+          if let Some(pointer) = cell.hot.trigger_wakeup_pointer {
+            if ActorControlLocators::<T>::get(cell.actor_id)
+              != Some(ActorControlLocation::Unsignaled)
+            {
+              return None;
+            }
+            let reference = WakeupPointer {
+              block: WakeupKey::Tick(pointer.tick),
+              page_id: pointer.page_id,
+              slot: pointer.slot,
+            };
+            if !Self::wakeup_page_entry_matches(reference, cell.actor_id) {
+              return None;
+            }
+          }
+          None
+        }
+        ActorControlLocation::Ready { ticket } => {
+          let terminal_ready = cell.hot.cycle_state == CycleState::Idle
+            && !cell.hot.pending_signal
+            && cell
+              .hot
+              .terminal_at
+              .zip(cell.eligible_at)
+              .is_some_and(|(terminal_at, eligible_at)| eligible_at >= terminal_at);
+          if cell.eligible_at.is_none()
+            || !(matches!(
+              cell.hot.cycle_state,
+              CycleState::Running | CycleState::Suspended
+            ) || (cell.hot.cycle_state == CycleState::Idle && cell.hot.pending_signal)
+              || terminal_ready)
+          {
+            return None;
+          }
+          Some(ticket)
+        }
+        ActorControlLocation::Waiting { key, .. } => {
+          if let Some(pointer) = cell.hot.wakeup_pointer {
+            let terminal_waiting = cell.hot.cycle_state == CycleState::Idle
+              && !cell.hot.pending_signal
+              && cell
+                .hot
+                .terminal_at
+                .zip(cell.eligible_at)
+                .is_some_and(|(terminal_at, eligible_at)| eligible_at >= terminal_at);
+            if pointer.block != key
+              || cell.eligible_at.is_none()
+              || !(matches!(
+                cell.hot.cycle_state,
+                CycleState::Running | CycleState::Suspended
+              ) || (cell.hot.cycle_state == CycleState::Idle && cell.hot.pending_signal)
+                || terminal_waiting)
+            {
+              return None;
+            }
+          } else {
+            let pointer = cell.hot.trigger_wakeup_pointer?;
+            let reference = WakeupPointer {
+              block: WakeupKey::Tick(pointer.tick),
+              page_id: pointer.page_id,
+              slot: pointer.slot,
+            };
+            if key != reference.block
+              || cell.eligible_at.is_some()
+              || cell.hot.pending_signal
+              || cell.hot.cycle_state != CycleState::Idle
+            {
+              return None;
+            }
+          }
+          None
+        }
+      };
+      Some((
+        Self::control_identity_to_scalar(&cell.identity),
+        Self::control_hot_to_scalar(&cell.hot, queue_ticket),
+        cell.admission.clone(),
+      ))
+    }
+
+    pub(crate) fn insert_unsignaled_control_authority(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      resources: ActorStepResourceEnvelope,
+    ) -> bool {
+      if ActorControlLocators::<T>::contains_key(actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+        || hot.cycle_state != CycleState::Idle
+        || (hot.pending_signal && !hot.lifecycle.is_paused())
+        || hot.queue_ticket.is_some()
+        || hot.wakeup_pointer.is_some()
+        || !admission.has_valid_identity()
+      {
+        return false;
+      }
+      let Some(control_identity) = Self::control_identity_from_scalar(identity.clone()) else {
+        return false;
+      };
+      let cell = ActorControlCell {
+        actor_id,
+        identity: control_identity,
+        hot: Self::control_hot_from_scalar(hot.clone()),
+        cursor: 0,
+        eligible_at: None,
+        admission: admission.clone(),
+        resources,
+      };
+      ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
+      ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
+      Self::load_frame_control_authority(actor_id).is_some_and(
+        |(location, restored_identity, restored_hot, restored_admission)| {
+          location == ActorControlLocation::Unsignaled
+            && restored_identity == identity
+            && restored_hot == hot
+            && restored_admission == admission
+        },
+      )
+    }
+
+    pub(crate) fn load_frame_control_authority(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActorControlLocation<BlockNumberFor<T>>,
+      ActorIdentityOf<T>,
+      ActorHotStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+    )> {
+      let (location, cell) = Self::load_primary_control_cell(actor_id).ok()?;
+      let (identity, hot, admission) = Self::project_control_cell(&cell, location)?;
+      Some((location, identity, hot, admission))
+    }
+
+    pub(crate) fn load_control_authority_with_authority(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActorIdentityOf<T>,
+      ActorHotStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+    )> {
+      let (_, identity, hot, admission) = Self::load_frame_control_authority(actor_id)?;
+      Some((identity, hot, admission))
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    pub(crate) fn store_frame_control_authority(
+      actor_id: ActorId,
+      location: ActorControlLocation<BlockNumberFor<T>>,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+    ) -> bool {
+      let expected_ticket = match location {
+        ActorControlLocation::Ready { ticket } => Some(ticket),
+        ActorControlLocation::Unsignaled | ActorControlLocation::Waiting { .. } => None,
+      };
+      if hot.queue_ticket != expected_ticket || !admission.has_valid_identity() {
+        return false;
+      }
+      let Ok((stored_location, mut cell)) = Self::load_primary_control_cell(actor_id) else {
+        return false;
+      };
+      if stored_location != location {
+        return false;
+      }
+      let Some(control_identity) = Self::control_identity_from_scalar(identity.clone()) else {
+        return false;
+      };
+      cell.identity = control_identity;
+      cell.hot = Self::control_hot_from_scalar(hot.clone());
+      cell.admission = admission.clone();
+      let Some((restored_identity, restored_hot, restored_admission)) =
+        Self::project_control_cell(&cell, location)
+      else {
+        return false;
+      };
+      if restored_identity != identity || restored_hot != hot || restored_admission != admission {
+        return false;
+      }
+      Self::store_primary_control_cell(location, cell).is_ok()
+    }
+
+    #[cfg(all(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn control_load_frame_contract(
+      actor_id: ActorId,
+      admission: &ActorAdmissionCertificateOf<T>,
+    ) -> Option<(ActorContractOf<T>, ActorContractHeadOf<T>)> {
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      if !admission.has_valid_identity()
+        || admission.semantic_contract_id != head.header.semantic_contract_id
+        || admission.body_commitment != head.header.body_commitment
+        || admission.admission_identity != head.header.admission_identity
+      {
+        return None;
+      }
+      let chunk_count = head
+        .header
+        .step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let chunks = (0..chunk_count)
+        .map(|chunk_index| {
+          Some((
+            chunk_index,
+            ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
+          ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+      let contract = Self::reconstruct_contract_geometry(actor_id, head.clone(), &chunks)?;
+      Some((contract, head))
+    }
+
+    #[cfg(all(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn control_load_current_step_contract(
+      actor_id: ActorId,
+      admission: &ActorAdmissionCertificateOf<T>,
+      cursor: u32,
+    ) -> Option<(
+      ActorContractOf<T>,
+      LoadedActorStepOf<T>,
+      ActorContractHeadOf<T>,
+    )> {
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      if cursor >= head.header.step_count
+        || !admission.has_valid_identity()
+        || admission.semantic_contract_id != head.header.semantic_contract_id
+        || admission.body_commitment != head.header.body_commitment
+        || admission.admission_identity != head.header.admission_identity
+      {
+        return None;
+      }
+      let tail_chunk = if cursor == 0 {
+        None
+      } else {
+        let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
+        Some((
+          chunk_index,
+          ActorContractTailChunks::<T>::get(actor_id, chunk_index)?,
+        ))
+      };
+      let loaded_step = Self::load_current_step_from_geometry(
+        actor_id,
+        &head,
+        admission,
+        cursor,
+        tail_chunk.as_ref().map(|(index, chunk)| (*index, chunk)),
+      )?;
+      let contract = ActorContract {
+        trigger: head.header.trigger.clone(),
+        cooldown_blocks: head.header.cooldown_blocks,
+        window: head.header.window,
+        steps: BoundedVec::try_from(alloc::vec![loaded_step.step.clone()]).ok()?,
+        funding: head.header.funding.clone(),
+        completion: head.header.completion,
+        auto_close_at_cycle_nonce: head.header.auto_close_at_cycle_nonce,
+      };
+      Some((contract, loaded_step, head))
     }
 
     pub(crate) fn validate_loaded_step_authority(
@@ -1838,10 +2564,6 @@ pub mod pallet {
       })
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 geometry decomposition is staged before production storage wiring"
-    )]
     pub(crate) fn decompose_contract_geometry(
       actor_id: ActorId,
       contract: &ActorContractOf<T>,
@@ -1908,10 +2630,6 @@ pub mod pallet {
       ))
     }
 
-    #[allow(
-      dead_code,
-      reason = "I2 bounded reconstruction is staged before production storage wiring"
-    )]
     pub(crate) fn reconstruct_contract_geometry(
       actor_id: ActorId,
       head: ActorContractHeadOf<T>,
@@ -2055,6 +2773,7 @@ pub mod pallet {
         window: contract.window,
         steps: contract.steps,
         completion: contract.completion,
+        trigger_runtime_state: hot.trigger_runtime_state.clone(),
         cycle_nonce: identity.cycle_nonce,
         auto_close_at_cycle_nonce: contract.auto_close_at_cycle_nonce,
         unsuccessful_attempt_streak: hot.unsuccessful_attempt_streak,
@@ -2070,55 +2789,248 @@ pub mod pallet {
       }
     }
 
+    /// Active identity belongs to the primary; the separate registry owns dormant identities.
+    pub(crate) fn control_identity_exists(actor_id: ActorId) -> bool {
+      ActorControlLocators::<T>::contains_key(actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+        || ActorIdentities::<T>::contains_key(actor_id)
+    }
+
+    pub(crate) fn load_control_identity(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
+      if ActorControlLocators::<T>::contains_key(actor_id) {
+        return Self::load_frame_control_authority(actor_id).map(|(_, identity, _, _)| identity);
+      }
+      if ActorUnsignaledControlCells::<T>::contains_key(actor_id) {
+        return None;
+      }
+      ActorIdentities::<T>::get(actor_id)
+    }
+
+    pub(crate) fn control_hot_exists(actor_id: ActorId) -> bool {
+      ActorControlLocators::<T>::contains_key(actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+    }
+
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn load_control_hot(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
+      Self::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+    }
+
+    #[cfg(feature = "try-runtime")]
+    pub(crate) fn control_hot_entries_for_try_state() -> Option<Vec<(ActorId, ActorHotStateOf<T>)>>
+    {
+      Self::frame_control_entries()?
+        .into_iter()
+        .map(|(actor_id, location, cell)| {
+          let (_, hot, _) = Self::project_control_cell(&cell, location)?;
+          Some((actor_id, hot))
+        })
+        .collect()
+    }
+
+    #[cfg(all(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn load_control_head(
+      actor_id: ActorId,
+    ) -> Option<(ActorIdentityOf<T>, ActorHotStateOf<T>)> {
+      Self::load_frame_control_authority(actor_id).map(|(_, identity, hot, _)| (identity, hot))
+    }
+
+    /// In-place mutation requires a live primary; moving transitions publish a supplied successor.
+    pub(crate) fn try_store_control_hot_with_authority(
+      actor_id: ActorId,
+      hot: ActorHotStateOf<T>,
+    ) -> Result<(), crate::scheduler::EnqueueOutcome> {
+      if !ActorControlLocators::<T>::contains_key(actor_id) {
+        return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+      }
+      Self::update_existing_frame_control_hot(actor_id, &hot)
+    }
+
+    /// Mutates the physical primary without introducing a second hot-state owner.
+    pub(crate) fn try_mutate_control_hot<R>(
+      actor_id: ActorId,
+      missing: Error<T>,
+      mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> Result<R, DispatchError>,
+    ) -> Result<R, DispatchError> {
+      let (_, _, mut hot, _) = Self::load_frame_control_authority(actor_id).ok_or(missing)?;
+      let output = mutate(&mut hot)?;
+      Self::update_existing_frame_control_hot(actor_id, &hot)
+        .map_err(|_| Error::<T>::ActorInvariant)?;
+      Ok(output)
+    }
+
+    #[cfg(all(test, not(feature = "runtime-benchmarks")))]
+    pub(crate) fn mutate_control_hot_or<R>(
+      actor_id: ActorId,
+      fallback: R,
+      mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> R,
+    ) -> R {
+      let Some((_, _, mut hot, _)) = Self::load_frame_control_authority(actor_id) else {
+        return fallback;
+      };
+      let output = mutate(&mut hot);
+      match Self::update_existing_frame_control_hot(actor_id, &hot) {
+        Ok(()) => output,
+        Err(_) => fallback,
+      }
+    }
+
+    pub(crate) fn try_mutate_control_hot_with_authority<R>(
+      actor_id: ActorId,
+      missing: Error<T>,
+
+      mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> Result<R, DispatchError>,
+    ) -> Result<R, DispatchError> {
+      Self::try_mutate_control_hot(actor_id, missing, mutate)
+    }
+
+    /// Identity mutation follows its active-primary or dormant-registry owner.
+    #[cfg(test)]
+    pub(crate) fn try_mutate_control_identity<R>(
+      actor_id: ActorId,
+      missing: Error<T>,
+      mutate: impl FnOnce(&mut ActorIdentityOf<T>) -> Result<R, DispatchError>,
+    ) -> Result<R, DispatchError> {
+      if ActorControlLocators::<T>::contains_key(actor_id) {
+        let (_, mut identity, _, _) =
+          Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+        let output = mutate(&mut identity)?;
+        Self::update_existing_frame_control_identity(actor_id, &identity)
+          .map_err(|_| Error::<T>::ActorInvariant)?;
+        return Ok(output);
+      }
+      ensure!(
+        !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
+        Error::<T>::ActorInvariant
+      );
+      ActorIdentities::<T>::try_mutate(actor_id, |maybe| {
+        let identity = maybe.as_mut().ok_or(missing)?;
+        mutate(identity)
+      })
+    }
+
+    /// Admission is carried by the sole active primary.
+    pub(crate) fn control_admission_exists(actor_id: ActorId) -> bool {
+      Self::load_control_admission(actor_id).is_some()
+    }
+
+    pub(crate) fn load_control_admission(
+      actor_id: ActorId,
+    ) -> Option<ActorAdmissionCertificateOf<T>> {
+      Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)
+    }
+
+    /// Replaces admission and current-Step resources in the existing primary. Source-consumed
+    /// transitions must carry admission explicitly into their destination publication.
+    pub(crate) fn replace_control_admission_for_transition(
+      actor_id: ActorId,
+      certificate: &ActorAdmissionCertificateOf<T>,
+      contract: &ActorContractOf<T>,
+    ) -> bool {
+      let Ok((location, mut cell)) = Self::load_primary_control_cell(actor_id) else {
+        return false;
+      };
+      let Some(resources) = Self::derive_step_resource_envelopes(contract).and_then(|resources| {
+        if contract.steps.is_empty() {
+          Some(ActorStepResourceEnvelope {
+            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+            effect: Weight::zero(),
+          })
+        } else {
+          resources.get(cell.cursor as usize).copied()
+        }
+      }) else {
+        return false;
+      };
+      let pointers = [
+        cell.hot.wakeup_pointer,
+        cell
+          .hot
+          .trigger_wakeup_pointer
+          .map(|pointer| WakeupPointer {
+            block: WakeupKey::Tick(pointer.tick),
+            page_id: pointer.page_id,
+            slot: pointer.slot,
+          }),
+      ];
+      let mut reference_updates = Vec::with_capacity(2);
+      for pointer in pointers.into_iter().flatten() {
+        let key = (pointer.block, pointer.page_id);
+        let Some(mut page) = ActorWaitingFrameChunks::<T>::get(key) else {
+          return false;
+        };
+        match page
+          .entries
+          .get_mut(pointer.slot as usize)
+          .and_then(Option::as_mut)
+        {
+          Some(ActorWaitingEntry::Reference(reference))
+            if reference.actor_id == actor_id
+              && reference.admission_identity == cell.admission.admission_identity =>
+          {
+            reference.admission_identity = certificate.admission_identity;
+            reference_updates.push((key, page));
+          }
+          Some(ActorWaitingEntry::Primary(primary))
+            if primary.actor_id == actor_id
+              && primary.admission.admission_identity == cell.admission.admission_identity
+              && location
+                == (ActorControlLocation::Waiting {
+                  key: pointer.block,
+                  page: pointer.page_id,
+                  slot: pointer.slot as u8,
+                }) => {}
+          _ => return false,
+        }
+      }
+      cell.admission = certificate.clone();
+      cell.resources = resources;
+      if Self::store_primary_control_cell(location, cell).is_err() {
+        return false;
+      }
+      for (key, page) in reference_updates {
+        ActorWaitingFrameChunks::<T>::insert(key, page);
+      }
+      true
+    }
+
     pub(crate) fn load_actor_state_with_admission(
       actor_id: ActorId,
     ) -> (
       LoadedActorStateOf<T>,
       Option<ActorAdmissionCertificateOf<T>>,
     ) {
-      let identity = ActorIdentities::<T>::get(actor_id);
-      let hot = ActorHot::<T>::get(actor_id);
-      let admitted_contract = Self::load_admitted_contract_geometry(actor_id);
+      if ActorControlLocators::<T>::contains_key(actor_id) {
+        let state = Self::load_frame_actor_state(actor_id);
+        let admission = match &state {
+          LoadedActorStateOf::Active(_) => Self::load_control_admission(actor_id),
+          _ => None,
+        };
+        return (state, admission);
+      }
+      if ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+        || ActorContractHeads::<T>::contains_key(actor_id)
+        || ActorActivationAuthorities::<T>::contains_key(actor_id)
+        || ActorRunHeads::<T>::contains_key(actor_id)
+        || ActorRunPayloads::<T>::contains_key(actor_id)
+        || ActorFunding::<T>::contains_key(actor_id)
+        || <ActorContractTailChunks<T> as polkadot_sdk::frame_support::storage::StorageDoubleMap<
+          ActorId,
+          u32,
+          ActorStepChunkOf<T>,
+        >>::contains_prefix(actor_id)
+      {
+        return (LoadedActorStateOf::Corrupt, None);
+      }
+      let identity = Self::load_control_identity(actor_id);
+      if identity.is_none() && ActorIdentities::<T>::contains_key(actor_id) {
+        return (LoadedActorStateOf::Corrupt, None);
+      }
       let funding = ActorFunding::<T>::get(actor_id);
       let run_state = ActorRunStateStore::<T>::get(actor_id);
-      match (identity, hot, admitted_contract, funding, run_state) {
-        (None, None, None, None, None) => (LoadedActorStateOf::NotRegistered, None),
-        (Some(identity), None, None, None, None) => (LoadedActorStateOf::Dormant(identity), None),
-        (Some(identity), Some(hot), Some((contract, admission)), Some(funding), run_state)
-          if match (hot.cycle_state, run_state.as_ref()) {
-            (CycleState::Idle, None) => true,
-            (CycleState::Running, Some(run)) => {
-              run.running_is_coherent()
-                && run.has_contract_authority(
-                  admission.semantic_contract_id,
-                  admission.body_commitment,
-                  admission.admission_identity,
-                )
-            }
-            (CycleState::Suspended, Some(run)) => {
-              run.suspension_is_coherent()
-                && run.has_contract_authority(
-                  admission.semantic_contract_id,
-                  admission.body_commitment,
-                  admission.admission_identity,
-                )
-            }
-            _ => false,
-          } && hot
-            .trigger_runtime_state
-            .is_compatible_with(&contract.trigger) =>
-        {
-          (
-            LoadedActorStateOf::Active(ActiveActorState {
-              identity,
-              hot,
-              contract,
-              funding,
-              run_state,
-            }),
-            Some(admission),
-          )
-        }
+      match (identity, funding, run_state) {
+        (None, None, None) => (LoadedActorStateOf::NotRegistered, None),
+        (Some(identity), None, None) => (LoadedActorStateOf::Dormant(identity), None),
         _ => (LoadedActorStateOf::Corrupt, None),
       }
     }
@@ -2127,12 +3039,112 @@ pub mod pallet {
       Self::load_actor_state_with_admission(actor_id).0
     }
 
-    pub fn load_crossing_idle_activation_state(
+    /// Strict active-state loader; malformed primary authority never falls back to dormancy.
+    pub(crate) fn load_frame_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
+      if ActorIdentities::<T>::contains_key(actor_id) {
+        return LoadedActorStateOf::Corrupt;
+      }
+      let Some((location, identity, hot, frame_admission)) =
+        Self::load_frame_control_authority(actor_id)
+      else {
+        return LoadedActorStateOf::Corrupt;
+      };
+      // Full classification validates temporal references; hot head admission does not load them.
+      let pointers = [
+        hot.wakeup_pointer,
+        hot.trigger_wakeup_pointer.map(|pointer| WakeupPointer {
+          block: WakeupKey::Tick(pointer.tick),
+          page_id: pointer.page_id,
+          slot: pointer.slot,
+        }),
+      ];
+      if let ActorControlLocation::Waiting { key, page, slot } = location {
+        if !pointers.contains(&Some(WakeupPointer {
+          block: key,
+          page_id: page,
+          slot: u32::from(slot),
+        })) {
+          return LoadedActorStateOf::Corrupt;
+        }
+      }
+      for pointer in pointers.into_iter().flatten() {
+        let Some(page) = ActorWaitingFrameChunks::<T>::get((pointer.block, pointer.page_id)) else {
+          return LoadedActorStateOf::Corrupt;
+        };
+        let coherent = match page
+          .entries
+          .get(pointer.slot as usize)
+          .and_then(Option::as_ref)
+        {
+          Some(ActorWaitingEntry::Reference(reference)) => {
+            reference.actor_id == actor_id
+              && reference.admission_identity == frame_admission.admission_identity
+          }
+          Some(ActorWaitingEntry::Primary(primary)) => {
+            primary.actor_id == actor_id
+              && primary.admission.admission_identity == frame_admission.admission_identity
+              && matches!(location, ActorControlLocation::Waiting { key, page, slot }
+                if key == pointer.block && page == pointer.page_id && u32::from(slot) == pointer.slot)
+          }
+          None => false,
+        };
+        if !coherent {
+          return LoadedActorStateOf::Corrupt;
+        }
+      }
+      let Some(contract) = Self::load_contract_geometry_with_admission(actor_id, &frame_admission)
+      else {
+        return LoadedActorStateOf::Corrupt;
+      };
+      let Some(funding) = ActorFunding::<T>::get(actor_id) else {
+        return LoadedActorStateOf::Corrupt;
+      };
+      let run_state = ActorRunStateStore::<T>::get(actor_id);
+      let run_is_coherent = match (hot.cycle_state, run_state.as_ref()) {
+        (CycleState::Idle, None) => {
+          !ActorRunHeads::<T>::contains_key(actor_id)
+            && !ActorRunPayloads::<T>::contains_key(actor_id)
+        }
+        (CycleState::Running, Some(run)) => {
+          run.running_is_coherent()
+            && run.has_contract_authority(
+              frame_admission.semantic_contract_id,
+              frame_admission.body_commitment,
+              frame_admission.admission_identity,
+            )
+        }
+        (CycleState::Suspended, Some(run)) => {
+          run.suspension_is_coherent()
+            && run.has_contract_authority(
+              frame_admission.semantic_contract_id,
+              frame_admission.body_commitment,
+              frame_admission.admission_identity,
+            )
+        }
+        _ => false,
+      };
+      if !run_is_coherent
+        || !hot
+          .trigger_runtime_state
+          .is_compatible_with(&contract.trigger)
+      {
+        return LoadedActorStateOf::Corrupt;
+      }
+      LoadedActorStateOf::Active(ActiveActorState {
+        identity,
+        hot,
+        contract,
+        funding,
+        run_state,
+      })
+    }
+
+    pub(crate) fn load_crossing_idle_activation_state_with_authority(
       actor_id: ActorId,
       feed: T::ObservationFeedId,
     ) -> Option<ObservationActivationState<T>> {
-      let identity = ActorIdentities::<T>::get(actor_id)?;
-      let hot = ActorHot::<T>::get(actor_id)?;
+      let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
+      let (identity, hot, certificate) = Self::load_control_authority_with_authority(actor_id)?;
       if hot.cycle_state != CycleState::Idle
         || !matches!(
           hot.trigger_runtime_state,
@@ -2142,8 +3154,6 @@ pub mod pallet {
       {
         return None;
       }
-      let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
-      let certificate = ActorAdmissionCertificates::<T>::get(actor_id)?;
       if authority.feed != feed
         || authority.semantic_contract_id != certificate.semantic_contract_id
         || authority.body_commitment != certificate.body_commitment
@@ -2156,21 +3166,35 @@ pub mod pallet {
         identity,
         hot,
         authority,
+        admission: Some(certificate),
         run_head: None,
         loaded_step: None,
       })
     }
 
-    pub(crate) fn load_observation_activation_state(
+    pub fn load_crossing_idle_activation_state(
       actor_id: ActorId,
       feed: T::ObservationFeedId,
     ) -> Option<ObservationActivationState<T>> {
-      let identity = ActorIdentities::<T>::get(actor_id)?;
-      let hot = ActorHot::<T>::get(actor_id)?;
+      Self::load_crossing_idle_activation_state_with_authority(actor_id, feed)
+    }
+
+    pub(crate) fn load_observation_activation_state_with_authority(
+      actor_id: ActorId,
+      feed: T::ObservationFeedId,
+    ) -> Option<ObservationActivationState<T>> {
       let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
       if authority.feed != feed {
         return None;
       }
+      let (identity, hot, admission) = Self::load_control_authority_with_authority(actor_id)?;
+      if authority.semantic_contract_id != admission.semantic_contract_id
+        || authority.body_commitment != admission.body_commitment
+        || authority.admission_identity != admission.admission_identity
+      {
+        return None;
+      }
+      let admission = Some(admission);
       let head = ActorContractHeads::<T>::get(actor_id)?;
       if !matches!(
         &head.header.trigger,
@@ -2255,24 +3279,46 @@ pub mod pallet {
         identity,
         hot,
         authority,
+        admission,
         run_head,
         loaded_step,
       })
     }
 
-    pub(crate) fn load_actor_service_state(
+    pub(crate) fn load_observation_activation_state(
       actor_id: ActorId,
+      feed: T::ObservationFeedId,
+    ) -> Option<ObservationActivationState<T>> {
+      Self::load_observation_activation_state_with_authority(actor_id, feed)
+    }
+
+    pub(crate) fn load_actor_service_state_with_control(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
     ) -> Option<(
       ActiveActorStateOf<T>,
       ActorAdmissionCertificateOf<T>,
       Option<LoadedActorStepOf<T>>,
     )> {
-      let identity = ActorIdentities::<T>::get(actor_id)?;
-      let hot = ActorHot::<T>::get(actor_id)?;
       let head = ActorContractHeads::<T>::get(actor_id)?;
+      Self::load_actor_service_state_with_head(actor_id, identity, hot, admission, head)
+    }
+
+    pub(crate) fn load_actor_service_state_with_head(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      admission: ActorAdmissionCertificateOf<T>,
+      head: ActorContractHeadOf<T>,
+    ) -> Option<(
+      ActiveActorStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+      Option<LoadedActorStepOf<T>>,
+    )> {
       let funding = ActorFunding::<T>::get(actor_id)?;
       let run_state = ActorRunStateStore::<T>::get(actor_id);
-      let admission = ActorAdmissionCertificates::<T>::get(actor_id)?;
       let cursor = match (hot.cycle_state, run_state.as_ref()) {
         (CycleState::Idle, None) => 0,
         (CycleState::Running, Some(run))
@@ -2360,6 +3406,28 @@ pub mod pallet {
       ))
     }
 
+    pub(crate) fn load_actor_service_state_with_authority(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActiveActorStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+      Option<LoadedActorStepOf<T>>,
+    )> {
+      let (identity, hot, admission) = Self::load_control_authority_with_authority(actor_id)?;
+      Self::load_actor_service_state_with_control(actor_id, identity, hot, admission)
+    }
+
+    pub(crate) fn load_frame_actor_service_state(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActiveActorStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+      Option<LoadedActorStepOf<T>>,
+    )> {
+      Self::load_actor_service_state_with_authority(actor_id)
+    }
+
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
     pub(crate) fn load_current_step_service_state(
       actor_id: ActorId,
     ) -> Option<(
@@ -2367,12 +3435,14 @@ pub mod pallet {
       ActorAdmissionCertificateOf<T>,
       LoadedActorStepOf<T>,
     )> {
-      let (state, admission, loaded_step) = Self::load_actor_service_state(actor_id)?;
+      let (state, admission, loaded_step) = Self::load_frame_actor_service_state(actor_id)?;
       Some((state, admission, loaded_step?))
     }
 
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
     pub(crate) fn active_actor_view(actor_id: ActorId) -> Option<ActiveActorViewOf<T>> {
-      let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+      let LoadedActorStateOf::Active(state) = Self::load_actor_state_for_frame_control(actor_id)
+      else {
         return None;
       };
       Some(Self::derive_active_actor_view(
@@ -2382,10 +3452,19 @@ pub mod pallet {
       ))
     }
 
-    pub(crate) fn active_actor_state_for_control(
+    pub(crate) fn load_actor_state_with_authority(actor_id: ActorId) -> LoadedActorStateOf<T> {
+      Self::load_actor_state(actor_id)
+    }
+
+    /// Lifecycle classification shares one strict canonical state boundary.
+    pub(crate) fn load_actor_state_for_frame_control(actor_id: ActorId) -> LoadedActorStateOf<T> {
+      Self::load_actor_state_with_authority(actor_id)
+    }
+
+    pub(crate) fn active_actor_state_for_frame_control(
       actor_id: ActorId,
     ) -> Result<ActiveActorStateOf<T>, Error<T>> {
-      match Self::load_actor_state(actor_id) {
+      match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Active(state) => Ok(state),
         LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
           Err(Error::<T>::ActorNotFound)
@@ -2395,25 +3474,66 @@ pub mod pallet {
     }
 
     pub fn active_actor_state(actor_id: ActorId) -> Option<ActiveActorStateOf<T>> {
-      match Self::load_actor_state(actor_id) {
+      match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Active(state) => Some(state),
         _ => None,
       }
     }
 
+    /// Resolves identity from its lifecycle owner; malformed active authority never falls back
+    /// to a dormant registry row.
+    pub fn actor_identity(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
+      match Self::load_actor_state_for_frame_control(actor_id) {
+        LoadedActorStateOf::Active(state) => Some(state.identity),
+        LoadedActorStateOf::Dormant(identity) => Some(identity),
+        LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Corrupt => None,
+      }
+    }
+
+    /// Reads the bounded control owner independently of funding and Contract projections.
+    pub fn actor_control_cell(
+      actor_id: ActorId,
+    ) -> Option<(
+      ActorControlLocation<BlockNumberFor<T>>,
+      ActorControlCellOf<T>,
+    )> {
+      Self::load_primary_control_cell(actor_id).ok()
+    }
+
+    pub fn actor_hot(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
+      Self::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+    }
+
     pub fn pending_signal(actor_id: ActorId) -> bool {
-      match Self::load_actor_state(actor_id) {
+      match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Active(state) => state.hot.pending_signal,
         _ => false,
       }
     }
 
-    pub fn wakeup_pages(key: (BlockNumberFor<T>, WakeupPageId)) -> Option<WakeupPageOf<T>> {
-      WakeupPages::<T>::get((WakeupKey::Block(key.0), key.1))
+    pub fn wakeup_pages(key: (BlockNumberFor<T>, WakeupPageId)) -> Option<ActorWaitingPageOf<T>> {
+      ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(key.0), key.1))
     }
 
     pub fn wakeup_buckets(block: BlockNumberFor<T>) -> Option<WakeupBucketState> {
-      WakeupBuckets::<T>::get(WakeupKey::Block(block))
+      Self::wakeup_bucket_state(WakeupKey::Block(block))
+    }
+
+    pub(crate) fn wakeup_bucket_state(
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Option<WakeupBucketState> {
+      let live_entries = ActorWaitingOccupancies::<T>::get(key);
+      if live_entries == 0 {
+        return None;
+      }
+      let tail = ActorWaitingTails::<T>::get(key);
+      Some(WakeupBucketState {
+        head_page: ActorWaitingHeads::<T>::get(key) / 32,
+        tail_page: tail.checked_sub(1)? / 32,
+        next_page_id: tail.div_ceil(32),
+        live_entries,
+        cursor_index: ActorWaitingCursorIndices::<T>::get(key),
+      })
     }
 
     pub fn wakeup_cursor_pages(page_id: WakeupPageId) -> Option<WakeupCursorPageOf<T>> {
@@ -2426,7 +3546,7 @@ pub mod pallet {
 
     pub(crate) fn active_actor_exists(actor_id: ActorId) -> bool {
       matches!(
-        Self::load_actor_state(actor_id),
+        Self::load_actor_state_for_frame_control(actor_id),
         LoadedActorStateOf::Active(_)
       )
     }
@@ -2436,9 +3556,17 @@ pub mod pallet {
       trigger: &TriggerOf<T>,
       intent: TriggerTransitionIntent,
     ) -> Result<TriggerTransitionPlan<T>, DispatchError> {
+      Self::preflight_trigger_transition_with_authority(actor_id, trigger, intent)
+    }
+
+    pub(crate) fn preflight_trigger_transition_with_authority(
+      actor_id: ActorId,
+      trigger: &TriggerOf<T>,
+      intent: TriggerTransitionIntent,
+    ) -> Result<TriggerTransitionPlan<T>, DispatchError> {
       Ok(TriggerTransitionPlan {
         intent,
-        crossing: Self::preflight_crossing_membership(actor_id, trigger)?,
+        crossing: Self::preflight_crossing_membership_with_authority(actor_id, trigger)?,
         observation_feeds: Self::preflight_observation_subscription_replace(actor_id, trigger)?,
       })
     }
@@ -2455,21 +3583,20 @@ pub mod pallet {
         Error::<T>::ActorInvariant
       );
       Self::preflight_remove_observation_subscriptions(actor_id)?;
-      Self::preflight_trigger_transition(actor_id, &TriggerOf::<T>::Manual, intent)
+      Self::preflight_trigger_transition_with_authority(actor_id, &TriggerOf::<T>::Manual, intent)
     }
 
     fn commit_trigger_transition(
       actor_id: ActorId,
       plan: TriggerTransitionPlan<T>,
-      prospective_is_user: Option<bool>,
+      actor_type: ActorType,
+      prospective_admission_identity: Option<[u8; 32]>,
     ) -> Result<Option<(CrossingPhase, ObservationRevision)>, DispatchError> {
       let _intent = plan.intent;
       IndexedTriggerDetectionDisabled::<T>::remove(actor_id);
-      let is_user = prospective_is_user.unwrap_or_else(|| {
-        ActorIdentities::<T>::get(actor_id)
-          .is_some_and(|identity| matches!(identity.actor_class, ActorClass::User { .. }))
-      });
-      let crossing_state = Self::commit_crossing_membership(actor_id, plan.crossing, is_user)?;
+      let admission_identity = prospective_admission_identity.unwrap_or([0; 32]);
+      let crossing_state =
+        Self::commit_crossing_membership(actor_id, plan.crossing, actor_type, admission_identity)?;
       Self::commit_observation_subscription_replace(actor_id, plan.observation_feeds)?;
       Ok(crossing_state)
     }
@@ -2482,18 +3609,33 @@ pub mod pallet {
       intent: TriggerTransitionIntent,
     ) -> DispatchResult {
       let transition = Self::preflight_trigger_transition(actor_id, &contract.trigger, intent)?;
+      let admission =
+        Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
       let crossing_state = Self::commit_trigger_transition(
         actor_id,
         transition,
-        Some(matches!(identity.actor_class, ActorClass::User { .. })),
+        identity.actor_class.actor_type(),
+        Some(admission.admission_identity),
       )?;
       hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
         &contract.trigger,
         hot.trigger_runtime_state.temporal_anchor_tick(),
         crossing_state,
       )?;
-      ActorIdentities::<T>::insert(actor_id, identity);
-      ActorHot::<T>::insert(actor_id, hot);
+      let step_resources = Self::derive_step_resource_envelopes(&contract)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+      let resources = step_resources
+        .first()
+        .copied()
+        .unwrap_or(ActorStepResourceEnvelope {
+          control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+          effect: Weight::zero(),
+        });
+      ensure!(
+        Self::insert_unsignaled_control_authority(actor_id, identity, hot, admission, resources,),
+        Error::<T>::ActorInvariant
+      );
+      ActorIdentities::<T>::remove(actor_id);
       Self::store_actor_contract(actor_id, contract)
     }
 
@@ -2543,13 +3685,24 @@ pub mod pallet {
       }
     }
 
-    pub(crate) fn remove_active_actor(
+    fn remove_active_actor_with_admission(
       actor_id: ActorId,
       trigger_transition: TriggerTransitionPlan<T>,
+      admission: Option<&ActorAdmissionCertificateOf<T>>,
+      actor_type: ActorType,
     ) -> DispatchResult {
-      Self::commit_trigger_transition(actor_id, trigger_transition, None)?;
-      ActorHot::<T>::remove(actor_id);
-      Self::remove_actor_contract(actor_id)?;
+      Self::commit_trigger_transition(actor_id, trigger_transition, actor_type, None)?;
+      if ActorControlLocators::<T>::contains_key(actor_id) {
+        Self::remove_primary_control_cell_inner(actor_id)
+          .map_err(|_| Error::<T>::ActorInvariant)?;
+      }
+      let removed_contract = match admission {
+        Some(admission) => {
+          Self::remove_admitted_contract_geometry_with_admission(actor_id, admission)
+        }
+        None => Self::remove_admitted_contract_geometry(actor_id),
+      };
+      ensure!(removed_contract.is_some(), Error::<T>::ActorInvariant);
       ActorRunStateStore::<T>::remove(actor_id);
       Ok(())
     }
@@ -2583,11 +3736,6 @@ pub mod pallet {
   #[pallet::getter(fn system_sovereign_count)]
   pub type SystemSovereignCount<T> = StorageValue<_, u32, ValueQuery>;
 
-  /// Next never-used ticket for the canonical FIFO.
-  #[pallet::storage]
-  #[pallet::getter(fn next_queue_ticket)]
-  pub type NextQueueTicket<T> = StorageValue<_, QueueTicket, ValueQuery>;
-
   /// Ticket frontier frozen at block initialization before ordinary external causes.
   #[pallet::storage]
   #[pallet::getter(fn prepass_execution_cutoff)]
@@ -2606,41 +3754,55 @@ pub mod pallet {
   pub type FinalizedBlockResourceTelemetry<T: Config> =
     StorageValue<_, FinalizedBlockResourceSnapshot<BlockNumberFor<T>>, OptionQuery>;
 
-  /// Physical head position of the canonical paged FIFO.
+  /// Sole primary control cells for active Actors without current process readiness.
   #[pallet::storage]
-  #[pallet::getter(fn queue_head)]
-  pub type QueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
+  pub type ActorUnsignaledControlCells<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorControlCellOf<T>, OptionQuery>;
 
-  /// Next physical position in the canonical paged FIFO.
+  /// Ticket-addressed C32 chunks for the one canonical Ready FIFO.
   #[pallet::storage]
-  #[pallet::getter(fn queue_tail)]
-  pub type QueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+  pub type ActorReadyFrameChunks<T: Config> =
+    StorageMap<_, Blake2_128Concat, QueuePageId, ActorControlChunkOf<T>, OptionQuery>;
 
-  /// Exact unconsumed physical entries, including tombstones, in the canonical FIFO.
+  /// Deadline-addressed C32 chunks for non-ready active control cells.
   #[pallet::storage]
-  #[pallet::getter(fn queue_occupancy)]
-  pub type QueueOccupancy<T> = StorageValue<_, u32, ValueQuery>;
-
-  /// Bounded physical pages for the canonical FIFO.
-  #[pallet::storage]
-  #[pallet::getter(fn queue_pages)]
-  pub type QueuePages<T: Config> =
-    StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
-
-  /// Fixed-size pages for block and timestamp-tick wakeups.
-  #[pallet::storage]
-  pub type WakeupPages<T: Config> = StorageMap<
+  pub type ActorWaitingFrameChunks<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    (WakeupKey<BlockNumberFor<T>>, WakeupPageId),
-    WakeupPageOf<T>,
+    (WakeupKey<BlockNumberFor<T>>, QueuePageId),
+    ActorWaitingPageOf<T>,
     OptionQuery,
   >;
 
-  /// Small per-deadline ownership and allocation metadata for temporal pages.
+  /// External-boundary locator for the sole primary active control cell.
   #[pallet::storage]
-  pub type WakeupBuckets<T: Config> =
-    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, WakeupBucketState, OptionQuery>;
+  pub type ActorControlLocators<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorControlLocation<BlockNumberFor<T>>, OptionQuery>;
+
+  #[pallet::storage]
+  pub type ActorReadyHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorReadyTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorReadyOccupancy<T> = StorageValue<_, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorWaitingHeads<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, u64, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorWaitingTails<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, u64, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorWaitingOccupancies<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ActorWaitingCursorIndices<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, WakeupCursorIndex, OptionQuery>;
 
   /// Paged binary min-heaps of distinct block and timestamp-tick deadlines.
   #[pallet::storage]
@@ -2874,7 +4036,7 @@ pub mod pallet {
   pub trait GenesisSystemActors<AccountId, Contract> {
     fn system_actors() -> alloc::vec::Vec<(ActorId, AccountId, Mutability, Contract)>;
 
-    fn dormant_system_actors() -> alloc::vec::Vec<(ActorId, AccountId)> {
+    fn dormant_system_actors() -> alloc::vec::Vec<(ActorId, AccountId, Mutability)> {
       alloc::vec::Vec::new()
     }
 
@@ -3054,10 +4216,13 @@ pub mod pallet {
           ActorIdentityCount::<T>::get() <= T::MaxActorIdentities::get(),
           "genesis actor identity capacity exceeded at actor_id={actor_id}"
         );
-        Pallet::<T>::prime_actor_schedule(actor_id)
-          .expect("genesis placement preserves readiness (spec 8.1.4)");
+        Pallet::<T>::prime_initial_actor_schedule(actor_id).unwrap_or_else(|error| {
+          panic!(
+            "genesis placement preserves readiness (spec 8.1.4) at actor_id={actor_id}: {error:?}"
+          )
+        });
       }
-      for (actor_id, owner) in T::GenesisSystemActors::dormant_system_actors() {
+      for (actor_id, owner, mutability) in T::GenesisSystemActors::dormant_system_actors() {
         assert!(
           !Pallet::<T>::active_actor_exists(actor_id)
             && !ActorIdentities::<T>::contains_key(actor_id),
@@ -3080,7 +4245,7 @@ pub mod pallet {
           actor_class: ActorClass::System {
             sovereign_id: actor_id,
           },
-          mutability: Mutability::Mutable,
+          mutability,
           cycle_nonce: 0,
           last_control_mutation_block: Zero::zero(),
         };
@@ -3211,14 +4376,18 @@ pub mod pallet {
       let all_minimum_quanta = Self::materialization_family_minimum(0)
         .saturating_add(Self::materialization_family_minimum(1))
         .saturating_add(Self::materialization_family_minimum(2));
-      let can_reserve_all_minima = all_minimum_quanta.all_lte(remaining);
+      let minimum_reservation = if all_minimum_quanta.all_lte(remaining) {
+        MaterializationMinimumReservation::ReserveAllFamilies
+      } else {
+        MaterializationMinimumReservation::Unavailable
+      };
       for offset in 0u8..3 {
         let family = family_cursor.saturating_add(offset) % 3;
         let family_budget = Self::materialization_family_budget(
           family_cursor,
           offset,
           remaining,
-          can_reserve_all_minima,
+          minimum_reservation,
         );
         let consumed = Self::service_materialization_family(
           family,
@@ -3268,7 +4437,7 @@ pub mod pallet {
         CurrentBlockResourceState::<T>::put(state);
         return Err(Error::<T>::ResourceProtocolFailed);
       }
-      let cutoff = NextQueueTicket::<T>::get();
+      let cutoff = ActorReadyTail::<T>::get();
       let mut cutoff_reservation = state
         .reserve(
           budget.limits(),
@@ -3282,8 +4451,10 @@ pub mod pallet {
         .map_err(|_| Error::<T>::ResourceProtocolFailed)?;
 
       let cleanup_units = u32::from(
-        QueueHead::<T>::get() < QueueTail::<T>::get()
-          && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get()),
+        Self::ready_work_exists()
+          && ActorReadyTail::<T>::get()
+            .checked_sub(ActorReadyHead::<T>::get())
+            .is_some_and(|span| span >= u64::from(T::MaxQueueLength::get())),
       );
       let cleanup_weight = if cleanup_units > 0 {
         T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units)
@@ -3345,17 +4516,23 @@ pub mod pallet {
         .limits()
         .actor_control()
         .checked_sub(&state.usage().actor_control_used())
-        .unwrap_or_else(Weight::zero);
-      let prepass_limit = control_remaining
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let drain_finalization_control = T::WeightInfo::scheduler_on_idle_base()
+        .checked_add(&T::WeightInfo::block_resource_finalize())
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let prepass_control = control_remaining
+        .checked_sub(&drain_finalization_control)
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
+      let prepass_limit = prepass_control
         .checked_add(&budget.limits().actor_base_turn())
-        .unwrap_or_else(Weight::zero);
+        .ok_or(Error::<T>::ResourceProtocolFailed)?;
       let pass = Self::execute_cycle_to_cutoff_with_resources(
         prepass_limit,
         cutoff,
         &mut state,
         budget.limits(),
         BlockResourceDomain::ActorBaseEffect,
-        control_remaining,
+        prepass_control,
       );
       if state.open_external_phase().is_err() {
         state.halt_optional_actor_work();
@@ -3524,8 +4701,11 @@ pub mod pallet {
         wakeup_limit.ref_time() > 0 && wakeup_limit.proof_size() > 0,
         "wakeup worker Weight limit must be non-zero in both dimensions"
       );
-      let wakeup_unit = T::WeightInfo::scheduler_wakeup_cursor_worker_future()
-        .saturating_add(Self::wakeup_cursor_drain_unit_weight_upper(true));
+      let wakeup_unit = T::WeightInfo::scheduler_wakeup_cursor_worker_future().saturating_add(
+        Self::wakeup_cursor_drain_unit_weight_upper(
+          crate::scheduler::WakeupBucketDisposition::Remove,
+        ),
+      );
       assert!(
         wakeup_unit.all_lte(wakeup_limit),
         "positive wakeup cap must admit one complete maximum unit"
@@ -3616,14 +4796,16 @@ pub mod pallet {
       };
       let breaker_active = GlobalCircuitBreaker::<T>::get();
       let after_base = control_available.saturating_sub(fixed_weight);
-      let cleanup_units = u32::from(QueueHead::<T>::get() < QueueTail::<T>::get());
+      let cleanup_units = u32::from(Self::ready_work_exists());
       let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
       let saturated_cleanup_weight = if legacy_unmetered_materialization
         && cleanup_units > 0
-        && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get())
+        && ActorReadyTail::<T>::get()
+          .checked_sub(ActorReadyHead::<T>::get())
+          .is_some_and(|span| span >= u64::from(T::MaxQueueLength::get()))
         && queue_cleanup_weight.all_lte(after_base)
       {
-        let cutoff = NextQueueTicket::<T>::get();
+        let cutoff = ActorReadyTail::<T>::get();
         // The probe reads queue topology and the head page before it can know whether anything is
         // drainable, so a scan that finds nothing still consumed that work. Charge the attempt
         // unconditionally rather than letting the empty outcome bill zero every block.
@@ -3654,7 +4836,7 @@ pub mod pallet {
       let execution_cutoff = PrepassExecutionCutoff::<T>::get()
         .filter(|(cutoff_block, _)| *cutoff_block == now)
         .map(|(_, cutoff)| cutoff)
-        .unwrap_or_else(NextQueueTicket::<T>::get);
+        .unwrap_or_else(ActorReadyTail::<T>::get);
       let pass = match CurrentBlockResourceState::<T>::get() {
         Some(mut state)
           if state.ensure_block(now).is_ok()
@@ -4094,7 +5276,7 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let state = Self::active_actor_state_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
@@ -4112,28 +5294,47 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
-        ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
-          let inst = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
-          ensure!(
-            snapshot.mutability == Mutability::Mutable,
-            Error::<T>::ImmutableActor
-          );
-          inst.lifecycle = ActiveLifecycle::Paused;
-          inst.queue_ticket = None;
-          Self::record_control_mutation(actor_id, now)?;
-          Self::deposit_event(Event::ActorPaused { actor_id });
-          Ok(())
-        })?;
-        Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
+        Self::try_mutate_control_hot_with_authority(
+          actor_id,
+          Error::<T>::ActorNotFound,
+          |inst| -> DispatchResult {
+            ensure!(
+              snapshot.mutability == Mutability::Mutable,
+              Error::<T>::ImmutableActor
+            );
+            inst.lifecycle = ActiveLifecycle::Paused;
+            inst.queue_ticket = None;
+            Self::record_control_mutation_with_authority(actor_id, now)?;
+            Self::deposit_event(Event::ActorPaused { actor_id });
+            Ok(())
+          },
+        )?;
+        Self::demote_ready_frame_to_unsignaled(actor_id).map_err(Self::placement_error)?;
+        Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)
       })
     }
 
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let state = Self::active_actor_state_for_control(actor_id)?;
-      let continuation = state.run_state;
-      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+      ensure!(
+        !ActorIdentities::<T>::contains_key(actor_id),
+        Error::<T>::ActorInvariant
+      );
+      let (state, admission, loaded_step) =
+        Self::load_frame_actor_service_state(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+      ensure!(
+        state.hot.cycle_state != CycleState::Idle
+          || (!ActorRunHeads::<T>::contains_key(actor_id)
+            && !ActorRunPayloads::<T>::contains_key(actor_id)),
+        Error::<T>::ActorInvariant
+      );
+      let continuation = state.run_state.clone();
+      let snapshot = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
@@ -4149,25 +5350,26 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
-        ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
-          let inst = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
-          ensure!(
-            snapshot.mutability == Mutability::Mutable,
-            Error::<T>::ImmutableActor
-          );
-          inst.lifecycle = ActiveLifecycle::Active;
-          Self::record_control_mutation(actor_id, now)?;
-          Self::deposit_event(Event::ActorResumed { actor_id });
-          Ok(())
-        })?;
-        Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
+        Self::record_control_mutation_with_authority(actor_id, now)?;
+        let (_, identity, _, _) =
+          Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+        let mut resumed = state.clone();
+        resumed.identity = identity;
+        resumed.hot.lifecycle = ActiveLifecycle::Active;
+        resumed.hot.queue_ticket = None;
+        Self::detach_primary_for_successor(actor_id, &resumed.hot)
+          .map_err(Self::placement_error)?;
+        Self::publish_resumed_frame(actor_id, resumed, admission.clone(), loaded_step.clone())
+          .map_err(Self::placement_error)?;
+        Self::deposit_event(Event::ActorResumed { actor_id });
+        Ok(())
       })
     }
 
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResultWithPostInfo {
-      let state = Self::active_actor_state_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let continuation = state.run_state;
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
@@ -4189,7 +5391,7 @@ pub mod pallet {
       );
       let mut trigger_processed = false;
       Self::with_control_transaction(|| {
-        let Some(outcome) = Self::commit_trigger_occurrence(
+        let Some(outcome) = Self::commit_frame_trigger_occurrence(
           actor_id,
           actor_type,
           &snapshot.sovereign_account,
@@ -4218,7 +5420,7 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      match Self::load_actor_state(actor_id) {
+      match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Active(state) => {
           let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
           Self::ensure_control_origin(origin, &instance)?;
@@ -4230,6 +5432,10 @@ pub mod pallet {
         }
         LoadedActorStateOf::Dormant(identity) => {
           Self::ensure_identity_control_origin(origin, &identity)?;
+          ensure!(
+            identity.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableActor
+          );
           Self::close_inactive_actor(actor_id, &identity, CloseReason::OwnerInitiated)
         }
         LoadedActorStateOf::NotRegistered => Err(Error::<T>::ActorNotFound.into()),
@@ -4250,12 +5456,11 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_future_schedule_targets(&contract)?;
-      let state = Self::active_actor_state_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let continuation = state.run_state;
+      let current_contract = state.contract.clone();
       let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      let current_contract =
-        Self::load_actor_contract(actor_id).ok_or(Error::<T>::ActorInvariant)?;
       if current_contract == contract {
         return Ok(());
       }
@@ -4298,6 +5503,8 @@ pub mod pallet {
       if let Some(target_nonce) = contract.auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(snapshot.cycle_nonce, target_nonce)?;
       }
+      let replacement_admission =
+        Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
       let new_tracked = Self::derive_funding_tracked_assets(&contract.steps)?;
       let mut funding_state = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
       funding_state.funding_tracked_assets = new_tracked.clone();
@@ -4312,7 +5519,7 @@ pub mod pallet {
         Self::temporal_anchor_tick(&contract.trigger).map_err(Self::placement_error)?;
       let trigger_transition = schedule_changed
         .then(|| {
-          Self::preflight_trigger_transition(
+          Self::preflight_trigger_transition_with_authority(
             actor_id,
             &contract.trigger,
             TriggerTransitionIntent::ReplaceActive,
@@ -4326,39 +5533,49 @@ pub mod pallet {
           false
         };
         let crossing_state = if let Some(transition) = trigger_transition {
-          Self::commit_trigger_transition(actor_id, transition, None)?
+          Self::commit_trigger_transition(
+            actor_id,
+            transition,
+            snapshot.actor_class.actor_type(),
+            Some(replacement_admission.admission_identity),
+          )?
         } else {
           None
         };
-        if schedule_changed
-          && ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.trigger_wakeup_pointer.is_some())
-        {
-          Self::trigger_wakeup_substrate_invalidate_inner(actor_id)
-            .map_err(Self::placement_error)?;
+        if schedule_changed {
+          let (state, admission, _) =
+            Self::load_frame_actor_service_state(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+          if state.hot.trigger_wakeup_pointer.is_some() {
+            Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state, &admission)
+              .map_err(Self::placement_error)?;
+          }
         }
-        ActorHot::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
-          let hot = maybe.as_mut().ok_or(Error::<T>::ActorNotFound)?;
-          if schedule_changed {
-            hot.schedule_anchor = schedule_anchor;
-            hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
-              &contract.trigger,
-              temporal_anchor_tick,
-              crossing_state,
-            )?;
-            hot.terminal_at = contract
-              .window
-              .map(|window| Self::window_terminal_at(&window));
-          }
-          if steps_changed {
-            hot.unsuccessful_attempt_streak = crate::execution::transition_failure_streak(
-              hot.unsuccessful_attempt_streak,
-              crate::execution::FailureStreakTransition::Reset,
-            )
-            .ok_or(Error::<T>::ActorInvariant)?;
-          }
-          Self::record_control_mutation(actor_id, now)?;
-          Ok(())
-        })?;
+        Self::try_mutate_control_hot_with_authority(
+          actor_id,
+          Error::<T>::ActorNotFound,
+          |hot| -> DispatchResult {
+            if schedule_changed {
+              hot.schedule_anchor = schedule_anchor;
+              hot.trigger_runtime_state = Self::installed_trigger_runtime_state(
+                &contract.trigger,
+                temporal_anchor_tick,
+                crossing_state,
+              )?;
+              hot.terminal_at = contract
+                .window
+                .map(|window| Self::window_terminal_at(&window));
+            }
+            if steps_changed {
+              hot.unsuccessful_attempt_streak = crate::execution::transition_failure_streak(
+                hot.unsuccessful_attempt_streak,
+                crate::execution::FailureStreakTransition::Reset,
+              )
+              .ok_or(Error::<T>::ActorInvariant)?;
+            }
+            Self::record_control_mutation_with_authority(actor_id, now)?;
+            Ok(())
+          },
+        )?;
         // Crossing compilation binds the newly installed runtime phase to the replacement
         // admission identity, so publish hot schedule authority before storing its Contract.
         Self::store_actor_contract(actor_id, contract.clone())?;
@@ -4367,9 +5584,9 @@ pub mod pallet {
         #[cfg(test)]
         crate::mock::control_atomicity_checkpoint(actor_id)?;
         if schedule_changed || run_cancelled {
-          Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)?;
+          Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)?;
         }
-        Self::reconcile_actor_state_hold(actor_id)?;
+        Self::reconcile_actor_state_hold_with_authority(actor_id)?;
         Ok(())
       })
     }
@@ -4437,7 +5654,7 @@ pub mod pallet {
         let mut missing = 0u32;
         let requested = actor_ids.len() as u32;
         for actor_id in actor_ids {
-          let state = match Self::load_actor_state(actor_id) {
+          let state = match Self::load_actor_state_for_frame_control(actor_id) {
             LoadedActorStateOf::Active(state) => state,
             LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
               missing = missing.saturating_add(1);
@@ -4474,7 +5691,7 @@ pub mod pallet {
       actor_id: ActorId,
       contract: ActorContractOf<T>,
     ) -> DispatchResult {
-      let identity = match Self::load_actor_state(actor_id) {
+      let identity = match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Dormant(identity) => identity,
         LoadedActorStateOf::Active(_) => return Err(Error::<T>::ActorAlreadyActive.into()),
         LoadedActorStateOf::NotRegistered => return Err(Error::<T>::ActorNotFound.into()),
@@ -4487,7 +5704,7 @@ pub mod pallet {
     #[pallet::call_index(18)]
     #[pallet::weight(T::WeightInfo::deactivate_actor())]
     pub fn deactivate_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let instance = match Self::load_actor_state(actor_id) {
+      let instance = match Self::load_actor_state_for_frame_control(actor_id) {
         LoadedActorStateOf::Active(state) => {
           Self::derive_active_actor_view(state.identity, state.hot, state.contract)
         }
@@ -4550,7 +5767,7 @@ pub mod pallet {
     #[pallet::call_index(19)]
     #[pallet::weight(T::WeightInfo::run_cancel())]
     pub fn cancel_run(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
-      let state = Self::active_actor_state_for_control(actor_id)?;
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let run_state = state.run_state;
       let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
       Self::ensure_control_origin(origin, &instance)?;
@@ -4575,8 +5792,8 @@ pub mod pallet {
           Self::cancel_run_internal(actor_id, CancellationReason::Explicit, None)?,
           Error::<T>::ActorRunNotFound
         );
-        Self::record_control_mutation(actor_id, now)?;
-        Self::prime_actor_schedule(actor_id).map_err(Self::placement_error)
+        Self::record_control_mutation_with_authority(actor_id, now)?;
+        Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)
       })
     }
 
@@ -4661,49 +5878,6 @@ pub mod pallet {
       Self::close_cleanup_weight_upper()
     }
 
-    pub(crate) fn compute_cycle_weight_upper_from(
-      actor_type: ActorType,
-      contract_steps: &ContractSteps<T>,
-      start_cursor: usize,
-    ) -> Weight {
-      let mut upper = T::WeightInfo::step_orchestration(contract_steps.len() as u32);
-      for step_index in start_cursor..contract_steps.len() {
-        let step = &contract_steps[step_index];
-        let predicate_evaluation = Self::predicate_evaluation_weight(
-          step
-            .precondition
-            .as_ref()
-            .map_or(0, Precondition::evaluation_units),
-        );
-        upper = upper
-          .saturating_add(predicate_evaluation)
-          .saturating_add(Self::weight_upper_bound(&step.task));
-        if actor_type == ActorType::User {
-          upper = upper.saturating_add(T::WeightInfo::fee_collection());
-        }
-      }
-      if (start_cursor..contract_steps.len()).any(|step_index| {
-        contract_steps[step_index]
-          .on_error
-          .retry_max_attempts()
-          .is_some()
-      }) {
-        upper = upper.saturating_add(
-          T::WeightInfo::run_suspend()
-            .max(T::WeightInfo::run_complete())
-            .max(T::WeightInfo::run_cancel()),
-        );
-      }
-      upper
-    }
-
-    pub fn compute_cycle_weight_upper(
-      actor_type: ActorType,
-      contract_steps: &ContractSteps<T>,
-    ) -> Weight {
-      Self::compute_cycle_weight_upper_from(actor_type, contract_steps, 0)
-    }
-
     pub fn attempt_fee_envelope(
       actor_type: ActorType,
       contract_steps: &ContractSteps<T>,
@@ -4731,33 +5905,6 @@ pub mod pallet {
         }
         FeeEnvelopeError::Overflow => Error::<T>::AdmissionBoundOverflow,
       })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn attempt_weight_upper_bound(
-      instance: &ActiveActorViewOf<T>,
-      start_cursor: usize,
-    ) -> Weight {
-      let mut upper = Self::compute_cycle_weight_upper_from(
-        instance.actor_class.actor_type(),
-        &instance.steps,
-        start_cursor,
-      );
-      if instance.cycle_state == CycleState::Suspended {
-        let suffix_steps = instance.steps.len().saturating_sub(start_cursor) as u32;
-        // Retry and terminal transition touch the same bounded Actor run value. The transition
-        // envelope already carries its maximum proof, so only incremental RefTime composes here.
-        let retry = T::WeightInfo::run_retry();
-        let suffix_admission = T::WeightInfo::run_suffix_admission(suffix_steps);
-        upper = upper
-          .saturating_add(Weight::from_parts(retry.ref_time(), 0))
-          .saturating_add(Weight::from_parts(suffix_admission.ref_time(), 0));
-      }
-      upper
-    }
-
-    pub(crate) fn close_cycle_weight_upper_bound(_instance: &ActiveActorViewOf<T>) -> Weight {
-      Self::close_cleanup_weight_upper()
     }
 
     /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
@@ -4838,9 +5985,9 @@ pub mod pallet {
       family_cursor: u8,
       offset: u8,
       remaining: Weight,
-      reserve_all_minima: bool,
+      minimum_reservation: MaterializationMinimumReservation,
     ) -> Weight {
-      if !reserve_all_minima {
+      if !minimum_reservation.reserves_all_families() {
         return remaining;
       }
       let reserved_for_later = ((offset + 1)..3).fold(Weight::zero(), |reserved, later| {
@@ -4873,7 +6020,9 @@ pub mod pallet {
       match family {
         0 => T::WeightInfo::scheduler_wakeup_cursor_worker_future()
           .saturating_mul(2)
-          .saturating_add(Self::wakeup_cursor_drain_unit_weight_upper(true)),
+          .saturating_add(Self::wakeup_cursor_drain_unit_weight_upper(
+            crate::scheduler::WakeupBucketDisposition::Remove,
+          )),
         1 => {
           let branch = T::WeightInfo::crossing_transition_unit()
             .max(T::WeightInfo::crossing_leaf_unit())
@@ -4968,7 +6117,7 @@ pub mod pallet {
       true
     }
 
-    fn owner_slot_is_set(bitmap: &OwnerSlotBitmap, owner_slot: u8) -> bool {
+    pub(crate) fn owner_slot_is_set(bitmap: &OwnerSlotBitmap, owner_slot: u8) -> bool {
       let byte = (owner_slot / 8) as usize;
       let bit = owner_slot % 8;
       bitmap[byte] & (1u8 << bit) != 0
@@ -5067,13 +6216,20 @@ pub mod pallet {
       Ok(())
     }
 
-    fn derive_actor_state_hold(
+    fn derive_actor_state_hold_with_authority(
       actor_id: ActorId,
       identity: &ActorIdentityOf<T>,
+      authority: Option<(&ActorHotStateOf<T>, &ActorAdmissionCertificateOf<T>)>,
     ) -> Result<ActorStateHoldBreakdownOf<T>, Error<T>> {
       let mut identity_bytes = 0usize;
       Self::add_state_hold_encoded_size(&mut identity_bytes, &actor_id)?;
-      Self::add_state_hold_encoded_size(&mut identity_bytes, identity)?;
+      if authority.is_some() {
+        let control_identity = Self::control_identity_from_scalar(identity.clone())
+          .ok_or(Error::<T>::StateHoldInvariant)?;
+        Self::add_state_hold_encoded_size(&mut identity_bytes, &control_identity)?;
+      } else {
+        Self::add_state_hold_encoded_size(&mut identity_bytes, identity)?;
+      }
       Self::add_state_hold_encoded_size(&mut identity_bytes, &identity.sovereign_account)?;
 
       let mut breakdown = ActorStateHoldBreakdown {
@@ -5091,10 +6247,10 @@ pub mod pallet {
         });
       }
 
-      let Some(hot) = ActorHot::<T>::get(actor_id) else {
+      let Some((hot, admission)) = authority else {
         ensure!(
           !ActorContractHeads::<T>::contains_key(actor_id)
-            && !ActorAdmissionCertificates::<T>::contains_key(actor_id)
+            && !Self::control_admission_exists(actor_id)
             && !ActorFunding::<T>::contains_key(actor_id)
             && !ActorRunStateStore::<T>::contains_key(actor_id),
           Error::<T>::StateHoldInvariant
@@ -5102,14 +6258,10 @@ pub mod pallet {
         return Ok(breakdown);
       };
       let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
-      let admission =
-        ActorAdmissionCertificates::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
       let funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
 
-      let mut head_bytes = <ActorHotStateOf<T> as codec::MaxEncodedLen>::max_encoded_len();
-      Self::add_state_hold_encoded_size(&mut head_bytes, &head)?;
-      Self::add_state_hold_encoded_size(&mut head_bytes, &admission)?;
-      breakdown.contract_head = Self::state_hold_component(head_bytes)?;
+      breakdown.contract_head =
+        Self::state_hold_component(Self::control_state_hold_head_bytes(&head, admission)?)?;
 
       let chunk_count = head
         .header
@@ -5124,33 +6276,63 @@ pub mod pallet {
       }
       breakdown.contract_body = Self::state_hold_component(body_bytes)?;
 
-      let mut detector_bytes = 0usize;
-      let activation = ActorActivationAuthorities::<T>::get(actor_id);
-      if let Some(activation) = &activation {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, activation)?;
-      }
-      if let Some(feeds) = ActorObservationFeeds::<T>::get(actor_id) {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, &feeds)?;
-      }
-      if let Some(slot) = ObservationSubscriptionSlot::<T>::get(actor_id) {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, &slot)?;
-      }
-      let crossing_locator = CrossingMemberships::<T>::get(actor_id);
-      if let Some(locator) = &crossing_locator {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, locator)?;
-      }
-      if activation.is_some() || crossing_locator.is_some() {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, &())?;
-      }
-      if let Some(pointer) = hot.trigger_wakeup_pointer {
-        Self::add_state_hold_encoded_size(&mut detector_bytes, &pointer)?;
-      }
-      breakdown.detector = Self::state_hold_component(detector_bytes)?;
+      breakdown.detector = Self::state_hold_component(Self::state_hold_detector_bytes(
+        actor_id,
+        hot.trigger_wakeup_pointer,
+      )?)?;
       breakdown.funding = Self::state_hold_component(codec::Encode::encoded_size(&funding))?;
       breakdown.run = Self::state_hold_component(
         <ActorRunStateOf<T> as codec::MaxEncodedLen>::max_encoded_len(),
       )?;
       Ok(breakdown)
+    }
+
+    fn control_state_hold_head_bytes(
+      head: &ActorContractHeadOf<T>,
+      admission: &ActorAdmissionCertificateOf<T>,
+    ) -> Result<usize, Error<T>> {
+      let mut bytes =
+        <ActorControlHotState<BlockNumberFor<T>> as codec::MaxEncodedLen>::max_encoded_len();
+      for component in [
+        <u32 as codec::MaxEncodedLen>::max_encoded_len(),
+        <Option<BlockNumberFor<T>> as codec::MaxEncodedLen>::max_encoded_len(),
+        <ActorStepResourceEnvelope as codec::MaxEncodedLen>::max_encoded_len(),
+      ] {
+        bytes = bytes
+          .checked_add(component)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+      }
+      Self::add_state_hold_encoded_size(&mut bytes, admission)?;
+      Self::add_state_hold_encoded_size(&mut bytes, head)?;
+      Ok(bytes)
+    }
+
+    fn state_hold_detector_bytes(
+      actor_id: ActorId,
+      trigger_wakeup_pointer: Option<TriggerWakeupPointer>,
+    ) -> Result<usize, Error<T>> {
+      let mut bytes = 0usize;
+      let activation = ActorActivationAuthorities::<T>::get(actor_id);
+      if let Some(activation) = &activation {
+        Self::add_state_hold_encoded_size(&mut bytes, activation)?;
+      }
+      if let Some(feeds) = ActorObservationFeeds::<T>::get(actor_id) {
+        Self::add_state_hold_encoded_size(&mut bytes, &feeds)?;
+      }
+      if let Some(slot) = ObservationSubscriptionSlot::<T>::get(actor_id) {
+        Self::add_state_hold_encoded_size(&mut bytes, &slot)?;
+      }
+      let crossing_locator = CrossingMemberships::<T>::get(actor_id);
+      if let Some(locator) = &crossing_locator {
+        Self::add_state_hold_encoded_size(&mut bytes, locator)?;
+      }
+      if activation.is_some() || crossing_locator.is_some() {
+        Self::add_state_hold_encoded_size(&mut bytes, &())?;
+      }
+      if let Some(pointer) = trigger_wakeup_pointer {
+        Self::add_state_hold_encoded_size(&mut bytes, &pointer)?;
+      }
+      Ok(bytes)
     }
 
     pub(crate) fn ensure_funding_state_hold_capacity(
@@ -5179,14 +6361,35 @@ pub mod pallet {
       Ok(())
     }
 
-    pub(crate) fn reconcile_actor_state_hold(actor_id: ActorId) -> DispatchResult {
+    pub(crate) fn reconcile_actor_state_hold_with_authority(actor_id: ActorId) -> DispatchResult {
       let existing = ActorStateHolds::<T>::get(actor_id);
-      let target = match ActorIdentities::<T>::get(actor_id) {
-        Some(identity) if identity.actor_class.actor_type() == ActorType::User => Some((
-          identity.owner.clone(),
-          Self::derive_actor_state_hold(actor_id, &identity)?,
-        )),
-        Some(_) | None => None,
+      let target = if ActorControlLocators::<T>::contains_key(actor_id) {
+        let (_, identity, hot, admission) =
+          Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+        if identity.actor_class.actor_type() == ActorType::User {
+          Some((
+            identity.owner.clone(),
+            Self::derive_actor_state_hold_with_authority(
+              actor_id,
+              &identity,
+              Some((&hot, &admission)),
+            )?,
+          ))
+        } else {
+          None
+        }
+      } else {
+        ensure!(
+          !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
+          Error::<T>::StateHoldInvariant
+        );
+        match Self::load_control_identity(actor_id) {
+          Some(identity) if identity.actor_class.actor_type() == ActorType::User => Some((
+            identity.owner.clone(),
+            Self::derive_actor_state_hold_with_authority(actor_id, &identity, None)?,
+          )),
+          Some(_) | None => None,
+        }
       };
       let (owner, target_breakdown) = match (existing.as_ref(), target) {
         (Some(existing), Some((owner, breakdown))) => {
@@ -5248,6 +6451,88 @@ pub mod pallet {
       Ok(())
     }
 
+    #[cfg(all(test, feature = "runtime-benchmarks"))]
+    pub(crate) fn control_reconcile_single_step_state_hold(
+      actor_id: ActorId,
+      cell: &ActorControlCellOf<T>,
+      head: &ActorContractHeadOf<T>,
+      funding: &ActorFundingStateOf<T>,
+    ) -> DispatchResult {
+      if cell.identity.actor_class.actor_type() == ActorType::System {
+        return Ok(());
+      }
+      ensure!(cell.actor_id == actor_id, Error::<T>::StateHoldInvariant);
+      let sovereign_account = match cell.identity.actor_class {
+        ActorClass::User { owner_slot } => {
+          Self::sovereign_account_id(&cell.identity.owner, owner_slot)
+        }
+        ActorClass::System { sovereign_id } => Self::sovereign_account_id_system(sovereign_id),
+      };
+      let mut identity_bytes = 0usize;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, &actor_id)?;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, &cell.identity)?;
+      Self::add_state_hold_encoded_size(&mut identity_bytes, &sovereign_account)?;
+      let head_bytes = Self::control_state_hold_head_bytes(head, &cell.admission)?;
+      let chunk_count = head
+        .header
+        .step_count
+        .saturating_sub(1)
+        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
+      let mut body_bytes = 0usize;
+      for chunk_index in 0..chunk_count {
+        let chunk = ActorContractTailChunks::<T>::get(actor_id, chunk_index)
+          .ok_or(Error::<T>::StateHoldInvariant)?;
+        Self::add_state_hold_encoded_size(&mut body_bytes, &chunk)?;
+      }
+      let target_breakdown = ActorStateHoldBreakdown {
+        identity: Self::state_hold_component(identity_bytes)?,
+        contract_head: Self::state_hold_component(head_bytes)?,
+        contract_body: Self::state_hold_component(body_bytes)?,
+        detector: Self::state_hold_component(Self::state_hold_detector_bytes(
+          actor_id,
+          cell.hot.trigger_wakeup_pointer,
+        )?)?,
+        funding: Self::state_hold_component(codec::Encode::encoded_size(funding))?,
+        run: Self::state_hold_component(
+          <ActorRunStateOf<T> as codec::MaxEncodedLen>::max_encoded_len(),
+        )?,
+      };
+      let existing = ActorStateHolds::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
+      ensure!(
+        existing.owner == cell.identity.owner,
+        Error::<T>::StateHoldInvariant
+      );
+      if existing.breakdown == target_breakdown {
+        return Ok(());
+      }
+      let old_total = Self::state_hold_total(&existing.breakdown)?;
+      let target_total = Self::state_hold_total(&target_breakdown)?;
+      let reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
+      if target_total > old_total {
+        let increase = target_total
+          .checked_sub(&old_total)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+        T::StateHoldCurrency::hold(&reason, &existing.owner, increase)
+          .map_err(|_| Error::<T>::StateHoldUnavailable)?;
+      } else if old_total > target_total {
+        let decrease = old_total
+          .checked_sub(&target_total)
+          .ok_or(Error::<T>::StateHoldOverflow)?;
+        let released =
+          T::StateHoldCurrency::release(&reason, &existing.owner, decrease, Precision::Exact)
+            .map_err(|_| Error::<T>::StateHoldInvariant)?;
+        ensure!(released == decrease, Error::<T>::StateHoldInvariant);
+      }
+      ActorStateHolds::<T>::insert(
+        actor_id,
+        ActorStateHoldRecord {
+          owner: existing.owner,
+          breakdown: target_breakdown,
+        },
+      );
+      Ok(())
+    }
+
     fn charge_creation_fee(owner: &T::AccountId) -> DispatchResult {
       let creation_fee = T::ActorCreationFee::get();
       if creation_fee.is_zero() {
@@ -5300,18 +6585,26 @@ pub mod pallet {
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 
-    pub(crate) fn commit_trigger_occurrence(
+    fn commit_trigger_occurrence_with_authority(
       actor_id: ActorId,
       actor_type: ActorType,
       sovereign_account: &T::AccountId,
       breakdown: TriggerFeeBreakdown<T::Balance>,
-      _cause_provenance: TriggerCauseProvenance,
+      state: ActiveActorStateOf<T>,
     ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
-      if ActorHot::<T>::get(actor_id).is_some_and(|hot| hot.pending_signal) {
+      if state.hot.pending_signal {
         return Ok(None);
       }
       Self::ensure_trigger_occurrence_capacity(actor_type, sovereign_account, breakdown)?;
-      let outcome = Self::request_activation(actor_id).map_err(Self::activation_failure_error)?;
+      ensure!(
+        state.identity.actor_class.actor_type() == actor_type
+          && state.identity.sovereign_account == *sovereign_account,
+        Error::<T>::ActorInvariant
+      );
+
+      let plan = Self::preflight_activation_loaded(actor_id, state)
+        .map_err(Self::activation_failure_error)?;
+      let outcome = Self::commit_activation_plan(plan).map_err(Self::activation_failure_error)?;
       if matches!(outcome, crate::scheduler::ActivationOutcome::Closed) {
         return Ok(None);
       }
@@ -5324,7 +6617,24 @@ pub mod pallet {
       Ok(Some(outcome))
     }
 
-    pub(crate) fn try_commit_automatic_trigger_occurrence(
+    pub(crate) fn commit_frame_trigger_occurrence(
+      actor_id: ActorId,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+      _cause_provenance: TriggerCauseProvenance,
+    ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
+      Self::commit_trigger_occurrence_with_authority(
+        actor_id,
+        actor_type,
+        sovereign_account,
+        breakdown,
+        state,
+      )
+    }
+
+    pub(crate) fn try_commit_frame_automatic_trigger_occurrence(
       actor_id: ActorId,
       actor_type: ActorType,
       sovereign_account: &T::AccountId,
@@ -5332,7 +6642,7 @@ pub mod pallet {
       cause_provenance: TriggerCauseProvenance,
     ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        match Self::commit_trigger_occurrence(
+        match Self::commit_frame_trigger_occurrence(
           actor_id,
           actor_type,
           sovereign_account,
@@ -5408,7 +6718,23 @@ pub mod pallet {
       if actor_type == ActorType::System {
         return Ok(true);
       }
-      let breakdown = Self::pipeline_fee_for_actor(actor_id, actor_type)?;
+      let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+      Self::pipeline_capacity_sufficient_with_envelope(
+        actor_type,
+        sovereign_account,
+        head.header.pipeline_machine_envelope,
+      )
+    }
+
+    pub(crate) fn pipeline_capacity_sufficient_with_envelope(
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      envelope: PipelineMachineEnvelope<T::Balance>,
+    ) -> Result<bool, Error<T>> {
+      if actor_type == ActorType::System {
+        return Ok(true);
+      }
+      let breakdown = Self::pipeline_fee_breakdown(actor_type, envelope)?;
       let required = T::MinUserBalance::get()
         .checked_add(&breakdown.total_fee)
         .ok_or(Error::<T>::AdmissionBoundOverflow)?;
@@ -5609,7 +6935,10 @@ pub mod pallet {
       );
       let actor_id = NextActorId::<T>::get();
       ensure!(
-        !Self::active_actor_exists(actor_id) && !ActorIdentities::<T>::contains_key(actor_id),
+        matches!(
+          Self::load_actor_state(actor_id),
+          LoadedActorStateOf::NotRegistered
+        ),
         Error::<T>::ActorIdOccupied
       );
       let next_id = actor_id.checked_add(1).ok_or(Error::<T>::ActorIdOverflow)?;
@@ -5706,7 +7035,7 @@ pub mod pallet {
         if actor_type == ActorType::User || requested_system_sovereign_id.is_none() {
           frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         }
-        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+        if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         Self::deposit_event(Event::ActorCreated {
@@ -5829,7 +7158,10 @@ pub mod pallet {
       let funding_tracked_assets = Self::derive_funding_tracked_assets(&contract.steps)?;
       let actor_id = NextActorId::<T>::get();
       ensure!(
-        !Self::active_actor_exists(actor_id) && !ActorIdentities::<T>::contains_key(actor_id),
+        matches!(
+          Self::load_actor_state(actor_id),
+          LoadedActorStateOf::NotRegistered
+        ),
         Error::<T>::ActorIdOccupied
       );
       if actor_type == ActorType::System {
@@ -6002,10 +7334,12 @@ pub mod pallet {
         if let Err(error) = crate::mock::control_atomicity_checkpoint(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::prime_actor_schedule(actor_id).map_err(Self::placement_error) {
+        if let Err(error) =
+          Self::prime_initial_actor_schedule(actor_id).map_err(Self::placement_error)
+        {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+        if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
@@ -6089,7 +7423,7 @@ pub mod pallet {
         last_cycle_block: None,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        if !ActorIdentities::<T>::contains_key(actor_id) || Self::active_actor_exists(actor_id) {
+        if !Self::control_identity_exists(actor_id) || Self::active_actor_exists(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             Error::<T>::ActorAlreadyActive.into(),
           ));
@@ -6123,10 +7457,12 @@ pub mod pallet {
         if let Err(error) = crate::mock::control_atomicity_checkpoint(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::prime_actor_schedule(actor_id).map_err(Self::placement_error) {
+        if let Err(error) =
+          Self::prime_initial_actor_schedule(actor_id).map_err(Self::placement_error)
+        {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+        if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
@@ -6138,7 +7474,7 @@ pub mod pallet {
       let trigger_transition =
         Self::preflight_trigger_cleanup(actor_id, TriggerTransitionIntent::Deactivate)?;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        if let Err(error) = Self::record_control_mutation(actor_id, now) {
+        if let Err(error) = Self::record_control_mutation_with_authority(actor_id, now) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         if let Err(error) =
@@ -6146,31 +7482,42 @@ pub mod pallet {
         {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::remove_actor_from_queues(actor_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+        let Some((state, admission, _)) = Self::load_frame_actor_service_state(actor_id) else {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             Error::<T>::ActorInvariant.into(),
           ));
         };
-        if state.hot.wakeup_pointer.is_some()
-          && Self::wakeup_substrate_invalidate(actor_id).is_none()
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-            Error::<T>::ActorNotFound.into(),
-          ));
-        }
-        if state.hot.trigger_wakeup_pointer.is_some()
-          && Self::trigger_wakeup_substrate_invalidate_inner(actor_id).is_err()
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-            Error::<T>::ActorNotFound.into(),
-          ));
-        }
-        if let Err(error) = Self::remove_active_actor(actor_id, trigger_transition) {
+        if let Err(error) = Self::remove_actor_from_queues_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        if state.hot.wakeup_pointer.is_some() {
+          let invalidated =
+            Self::wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission).is_ok();
+          if !invalidated {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              Error::<T>::ActorNotFound.into(),
+            ));
+          }
+        }
+        if state.hot.trigger_wakeup_pointer.is_some() {
+          let invalidated =
+            Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission)
+              .is_ok();
+          if !invalidated {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              Error::<T>::ActorNotFound.into(),
+            ));
+          }
+        }
+        if let Err(error) = Self::remove_active_actor_with_admission(
+          actor_id,
+          trigger_transition,
+          Some(&admission),
+          state.identity.actor_class.actor_type(),
+        ) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        ActorIdentities::<T>::insert(actor_id, state.identity.clone());
         ActorFunding::<T>::remove(actor_id);
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
@@ -6180,7 +7527,7 @@ pub mod pallet {
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) = Self::reconcile_actor_state_hold(actor_id) {
+        if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         Self::deposit_event(Event::ActorDeactivated { actor_id });
@@ -6716,14 +8063,16 @@ pub mod pallet {
       Self::with_reused_transaction(operation)
     }
 
-    fn record_control_mutation(actor_id: ActorId, now: BlockNumberFor<T>) -> DispatchResult {
-      ActorIdentities::<T>::try_mutate(actor_id, |maybe| -> DispatchResult {
-        maybe
-          .as_mut()
-          .ok_or(Error::<T>::ActorNotFound)?
-          .last_control_mutation_block = now;
-        Ok(())
-      })
+    fn record_control_mutation_with_authority(
+      actor_id: ActorId,
+      now: BlockNumberFor<T>,
+    ) -> DispatchResult {
+      let (_, mut identity, _, _) =
+        Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      identity.last_control_mutation_block = now;
+      Self::update_existing_frame_control_identity(actor_id, &identity)
+        .map_err(|_| Error::<T>::ActorInvariant)?;
+      Ok(())
     }
 
     fn ensure_control_mutation_allowed(
@@ -6753,7 +8102,11 @@ pub mod pallet {
       Ok(())
     }
 
-    fn remove_owner_slot_binding(owner: &T::AccountId, owner_slot: u8, sovereign: &T::AccountId) {
+    pub(crate) fn remove_owner_slot_binding(
+      owner: &T::AccountId,
+      owner_slot: u8,
+      sovereign: &T::AccountId,
+    ) {
       let mut bitmap = OwnerSlotBitmaps::<T>::get(owner);
       Self::clear_owner_slot(&mut bitmap, owner_slot);
       if Self::owner_slot_bitmap_is_empty(&bitmap) {
@@ -6774,18 +8127,74 @@ pub mod pallet {
       instance: &ActiveActorViewOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
-      ensure!(
-        Self::active_actor_view(actor_id).as_ref() == Some(instance),
-        Error::<T>::ActorNotFound
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
+      let current = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
       );
-      Self::finalize_actor_loaded(actor_id, instance, reason)
+      ensure!(current == *instance, Error::<T>::ActorNotFound);
+      let (_, _, admission) =
+        Self::load_control_authority_with_authority(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      Self::finalize_actor_from_retained_state(actor_id, state, &admission, reason)
     }
 
-    pub(crate) fn finalize_actor_loaded(
+    pub(crate) fn finalize_actor_from_consumed_state(
+      actor_id: ActorId,
+      state: ActiveActorStateOf<T>,
+      admission: &ActorAdmissionCertificateOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
+      ensure!(
+        !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
+        Error::<T>::ActorInvariant
+      );
+      let instance = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
+      Self::finalize_actor_loaded_inner(
+        actor_id,
+        &instance,
+        reason,
+        crate::execution::LoadedCancellationContext::ConsumedFrame {
+          admission: admission.clone(),
+          state,
+        },
+      )
+    }
+
+    pub(crate) fn finalize_actor_from_retained_state(
+      actor_id: ActorId,
+      state: ActiveActorStateOf<T>,
+      admission: &ActorAdmissionCertificateOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
+      let instance = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
+      Self::finalize_actor_loaded_inner(
+        actor_id,
+        &instance,
+        reason,
+        crate::execution::LoadedCancellationContext::RetainedFrame {
+          admission: admission.clone(),
+          state,
+        },
+      )
+    }
+
+    fn finalize_actor_loaded_inner(
       actor_id: ActorId,
       instance: &ActiveActorViewOf<T>,
       reason: CloseReason,
+      mut cancellation_context: crate::execution::LoadedCancellationContext<T>,
     ) -> DispatchResult {
+      let admission = cancellation_context.admission().clone();
       ensure!(
         ActorFunding::<T>::contains_key(actor_id),
         Error::<T>::ActorNotFound
@@ -6820,15 +8229,59 @@ pub mod pallet {
       }
       let trigger_transition =
         Self::preflight_trigger_cleanup(actor_id, TriggerTransitionIntent::Close)?;
+      let identity = ActorIdentity {
+        sovereign_account: instance.sovereign_account.clone(),
+        owner: instance.owner.clone(),
+        actor_class: instance.actor_class,
+        mutability: instance.mutability,
+        cycle_nonce: instance.cycle_nonce,
+        last_control_mutation_block: instance.last_control_mutation_block,
+      };
 
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let result = (|| -> DispatchResult {
-          Self::cancel_run_internal(actor_id, CancellationReason::Closing(reason), None)?;
+          let (close_state, close_admission) = match &mut cancellation_context {
+            crate::execution::LoadedCancellationContext::RetainedFrame { state, admission }
+            | crate::execution::LoadedCancellationContext::ConsumedFrame { state, admission } => {
+              (state, admission)
+            }
+          };
+          let pointers = [
+            close_state.hot.wakeup_pointer,
+            close_state
+              .hot
+              .trigger_wakeup_pointer
+              .map(|pointer| WakeupPointer {
+                block: WakeupKey::Tick(pointer.tick),
+                page_id: pointer.page_id,
+                slot: pointer.slot,
+              }),
+          ];
+          for pointer in pointers.into_iter().flatten() {
+            Self::invalidate_wakeup_reference(
+              actor_id,
+              pointer,
+              close_admission.admission_identity,
+            )
+            .map_err(|_| Error::<T>::ActorInvariant)?;
+          }
+          close_state.hot.wakeup_pointer = None;
+          close_state.hot.trigger_wakeup_pointer = None;
+          Self::cancel_run_internal_loaded(
+            actor_id,
+            &identity,
+            CancellationReason::Closing(reason),
+            None,
+            cancellation_context,
+          )?;
 
-          // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as
-          // soon as hot state disappears. Terminal cleanup performs no shared-container scan.
-          Self::remove_active_actor(actor_id, trigger_transition)?;
-          ActorIdentities::<T>::remove(actor_id);
+          // Exact secondary references are gone; remove the sole primary without a population scan.
+          Self::remove_active_actor_with_admission(
+            actor_id,
+            trigger_transition,
+            Some(&admission),
+            instance.actor_class.actor_type(),
+          )?;
           ActorFunding::<T>::remove(actor_id);
           ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
             *count = count
@@ -6853,7 +8306,7 @@ pub mod pallet {
               SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
             }
           }
-          Self::reconcile_actor_state_hold(actor_id)?;
+          Self::reconcile_actor_state_hold_with_authority(actor_id)?;
           Self::deposit_event(Event::ActorClosed { actor_id, reason });
           Ok(())
         })();
@@ -6872,7 +8325,7 @@ pub mod pallet {
       reason: CloseReason,
     ) -> DispatchResult {
       ensure!(
-        ActorIdentities::<T>::get(actor_id).as_ref() == Some(identity),
+        Self::load_control_identity(actor_id).as_ref() == Some(identity),
         Error::<T>::ActorNotFound
       );
       ensure!(
@@ -6914,7 +8367,7 @@ pub mod pallet {
             SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
           }
         }
-        Self::reconcile_actor_state_hold(actor_id)?;
+        Self::reconcile_actor_state_hold_with_authority(actor_id)?;
         Self::deposit_event(Event::ActorClosed { actor_id, reason });
         Ok(())
       })
@@ -6963,17 +8416,23 @@ pub mod pallet {
       ActiveActorCount::<T>::get()
     }
 
-    pub(crate) fn remove_actor_from_queues(actor_id: ActorId) -> DispatchResult {
-      Self::try_paged_invalidate(actor_id)
-        .map(|_| ())
-        .map_err(Self::placement_error)
+    pub(crate) fn remove_actor_from_queues_with_authority(actor_id: ActorId) -> DispatchResult {
+      match ActorControlLocators::<T>::get(actor_id) {
+        Some(ActorControlLocation::Unsignaled | ActorControlLocation::Waiting { .. }) => Ok(()),
+        Some(ActorControlLocation::Ready { .. }) => {
+          Self::remove_primary_control_cell_inner(actor_id)
+            .map(|_| ())
+            .map_err(|_| Error::<T>::ActorInvariant.into())
+        }
+        None => Err(Error::<T>::ActorInvariant.into()),
+      }
     }
 
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
       if PrepassExecutionCutoff::<T>::get()
-        .is_some_and(|(_, cutoff)| cutoff > NextQueueTicket::<T>::get())
+        .is_some_and(|(_, cutoff)| cutoff > ActorReadyTail::<T>::get())
       {
         return Err(TryRuntimeError::Other(
           "prepass execution cutoff exceeds the allocated ticket frontier",
@@ -6986,7 +8445,10 @@ pub mod pallet {
       }
       let limit = Self::effective_active_actor_limit();
       let active_count = Self::active_instance_count();
-      let actual_active_count = ActorHot::<T>::iter_keys().count() as u32;
+      let control_entries = Self::frame_control_entries().ok_or(TryRuntimeError::Other(
+        "ActorControl frame topology is corrupt",
+      ))?;
+      let actual_active_count = control_entries.len() as u32;
       if T::MaxOwnerSlots::get() == 0 {
         return Err(TryRuntimeError::Other("MaxOwnerSlots must be nonzero"));
       }
@@ -7002,19 +8464,47 @@ pub mod pallet {
       }
       if active_count != actual_active_count {
         return Err(TryRuntimeError::Other(
-          "ActiveActorCount does not match ActorHot cardinality",
+          "ActiveActorCount does not match ActorControl primary cardinality",
         ));
       }
       if active_count > limit {
         return Err(TryRuntimeError::Other(
-          "ActorHot count exceeds effective active actor limit",
+          "ActorControl primary count exceeds effective active actor limit",
         ));
       }
-      let stored_identity_count = ActorIdentities::<T>::iter_keys().count() as u32;
+      let mut semantic_identities = alloc::collections::BTreeMap::new();
+      for (actor_id, location, primary) in &control_entries {
+        let (identity, _, _) = Self::project_control_cell(primary, *location).ok_or(
+          TryRuntimeError::Other("ActorControl primary cannot restore its semantic identity"),
+        )?;
+        if semantic_identities.insert(*actor_id, identity).is_some() {
+          return Err(TryRuntimeError::Other(
+            "multiple ActorControl primaries own one identity",
+          ));
+        }
+      }
+      for (actor_id, identity) in ActorIdentities::<T>::iter() {
+        if ActorControlLocators::<T>::contains_key(actor_id) {
+          return Err(TryRuntimeError::Other(
+            "dormant ActorIdentity duplicates active primary authority",
+          ));
+        }
+        if !matches!(
+          Self::load_actor_state_for_frame_control(actor_id),
+          LoadedActorStateOf::Dormant(_)
+        ) || semantic_identities.insert(actor_id, identity).is_some()
+        {
+          return Err(TryRuntimeError::Other(
+            "scalar ActorIdentity without a primary is not uniquely dormant",
+          ));
+        }
+      }
+      let actual_identity_count = u32::try_from(semantic_identities.len())
+        .map_err(|_| TryRuntimeError::Other("semantic Actor identity count exceeds u32"))?;
       let identity_count = ActorIdentityCount::<T>::get();
-      if identity_count != stored_identity_count {
+      if identity_count != actual_identity_count {
         return Err(TryRuntimeError::Other(
-          "ActorIdentityCount does not match ActorIdentities cardinality",
+          "ActorIdentityCount does not match active primaries plus dormant identities",
         ));
       }
       if identity_count > T::MaxActorIdentities::get() {
@@ -7024,7 +8514,7 @@ pub mod pallet {
       }
       for actor_id in ActorContractHeads::<T>::iter_keys() {
         if !matches!(
-          Self::load_actor_state(actor_id),
+          Self::load_actor_state_for_frame_control(actor_id),
           LoadedActorStateOf::Active(_)
         ) {
           return Err(TryRuntimeError::Other(
@@ -7033,27 +8523,52 @@ pub mod pallet {
         }
       }
       let mut max_id: Option<ActorId> = None;
-      for actor_id in ActorHot::<T>::iter_keys() {
-        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+      for (actor_id, _, primary) in control_entries {
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state_for_frame_control(actor_id)
+        else {
           return Err(TryRuntimeError::Other(
-            "ActorHot entry belongs to a corrupt actor partition set",
+            "ActorControl primary belongs to a corrupt actor partition set",
           ));
         };
+        let frame_admission = primary.admission;
         let identity = state.identity;
+        if identity.last_control_mutation_block > frame_system::Pallet::<T>::block_number() {
+          return Err(TryRuntimeError::Other(
+            "actor control mutation block is in the future",
+          ));
+        }
         let hot = state.hot;
         let contract = state.contract;
         let funding = state.funding;
-        if !ActorAdmissionCertificates::<T>::contains_key(actor_id) {
-          return Err(TryRuntimeError::Other(
-            "Active actor has no admission certificate",
-          ));
-        }
         let head = ActorContractHeads::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
           "Active actor has no C6 Contract head",
         ))?;
         let resources = Self::derive_step_resource_envelopes(&contract).ok_or(
           TryRuntimeError::Other("Active actor Step resources cannot be rederived"),
         )?;
+        let expected_cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+        if primary.cursor != expected_cursor {
+          return Err(TryRuntimeError::Other(
+            "ActorControl primary cursor disagrees with canonical Run authority",
+          ));
+        }
+        let expected_resources = if contract.steps.is_empty() {
+          ActorStepResourceEnvelope {
+            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+            effect: Weight::zero(),
+          }
+        } else {
+          *resources
+            .get(expected_cursor as usize)
+            .ok_or(TryRuntimeError::Other(
+              "ActorControl primary cursor has no canonical Step resources",
+            ))?
+        };
+        if primary.resources != expected_resources {
+          return Err(TryRuntimeError::Other(
+            "ActorControl primary resources disagree with canonical Step authority",
+          ));
+        }
         let expected_pipeline_machine_envelope = Self::derive_pipeline_machine_envelope(
           identity.actor_class.actor_type(),
           &contract.steps,
@@ -7075,16 +8590,13 @@ pub mod pallet {
         };
         match (expected_activation_feed, activation_authority) {
           (Some(feed), Some(authority)) => {
-            let certificate = ActorAdmissionCertificates::<T>::get(actor_id).ok_or(
-              TryRuntimeError::Other("indexed Observation actor has no admission certificate"),
-            )?;
             if authority.feed != feed
               || authority.cooldown_blocks != contract.cooldown_blocks
               || authority.window != contract.window
               || authority.auto_close_at_cycle_nonce != contract.auto_close_at_cycle_nonce
-              || authority.semantic_contract_id != certificate.semantic_contract_id
-              || authority.body_commitment != certificate.body_commitment
-              || authority.admission_identity != certificate.admission_identity
+              || authority.semantic_contract_id != frame_admission.semantic_contract_id
+              || authority.body_commitment != frame_admission.body_commitment
+              || authority.admission_identity != frame_admission.admission_identity
             {
               return Err(TryRuntimeError::Other(
                 "indexed Observation activation authority disagrees with C6 Contract authority",
@@ -7125,10 +8637,10 @@ pub mod pallet {
             consumed: false, ..
           }
           | TriggerRuntimeState::Cadenced { .. }
-            if hot.trigger_wakeup_pointer.is_none() =>
+            if !hot.pending_signal && hot.trigger_wakeup_pointer.is_none() =>
           {
             return Err(TryRuntimeError::Other(
-              "pending temporal actor has no Trigger temporal membership",
+              "unlatched temporal actor has no Trigger temporal membership",
             ));
           }
           TriggerRuntimeState::Stateless | TriggerRuntimeState::ObservationCrossing { .. }
@@ -7199,7 +8711,7 @@ pub mod pallet {
       }
       for actor_id in ActorFunding::<T>::iter_keys() {
         if !matches!(
-          Self::load_actor_state(actor_id),
+          Self::load_actor_state_for_frame_control(actor_id),
           LoadedActorStateOf::Active(_)
         ) {
           return Err(TryRuntimeError::Other(
@@ -7213,7 +8725,8 @@ pub mod pallet {
             "ActorRunHead has no immutable ActorRunPayload",
           ));
         }
-        let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+        let LoadedActorStateOf::Active(state) = Self::load_actor_state_for_frame_control(actor_id)
+        else {
           return Err(TryRuntimeError::Other(
             "ActorRunState entry belongs to a corrupt actor partition set",
           ));
@@ -7324,18 +8837,16 @@ pub mod pallet {
           ));
         }
       }
-      for actor_id in ActorIdentities::<T>::iter_keys() {
-        let identity = ActorIdentities::<T>::get(actor_id)
-          .ok_or(TryRuntimeError::Other("actor identity key has no value"))?;
+      for (actor_id, identity) in &semantic_identities {
+        if ActorControlLocators::<T>::contains_key(actor_id) {
+          continue;
+        }
         if identity.last_control_mutation_block > frame_system::Pallet::<T>::block_number() {
           return Err(TryRuntimeError::Other(
             "actor control mutation block is in the future",
           ));
         }
-        max_id = Some(max_id.map_or(actor_id, |prev| prev.max(actor_id)));
-        if Self::active_actor_exists(actor_id) {
-          continue;
-        }
+        max_id = Some(max_id.map_or(*actor_id, |prev| prev.max(*actor_id)));
         if ActorFunding::<T>::contains_key(actor_id)
           || ActorRunHeads::<T>::contains_key(actor_id)
           || ActorRunPayloads::<T>::contains_key(actor_id)
@@ -7345,7 +8856,7 @@ pub mod pallet {
           ));
         }
         match SovereignIndex::<T>::get(&identity.sovereign_account) {
-          Some(mapped_id) if mapped_id == actor_id => {}
+          Some(mapped_id) if mapped_id == *actor_id => {}
           _ => {
             return Err(TryRuntimeError::Other(
               "Dormant SovereignIndex does not map sovereign_account back to actor_id",
@@ -7369,13 +8880,22 @@ pub mod pallet {
             }
           }
           ActorClass::System { sovereign_id } => {
-            if identity.mutability != Mutability::Mutable {
+            if identity.mutability == Mutability::Immutable
+              && !T::GenesisSystemActors::dormant_system_actors()
+                .into_iter()
+                .any(|(genesis_id, owner, mutability)| {
+                  genesis_id == *actor_id
+                    && genesis_id == sovereign_id
+                    && owner == identity.owner
+                    && mutability == Mutability::Immutable
+                })
+            {
               return Err(TryRuntimeError::Other(
-                "Dormant System Actors must be Mutable",
+                "Immutable Dormant System Actor is not declared by genesis",
               ));
             }
             if SystemSovereigns::<T>::get(sovereign_id)
-              != Some(SystemSovereignState::Occupied(actor_id))
+              != Some(SystemSovereignState::Occupied(*actor_id))
             {
               return Err(TryRuntimeError::Other(
                 "dormant System Actor disagrees with its sovereign locator",
@@ -7401,9 +8921,9 @@ pub mod pallet {
               "OwnerSlotBitmaps bit has no SovereignIndex owner",
             ));
           };
-          let Some(identity) = ActorIdentities::<T>::get(actor_id) else {
+          let Some(identity) = semantic_identities.get(&actor_id) else {
             return Err(TryRuntimeError::Other(
-              "OwnerSlotBitmaps bit has no ActorIdentity owner",
+              "OwnerSlotBitmaps bit has no semantic Actor identity owner",
             ));
           };
           if identity.owner != owner
@@ -7429,10 +8949,10 @@ pub mod pallet {
         ));
       }
       let mut system_identity_owners = alloc::collections::BTreeMap::new();
-      for (actor_id, identity) in ActorIdentities::<T>::iter() {
+      for (actor_id, identity) in &semantic_identities {
         if let ActorClass::System { sovereign_id } = identity.actor_class
           && system_identity_owners
-            .insert(sovereign_id, actor_id)
+            .insert(sovereign_id, *actor_id)
             .is_some()
         {
           return Err(TryRuntimeError::Other(
@@ -7464,9 +8984,11 @@ pub mod pallet {
                 "occupied System sovereign locator disagrees with identity ownership",
               ));
             }
-            let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-              "occupied System sovereign locator has no ActorIdentity",
-            ))?;
+            let identity = semantic_identities
+              .get(&actor_id)
+              .ok_or(TryRuntimeError::Other(
+                "occupied System sovereign locator has no semantic Actor identity",
+              ))?;
             if identity.sovereign_account != sovereign_account
               || SovereignIndex::<T>::get(&sovereign_account) != Some(actor_id)
             {
@@ -7490,9 +9012,11 @@ pub mod pallet {
             .ok_or(TryRuntimeError::Other(
               "SovereignIndex cardinality exceeds u32",
             ))?;
-        let identity = ActorIdentities::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "SovereignIndex owner has no ActorIdentity",
-        ))?;
+        let identity = semantic_identities
+          .get(&actor_id)
+          .ok_or(TryRuntimeError::Other(
+            "SovereignIndex owner has no semantic Actor identity",
+          ))?;
         if identity.sovereign_account != sovereign_account {
           return Err(TryRuntimeError::Other(
             "SovereignIndex key disagrees with ActorIdentity custody account",
@@ -7501,7 +9025,7 @@ pub mod pallet {
       }
       if sovereign_index_count != identity_count {
         return Err(TryRuntimeError::Other(
-          "SovereignIndex cardinality does not match ActorIdentities",
+          "SovereignIndex cardinality does not match semantic Actor identities",
         ));
       }
 
@@ -7511,239 +9035,281 @@ pub mod pallet {
           "MaxQueueLength is below effective active actor limit",
         ));
       }
-      let queue_occupancy = QueueOccupancy::<T>::get();
+      let queue_occupancy = ActorReadyOccupancy::<T>::get();
       if queue_occupancy > queue_capacity {
         return Err(TryRuntimeError::Other(
           "canonical queue physical occupancy exceeds MaxQueueLength",
         ));
       }
-      let next_ticket = NextQueueTicket::<T>::get();
-      let page_size = u64::from(T::QueuePageSize::get());
-      let head = QueueHead::<T>::get();
-      let tail = QueueTail::<T>::get();
-      if head > tail {
-        return Err(TryRuntimeError::Other("canonical queue head exceeds tail"));
-      }
-      let queue_span = tail.checked_sub(head).ok_or(TryRuntimeError::Other(
-        "canonical queue physical span underflows",
-      ))?;
-      if head < tail && queue_span != u64::from(queue_occupancy) {
+      const CONTROL_PAGE_SIZE: u64 = 32;
+      let head = ActorReadyHead::<T>::get();
+      let tail = ActorReadyTail::<T>::get();
+      let span = tail
+        .checked_sub(head)
+        .ok_or(TryRuntimeError::Other("canonical Ready head exceeds tail"))?;
+      if span > u64::from(queue_capacity)
+        || queue_occupancy > active_count
+        || u64::from(queue_occupancy) > span
+      {
         return Err(TryRuntimeError::Other(
-          "canonical queue occupancy disagrees with its nonempty physical span",
+          "canonical Ready live count or physical span exceeds its bound",
         ));
       }
-      let mut physical_tickets = alloc::collections::BTreeMap::new();
-      let mut physical_occupancy = 0u32;
-      for page_id in QueuePages::<T>::iter_keys() {
-        let page = QueuePages::<T>::get(page_id)
-          .ok_or(TryRuntimeError::Other("queue page key has no value"))?;
-        if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
+      let mut ready_pages = alloc::collections::BTreeSet::new();
+      let mut ready_live = 0u32;
+      for (page_id, page) in ActorReadyFrameChunks::<T>::iter(/* deos-bypass: bounded-iter -- TryRuntime-only topology audit. */)
+      {
+        let start = page_id
+          .checked_mul(CONTROL_PAGE_SIZE)
+          .ok_or(TryRuntimeError::Other(
+            "canonical Ready page range overflows",
+          ))?;
+        if page.len() != CONTROL_PAGE_SIZE as usize
+          || start >= tail
+          || start.saturating_add(CONTROL_PAGE_SIZE) <= head
+          || !ready_pages.insert(page_id)
+        {
           return Err(TryRuntimeError::Other(
-            "canonical queue page has invalid length",
+            "canonical Ready page has invalid width or range",
           ));
         }
-        let Some(page_start) = page_id.checked_mul(page_size) else {
-          return Err(TryRuntimeError::Other(
-            "canonical queue page range overflows",
-          ));
-        };
-        let Some(page_end) = page_start.checked_add(page.len() as u64) else {
-          return Err(TryRuntimeError::Other(
-            "canonical queue page range overflows",
-          ));
-        };
-        if page_end <= head || page_start >= tail {
-          return Err(TryRuntimeError::Other(
-            "canonical queue page lies outside its live physical range",
-          ));
-        }
-        for (slot, entry) in page.into_iter().enumerate() {
-          let position = page_start
+        for (slot, cell) in page.iter(/* deos-bypass: bounded-iter -- fixed C32. */).enumerate() {
+          let Some(cell) = cell else { continue };
+          let ticket = start
             .checked_add(slot as u64)
-            .ok_or(TryRuntimeError::Other("canonical queue position overflows"))?;
-          if position < head {
-            continue;
-          }
-          if position >= tail || entry.ticket >= next_ticket {
-            return Err(TryRuntimeError::Other(
-              "canonical queue entry lies beyond its physical or global ticket range",
-            ));
-          }
-          physical_occupancy = physical_occupancy
-            .checked_add(1)
-            .ok_or(TryRuntimeError::Other(
-              "canonical queue occupancy overflows",
-            ))?;
-          if physical_tickets
-            .insert(entry.ticket, entry.actor_id)
-            .is_some()
+            .ok_or(TryRuntimeError::Other("canonical Ready ticket overflows"))?;
+          let location = ActorControlLocation::Ready { ticket };
+          if ticket < head
+            || ticket >= tail
+            || ActorControlLocators::<T>::get(cell.actor_id) != Some(location)
+            || Self::project_control_cell(cell, location).is_none()
           {
             return Err(TryRuntimeError::Other(
-              "canonical queue contains a duplicate global ticket",
+              "canonical Ready primary disagrees with its ticket or locator",
             ));
           }
+          ready_live = ready_live.checked_add(1).ok_or(TryRuntimeError::Other(
+            "canonical Ready live count overflows",
+          ))?;
         }
       }
-      if physical_occupancy != queue_occupancy {
+      let expected_ready_pages = if head == tail {
+        0
+      } else {
+        (tail - 1) / CONTROL_PAGE_SIZE - head / CONTROL_PAGE_SIZE + 1
+      };
+      if ready_pages.len() as u64 != expected_ready_pages || ready_live != queue_occupancy {
         return Err(TryRuntimeError::Other(
-          "canonical queue occupancy disagrees with physical entries",
+          "canonical Ready pages or live occupancy disagree",
         ));
       }
-      let mut live_queue_tickets = alloc::collections::BTreeSet::new();
-      for actor_id in ActorHot::<T>::iter_keys() {
-        let hot = ActorHot::<T>::get(actor_id)
-          .ok_or(TryRuntimeError::Other("live-ticket hot key has no value"))?;
-        let Some(ticket) = hot.queue_ticket else {
-          continue;
-        };
-        if ticket >= next_ticket || !live_queue_tickets.insert(ticket) {
-          return Err(TryRuntimeError::Other(
-            "ActorHot owns an invalid or duplicate global queue ticket",
-          ));
-        }
-        if !ActorIdentities::<T>::contains_key(actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorHot live ticket has no ActorIdentity",
-          ));
-        }
-        if physical_tickets.get(&ticket) != Some(&actor_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorHot live ticket does not resolve to its canonical queue entry",
-          ));
-        }
-      }
+      // Empty slots inside the bounded [head, tail) span are FIFO tombstones, not live occupancy.
       if T::WakeupPageSize::get() == 0 {
         return Err(TryRuntimeError::Other("WakeupPageSize must be non-zero"));
       }
-      let mut wakeup_live_by_key = alloc::collections::BTreeMap::new();
-      let mut live_wakeup_memberships = 0u32;
-      for (block, page_id) in WakeupPages::<T>::iter_keys() {
-        let page = WakeupPages::<T>::get((block, page_id))
-          .ok_or(TryRuntimeError::Other("wakeup page key has no value"))?;
-        if page.entries.is_empty() || page.entries.len() > T::WakeupPageSize::get() as usize {
-          return Err(TryRuntimeError::Other(
-            "WakeupPages entry has invalid length",
-          ));
-        }
-        if page.scan_slot as usize > page.entries.len() {
-          return Err(TryRuntimeError::Other(
-            "WakeupPage scan cursor exceeds page length",
-          ));
-        }
-        let mut live_entries = 0u32;
-        for entry in page.entries.as_slice() {
-          if entry.is_some() {
-            live_entries = live_entries
-              .checked_add(1)
-              .ok_or(TryRuntimeError::Other("wakeup page live count overflows"))?;
-          }
-        }
-        if live_entries == 0 || page.live_entries != live_entries {
-          return Err(TryRuntimeError::Other(
-            "WakeupPage live-entry count disagrees with slots",
-          ));
-        }
-        let Some(bucket) = WakeupBuckets::<T>::get(block) else {
-          return Err(TryRuntimeError::Other(
-            "WakeupPage has no matching bucket metadata",
-          ));
-        };
-        if let Some(previous_page) = page.previous_page
-          && WakeupPages::<T>::get((block, previous_page)).and_then(|previous| previous.next_page)
-            != Some(page_id)
+      let mut waiting_pages = alloc::collections::BTreeMap::new();
+      let mut waiting_live = alloc::collections::BTreeMap::new();
+      let mut reference_count = 0u64;
+      for ((key, page_id), page) in ActorWaitingFrameChunks::<T>::iter(/* deos-bypass: bounded-iter -- TryRuntime-only topology audit. */)
+      {
+        if page.entries.len() != CONTROL_PAGE_SIZE as usize
+          || page.scan_slot >= CONTROL_PAGE_SIZE as u32
+          || page
+            .entries
+            .iter(/* deos-bypass: bounded-iter -- fixed C32. */)
+            .take(page.scan_slot as usize)
+            .any(Option::is_some)
         {
           return Err(TryRuntimeError::Other(
-            "WakeupPage previous link is not reciprocal",
+            "canonical Waiting page has invalid width or scan cursor",
           ));
         }
-        if let Some(next_page) = page.next_page
-          && WakeupPages::<T>::get((block, next_page)).and_then(|next| next.previous_page)
-            != Some(page_id)
+        let actual_live = page.entries.iter(/* deos-bypass: bounded-iter -- fixed C32. */).filter(|entry| entry.is_some()).count()
+          as u32;
+        if actual_live == 0 || actual_live != page.live_entries {
+          return Err(TryRuntimeError::Other(
+            "canonical Waiting page live count disagrees with slots",
+          ));
+        }
+        let count = waiting_live.entry(key).or_insert(0u32);
+        *count = count
+          .checked_add(actual_live)
+          .ok_or(TryRuntimeError::Other(
+            "canonical Waiting per-key count overflows",
+          ))?;
+        for (slot, entry) in
+          page.entries.iter(/* deos-bypass: bounded-iter -- fixed C32. */).enumerate()
         {
-          return Err(TryRuntimeError::Other(
-            "WakeupPage next link is not reciprocal",
-          ));
-        }
-        if page_id == bucket.head_page && page.previous_page.is_some() {
-          return Err(TryRuntimeError::Other(
-            "WakeupBucket head page has a predecessor",
-          ));
-        }
-        if page_id == bucket.tail_page && page.next_page.is_some() {
-          return Err(TryRuntimeError::Other(
-            "WakeupBucket tail page has a successor",
-          ));
-        }
-        let key_live = wakeup_live_by_key.entry(block).or_insert(0u32);
-        *key_live = key_live
-          .checked_add(live_entries)
-          .ok_or(TryRuntimeError::Other("wakeup bucket live count overflows"))?;
-        // Block-keyed Pipeline service and tick-keyed Trigger detection own independent exact
-        // pointers into one physical substrate. A slot whose clock-domain pointer differs is
-        // corruption; an absent pointer is a lazy stale entry until bounded drain converges.
-        for slot in 0..page.entries.len() {
-          let Some(entry) = &page.entries[slot] else {
-            continue;
-          };
-          let expected = WakeupPointer {
-            block,
+          let Some(entry) = entry else { continue };
+          let pointer = WakeupPointer {
+            block: key,
             page_id,
-            slot: slot as WakeupSlot,
+            slot: slot as u32,
           };
-          let authoritative = ActorHot::<T>::get(entry.actor_id).and_then(|hot| match block {
-            WakeupKey::Block(_) => hot.wakeup_pointer,
-            WakeupKey::Tick(_) => hot.trigger_wakeup_pointer.map(|pointer| WakeupPointer {
-              block: WakeupKey::Tick(pointer.tick),
-              page_id: pointer.page_id,
-              slot: pointer.slot,
-            }),
-          });
-          match authoritative {
-            Some(pointer) if pointer == expected => {
-              live_wakeup_memberships =
-                live_wakeup_memberships
-                  .checked_add(1)
-                  .ok_or(TryRuntimeError::Other(
-                    "live wakeup membership count overflows",
-                  ))?;
+          let (actor_id, primary) = match entry {
+            ActorWaitingEntry::Primary(cell) => {
+              let location = ActorControlLocation::Waiting {
+                key,
+                page: page_id,
+                slot: slot as u8,
+              };
+              if ActorControlLocators::<T>::get(cell.actor_id) != Some(location)
+                || Self::project_control_cell(cell, location).is_none()
+              {
+                return Err(TryRuntimeError::Other(
+                  "canonical Waiting primary disagrees with its locator",
+                ));
+              }
+              (cell.actor_id, cell.clone())
             }
-            Some(_) => {
-              return Err(TryRuntimeError::Other(
-                "WakeupPage slot addresses an actor with a different clock-domain pointer",
-              ));
+            ActorWaitingEntry::Reference(reference) => {
+              let (_, primary) =
+                Self::load_primary_control_cell(reference.actor_id).map_err(|_| {
+                  TryRuntimeError::Other("canonical Waiting reference has no primary")
+                })?;
+              if primary.admission.admission_identity != reference.admission_identity {
+                return Err(TryRuntimeError::Other(
+                  "canonical Waiting reference admission identity disagrees",
+                ));
+              }
+              reference_count = reference_count
+                .checked_add(1)
+                .ok_or(TryRuntimeError::Other(
+                  "canonical Waiting reference count overflows",
+                ))?;
+              (reference.actor_id, primary)
             }
-            None => {}
+          };
+          let authoritative = match key {
+            WakeupKey::Block(_) => primary.hot.wakeup_pointer,
+            WakeupKey::Tick(_) => primary
+              .hot
+              .trigger_wakeup_pointer
+              .map(|trigger| WakeupPointer {
+                block: WakeupKey::Tick(trigger.tick),
+                page_id: trigger.page_id,
+                slot: trigger.slot,
+              }),
+          };
+          if primary.actor_id != actor_id || authoritative != Some(pointer) {
+            return Err(TryRuntimeError::Other(
+              "WakeupPage slot addresses an actor with a different clock-domain pointer",
+            ));
           }
+        }
+        if waiting_pages.insert((key, page_id), page).is_some() {
+          return Err(TryRuntimeError::Other("duplicate canonical Waiting page"));
         }
       }
-      // One Active Actor may own one Pipeline-service pointer and one Trigger-temporal pointer.
-      // Stale physical pages and cursor blocks may legitimately outlive their actors.
-      if live_wakeup_memberships > active_count.saturating_mul(2) {
+      if u64::from(active_count)
+        .checked_add(reference_count)
+        .is_none_or(|count| count > u64::from(active_count) * 3)
+      {
         return Err(TryRuntimeError::Other(
-          "live wakeup memberships exceed dual active-actor capacity",
+          "canonical primary plus reference cardinality exceeds 3N",
         ));
       }
-      for block in WakeupBuckets::<T>::iter_keys() {
-        let bucket = WakeupBuckets::<T>::get(block)
-          .ok_or(TryRuntimeError::Other("wakeup bucket key has no value"))?;
-        if wakeup_live_by_key.get(&block).copied() != Some(bucket.live_entries) {
-          return Err(TryRuntimeError::Other(
-            "WakeupBucket live-entry count disagrees with pages",
-          ));
-        }
-        if !WakeupPages::<T>::contains_key((block, bucket.head_page))
-          || !WakeupPages::<T>::contains_key((block, bucket.tail_page))
+      let mut directory_keys = alloc::collections::BTreeSet::new();
+      let mut visited_pages = alloc::collections::BTreeSet::new();
+      for (key, occupancy) in ActorWaitingOccupancies::<T>::iter(/* deos-bypass: bounded-iter -- TryRuntime-only topology audit. */)
+      {
+        if occupancy == 0
+          || occupancy > T::MaxActiveActors::get()
+          || waiting_live.get(&key).copied() != Some(occupancy)
+          || !ActorWaitingHeads::<T>::contains_key(key)
+          || !ActorWaitingTails::<T>::contains_key(key)
+          || !directory_keys.insert(key)
         {
           return Err(TryRuntimeError::Other(
-            "WakeupBucket head or tail page is missing",
+            "canonical Waiting directory occupancy disagrees with pages",
           ));
         }
-        let cursor_len = WakeupCursorLen::<T>::get(block.clock());
-        if let Some(index) = bucket.cursor_index
-          && (index >= cursor_len || Self::wakeup_cursor_get(block.clock(), index) != Some(block))
+        let head = ActorWaitingHeads::<T>::get(key);
+        let tail = ActorWaitingTails::<T>::get(key);
+        if head >= tail {
+          return Err(TryRuntimeError::Other(
+            "canonical Waiting directory has invalid range",
+          ));
+        }
+        let first = head / CONTROL_PAGE_SIZE;
+        let last = (tail - 1) / CONTROL_PAGE_SIZE;
+        let mut page_id = first;
+        let mut previous = None;
+        loop {
+          if !visited_pages.insert((key, page_id)) {
+            return Err(TryRuntimeError::Other("canonical Waiting page links cycle"));
+          }
+          let page = waiting_pages
+            .get(&(key, page_id))
+            .ok_or(TryRuntimeError::Other(
+              "canonical Waiting linked page is missing",
+            ))?;
+          if page.previous_page != previous
+            || page_id > last
+            || (page_id == first && head % CONTROL_PAGE_SIZE != u64::from(page.scan_slot))
+            || (page_id != first && page.scan_slot != 0)
+          {
+            return Err(TryRuntimeError::Other(
+              "canonical Waiting page links or head cursor disagree",
+            ));
+          }
+          if page_id == last {
+            let tail_slot = ((tail - 1) % CONTROL_PAGE_SIZE + 1) as usize;
+            if page.next_page.is_some()
+              || page.entries.iter(/* deos-bypass: bounded-iter -- fixed C32. */).skip(tail_slot).any(Option::is_some)
+            {
+              return Err(TryRuntimeError::Other(
+                "canonical Waiting tail page exceeds directory range",
+              ));
+            }
+            break;
+          }
+          let next = page.next_page.ok_or(TryRuntimeError::Other(
+            "canonical Waiting linked chain ends before tail",
+          ))?;
+          if next <= page_id {
+            return Err(TryRuntimeError::Other(
+              "canonical Waiting links are not strictly ordered",
+            ));
+          }
+          previous = Some(page_id);
+          page_id = next;
+        }
+        let index = ActorWaitingCursorIndices::<T>::get(key).ok_or(TryRuntimeError::Other(
+          "canonical Waiting key has no shared cursor index",
+        ))?;
+        if index >= WakeupCursorLen::<T>::get(key.clock())
+          || Self::wakeup_cursor_get(key.clock(), index) != Some(key)
         {
           return Err(TryRuntimeError::Other(
-            "WakeupBucket cursor reverse index does not resolve",
+            "canonical Waiting cursor reverse index does not resolve",
+          ));
+        }
+      }
+      if visited_pages.len() != waiting_pages.len() || directory_keys.len() != waiting_live.len() {
+        return Err(TryRuntimeError::Other(
+          "canonical Waiting pages are disconnected or have no directory",
+        ));
+      }
+      for key in ActorWaitingHeads::<T>::iter_keys()
+        .chain(ActorWaitingTails::<T>::iter_keys())
+        .chain(ActorWaitingCursorIndices::<T>::iter_keys())
+      {
+        if !directory_keys.contains(&key) {
+          return Err(TryRuntimeError::Other(
+            "canonical Waiting directory contains an orphan key",
+          ));
+        }
+      }
+      for clock in [WakeupClock::Block, WakeupClock::Tick] {
+        if directory_keys
+          .iter(/* deos-bypass: bounded-iter -- TryRuntime-only topology audit. */)
+          .filter(|key| key.clock() == clock)
+          .count() as u64
+          != u64::from(WakeupCursorLen::<T>::get(clock))
+        {
+          return Err(TryRuntimeError::Other(
+            "canonical Waiting directory and heap cardinality disagree",
           ));
         }
       }
@@ -7802,9 +9368,9 @@ pub mod pallet {
               "WakeupCursor contains a duplicate or wrong-clock key",
             ));
           }
-          if WakeupBuckets::<T>::get(key).and_then(|bucket| bucket.cursor_index) != Some(index) {
+          if Self::wakeup_cursor_owner_index(key) != Some(index) {
             return Err(TryRuntimeError::Other(
-              "WakeupCursor key has no matching bucket reverse index",
+              "WakeupCursor key has no matching owner reverse index",
             ));
           }
           if index > 0 {
@@ -7821,10 +9387,10 @@ pub mod pallet {
         }
       }
       let mut live_wakeup_pointers = alloc::collections::BTreeSet::new();
-      for actor_id in ActorHot::<T>::iter_keys() {
-        let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-          "wakeup-pointer hot key has no value",
-        ))?;
+      let wakeup_control_entries = Self::control_hot_entries_for_try_state().ok_or(
+        TryRuntimeError::Other("ActorControl frame topology is corrupt"),
+      )?;
+      for (actor_id, hot) in wakeup_control_entries {
         if let Some(pointer) = hot.wakeup_pointer {
           if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
             return Err(TryRuntimeError::Other(
@@ -7833,14 +9399,14 @@ pub mod pallet {
           }
           if !Self::wakeup_page_entry_matches(pointer, actor_id) {
             return Err(TryRuntimeError::Other(
-              "ActorHot Pipeline wakeup pointer does not resolve to its actor",
+              "ActorControl Pipeline wakeup pointer does not resolve to its actor",
             ));
           }
           if let Some(terminal_at) = hot.terminal_at
             && !matches!(pointer.block, WakeupKey::Block(block) if block <= terminal_at)
           {
             return Err(TryRuntimeError::Other(
-              "ActorHot Pipeline wakeup pointer exceeds its terminal membership",
+              "ActorControl Pipeline wakeup pointer exceeds its terminal membership",
             ));
           }
         }
@@ -7868,7 +9434,7 @@ pub mod pallet {
           }
           if !Self::wakeup_page_entry_matches(pointer, actor_id) {
             return Err(TryRuntimeError::Other(
-              "ActorHot Trigger wakeup pointer does not resolve to its actor",
+              "ActorControl Trigger wakeup pointer does not resolve to its actor",
             ));
           }
         }
@@ -7889,9 +9455,11 @@ pub mod pallet {
           .checked_add(1)
           .ok_or(TryRuntimeError::Other("System sovereign count overflow"))?;
         if let SystemSovereignState::Occupied(actor_id) = state {
-          let class = Self::active_actor_view(actor_id)
-            .map(|actor| actor.actor_class)
-            .or_else(|| ActorIdentities::<T>::get(actor_id).map(|identity| identity.actor_class));
+          let class = match Self::load_actor_state_for_frame_control(actor_id) {
+            LoadedActorStateOf::Active(state) => Some(state.identity.actor_class),
+            LoadedActorStateOf::Dormant(identity) => Some(identity.actor_class),
+            LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Corrupt => None,
+          };
           if class != Some(ActorClass::System { sovereign_id }) {
             return Err(TryRuntimeError::Other(
               "occupied System sovereign locator has no matching actor identity",
@@ -7907,7 +9475,7 @@ pub mod pallet {
         ));
       }
       let mut owner_hold_totals = alloc::collections::BTreeMap::new();
-      for (actor_id, identity) in ActorIdentities::<T>::iter() {
+      for (actor_id, identity) in &semantic_identities {
         match identity.actor_class.actor_type() {
           ActorType::System => {
             if ActorStateHolds::<T>::contains_key(actor_id) {
@@ -7917,7 +9485,25 @@ pub mod pallet {
             }
           }
           ActorType::User => {
-            let expected = Self::derive_actor_state_hold(actor_id, &identity).map_err(|_| {
+            let expected = if ActorControlLocators::<T>::contains_key(actor_id) {
+              let (_, frame_identity, hot, admission) =
+                Self::load_frame_control_authority(*actor_id).ok_or(TryRuntimeError::Other(
+                  "User Actor frame authority cannot be loaded for state-hold derivation",
+                ))?;
+              if frame_identity != *identity {
+                return Err(TryRuntimeError::Other(
+                  "User Actor frame identity disagrees with semantic state-hold identity",
+                ));
+              }
+              Self::derive_actor_state_hold_with_authority(
+                *actor_id,
+                identity,
+                Some((&hot, &admission)),
+              )
+            } else {
+              Self::derive_actor_state_hold_with_authority(*actor_id, identity, None)
+            }
+            .map_err(|_| {
               TryRuntimeError::Other("User Actor-state hold geometry cannot be rederived")
             })?;
             let record = ActorStateHolds::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
@@ -7944,9 +9530,9 @@ pub mod pallet {
       }
       for (actor_id, _) in ActorStateHolds::<T>::iter() {
         // deos-bypass: bounded-iter -- MaxActorIdentities bounds per-Actor hold records.
-        if !ActorIdentities::<T>::contains_key(actor_id) {
+        if !semantic_identities.contains_key(&actor_id) {
           return Err(TryRuntimeError::Other(
-            "Actor-state hold record has no Actor identity",
+            "Actor-state hold record has no semantic Actor identity",
           ));
         }
       }

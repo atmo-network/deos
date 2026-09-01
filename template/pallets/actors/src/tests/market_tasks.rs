@@ -763,18 +763,20 @@ fn create_rejects_zero_liquidity_output_bounds() {
 fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
+    let mut add_step = make_step(Task::AddLiquidity {
+      asset_a: TestAsset::Local(1),
+      asset_b: TestAsset::Local(2),
+      amount_a: AmountResolution::Fixed(4),
+      amount_b: AmountResolution::Fixed(4),
+      min_lp_out: 5,
+    });
+    add_step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
     let add_id = create_user_with(
       ALICE,
       Mutability::Mutable,
       manual_schedule(),
       None,
-      contract_steps_with_step(make_step(Task::AddLiquidity {
-        asset_a: TestAsset::Local(1),
-        asset_b: TestAsset::Local(2),
-        amount_a: AmountResolution::Fixed(4),
-        amount_b: AmountResolution::Fixed(4),
-        min_lp_out: 5,
-      })),
+      contract_steps_with_step(add_step),
     );
     fund_native(add_id, 1_000);
     let add_actor = sovereign_account(add_id);
@@ -786,6 +788,18 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
       event,
       Event::LiquidityAdded { actor_id, .. } if *actor_id == add_id
     )));
+    assert_eq!(asset_balance(&add_actor, TestAsset::Local(1)), 10);
+    assert_eq!(asset_balance(&add_actor, TestAsset::Local(2)), 10);
+    let run = Actors::actor_run_state(add_id).expect("dynamic LP output rejection suspends");
+    assert_eq!(run.cursor, 0);
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert!(matches!(
+      run.last_step_outcome,
+      Some(StepOutcome::Failed(TaskFailure {
+        retry: RetryClass::Temporary,
+        ..
+      }))
+    ));
 
     let remove_id = create_user_with(
       BOB,
@@ -1028,8 +1042,7 @@ fn ordinary_transfer_updates_accumulator_without_resuming_paused_system_actor() 
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    ActorHot::<Test>::mutate(actor_id, |maybe| {
-      let hot = maybe.as_mut().expect("Actors hot state exists");
+    mutate_actor_hot_coherent(actor_id, |hot| {
       hot.lifecycle = ActiveLifecycle::Paused;
     });
     assert_ok!(ordinary_transfer_to_actor(

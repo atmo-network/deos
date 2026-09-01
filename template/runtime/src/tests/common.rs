@@ -11,7 +11,7 @@ use alloc::vec;
 use polkadot_sdk::frame_support::{
   assert_ok,
   dispatch::DispatchResult,
-  traits::{Currency, Get, Hooks},
+  traits::{Currency, Get, GetStorageVersion, Hooks},
 };
 use polkadot_sdk::sp_std::boxed::Box;
 use polkadot_sdk::{
@@ -157,6 +157,21 @@ pub const MIN_LIQUIDITY: Balance = 0;
 
 /// Initialize test externalities with a clean state
 pub fn new_test_ext() -> TestExternalities {
+  build_test_ext(ActorTestGenesis::Reference)
+}
+
+enum ActorTestGenesis {
+  Reference,
+  SyntheticCapacity,
+}
+
+/// Capacity-only genesis excludes reference System Actors while retaining ledger
+/// anchors and the reserved Actor-id frontier. It does not model their lifecycle.
+pub fn synthetic_actor_test_ext() -> TestExternalities {
+  build_test_ext(ActorTestGenesis::SyntheticCapacity)
+}
+
+fn build_test_ext(actor_genesis: ActorTestGenesis) -> TestExternalities {
   let mut t = polkadot_sdk::frame_system::GenesisConfig::<Runtime>::default()
     .build_storage()
     .unwrap();
@@ -206,14 +221,35 @@ pub fn new_test_ext() -> TestExternalities {
   }
   .assimilate_storage(&mut t)
   .unwrap();
-  pallet_deos_actors::GenesisConfig::<Runtime>::default()
-    .assimilate_storage(&mut t)
-    .unwrap();
+  if matches!(actor_genesis, ActorTestGenesis::Reference) {
+    pallet_deos_actors::GenesisConfig::<Runtime>::default()
+      .assimilate_storage(&mut t)
+      .unwrap();
+  }
   pallet_governance::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
     .unwrap();
   let mut ext = TestExternalities::new(t);
   ext.execute_with(|| {
+    if matches!(actor_genesis, ActorTestGenesis::SyntheticCapacity) {
+      use pallet_deos_actors::GenesisSystemActors;
+      type GenesisActors = <Runtime as pallet_deos_actors::Config>::GenesisSystemActors;
+      crate::Actors::in_code_storage_version().put::<crate::Actors>();
+      let active_limit = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+        .min(<Runtime as pallet_deos_actors::Config>::MaxQueueLength::get());
+      pallet_deos_actors::ActiveActorLimit::<Runtime>::put(active_limit);
+      let next_id = GenesisActors::system_actors()
+        .into_iter()
+        .map(|(id, _, _, _)| id)
+        .chain(
+          GenesisActors::dormant_system_actors()
+            .into_iter()
+            .map(|(id, _, _)| id),
+        )
+        .max()
+        .map_or(0, |id| id.checked_add(1).expect("reserved Actor ids fit"));
+      pallet_deos_actors::NextActorId::<Runtime>::put(next_id);
+    }
     System::set_block_number(1);
     let _ = Staking::on_initialize(1);
   });
@@ -223,6 +259,10 @@ pub fn new_test_ext() -> TestExternalities {
 /// Primary helper for tests that need seeded assets/accounts.
 pub fn seeded_test_ext() -> TestExternalities {
   setup_basic_test_environment()
+}
+
+pub fn seeded_synthetic_actor_test_ext() -> TestExternalities {
+  seed_test_environment(synthetic_actor_test_ext())
 }
 
 /// Mint test assets to multiple accounts
@@ -253,7 +293,10 @@ pub fn mint_tokens(
 
 /// Setup a basic test environment with common assets and accounts
 pub fn setup_basic_test_environment() -> TestExternalities {
-  let mut ext = new_test_ext();
+  seed_test_environment(new_test_ext())
+}
+
+fn seed_test_environment(mut ext: TestExternalities) -> TestExternalities {
   ext.execute_with(|| {
     System::set_block_number(1);
     // Create test assets using standard asset IDs for consistency

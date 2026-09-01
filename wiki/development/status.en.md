@@ -1,7 +1,7 @@
 ---
 type: status
 title: Development Status
-description: Current implementation status, roadmap context, and active backlog items for the DEOS framework, focused on shipped baseline, open boundaries, and future-gated work without treating the wiki as a release-note surface.
+description: Current capabilities and present limitations of the DEOS framework and reference client.
 locale: en
 canonical_page_id: status
 translation_status: source
@@ -9,7 +9,6 @@ available_locales:
   - en
   - ru
 sources:
-  - resource: ../../BACKLOG.md
   - resource: ../../CHANGELOG.md
   - resource: ../../web-client/README.md
   - resource: ../../web-client/docs/architecture.en.md
@@ -18,7 +17,6 @@ audience: newcomer
 tags:
   - development
   - status
-  - roadmap
 related:
   - Three-Layer Validation
   - Reference Client
@@ -29,44 +27,25 @@ related:
 
 ## Summary
 
-DEOS is in framework-stabilization mode. The runtime, reference client, scripts, docs, and wiki are now being shaped into one coherent reference product rather than a sequence of visible refactor milestones.
+DEOS combines a FRAME runtime, a browser reference client, development tools, and documentation. This page describes current capabilities and their limits; it does not certify a release or a deployed network.
 
-This page is a current-state map. It is not the release history and not the full backlog.
+## Current capabilities
 
-## Stable baseline areas
+- **Economic mechanisms**: TMCTOL issuance, routing, treasury-owned liquidity, and Actor-mediated economic flows form the reference composition.
+- **DEOS Actors**: deterministic Actor Contract execution uses a bounded scheduler. Mutable Actors can retry Temporary Step failures while preserving committed prefixes without whole-contract rollback.
+- **Staking and governance**: multi-asset share accounting and bounded governance tracks provide staking, typed proposals, and protection mechanisms.
+- **Reference client**: the SvelteKit client provides wallet/account selection, tracked-asset balances and transfers, swap, staking, governance, automation, wiki browsing, and transaction feedback.
+- **Development tools**: project scripts, benchmarks, metadata export, and package/runtime/client checks support development and validation.
 
-The current framework baseline is best understood by domain:
+[Domain Map](../concepts/domain-map.en.md) explains how these areas relate.
 
-- **Economic physics**: TMCTOL minting, routing, treasury-owned liquidity, actor-mediated fee burning, and bounded invariants form the core economic loop.
-- **Autonomous actors**: Actors provides deterministic Actor Contract execution plus Mutable-only sparse Continuation for Temporary Step failure. Retries preserve committed prefixes on the canonical bounded scheduler without whole-contract rollback.
-- **Staking and governance**: staking uses multi-asset share-vault mechanics, while governance uses bounded domain tracks, typed payloads, and protection surfaces.
-- **Reference client**: the SvelteKit client exposes on-chain-first wallet, swap, staking, governance, wiki, chart/status, automation, and execution-feedback surfaces.
-- **Tooling and validation**: scripts, benchmarks, metadata export, wiki trust checks, client validation, and context gates support local development and release readiness.
+## Present limits
 
-Use [Domain Map](../concepts/domain-map.en.md) when you need the conceptual topology instead of the status snapshot.
+The client is a reference interface, not the source of protocol truth. Its canonical chain views expose bounded state. Wallet transfers cover tracked assets; this is not an exhaustive asset-discovery claim.
 
-## Active focus
+Browser session history and charts are not an archive. Indexed history, search, and analytics are materialized data, distinct from current canonical chain state.
 
-The current backlog concentrates on closing the contracted model with minimal release machinery:
-
-- Pass the direct pull-request validation gate on the final release tree;
-- Publish the runtime Wasm, metadata, descriptors, and five generated semantic/runtime evidence assets;
-- Publish one checksum file for that eight-asset payload;
-- Keep network assurance as an independently useful local operation rather than a release claim.
-
-## Open boundaries
-
-The important unfinished areas are intentionally gated:
-
-- Wallet expansion waits for a materialized/indexed asset-discovery surface;
-- Archive/search UX waits for a materialized provider contract;
-- Permissionless collators and advanced randomness wait for an upstream relay-beacon path;
-- Client composition and provider growth wait for concrete ownership pressure;
-- Block-reward routing waits for a concrete subsidy source and amount policy.
-
-## Where to look next
-
-For active tasks, use the root backlog. For completed delivery history, use the root changelog. For how to validate a change, use [Three-Layer Validation](three-layer-validation.en.md).
+The presence of a feature or a validation command does not by itself establish production readiness, network deployment, or validation of the current source tree.
 
 ## Related
 

@@ -7,12 +7,12 @@
 //! historical metrics, dashboards, trend analysis, or alerting; those belong in external indexers,
 //! operator tooling, or test-only analytical helpers that may consume this projection.
 
-use pallet_deos_actors::{ActorType, Task};
+use pallet_deos_actors::{ActorEligibility, ActorType, Task};
 use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
 use polkadot_sdk::pallet_asset_conversion::{self, PoolLocator};
 use polkadot_sdk::sp_runtime::traits::Zero;
 use primitives::{
-  AnchorBucketState, AnchorDomain, AssetKind, BurnDomain, BurnLivenessState, GuaranteeStatus,
+  AnchorDomain, AnchorState, AssetKind, BurnDomain, BurnLivenessState, GuaranteeStatus,
   PoolProjection, ReportedFloorInputs, TmctolConformanceStatus, TmctolGuaranteeState,
   ZapPostconditionState, ecosystem,
 };
@@ -23,13 +23,13 @@ pub struct TmctolReadModel;
 
 impl TmctolReadModel {
   pub fn tmctol_guarantee_state() -> TmctolGuaranteeState<AccountId, Balance> {
-    let tol_anchor = Self::anchor_bucket_state(
+    let tol_anchor = Self::anchor_state(
       AnchorDomain::Tol,
       ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
     );
-    let bldr_anchor = Self::anchor_bucket_state(
+    let bldr_anchor = Self::anchor_state(
       AnchorDomain::Bldr,
-      ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+      ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
     );
 
     let tol_counterparty =
@@ -70,45 +70,54 @@ impl TmctolReadModel {
     }
   }
 
-  fn anchor_bucket_state(domain: AnchorDomain, actor_id: u64) -> AnchorBucketState<AccountId> {
+  fn anchor_state(domain: AnchorDomain, actor_id: u64) -> AnchorState<AccountId> {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
-    let is_custody_only = matches!(
-      (domain, actor_id),
-      (
-        AnchorDomain::Tol,
-        ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID
-      ) | (
-        AnchorDomain::Bldr,
-        ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID
-      )
-    );
-    let actor_identity_exists =
-      pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id);
-    let scheduler_state_exists = pallet_deos_actors::ActorHot::<Runtime>::get(actor_id)
-      .is_some_and(|hot| {
-        hot.pending_signal || hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some()
-      });
-    let status = if is_custody_only && !actor_identity_exists && !scheduler_state_exists {
+    let identity = crate::Actors::actor_identity(actor_id);
+    let is_immutable_system_actor = identity.as_ref().is_some_and(|identity| {
+      identity.sovereign_account == sovereign_account
+        && identity.mutability == pallet_deos_actors::Mutability::Immutable
+        && matches!(
+          identity.actor_class,
+          pallet_deos_actors::ActorClass::System { sovereign_id } if sovereign_id == actor_id
+        )
+    });
+    let actor_identity_exists = identity.is_some();
+    let max_tail_chunks = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
+      .saturating_sub(1)
+      .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK);
+    let has_tail_chunk = (0..max_tail_chunks).any(|chunk_index| {
+      pallet_deos_actors::ActorContractTailChunks::<Runtime>::contains_key(actor_id, chunk_index)
+    });
+    let active_state_exists =
+      pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(actor_id)
+        || pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::contains_key(actor_id)
+        || pallet_deos_actors::ActorContractHeads::<Runtime>::contains_key(actor_id)
+        || pallet_deos_actors::ActorActivationAuthorities::<Runtime>::contains_key(actor_id)
+        || has_tail_chunk
+        || pallet_deos_actors::ActorFunding::<Runtime>::contains_key(actor_id)
+        || pallet_deos_actors::ActorRunHeads::<Runtime>::contains_key(actor_id)
+        || pallet_deos_actors::ActorRunPayloads::<Runtime>::contains_key(actor_id);
+    let status = if is_immutable_system_actor && !active_state_exists {
       GuaranteeStatus::Satisfied
     } else {
       GuaranteeStatus::Violated
     };
 
-    AnchorBucketState {
+    AnchorState {
       domain,
       actor_id,
       status,
       sovereign_account,
-      is_custody_only,
+      is_immutable_system_actor,
       actor_identity_exists,
-      scheduler_state_exists,
+      active_state_exists,
     }
   }
 
   fn pool_projection(
     domain: AnchorDomain,
     asset_b: Option<AssetKind>,
-    anchor: &AnchorBucketState<AccountId>,
+    anchor: &AnchorState<AccountId>,
   ) -> PoolProjection<Balance> {
     let asset_a = AssetKind::Native;
     let Some(asset_b_value) = asset_b else {
@@ -249,9 +258,7 @@ impl TmctolReadModel {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let target_balance = Self::asset_balance(target_asset, &sovereign_account);
     let dust_threshold = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
-    let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
-      .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(crate::Actors::actor_contract(actor_id));
+    let maybe_actor = crate::Actors::active_actor_state(actor_id);
     let (
       actor_exists,
       is_system,
@@ -260,23 +267,26 @@ impl TmctolReadModel {
       has_required_burn_step,
       has_required_swap_step,
     ) = maybe_actor
-      .map(|((identity, hot), program)| {
+      .map(|state| {
+        let program = state.contract;
         let has_address_event_trigger = program.trigger.address_event_source_enabled();
         let has_required_burn_step = program.steps.iter().any(|step| burn_match(&step.task));
         let has_required_swap_step =
           !requires_swap || program.steps.iter().any(|step| swap_match(&step.task));
         (
           true,
-          identity.actor_class.actor_type() == ActorType::System,
-          hot.lifecycle.is_paused(),
+          state.identity.actor_class.actor_type() == ActorType::System,
+          state.hot.lifecycle.is_paused(),
           has_address_event_trigger,
           has_required_burn_step,
           has_required_swap_step,
         )
       })
       .unwrap_or((false, false, false, false, false, !requires_swap));
-    let dormant = pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id)
-      && !pallet_deos_actors::ActorHot::<Runtime>::contains_key(actor_id);
+    let dormant = matches!(
+      crate::Actors::actor_eligibility(actor_id),
+      Ok(ActorEligibility::Dormant)
+    );
     let status = if domain == BurnDomain::BldrBuyback && dormant {
       GuaranteeStatus::NotInitialized
     } else if !actor_exists || !is_system || is_paused || !has_address_event_trigger {
@@ -314,11 +324,11 @@ impl TmctolReadModel {
   fn zap_postconditions() -> ZapPostconditionState<AccountId> {
     let actor_id = ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
-    let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
-      .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
-      .zip(crate::Actors::actor_contract(actor_id));
-    let Some(((identity, hot), program)) = maybe_actor else {
-      let status = if pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id) {
+    let Some(state) = crate::Actors::active_actor_state(actor_id) else {
+      let status = if matches!(
+        crate::Actors::actor_eligibility(actor_id),
+        Ok(ActorEligibility::Dormant)
+      ) {
         GuaranteeStatus::NotInitialized
       } else {
         GuaranteeStatus::Violated
@@ -342,7 +352,8 @@ impl TmctolReadModel {
       };
     };
 
-    let is_system = identity.actor_class.actor_type() == ActorType::System;
+    let program = state.contract;
+    let is_system = state.identity.actor_class.actor_type() == ActorType::System;
     let has_address_event_trigger = program.trigger.address_event_source_enabled();
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
@@ -433,7 +444,7 @@ impl TmctolReadModel {
       && split_targets_all_buckets
       && split_shares_sum_to_one
       && split_shares_match_policy;
-    let status = if !is_system || hot.lifecycle.is_paused() || !has_address_event_trigger {
+    let status = if !is_system || state.hot.lifecycle.is_paused() || !has_address_event_trigger {
       GuaranteeStatus::Violated
     } else if structure_satisfied {
       GuaranteeStatus::Satisfied
@@ -447,7 +458,7 @@ impl TmctolReadModel {
       sovereign_account,
       actor_exists: true,
       is_system,
-      is_paused: hot.lifecycle.is_paused(),
+      is_paused: state.hot.lifecycle.is_paused(),
       has_address_event_trigger,
       configured_foreign_asset,
       configured_lp_asset,

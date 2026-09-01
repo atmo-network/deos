@@ -153,7 +153,7 @@ Public read helpers now expose these governance-observability layers, and the sa
    - Runtime-declared power-profile identity for the live track family behind that vote kind
    - Current runtime returns `DecliningDirectStake` for ordinary `Aye / Nay`
    - Current runtime returns `DecliningVetoAsset` for protocol / network protection-track `Veto / Pass`
-   - Current runtime returns `DecliningNativeStake` for `$BLDR`-domain protection-track `Veto / Pass`, backed by locked `$NTVE`, locked `stNTVE`, and locked `NTVE/stNTVE` LP-derived `NativeVotePower`
+   - Current runtime returns `DecliningNativeStake` for `$BLDR`-domain protection-track `Veto / Pass`, backed by locked `$NTVE`, locked `stNTVE`, and locked `$NTVE/stNTVE` LP-derived `NativeVotePower`
 
 5. `proposal_resolution_state(domain, item_id)`
    - `VotingWindowOpen { current_epoch, maturity_epoch }`
@@ -642,7 +642,7 @@ For the current launch line, the runtime policy is now intentionally frozen to t
 
 Normal runtime builds apply the shipped piecewise `7x -> 1x` curve to ordinary and protection-track ballots. Ordinary `Aye / Nay` derive their base from same-domain `Staking::stake_value(domain, account)`; protection-track `Veto / Pass` use the runtime-declared protection surface for that domain.
 
-For `$BLDR`, the native protection surface adds locked `$NTVE`, locked `stNTVE` converted through the staking exchange rate, and account-level locked `NTVE/stNTVE` LP converted into conservative native-equivalent `NativeVotePower`.
+For `$BLDR`, the native protection surface adds locked `$NTVE`, locked `stNTVE` converted through the staking exchange rate, and account-level locked `$NTVE/stNTVE` LP converted into conservative native-equivalent `NativeVotePower`.
 
 **2. Domain-scoped hierarchy.**
 
@@ -650,7 +650,7 @@ Protocol / network governance runs as `$NTVE` primary + `$VETO` protection, whil
 
 **3. Protection-track cancellation.**
 
-Domain-specific backing enables the first live protection slice. Protocol governance uses the well-known `$VETO` asset class, created at genesis with deterministic metadata and an Asset Registry-owned admin surface. `$BLDR` governance uses locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower`.
+Domain-specific backing enables the first live protection slice. Protocol governance uses the well-known `$VETO` asset class, created at genesis with deterministic metadata and an Asset Registry-owned admin surface. `$BLDR` governance uses locked `$NTVE` / `stNTVE` / `$NTVE/stNTVE` LP-derived native `NativeVotePower`.
 
 One account may vote once in each track on the same item. Later protection replacements use the later ballot epoch, and protection ballots remain admissible until the configured close.
 
@@ -682,7 +682,7 @@ Instead:
 - `unlock_vote_power(lock_id)` transactionally returns the full aggregate source position after its horizon and removes the position; early and unknown releases fail explicitly
 - `cast_vote(...)` now already enforces the generic rule that ordinary ballots cannot enter before `primary_open`, while protection-track ballots remain admissible during any configured lead-in
 - `proposal_resolution_state(...)` first checks whether frozen raw protection-majority triggers the immediate threshold. After maturity, raw `Veto` turnout must clear the `1%` dust floor before the stored-weight `Veto` versus `Pass` gate applies; only then does the evaluator derive primary state from the family-aware tally.
-- Binary families use weighted `Aye / Nay`. Invoice families use `weighted_positive` versus `weighted_nay` with deterministic lowest-scalar tie-breaking across `Amplify / Approve / Reduce`. The launch-line runtime still reports only `Binary`, so invoice resolution remains kernel-ready rather than live reference-line policy.
+- Binary families use weighted `Aye / Nay`. Invoice families use `weighted_positive` versus `weighted_nay` with deterministic lowest-scalar tie-breaking across `Amplify / Approve / Reduce`. The current runtime reports `Invoice` for tactical-domain `L2TreasurySpend` in the canonical `$BLDR` domain and `Binary` for every other enabled combination.
 - Vote-derived finalization paths reuse the same logic rather than carrying a second hidden policy engine
 
 This keeps the pallet simpler and more honest, but it means tally/resolution cost scales with the bounded ballot-set size rather than O(1) cached counters.
@@ -881,7 +881,7 @@ The pallet intentionally retains only recent finalized outcomes.
 
 **1. Launch policy is intentionally narrow and frozen.**
 
-Ordinary `Aye / Nay` applies ballot-time Declining Power to same-domain `Staking::stake_value(...)`. Protocol / network protection-track `Veto / Pass` applies the same curve to the `$VETO` asset. `$BLDR` protection applies it to locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower`.
+Ordinary `Aye / Nay` applies ballot-time Declining Power to same-domain `Staking::stake_value(...)`. Protocol / network protection-track `Veto / Pass` applies the same curve to the `$VETO` asset. `$BLDR` protection applies it to locked `$NTVE` / `stNTVE` / `$NTVE/stNTVE` LP-derived native `NativeVotePower`.
 
 The policy includes a raw-supply immediate-cancellation gate and a raw `1%` veto dust floor before final protection can activate. It admits protection ballots until the configured close, retains bounded recent outcomes, and exposes a deliberately narrow admin recovery surface. Broader models remain future opt-ins, not hidden implementation debt.
 
@@ -916,6 +916,10 @@ TMCTOL treats the live proposal set as protected, so the separate dual-mode prot
 **9. GovXP identity layers beyond the counters-first v1 slice remain out of scope.**
 
 The pallet ships only bounded GovXP input counters. Richer identity layers, any later bounded multiplier policy, delegation semantics, and soulbound reputation policy remain future work.
+
+**10. Builder invoice settlement has not converged to the current contract.**
+
+The runtime still selects the fixed `BldrTreasury` enum, carries no bounded validated CIDv1 invoice identity or explicit validated treasury account, transfers only the full scalar target, and collapses insufficient capacity into generic dispatch failure. Runtime types, tests, benchmarks, Weight, metadata, and clients must implement `BaseFloorCapped` settlement, the new payload fields, and typed below-floor `InsufficientTreasuryCapacity` evidence before this architecture can claim the complete Builder invoice contract as shipped.
 
 ## Conclusion
 

@@ -424,6 +424,8 @@ run_pallet_benchmark() {
             "update_contract_observation_change"
             "precondition_all_max"
             "precondition_observation"
+            "scheduler_wakeup_cursor_remove_upward_depth"
+            "scheduler_wakeup_cursor_remove_upward_pages"
             "benchmark_monolithic_create"
             "benchmark_chunked_create"
             "benchmark_monolithic_close"

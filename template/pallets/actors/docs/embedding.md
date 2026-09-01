@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.24`
+- **Release line**: `0.7.25`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Source navigation**: `src/types.rs` is the stable public facade; the architecture map routes Contract, Lifecycle, Scheduler, and Observation type owners; `src/contract.rs` owns semantic classification rather than public type definitions
@@ -13,7 +13,7 @@
 
 `pallet-deos-actors` is a bounded deterministic actor kernel. A downstream runtime can embed it without inheriting DEOS governance policy, TMCTOL bucket topology, native staking design, or the current System Actor catalog.
 
-The `0.7.24` package is fresh-genesis source only. The current baseline defines no migration from an earlier activation, detector, hold, resource, or index layout and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
+The package is fresh-genesis source only. The current baseline defines no migration from an earlier activation, detector, hold, resource, or index layout and must not be used to upgrade a deployed chain; a downstream live lineage owns its own explicit bounded migration before adopting this storage baseline.
 
 Use this guide with the normative [DEOS Actors Specification](./specification.en.md) and shipped [DEOS Actors Architecture](./architecture.en.md). The specification defines portable semantics; this package document defines the host contract; the architecture document maps the reusable package implementation and source ownership.
 
@@ -67,7 +67,7 @@ An embedding runtime must provide only the bounded host surface that Actors cann
 - Canonical FIFO configuration: non-zero page size, bounded `MaxQueueLength`, `MaxQueueEntriesScannedPerBlock`, and `MaxExecutionsPerBlock`. One `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Actor run-state owner govern every actor. Actor class, actor id, execution share, and priority policy never change service order.
 - Under `runtime-benchmarks`, `setup_predicate_assets` must provide enough valid distinct assets to measure the maximum bounded-DNF predicate count honestly; repeated keys do not establish worst-case ProofSize.
 
-The host runtime owns those bindings. Actors core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no contract or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
+The host runtime owns those bindings. Actors core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage and explicit mutability under the total-identity bound but own no contract or scheduler state; an Immutable dormant identity rejects activation and owner close. Runtime-specific custody-only addresses may remain outside generic actor storage when no Actor identity is intended.
 
 Deterministic User and System custody derivation survives host account-provider removal. Reattachment recovers the same address but does not recreate balances removed by external reaping, dust handling, or other host policy.
 

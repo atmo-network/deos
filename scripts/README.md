@@ -2,7 +2,7 @@
 
 This directory is the deterministic operator/developer automation layer of the DEOS reference stack. It supports testing, validation, benchmarking, generation, build, deployment preparation, local-network operation, release work, and repeatable coordination across `/docs`, `/template`, and `/web-client`; it is not the primary conceptual control plane.
 
-The `0.7.22` release accepts only a fresh-genesis candidate. Local full validation does not certify an upgrade from `0.7.21`, a deployed storage lineage, or a network launch; those remain outside the pre-`1.0` release boundary.
+The pre-`1.0` release line accepts only fresh-genesis candidates. Local full validation does not certify an upgrade from an earlier release, a deployed storage lineage, or a network launch.
 
 This directory contains deterministic command surfaces, not agent strategy:
 
@@ -84,15 +84,17 @@ Each numbered command is independently callable by a human or CI from any workin
 - [actors-assurance.sh](./actors-assurance.sh)
   Shared current-tree Actors proof contract for semantic-manifest and fee-envelope-vector freshness, cross-language semantics, scheduler stress, capacity, and independent-runtime embedding. By default it reports and preserves exact source, production Weight, production Wasm, and metadata identities. A caller that intentionally cannot build Wasm may set `REQUIRE_WASM_IDENTITY=0`; the script reports that narrower evidence boundary while retaining every non-Wasm check. Historical transition replay is release history rather than a routine validation dependency.
 
+  Its built-in `self-test` mode checks source-content identity in temporary Git fixtures: committed, staged, unstaged, untracked, deleted and executable-mode changes, stable commit packaging, artifact exclusions and fail-closed symlink handling. The assurance gate runs the same self-test automatically; standalone self-test needs no Cargo, network access or build artifacts.
+
 - [audit-asset-conversion-boundaries.sh](./audit-asset-conversion-boundaries.sh)
   Read-only fail-closed audit requiring exactly one production direct Asset Conversion pool-creation owner inside the atomic DEOS lifecycle and prohibiting LP-binding repair outside that owner. It accepts no arguments except `--help` and may run from any working directory.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
 
-Project-local audit leaves and targeted routes are documented in `/.agents/skills/alignment/SKILL.md`. Use the diff-aware completion gate for changed-scope work and `./scripts/validate-local.sh fast|heavy|full` only for the corresponding release-validation boundary.
+Use the owning tool's focused checks for changed-scope work and `./scripts/validate-local.sh fast|heavy|full` for the corresponding project-validation boundary. These commands do not require agent skills; any agent-specific audits are optional additional review.
 
-Before creating a release tag, run `./scripts/validate-local.sh full` against the intended commit. After that commit is accepted as local `main` and tagged, run `./.agents/skills/alignment/scripts/audit-release-line.sh --validated-release-commit <commit>`; the audit requires `main`, `vX.Y.Z`, and the explicitly supplied validated commit/tree to be identical and rejects a parallel plain version ref. It records no hidden validation state and does not discover branch or GitHub authority.
+Before creating a release tag, run `./scripts/validate-local.sh full` against the intended commit. After that commit is accepted as `main` and tagged, verify with Git that `main`, the peeled `vX.Y.Z` tag, and the validated commit/tree are identical and that no parallel plain version tag exists. Release verification must not depend on an agent skill, hidden validation state, or inferred GitHub authority.
 
 Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
 
@@ -111,7 +113,7 @@ Commands executed through the shared script harness use compact output by defaul
   Export native runtime metadata through the committed `deos-runtime` metadata example in an isolated Cargo target, regenerate PAPI descriptors, and project observation-inspector runtime evidence from the exact metadata, compressed production runtime-code Wasm, runtime constants, production Actors weights, and descriptor identity. Isolation prevents metadata compilation from replacing the production Wasm artifact. This replaces ad hoc metadata export and independently maintained inspector constants.
 
 - [bootstrap-native-staking-local.sh](./bootstrap-native-staking-local.sh)
-  Consolidated native staking bootstrap helper. `check` reads canonical `NativeSecurityMode` plus live readiness for the `NTVE/stNTVE` pool and Native Staking Liquidity Actor skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding without synthesizing mode-inactive LP-security actions. It never signs or submits transactions. The staking specification and package architecture own readiness sequencing and authority boundaries; this command remains the single operator surface.
+  Consolidated native staking bootstrap helper. `check` reads canonical `NativeSecurityMode`, pool readiness and bounded `ActorEligibilityApi` state at one finalized block. JSON `stakingLiquidityActor` contains the Active activation projection, or null for Dormant/NotRegistered; classification errors fail closed. Matching runtime metadata/descriptors are required. `prepare-calls` emits plan-only registration, pool and liquidity calls without mode-inactive LP-security actions. It never signs or submits transactions; the staking specification and package architecture own sequencing and authority boundaries.
 
 - [authorized-upgrade-local.sh](./authorized-upgrade-local.sh)
   Consolidated authorized runtime-upgrade helper. `check` pins one finalized block, compares live and local runtime code, inspects protocol `L1RootAction` submission authority and `$VETO` issuance, verifies the pending authorized hash, and can emit offline relay call data. `prepare-authorization` emits candidate-bound stake, preimage, and signed proposal call data only after reporting finalized item, balance, fee, and authority checks; it withholds the protection `Pass` call unless the lifecycle is ready. `apply` stays plan-only unless explicit `--submit` relays matching code bytes through `System.apply_authorized_upgrade { code }`. `snapshot` captures finalized non-empty Router/Oracle/Actors baseline state, and `verify` checks runtime identity, selected-state preservation, and live code equality with the candidate Wasm.

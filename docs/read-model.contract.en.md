@@ -77,10 +77,10 @@ Each subsystem below uses the same two buckets:
 
 #### On-Chain Canonical Projection
 
-- Current System Immutable Bucket A anchor status for TOL and BLDR domains
-- Current anchor-pool existence, reserves, LP issuance, and Bucket A LP balance
+- Current sealed Immutable System Actor status for first-order Bucket A and BLDR Anchor
+- Current anchor-pool existence, reserves, LP issuance, and owning anchor LP balance
 - Bounded live inputs needed to recompute the reported floor metric
-- Separate live burn-liveness status for framework native burn and reference BLDR buyback/burn paths
+- Separate live burn-liveness status for framework native burn and reference `$BLDR` buyback/burn paths
 - Current Zap postcondition status for add-liquidity, foreign-to-native swap, and LP bucket-split configuration
 - Explicit live statuses for guarantee classes, including `NotInitialized` and `NotGuaranteed`
 

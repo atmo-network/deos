@@ -67,10 +67,10 @@ This matters because the floor-support properties depend on liquidity accumulati
 
 The TOL share is split into four buckets:
 
-- `Bucket A` for anchor liquidity and hard floor support
-- `Bucket B` for building-budget and buyback-oriented flows
-- `Bucket C` for capital reserve and treasury operations
-- `Bucket D` for dormant policy reserve
+- `Bucket A / Anchor` for immutable floor-support custody
+- `Bucket B / Builder` for ecosystem construction and buyback-oriented flows
+- `Bucket C / Capital` for capital reserve and treasury operations
+- `Bucket D / Dormant` for sleeping demand, distribution, or marketing reserve
 
 The bucket model lets governance steer deployment without treating all protocol liquidity as interchangeable.
 

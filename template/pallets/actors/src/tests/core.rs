@@ -199,7 +199,9 @@ fn maximum_contract_admission_uses_one_step_envelope_instead_of_suffix_sum() {
     let actor_id = crate::NextActorId::<Test>::get().saturating_sub(1);
     assert_eq!(
       crate::ActorContractTailChunks::<Test>::iter_prefix(actor_id).count(),
-      2
+      <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get()
+        .saturating_sub(1)
+        .div_ceil(crate::MAX_STEPS_PER_TAIL_CHUNK) as usize
     );
   });
 }
@@ -270,7 +272,6 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     record_wakeup_worker_fault,
     close_actor,
     fee_collection,
-    cycle_orchestration,
     task_transfer,
     task_burn,
     task_mint,
@@ -311,7 +312,6 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     transaction_extension_ingress_notify,
     run_progress,
     run_suspend,
-    run_retry,
     run_complete,
     run_cancel,
     update_contract,
@@ -337,13 +337,11 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
   same_at!(opening_predicate_capture, 1, 16, 32);
   same_at!(predicate_set_evaluation, 0, 1, 8);
   same_at!(task_split_transfer, 0, 1, 8);
-  same_at!(step_orchestration, 0, 1, 8);
   same_at!(scheduler_paged_tombstone_drain, 0, 1, 10_000);
   same_at!(scheduler_paged_mixed_scan, 0, 1, 10_000);
   same_at!(scheduler_paged_execute_cheap, 0, 1, 1_000);
   same_at!(scheduler_paged_execute_cheap_mixed, 0, 1, 1_000);
   same_at!(funding_snapshot_open, 0, 1, 10);
-  same_at!(run_suffix_admission, 0, 1, 8);
   same_at!(permissionless_sweep_many, 0, 1, 5);
 }
 
@@ -412,7 +410,10 @@ fn create_atomicity_checkpoint_failure_rolls_back_all_state() {
     assert_eq!(SovereignIndex::<Test>::get(&expected_sovereign), None);
     assert_eq!(OwnerSlotBitmaps::<Test>::get(ALICE), [0; 32]);
     assert_eq!(Actors::active_actor_count(), active_before);
-    assert_eq!(ActorHot::<Test>::iter_keys().count() as u32, active_before);
+    assert_eq!(
+      crate::ActorControlLocators::<Test>::iter_keys().count() as u32,
+      active_before
+    );
     assert_eq!(native_balance(&ALICE), owner_before);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
     assert_eq!(System::events(), events_before);
@@ -526,7 +527,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
     ));
     let actor_id = Actors::next_actor_id() - 1;
     frame_system::Pallet::<Test>::set_block_number(2);
-    let identity_before = ActorIdentities::<Test>::get(actor_id);
+    let identity_before = Actors::actor_identity(actor_id);
     fund_native_raw(
       &identity_before
         .as_ref()
@@ -548,7 +549,7 @@ fn activation_checkpoint_failure_rolls_back_state_and_event() {
       DispatchError::Other("AtomicityCreateCheckpointFailed")
     );
 
-    assert_eq!(ActorIdentities::<Test>::get(actor_id), identity_before);
+    assert_eq!(Actors::actor_identity(actor_id), identity_before);
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert_eq!(Actors::active_actor_count(), 0);
     assert_eq!(System::events(), events_before);
@@ -739,22 +740,23 @@ fn weight_deferral_is_silent_when_both_dimensions_are_exhausted() {
       transfer_contract_steps(BOB, 10),
     );
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
+    let step = cell.resources.control.saturating_add(cell.resources.effect);
     let queue_weight = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
       .saturating_add(Actors::scheduler_actor_probe_weight_upper())
       .saturating_add(
         <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
           .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
       );
-    // Both dimensions are exhausted one unit below the full cycle envelope.
+    // Both dimensions are exhausted one unit below the current Step envelope.
     let limit = Weight::from_parts(
       queue_weight
         .ref_time()
-        .saturating_add(Actors::attempt_weight_upper_bound(&instance, 0).ref_time())
+        .saturating_add(step.ref_time())
         .saturating_sub(1),
       queue_weight
         .proof_size()
-        .saturating_add(Actors::attempt_weight_upper_bound(&instance, 0).proof_size())
+        .saturating_add(step.proof_size())
         .saturating_sub(1),
     );
     Actors::execute_cycle(limit);
@@ -775,11 +777,11 @@ fn live_head_consume_rolls_back_on_missing_or_malformed_head_page() {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert!(Actors::paged_enqueue(actor_id));
+      assert!(enqueue_latched_actor(actor_id));
       if malformed {
-        QueuePages::<Test>::insert(0, BoundedVec::default());
+        crate::ActorReadyFrameChunks::<Test>::insert(0, BoundedVec::default());
       } else {
-        QueuePages::<Test>::remove(0);
+        crate::ActorReadyFrameChunks::<Test>::remove(0);
       }
       let events_before = System::events();
       let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -795,8 +797,8 @@ fn live_head_consume_rolls_back_on_missing_or_malformed_head_page() {
         root_before
       );
       assert_eq!(
-        Actors::actor_hot(actor_id).expect("hot").queue_ticket,
-        Some(0)
+        crate::ActorControlLocators::<Test>::get(actor_id),
+        Some(crate::ActorControlLocation::Ready { ticket: 0 })
       );
     });
   }
@@ -968,9 +970,7 @@ fn terminal_membership_rolls_back_atomically_with_failed_schedule_replacement() 
     );
     // Corrupt the existing wakeup cursor so the replacement placement must roll back; the
     // terminal membership update and the whole control transaction revert together.
-    WakeupBuckets::<Test>::mutate(WakeupKey::Block(102), |maybe| {
-      maybe.as_mut().expect("bucket").cursor_index = None;
-    });
+    crate::ActorWaitingCursorIndices::<Test>::remove(WakeupKey::Block(102));
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert!(
       update_contract_partial!(
@@ -989,6 +989,112 @@ fn terminal_membership_rolls_back_atomically_with_failed_schedule_replacement() 
       Actors::actor_hot(actor_id).expect("hot").terminal_at,
       Some(102),
       "terminal membership stays at the original window terminal"
+    );
+  });
+}
+
+#[test]
+fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_state() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let steps = transfer_contract_steps(BOB, 10);
+    let predecessor = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+    for id in [predecessor, actor_id] {
+      fund_native(id, 100);
+      assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
+    }
+    let contract = system_active_contract(manual_schedule(), None, steps).expect("valid Contract");
+    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    let host_before = (
+      native_balance(&BOB),
+      native_balance(&sovereign_account(actor_id)),
+      fee_collections(),
+    );
+    let full = ample_simulation_budget();
+    let half = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
+    for budget in [
+      crate::SimulationBudget {
+        actor_control: Weight::from_parts(0, half.proof_size()),
+        shared_economic: half,
+      },
+      crate::SimulationBudget {
+        actor_control: Weight::from_parts(half.ref_time(), 0),
+        shared_economic: half,
+      },
+      crate::SimulationBudget {
+        actor_control: half,
+        shared_economic: Weight::from_parts(0, half.proof_size()),
+      },
+      crate::SimulationBudget {
+        actor_control: half,
+        shared_economic: Weight::from_parts(half.ref_time(), 0),
+      },
+    ] {
+      assert_eq!(
+        Actors::simulate_current_contract(
+          actor_id,
+          ActorType::System,
+          Mutability::Mutable,
+          contract.clone(),
+          SimulationMode::FreshCurrentPlan,
+          budget
+        ),
+        Err(SimulationError::ResourceDeferred)
+      );
+      assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+      assert_eq!(
+        (
+          native_balance(&BOB),
+          native_balance(&sovereign_account(actor_id)),
+          fee_collections()
+        ),
+        host_before
+      );
+    }
+    assert_eq!(
+      Actors::simulate_current_contract(
+        actor_id,
+        ActorType::System,
+        Mutability::Mutable,
+        contract.clone(),
+        SimulationMode::FreshCurrentPlan,
+        crate::SimulationBudget {
+          actor_control: Weight::MAX,
+          shared_economic: Weight::MAX
+        }
+      ),
+      Err(SimulationError::InvalidBudget)
+    );
+    let result = Actors::simulate_current_contract(
+      actor_id,
+      ActorType::System,
+      Mutability::Mutable,
+      contract,
+      SimulationMode::FreshCurrentPlan,
+      full,
+    )
+    .expect("non-head actor simulates one local Step");
+    assert_eq!(
+      result.steps.as_slice(),
+      &[SimulationStepRecord {
+        step_index: 0,
+        outcome: StepOutcome::Executed
+      }]
+    );
+    assert_eq!(result.status, AttemptDisposition::Completed);
+    assert_eq!(
+      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
+      Some(predecessor)
+    );
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+    assert_eq!(
+      (
+        native_balance(&BOB),
+        native_balance(&sovereign_account(actor_id)),
+        fee_collections()
+      ),
+      host_before
     );
   });
 }
@@ -1022,6 +1128,7 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
       Mutability::Mutable,
       contract,
       SimulationMode::FreshCurrentPlan,
+      ample_simulation_budget(),
     )
     .expect("ready current plan simulates");
 
@@ -1060,6 +1167,7 @@ fn zero_step_simulation_completes_without_step_records_or_state_mutation() {
       Mutability::Mutable,
       contract,
       SimulationMode::FreshCurrentPlan,
+      ample_simulation_budget(),
     )
     .expect("ready zero-Step plan simulates");
 
@@ -1080,7 +1188,7 @@ fn canonical_head_discovery_distinguishes_empty_head_and_blocked() {
     assert_eq!(Actors::test_head_discovery(0, 1, 0, scan), (0, None, 0));
 
     let system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::paged_enqueue(system));
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), system));
     let cutoff = Actors::next_queue_ticket();
     let (state, entry, scanned) = Actors::test_head_discovery(cutoff, 1, 0, scan);
     assert_eq!((state, scanned), (1, 1));
@@ -1096,7 +1204,9 @@ fn canonical_head_discovery_distinguishes_empty_head_and_blocked() {
       (2, None, 0),
       "an unadmitted live-head probe is a weight stall"
     );
-    QueueTail::<Test>::mutate(|tail| *tail = tail.saturating_add(1));
+    crate::ActorReadyTail::<Test>::put(
+      u64::from(<<Test as crate::Config>::MaxQueueLength as Get<u32>>::get()) + 1,
+    );
     assert_eq!(
       Actors::test_head_discovery(cutoff, 1, 0, scan),
       (3, None, 0),
@@ -1220,7 +1330,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     assert_eq!(open_run.cycle_nonce, 1);
     assert_eq!(open_run.funding_snapshot.get(&TestAsset::Native), Some(&20));
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("identity remains live")
         .cycle_nonce,
       0
@@ -1248,6 +1358,11 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());
     let actor_state = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
+    #[cfg(not(feature = "runtime-benchmarks"))]
+    assert!(matches!(
+      Actors::load_frame_actor_state(actor_id),
+      crate::LoadedActorStateOf::Active(_)
+    ));
     assert_eq!(actor_state.cycle_state, CycleState::Idle);
     assert_eq!(actor_state.cycle_nonce, 1);
     assert_eq!(
@@ -1299,6 +1414,43 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
       Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ActorRunNotFound
     );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn cancellation_fails_closed_when_scalar_run_outlives_its_primary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
+    fund_native(actor_id, 100);
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_some());
+    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    let hot_before = Actors::actor_hot(actor_id);
+    let run_before = Actors::actor_run_state(actor_id)
+      .expect("run remains before failed cancellation")
+      .encode();
+    let events_before = System::events();
+
+    assert_noop!(
+      Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::ActorInvariant
+    );
+    assert_eq!(Actors::actor_hot(actor_id), hot_before);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("run remains after failed cancellation")
+        .encode(),
+      run_before
+    );
+    assert_eq!(System::events(), events_before);
   });
 }
 
@@ -1577,7 +1729,7 @@ fn identity_control_clock_tracks_creation_and_survives_deactivation() {
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("created identity")
         .last_control_mutation_block,
       7
@@ -1585,7 +1737,7 @@ fn identity_control_clock_tracks_creation_and_survives_deactivation() {
     frame_system::Pallet::<Test>::set_block_number(8);
     assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("dormant identity")
         .last_control_mutation_block,
       8
@@ -1864,7 +2016,7 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
     assert!(clauses[0][0].encode() < clauses[0][1].encode());
 
     let event_count = frame_system::Pallet::<Test>::event_count();
-    let control_block = ActorIdentities::<Test>::get(actor_id)
+    let control_block = Actors::actor_identity(actor_id)
       .expect("identity exists")
       .last_control_mutation_block;
     assert_ok!(Actors::update_contract(
@@ -1877,7 +2029,7 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
     ));
     assert_eq!(frame_system::Pallet::<Test>::event_count(), event_count);
     assert_eq!(
-      ActorIdentities::<Test>::get(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("identity exists")
         .last_control_mutation_block,
       control_block
@@ -2249,7 +2401,8 @@ fn system_immutable_indefinite_commitment_survives_breaker_mitigation() {
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     let before = Actors::active_actor_view(actor_id).expect("immutable actor");
-    assert!(Actors::attempt_weight_upper_bound(&before, 0).ref_time() > 0);
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
+    assert!(cell.resources.control.ref_time() > 0);
     assert_eq!(
       Actors::system_sovereigns(actor_id),
       Some(SystemSovereignState::Occupied(actor_id)),
@@ -2301,6 +2454,7 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
       Mutability::Mutable,
       expected_contract,
       SimulationMode::FreshCurrentPlan,
+      ample_simulation_budget(),
     )
     .expect("ready current plan simulates");
 

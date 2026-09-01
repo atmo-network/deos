@@ -204,12 +204,12 @@ Multi-component workflows and system-level behavior validation.
 - Validates: End-to-end flow produces consistent state
 - Failure Criteria: State inconsistency, balance mismatch, or operation failure
 
-### 5.3 Overflow Protection Testing
+### 5.3 Large BigInt Inputs Remain Deterministic
 
-- Nature: Tests near-maximum uint256 operations
-- Necessity: Critical for preventing financial exploits
-- Validates: Safe multiplication, no silent overflows
-- Failure Criteria: Overflow occurs or result wraps around
+- Nature: Repeats one near-uint256-sized price calculation with unbounded JavaScript `BigInt`.
+- Necessity: Confirms deterministic rounding without pretending to reproduce runtime `U256` overflow behavior.
+- Validates: Equal inputs produce equal outputs and sub-token mint output rounds to zero explicitly.
+- Failure Criteria: Repeated outputs differ, the operation throws, or a sub-token amount becomes a positive token.
 
 ### 5.4 Safe Operating Ranges
 
@@ -238,10 +238,10 @@ Validation of system invariants and participant class integration with core toke
 
 ### 6.2 Mass Conservation - System-Wide Token Accounting
 
-- Nature: Fundamental conservation law for token supply
-- Necessity: Proves tokens cannot be created or destroyed outside designed mechanisms (minting, TOL lock)
-- Validates: Total supply exactly equals user balances + TOL reserves (across all 4 buckets); no tokens lost to rounding; supply tracking remains consistent across all operations
-- Failure Criteria: Supply mismatch >1 wei; tokens disappear or appear unexpectedly; balance sum ≠ total supply
+- Nature: Fundamental conservation law for live native custody.
+- Necessity: Prevents historical TOL contribution telemetry from being double-counted with the same assets held in XYK.
+- Validates: Total supply exactly equals user balances, live XYK reserve, TOL buffer, and fee buffer.
+- Failure Criteria: Exact live-custody sum differs from total supply or any balance becomes negative.
 
 ### 6.3 TOL Independence - Participant Sales Don't Touch TOL
 
@@ -532,14 +532,14 @@ Executable vectors for durable TMCTOL reporting metrics and conformance boundari
 ### 13.4 Zap Bucket Accounting Conservation
 
 - Nature: Tests bucket-level LP/native/foreign accounting after Zap allocation.
-- Necessity: Supports the floor-reporting bucket state model with executable accounting conservation.
-- Validates: Sum of bucket LP/native/foreign fields equals aggregate Zap totals and Bucket_A receives classifiable LP.
-- Failure Criteria: Bucket sums diverge from aggregate totals or Bucket_A cannot be classified as anchor LP.
+- Necessity: Keeps configured TOL allocation accounting exact without introducing lifecycle semantics.
+- Validates: Sum of bucket LP/native/foreign fields equals aggregate Zap totals and Bucket_A receives its configured share.
+- Failure Criteria: Bucket sums diverge from aggregate totals or Bucket_A receives no LP.
 
 ### 13.5 Stress Floor Monotonicity
 
 - Nature: Tests stress-floor response to larger sellable pressure.
-- Necessity: Pins the canonical `P_stress(x)` direction used by floor reports.
+- Necessity: Pins the canonical `P_stress(x)` direction used by floor scenarios.
 - Validates: Larger sellable pressure lowers the stress floor for fixed reserves.
 - Failure Criteria: Stress floor increases or stays equal as sellable pressure grows.
 

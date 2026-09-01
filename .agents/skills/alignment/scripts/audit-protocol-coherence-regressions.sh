@@ -215,7 +215,7 @@ run_normative_drift_fixtures() {
     exec {FIXTURE_LOCK_FD}>"$PROJECT_ROOT/.git/deos-protocol-coherence-mutation.lock"
     acquire_fixture_lock
 
-    local plural_path condition_path duplicate_path soft_path phase_path staking_path retry_path near_miss_path
+    local plural_path condition_path duplicate_path soft_path phase_path staking_path retry_path near_miss_path bldr_anchor_path
     new_fixture "$TEMPLATE_DIR/pallets/actors/src" plural rs; plural_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/pallets/actors/docs" condition md; condition_path="$NEW_FIXTURE_PATH"
     new_fixture "$TEMPLATE_DIR/primitives/src" duplicate rs; duplicate_path="$NEW_FIXTURE_PATH"
@@ -224,6 +224,7 @@ run_normative_drift_fixtures() {
     new_fixture "$TEMPLATE_DIR/pallets/staking/src" staking-view rs; staking_path="$NEW_FIXTURE_PATH"
     new_fixture "$PROJECT_ROOT/web-client/scripts" router-retry mjs; retry_path="$NEW_FIXTURE_PATH"
     new_fixture "$PROJECT_ROOT/web-client/scripts" plural-near-miss mjs; near_miss_path="$NEW_FIXTURE_PATH"
+    new_fixture "$TEMPLATE_DIR/primitives/src" bldr-anchor rs; bldr_anchor_path="$NEW_FIXTURE_PATH"
     pause_fixture_test_if_requested post-lock
 
     require_legitimate_fixture_pass "$plural_path" "One optional Precondition gates this Step." "$output"
@@ -234,6 +235,7 @@ run_normative_drift_fixtures() {
     require_legitimate_fixture_pass "$staking_path" "fn native_security_view() -> NativeSecurityView;" "$output"
     require_legitimate_fixture_pass "$retry_path" "classifyRouterRetry(failure.retryDisposition, error);" "$output"
     require_legitimate_fixture_pass "$near_miss_path" "One optional Precondition remains singular." "$output"
+    require_legitimate_fixture_pass "$bldr_anchor_path" "pub const BLDR_ANCHOR_ACTORS_ID: u64 = 12;" "$output"
 
     require_mutation_failure "Plural Precondition" "$plural_path" \
         "Optional Preconditions gate this Step." \
@@ -259,12 +261,15 @@ run_normative_drift_fixtures() {
     require_mutation_failure "Plural Precondition near miss" "$near_miss_path" \
         "const entrySummary = 'Unrelated Preconditions prose';" \
         "Plural Preconditions terminology reintroduced" "$output"
+    require_mutation_failure "Retired BLDR bucket-qualified anchor" "$bldr_anchor_path" \
+        "pub const BLDR_BUCKET_A_ACTORS_ID: u64 = 12;" \
+        "Retired BLDR bucket-qualified anchor identity reintroduced" "$output"
 
     remove_fixture "$output"
     cleanup_fixtures
     flock -u "$FIXTURE_LOCK_FD"
     trap - EXIT INT TERM HUP
-    log_success "Seven repository-behavior mutation families and the plural-exception near miss failed closed; exact detector lines, legitimate fixtures, and cleanup passed"
+    log_success "Eight repository-behavior mutation families and the plural-exception near miss failed closed; exact detector lines, legitimate fixtures, and cleanup passed"
 }
 
 reject_pattern() {
@@ -722,13 +727,13 @@ main() {
         "Actors Step failure no longer preserves concrete cause and retry disposition"
     require_anchor 'pub enum AttemptDisposition' "$actors_lifecycle_types" \
         "Actors canonical attempt disposition is missing"
-    require_anchor 'fn resolve_step_control\(outcome: &StepOutcome' \
+    require_anchor 'fn execute_loaded_single_step_core\(' \
         "$TEMPLATE_DIR/pallets/actors/src/execution.rs" \
         "Actors Step policy interpreter no longer consumes the canonical outcome"
-    require_anchor 'status: attempt.disposition' "$TEMPLATE_DIR/pallets/actors/src/execution.rs" \
+    require_anchor 'status: attempt.status' "$TEMPLATE_DIR/pallets/actors/src/scheduler.rs" \
         "Actors simulation no longer returns production finalization disposition"
-    require_anchor 'cumulative_outcomes: attempt.outcomes' \
-        "$TEMPLATE_DIR/pallets/actors/src/execution.rs" \
+    require_anchor 'cumulative_outcomes: attempt.cumulative_outcomes' \
+        "$TEMPLATE_DIR/pallets/actors/src/scheduler.rs" \
         "Actors simulation reconstructed counters outside production finalization"
     require_anchor 'run_simulation_preserves_retry_position_and_committed_state' \
         "$actors_tests" "Actors shared failure-cause simulation evidence is missing"
@@ -782,13 +787,8 @@ main() {
     reject_pattern '\bconsecutive_failures\b' \
         "Retired ambiguous Actors failure-streak field reintroduced" \
         "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/wiki" "$PROJECT_ROOT/web-client"
-    require_anchor 'fn predicate_evaluation_weight' "$TEMPLATE_DIR/pallets/actors/src/execution.rs" \
-        "Actors benchmark-domain predicate Weight chunking is missing"
-    require_anchor 'generated_predicate_weight_scales_and_chunks_opening_plus_step_visits' "$actors_tests" \
-        "Actors dual-phase predicate Weight evidence is missing"
-    reject_pattern 'predicate_set_evaluation\(step\.preconditions\.evaluation_units\(\)\)' \
-        "Actors dual-phase predicate Weight bypasses benchmark-domain chunking" \
-        "$TEMPLATE_DIR/pallets/actors/src"
+    require_anchor 'generated_predicate_weight_scales_with_bounded_step_visits' "$actors_tests" \
+        "Actors bounded predicate Weight evidence is missing"
     reject_pattern 'BalanceExhausted|FeeBudgetExhausted' \
         "Actors active runtime/client surfaces revived retired mid-pipeline economic close reasons" \
         "$TEMPLATE_DIR/pallets/actors/src" \
@@ -900,7 +900,7 @@ main() {
         "$actors_tests" "Actors single global FIFO evidence is missing"
     require_anchor 'on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution' \
         "$actors_tests" "Actors fanout-to-canonical-scheduler evidence is missing"
-    require_anchor '`resolve_step_control` remains the only runtime transition owner' \
+    require_anchor 'Production and simulation share current-Step transition owners' \
         "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md" \
         "Actors single step/lifecycle transition owner is missing"
     reject_pattern '\b(?:PriorityQueue|PriorityLane|ReadinessCache|RetryQueue|AlternateRetryOwner|SecondaryLifecycleClassifier)\b' \
@@ -947,8 +947,35 @@ main() {
     reject_pattern '\b(?:fn|pub fn)\s+[a-z][a-z0-9_]+\s*\(' \
         "Exhaustive implementation symbol reintroduced into core composition architecture" \
         "$core_architecture"
-    local specification_docs=("$PROJECT_ROOT/docs/tmctol.specification.en.md")
+    local tmctol_spec="$PROJECT_ROOT/docs/tmctol.specification.en.md"
+    local builder_contract="$PROJECT_ROOT/docs/builder-economy.contract.en.md"
+    local specification_docs=("$tmctol_spec")
     local architecture_docs=("$core_architecture")
+    require_anchor 'tmctol\.specification\.en\.md' "$builder_contract" \
+        "Builder Economy contract no longer depends on the TMCTOL specification"
+    require_anchor 'template/pallets/governance/docs/specification\.en\.md' "$builder_contract" \
+        "Builder Economy contract no longer depends on the Governance specification"
+    require_anchor 'owns the cross-system composition' "$builder_contract" \
+        "Builder Economy contract no longer declares its composition ownership"
+    require_anchor 'Governance specification.s `BaseFloorCapped` invoice-settlement policy' \
+        "$builder_contract" "Builder Economy contract lost its BaseFloorCapped policy selection"
+    require_anchor 'Mutable System Actor treasury' "$builder_contract" \
+        "Builder Economy contract lost Mutable System Actor treasury ownership"
+    require_anchor 'canonical CIDv1 string' \
+        "$TEMPLATE_DIR/pallets/governance/docs/specification.en.md" \
+        "Governance specification lost content-addressed invoice identity"
+    require_anchor 'spendable amount < minimum payable amount' \
+        "$TEMPLATE_DIR/pallets/governance/docs/specification.en.md" \
+        "Governance specification lost below-floor capacity rejection"
+    require_anchor 'actual amount = min\(target amount, spendable amount\)' \
+        "$TEMPLATE_DIR/pallets/governance/docs/specification.en.md" \
+        "Governance specification lost bounded above-base clipping"
+    require_anchor 'canonical invoice settlement policy is `BaseFloorCapped`' \
+        "$TEMPLATE_DIR/pallets/governance/docs/specification.en.md" \
+        "Governance specification lost the canonical invoice settlement policy owner"
+    require_anchor 'builder-economy\.contract\.en\.md' \
+        "$PROJECT_ROOT/docs/framework-instance.contract.en.md" \
+        "Framework/instance contract no longer routes Builder composition to its owner"
     local subsystem
     for subsystem in governance staking actors router oracle; do
         specification_docs+=("$TEMPLATE_DIR/pallets/$subsystem/docs/specification.en.md")
@@ -976,6 +1003,9 @@ main() {
     reject_pattern '(?:\*\*Status\*\*:\s*Target Contract|Implementation status|shipped-runtime divergence)' \
         "Implementation-status narration reintroduced into a normative specification" \
         "${specification_docs[@]}"
+    reject_pattern '(?:\$[A-Z][A-Z0-9]*\b|\b(?:DEOS|BLDR|NTVE|Actors?)\b|[Ii]nvoice)' \
+        "Project-specific token, Actor, or invoice policy reintroduced into the TMCTOL standard" \
+        "$tmctol_spec"
     local integration_doc
     for integration_doc in "$PROJECT_ROOT"/docs/*.integration.en.md; do
         architecture_docs+=("$integration_doc")
@@ -1017,6 +1047,10 @@ main() {
     reject_pattern '(?i)\b(?:actor[- ]programs?|execution[- ]plans?|cycle[- ]plans?)\b' \
         "Parallel current Actor Contract or Step terminology reintroduced" \
         "${terminology_surfaces[@]}"
+    reject_pattern 'BLDR_BUCKET_A_ACTORS_ID|BLDR Bucket A|BLDR `Bucket A`|bldr_bucket_a|AnchorBucketState|anchor_bucket_state' \
+        "Retired BLDR bucket-qualified anchor identity reintroduced" \
+        "$TEMPLATE_DIR/primitives" "$TEMPLATE_DIR/runtime/src" "$PROJECT_ROOT/docs" \
+        "$PROJECT_ROOT/simulator" "$PROJECT_ROOT/web-client/src" "$PROJECT_ROOT/wiki"
     reject_pattern_except "$plural_preconditions_pattern" "$plural_detector_exception_pattern" \
         "Plural Preconditions terminology reintroduced where singular Precondition owns the optional DNF" \
         "${required_family_surfaces[@]}"

@@ -690,15 +690,14 @@ impl<T: Config> Pallet<T> {
       ));
     }
     for actor_id in IndexedTriggerDetectionDisabled::<T>::iter_keys() {
-      let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-        "disabled indexed detector has no active Actor",
-      ))?;
-      let contract = Self::load_actor_contract(actor_id).ok_or(TryRuntimeError::Other(
-        "disabled indexed detector has no Actor Contract",
-      ))?;
-      if !hot.pending_signal
+      let LoadedActorStateOf::Active(state) = Self::load_frame_actor_state(actor_id) else {
+        return Err(TryRuntimeError::Other(
+          "disabled indexed detector has no active Actor",
+        ));
+      };
+      if !state.hot.pending_signal
         || !matches!(
-          contract.trigger,
+          state.contract.trigger,
           Trigger::ObservationChange { .. } | Trigger::ObservationCrossing { .. }
         )
       {

@@ -327,7 +327,7 @@ impl AdmissionCertificateAuthorityProvider for () {
   }
 }
 
-/// Exact physical location facts needed to price one lazy current-Step load.
+/// Physical geometry and admission bounds for current-Step control pricing.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
@@ -338,6 +338,7 @@ pub struct StepControlWeightContext {
   pub predicate_evaluation_units: u32,
   pub opening_snapshot_entries: u32,
   pub opening_predicate_results: u32,
+  /// Configured bound for admission/Opening; retained count for a resumed head.
   pub funding_snapshot_entries: u32,
 }
 
@@ -377,6 +378,8 @@ pub struct StepControlExecution {
   pub phase: StepControlPhase,
   pub outcome: StepControlOutcome,
   pub placement: StepControlPlacement,
+  /// Nonzero Action fee collection required for this attempt to commit, separate from effects.
+  pub action_fee_collected: bool,
 }
 
 pub trait StepControlWeightProvider<Step> {

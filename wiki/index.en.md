@@ -60,7 +60,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [TMCTOL Standard](concepts/tmctol-standard.en.md) — economic standard and token laws
 - [TOL Bucket Scenarios](concepts/tol-bucket-scenarios.en.md) — concrete A/B/C/D bucket wakeups and treasury lanes
 - [$BLDR Builder Economy](concepts/builder-economy.en.md) — useful-work invoices, tactical funding, and the founder-as-first-worker pattern
-- [Token Surfaces](concepts/token-surfaces.en.md) — Native, VETO, BLDR, receipts, and LP roles
+- [Token Surfaces](concepts/token-surfaces.en.md) — Native, `$VETO`, `$BLDR`, receipts, and LP roles
 - [Actors System](overview/actor-system.en.md) — autonomous protocol actors
 - [DEOS Router](overview/router.en.md) — routing, fees, and protocol liquidity decisions
 - [Typed Observations](overview/typed-observations.en.md) — current scalar truth and reactive delivery

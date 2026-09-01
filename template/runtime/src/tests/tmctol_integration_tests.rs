@@ -87,7 +87,13 @@ fn tmctol_guarantee_state_reports_anchor_protection_without_pool_initialization(
   new_test_ext().execute_with(|| {
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert_eq!(state.tol_anchor.status, GuaranteeStatus::Satisfied);
+    assert!(state.tol_anchor.is_immutable_system_actor);
+    assert!(state.tol_anchor.actor_identity_exists);
+    assert!(!state.tol_anchor.active_state_exists);
     assert_eq!(state.bldr_anchor.status, GuaranteeStatus::Satisfied);
+    assert!(state.bldr_anchor.is_immutable_system_actor);
+    assert!(state.bldr_anchor.actor_identity_exists);
+    assert!(!state.bldr_anchor.active_state_exists);
     assert_eq!(state.anchor_status, GuaranteeStatus::Satisfied);
     assert_eq!(state.tol_pool.status, GuaranteeStatus::NotInitialized);
     assert_eq!(state.bldr_pool.status, GuaranteeStatus::NotInitialized);
@@ -130,7 +136,7 @@ fn tmctol_guarantee_state_reports_bldr_anchor_pool_when_initialized() {
     let AssetKind::Local(lp_asset_id) = lp_asset else {
       panic!("pool LP asset must be local");
     };
-    let bldr_anchor = Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
+    let bldr_anchor = Actors::sovereign_account_id_system(actor_ids::BLDR_ANCHOR_ACTORS_ID);
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
         lp_asset_id,
@@ -340,6 +346,43 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert_eq!(state.tol_anchor.status, GuaranteeStatus::Violated);
     assert_eq!(state.anchor_status, GuaranteeStatus::Violated);
+    assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_rejects_orphan_unsignaled_anchor_control() {
+  new_test_ext().execute_with(|| {
+    let anchor_id = actor_ids::TOL_BUCKET_A_ACTORS_ID;
+    let (_, mut orphan) = Actors::actor_control_cell(actor_ids::BURN_ACTOR_ID)
+      .expect("genesis Burn Actor has canonical control");
+    orphan.actor_id = anchor_id;
+    assert!(!pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(anchor_id));
+    // Deliberately corrupt only the directly keyed process owner: a sealed dormant
+    // Anchor must not be reported healthy merely because its locator is absent.
+    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::insert(anchor_id, orphan);
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert!(state.tol_anchor.active_state_exists);
+    assert_eq!(state.tol_anchor.status, GuaranteeStatus::Violated);
+    assert_eq!(state.anchor_status, GuaranteeStatus::Violated);
+    assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_rejects_missing_active_burn_control() {
+  new_test_ext().execute_with(|| {
+    let actor_id = actor_ids::BURN_ACTOR_ID;
+    assert!(Actors::active_actor_state(actor_id).is_some());
+    pallet_deos_actors::ActorUnsignaledControlCells::<Runtime>::remove(actor_id);
+    pallet_deos_actors::ActorControlLocators::<Runtime>::insert(
+      actor_id,
+      pallet_deos_actors::ActorControlLocation::Unsignaled,
+    );
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.native_burn_liveness.status, GuaranteeStatus::Violated);
     assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
   });
 }
@@ -849,14 +892,6 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     System::set_block_number(11);
     Actors::on_initialize(11);
     Actors::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
-    assert_eq!(
-      crate::Assets::balance(super::common::ASSET_A, &bm),
-      balance_before,
-      "stale Contract authority is replaced without same-block execution"
-    );
-    System::set_block_number(12);
-    Actors::on_initialize(12);
-    Actors::on_idle(12, Weight::from_parts(u64::MAX, u64::MAX));
     let balance_after = crate::Assets::balance(super::common::ASSET_A, &bm);
     assert!(
       balance_after > balance_before,
@@ -1763,10 +1798,10 @@ fn bldr_splitter_distributes_to_liquidity_and_treasury() {
   });
 }
 
-// --- BLDR Full E2E: Router → TMC → Splitter → Liquidity Actor → LP → Bucket A ---
+// --- BLDR Full E2E: Router → TMC → Splitter → Liquidity Actor → LP → Anchor ---
 
 #[test]
-fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
+fn bldr_full_e2e_router_tmc_splitter_liquidity_anchor() {
   use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
   use primitives::ecosystem::{actor_ids, protocol_tokens};
   seeded_test_ext().execute_with(|| {
@@ -1778,15 +1813,15 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
     let precision = primitives::ecosystem::params::PRECISION;
     let splitter_id = actor_ids::BLDR_SPLITTER_ACTORS_ID;
     let liquidity_id = actor_ids::BLDR_LIQUIDITY_ACTOR_ID;
-    let bucket_a_id = actor_ids::BLDR_BUCKET_A_ACTORS_ID;
+    let anchor_id = actor_ids::BLDR_ANCHOR_ACTORS_ID;
     let splitter_sov = Actors::sovereign_account_id_system(splitter_id);
     let liquidity_sov = Actors::sovereign_account_id_system(liquidity_id);
     let treasury_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
-    let bucket_a_sov = Actors::sovereign_account_id_system(bucket_a_id);
+    let anchor_sov = Actors::sovereign_account_id_system(anchor_id);
     // 1. Create the NTVE-BLDR pool so the Liquidity Actor can provision it. Seed it against
     // BLDR buys so the router exercises the TMC mint path rather than XYK.
     super::common::setup_bldr_pool_with_reserves(900 * precision, 10 * precision);
-    // 2. Activate the BLDR Liquidity Actor execution plan (AddLiquidity + LP → Bucket A).
+    // 2. Activate the BLDR Liquidity Actor execution plan (AddLiquidity + LP → BLDR Anchor).
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, bldr_asset);
     let liquidity_contract_steps =
       crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_liquidity_contract_steps(
@@ -1844,7 +1879,7 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
       "BLDR Liquidity Actor must hold NTVE collateral"
     );
     assert!(splitter_bldr > 0, "Splitter must hold BLDR zap share");
-    // 5. Run blocks to execute the Splitter → Liquidity Actor → Bucket A chain.
+    // 5. Run blocks to execute the Splitter → Liquidity Actor → BLDR Anchor chain.
     // The queue scheduler should keep this chain progressing without starvation.
     System::reset_events();
     for block in 2..=40 {
@@ -1854,20 +1889,20 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
     }
     // 6. Verify: Splitter distributed BLDR to both Liquidity Actor and Treasury. The Actor may
     // consume received NTVE immediately into LP, so the durable final proof is
-    // Bucket A receiving LP plus the Splitter sovereign draining below dust.
+    // BLDR Anchor receiving LP plus the Splitter sovereign draining below dust.
     let treasury_bldr =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &treasury_sov);
     assert!(treasury_bldr > 0, "Treasury must have received BLDR");
-    // 8. Verify: Bucket A received LP tokens provisioned by the Liquidity Actor.
+    // 8. Verify: BLDR Anchor received LP tokens provisioned by the Liquidity Actor.
     if let Some(lp_id) = match lp_asset {
       AssetKind::Local(id) => Some(id),
       _ => None,
     } {
-      let bucket_lp =
-        <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket_a_sov);
+      let anchor_lp =
+        <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &anchor_sov);
       assert!(
-        bucket_lp > 0,
-        "Bucket A must hold LP tokens from BLDR Liquidity Actor provisioning"
+        anchor_lp > 0,
+        "BLDR Anchor must hold LP tokens from BLDR Liquidity Actor provisioning"
       );
     }
     // 9. Verify: Splitter distributed its complete BLDR input below dust

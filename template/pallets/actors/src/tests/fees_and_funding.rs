@@ -1,4 +1,5 @@
 use super::*;
+use crate::FeeAssetClass;
 
 #[test]
 fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
@@ -229,11 +230,53 @@ fn actor_run_state_hold_is_reserved_for_the_active_installed_lifetime() {
     retry_step.on_error = RETRY_LATER;
     let steps = BoundedVec::try_from(vec![retry_step]).expect("one retry Step fits");
     let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
-    let installed_run_hold = Actors::actor_state_hold(actor_id)
-      .expect("idle hold exists")
-      .breakdown
-      .run;
-    assert!(installed_run_hold > 0);
+    let installed_hold = Actors::actor_state_hold(actor_id).expect("idle hold exists");
+    assert!(installed_hold.breakdown.run > 0);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    System::reset_events();
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_some());
+    assert_eq!(
+      Actors::actor_state_hold(actor_id).expect("Running hold exists"),
+      installed_hold
+    );
+    frame_system::Pallet::<Test>::set_block_number(4);
+    assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      Actors::actor_state_hold(actor_id).expect("active installed hold remains"),
+      installed_hold
+    );
+    assert!(!System::events().iter().any(|record| matches!(
+      record.event,
+      RuntimeEvent::Balances(
+        polkadot_sdk::pallet_balances::Event::Held { .. }
+          | polkadot_sdk::pallet_balances::Event::Released { .. }
+      )
+    )));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn frame_only_cancellation_preserves_active_user_state_hold() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut retry_step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(Balance::MAX),
+    });
+    retry_step.on_error = RETRY_LATER;
+    let steps = BoundedVec::try_from(vec![retry_step]).expect("one retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000_000_000_000_000_000);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -244,23 +287,23 @@ fn actor_run_state_hold_is_reserved_for_the_active_installed_lifetime() {
     frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(
-      Actors::actor_state_hold(actor_id)
-        .expect("Running hold exists")
-        .breakdown
-        .run,
-      installed_run_hold
-    );
+    let hold_before = Actors::actor_state_hold(actor_id).expect("active User hold exists");
+    assert!(Actors::actor_control_cell(actor_id).is_some());
     frame_system::Pallet::<Test>::set_block_number(4);
+
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
+
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
-      Actors::actor_state_hold(actor_id)
-        .expect("active installed hold remains")
-        .breakdown
-        .run,
-      installed_run_hold
+      Actors::actor_state_hold(actor_id),
+      Some(hold_before),
+      "active frame authority retains the complete installed-lifetime hold"
     );
+    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
+    assert!(Actors::actor_hot(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_some());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -505,12 +548,74 @@ fn zero_step_user_opening_charges_pipeline_but_no_action_fee() {
       } if *id == actor_id && *fee == pipeline_fee
     )));
     assert_eq!(
-      Actors::actor_identities(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("persistent zero-Step User remains")
         .cycle_nonce,
       1
     );
     assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn manual_trigger_uses_canonical_pending_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    assert!(
+      !Actors::actor_hot(actor_id)
+        .expect("canonical hot")
+        .pending_signal
+    );
+    frame_system::Pallet::<Test>::reset_events();
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let (_, _, frame_hot, _) =
+      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
+    let projected_hot = Actors::actor_hot(actor_id).expect("canonical projection remains live");
+    assert!(frame_hot.pending_signal);
+    assert_eq!(projected_hot, frame_hot);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ManualTriggerSet { actor_id: id } if *id == actor_id
+    )));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::Manual,
+        ..
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn manual_trigger_fails_closed_without_primary_before_fee_or_event() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    fund_native(actor_id, 100);
+    let sovereign = sovereign_account(actor_id);
+    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    let hot_before = Actors::actor_hot(actor_id);
+    let events_before = System::events();
+
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::ActorInvariant
+    );
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    assert_eq!(Actors::actor_hot(actor_id), hot_before);
+    assert_eq!(System::events(), events_before);
   });
 }
 
@@ -685,6 +790,19 @@ fn busy_manual_occurrence_charges_and_latches_only_the_future_pipeline() {
     let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
     assert_eq!(hot.cycle_state, CycleState::Running);
     assert!(hot.pending_signal);
+    #[cfg(not(feature = "runtime-benchmarks"))]
+    {
+      let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
+        .expect("busy Trigger keeps one frame-owned primary");
+      assert!(matches!(
+        location,
+        crate::ActorControlLocation::Ready { .. }
+      ));
+      assert_eq!(
+        frame_hot, hot,
+        "busy Trigger mutates the existing primary in place"
+      );
+    }
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
@@ -755,6 +873,112 @@ fn manual_trigger_collection_failure_rolls_back_readiness_and_fee_movement() {
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn address_event_uses_canonical_pending_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      percentage_trigger_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    assert!(
+      !Actors::actor_hot(actor_id)
+        .expect("canonical hot")
+        .pending_signal
+    );
+    frame_system::Pallet::<Test>::reset_events();
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      1,
+      &ALICE,
+    ));
+    let (_, _, frame_hot, _) =
+      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
+    let projected_hot = Actors::actor_hot(actor_id).expect("canonical projection remains live");
+    assert!(frame_hot.pending_signal);
+    assert_eq!(projected_hot, frame_hot);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::AddressEvent,
+        ..
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn address_event_execution_preserves_canonical_control() {
+  for steps in [inert_contract_steps(), BoundedVec::default()] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, steps);
+      assert!(Actors::actor_control_cell(actor_id).is_some());
+
+      assert_ok!(Actors::notify_address_event(
+        actor_id,
+        TestAsset::Native,
+        1,
+        &ALICE,
+      ));
+      run_idle(Weight::MAX);
+
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::CycleSummary { actor_id: id, .. } if *id == actor_id
+      )));
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+      assert!(Actors::actor_hot(actor_id).is_some());
+      assert!(Actors::actor_control_cell(actor_id).is_some());
+      #[cfg(feature = "try-runtime")]
+      assert_ok!(crate::Pallet::<Test>::do_try_state());
+    });
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn address_event_preflight_and_commit_fail_closed_without_primary_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      percentage_trigger_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    let funding_before = Actors::actor_funding(actor_id);
+    let hot_before = Actors::actor_hot(actor_id);
+    let events_before = System::events();
+
+    assert_noop!(
+      Actors::preflight_funding_event(
+        actor_id,
+        TestAsset::Native,
+        1,
+        Some(&ALICE),
+        Some(&crate::FundingProvenance::Signed),
+      ),
+      Error::<Test>::ActorInvariant
+    );
+    assert_noop!(
+      Actors::notify_address_event(actor_id, TestAsset::Native, 1, &ALICE),
+      Error::<Test>::ActorInvariant
+    );
+    assert_eq!(Actors::actor_funding(actor_id), funding_before);
+    assert_eq!(Actors::actor_hot(actor_id), hot_before);
+    assert_eq!(System::events(), events_before);
   });
 }
 
@@ -1141,32 +1365,42 @@ fn fee_envelope_settlement_releases_reservation_and_prices_attempts() {
 #[test]
 fn fee_native_protected_minimum_uses_the_configured_user_fee_native_floor() {
   assert_eq!(
-    fee_native_protected_minimum(ActorType::User, true, 1u128, 50),
+    fee_native_protected_minimum(ActorType::User, FeeAssetClass::FeeNative, 1u128, 50),
     50
   );
   assert_eq!(
-    fee_native_protected_minimum(ActorType::User, true, 100u128, 50),
+    fee_native_protected_minimum(ActorType::User, FeeAssetClass::FeeNative, 100u128, 50),
     50
   );
   assert_eq!(
-    fee_native_protected_minimum(ActorType::User, false, 1u128, 50),
+    fee_native_protected_minimum(ActorType::User, FeeAssetClass::Other, 1u128, 50),
     1
   );
   assert_eq!(
-    fee_native_protected_minimum(ActorType::System, true, 100u128, 50),
+    fee_native_protected_minimum(ActorType::System, FeeAssetClass::FeeNative, 100u128, 50),
     100
   );
 }
 
 #[test]
-fn user_cycle_weight_includes_one_fee_collection_per_step() {
+fn contract_admission_uses_class_neutral_canonical_step_resources() {
   new_test_ext().execute_with(|| {
     let contract_steps = inert_contract_steps();
-    let system_weight = Actors::compute_cycle_weight_upper(ActorType::System, &contract_steps);
-    let user_weight = Actors::compute_cycle_weight_upper(ActorType::User, &contract_steps);
+    let system_weight =
+      Actors::contract_steps_admission_weight_upper(ActorType::System, &contract_steps);
+    let user_weight =
+      Actors::contract_steps_admission_weight_upper(ActorType::User, &contract_steps);
+    assert_eq!(user_weight, system_weight);
+    let contract =
+      user_active_contract(manual_schedule(), None, contract_steps).expect("active Contract");
+    let resources =
+      Actors::derive_step_resource_envelopes(&contract).expect("canonical Step resources")[0];
     assert_eq!(
-      user_weight,
-      system_weight.saturating_add(<TestWeightInfo as crate::WeightInfo>::fee_collection())
+      system_weight,
+      Actors::scheduler_admission_overhead()
+        .saturating_add(resources.control)
+        .saturating_add(resources.effect)
+        .saturating_add(Actors::close_cleanup_weight_upper())
     );
   });
 }
@@ -1235,7 +1469,7 @@ fn system_sovereign_reattachment_accepts_dormant_contract_input() {
       Mutability::Mutable,
       None,
     ));
-    let identity = Actors::actor_identities(fresh_id).expect("dormant identity exists");
+    let identity = Actors::actor_identity(fresh_id).expect("dormant identity exists");
     assert_eq!(identity.sovereign_account, sovereign);
     assert_eq!(
       identity.actor_class,
@@ -2051,6 +2285,18 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
       Some(window),
       transfer_contract_steps(BOB, 1),
     );
+    #[cfg(not(feature = "runtime-benchmarks"))]
+    {
+      let (_, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
+        .expect("windowed Actor frame authority exists");
+      assert_eq!(
+        frame_hot.wakeup_pointer,
+        Actors::actor_hot(actor_id)
+          .expect("canonical projection exists")
+          .wakeup_pointer
+      );
+      assert!(frame_hot.wakeup_pointer.is_some());
+    }
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::permissionless_sweep(
       RuntimeOrigin::signed(ALICE),
@@ -2171,6 +2417,7 @@ fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back(
         Mutability::Mutable,
         contract,
         SimulationMode::FreshCurrentPlan,
+        ample_simulation_budget(),
       ),
       Err(SimulationError::FeeCollectionFailed)
     );
@@ -3337,6 +3584,53 @@ fn one_ingress_matching_the_single_source_mutates_funding_once() {
         .count(),
       1
     );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn frame_only_address_funding_reconciles_hold_with_canonical_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      contract_steps_with_step(make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      })),
+    );
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    let hold_before =
+      crate::ActorStateHolds::<Test>::get(actor_id).expect("User state hold is installed");
+    assert!(Actors::actor_control_cell(actor_id).is_some());
+
+    assert_ok!(Actors::notify_address_event(
+      actor_id,
+      TestAsset::Native,
+      100,
+      &ALICE,
+    ));
+
+    assert_eq!(
+      actor_funding(actor_id)
+        .funding_accumulated
+        .get(&TestAsset::Native),
+      Some(&100)
+    );
+    assert!(Actors::active_actor_view(actor_id).is_some_and(|view| view.pending_signal));
+    assert!(
+      crate::ActorStateHolds::<Test>::get(actor_id)
+        .is_some_and(|hold| hold.breakdown.funding > hold_before.breakdown.funding)
+    );
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_hot(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_some());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -5143,7 +5437,7 @@ fn try_state_reconciles_system_sovereign_and_reverse_index_ownership() {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      let identity = ActorIdentities::<Test>::get(actor_id).expect("System identity fixture");
+      let identity = Actors::actor_identity(actor_id).expect("System identity fixture");
       let ActorClass::System { sovereign_id } = identity.actor_class else {
         panic!("fixture must create a System actor");
       };

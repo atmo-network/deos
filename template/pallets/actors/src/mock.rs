@@ -312,6 +312,17 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
 
 pub struct MockAssetOps;
 
+#[cfg(feature = "runtime-benchmarks")]
+impl MockAssetOps {
+  fn frozen_account_key(who: &AccountId, asset: TestAsset) -> alloc::vec::Vec<u8> {
+    (b"mock-asset-account-freeze", who, asset).encode()
+  }
+
+  fn account_is_frozen(who: &AccountId, asset: TestAsset) -> bool {
+    polkadot_sdk::sp_io::storage::exists(&Self::frozen_account_key(who, asset))
+  }
+}
+
 impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   fn transfer(
     from: &AccountId,
@@ -319,6 +330,10 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     asset: TestAsset,
     amount: Balance,
   ) -> Result<(), TaskFailure> {
+    #[cfg(feature = "runtime-benchmarks")]
+    if amount > 0 && Self::account_is_frozen(from, asset) {
+      return Err(DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::Frozen).into());
+    }
     if FAIL_TRANSFER_TO.with(|target| *target.borrow() == Some(*to)) {
       return Err(DispatchError::Other("MockTransferTargetFailed").into());
     }
@@ -359,6 +374,10 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   }
 
   fn burn(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), TaskFailure> {
+    #[cfg(feature = "runtime-benchmarks")]
+    if amount > 0 && Self::account_is_frozen(who, asset) {
+      return Err(DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::Frozen).into());
+    }
     match asset {
       TestAsset::Native => {
         use polkadot_sdk::frame_support::traits::Currency;
@@ -418,6 +437,10 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   }
 
   fn balance(who: &AccountId, asset: TestAsset) -> Balance {
+    #[cfg(feature = "runtime-benchmarks")]
+    if Self::account_is_frozen(who, asset) {
+      return 0;
+    }
     match asset {
       TestAsset::Native => {
         use polkadot_sdk::frame_support::traits::{
@@ -446,6 +469,10 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   ) -> Result<(), TaskFailure> {
     if amount == 0 {
       return Ok(());
+    }
+    #[cfg(feature = "runtime-benchmarks")]
+    if Self::account_is_frozen(from, asset) {
+      return Err(DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::Frozen).into());
     }
     if asset == TestAsset::Native {
       use polkadot_sdk::frame_support::traits::{
@@ -728,7 +755,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     }
     let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
     if lp_minted < min_lp_out {
-      return Err(DispatchError::Other("MinimumLpOutputNotMet").into());
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "MinimumLpOutputNotMet",
+      )));
     }
     Ok((amount_a, amount_b, lp_minted))
   }
@@ -802,6 +831,29 @@ pub struct MockBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmarkHelper {
+  fn set_asset_account_frozen(
+    _owner: &AccountId,
+    who: &AccountId,
+    asset: TestAsset,
+    frozen: bool,
+  ) -> DispatchResult {
+    if asset == TestAsset::Native {
+      return Err(DispatchError::Other("BenchmarkAssetFreezeUnsupported"));
+    }
+    if !ASSET_BALANCES.with(|balances| balances.borrow().contains_key(&(*who, asset))) {
+      return Err(DispatchError::Other("BenchmarkAssetAccountMissing"));
+    }
+    // Externalities own the flag so FRAME storage wipes reset it between repetitions.
+    // The runtime fixture, not this mock ledger, proves host authorization.
+    let key = MockAssetOps::frozen_account_key(who, asset);
+    if frozen {
+      polkadot_sdk::sp_io::storage::set(&key, &[1]);
+    } else {
+      polkadot_sdk::sp_io::storage::clear(&key);
+    }
+    Ok(())
+  }
+
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(TestAsset, TestAsset, Balance, Balance), DispatchError> {
@@ -827,6 +879,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
   fn setup_stake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let asset = TestAsset::Local(1);
     let amount = 1_000_000;
+    set_staking_share_asset_available(true);
     MockAssetOps::mint(owner, asset, amount).map_err(|failure| failure.error)?;
     Ok((asset, amount))
   }
@@ -836,6 +889,15 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     let shares = 1_000_000;
     MockAssetOps::mint(owner, asset, shares).map_err(|failure| failure.error)?;
     Ok((asset, shares))
+  }
+
+  fn remove_empty_staking_receipt(_owner: &AccountId, asset: TestAsset) -> DispatchResult {
+    if MockStakingOps::share_asset(asset).is_none() {
+      return Err(DispatchError::Other("BenchmarkReceiptMissing"));
+    }
+    // The mock models mapping availability; the runtime fixture proves receipt-class destruction.
+    set_staking_share_asset_available(false);
+    Ok(())
   }
 
   fn setup_swap_exact_in(
@@ -1272,10 +1334,10 @@ impl pallet_deos_actors::Config for Test {
   type PalletId = ActorsPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
-  type MaxContractSteps = ConstU32<8>;
+  type MaxContractSteps = ConstU32<12>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxOpeningSnapshotEntries = ConstU32<16>;
-  type MaxOpeningPredicateResults = ConstU32<32>;
+  type MaxOpeningSnapshotEntries = ConstU32<24>;
+  type MaxOpeningPredicateResults = ConstU32<48>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
   type MaxPredicatesPerStep = ConstU32<4>;
@@ -1285,14 +1347,29 @@ impl pallet_deos_actors::Config for Test {
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
   type ObservationPageSize = ConstU32<16>;
+  #[cfg(not(feature = "runtime-benchmarks"))]
   type CrossingPageSize = ConstU32<16>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type CrossingPageSize = ConstU32<128>;
   type MaxCrossingTransitionsPerFeed = ConstU32<4>;
   type MaxCrossingMembersPerFeed = ConstU32<10_000>;
+  #[cfg(not(feature = "runtime-benchmarks"))]
   type MaxUserCrossingMembersPerFeed = ConstU32<8>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type MaxUserCrossingMembersPerFeed = ConstU32<128>;
   type MaxCrossingTransitionsPerBlock = ConstU32<4>;
+  #[cfg(not(feature = "runtime-benchmarks"))]
   type MaxCrossingLeavesPerBlock = ConstU32<8>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type MaxCrossingLeavesPerBlock = ConstU32<64>;
+  #[cfg(not(feature = "runtime-benchmarks"))]
   type MaxCrossingPagesPerBlock = ConstU32<8>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type MaxCrossingPagesPerBlock = ConstU32<64>;
+  #[cfg(not(feature = "runtime-benchmarks"))]
   type MaxCrossingActorsPerBlock = ConstU32<16>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type MaxCrossingActorsPerBlock = ConstU32<128>;
   type CrossingWorkerWeightLimit = TestCrossingWorkerWeightLimit;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<64>;

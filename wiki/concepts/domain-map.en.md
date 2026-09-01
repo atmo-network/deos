@@ -83,7 +83,7 @@ Read [Staking](../overview/staking.en.md) and [Three-Layer Validation](../develo
 
 ### Client and read model
 
-The client domain explains how the browser product shows the system without pretending to be the source of truth. It distinguishes direct on-chain state, session-derived projections, and future materialized/indexed providers.
+The client domain explains how the browser product shows the system without pretending to be the source of truth. It distinguishes direct on-chain state, session-derived projections, and external materialized/indexed data.
 
 Read [Reference Client](../overview/reference-client.en.md) and [Read-Model Split](read-model-split.en.md).
 
@@ -93,9 +93,9 @@ The tooling domain explains how contributors and agents keep the system honest: 
 
 Read [Three-Layer Validation](../development/three-layer-validation.en.md), [Scripts Layer](../usage/scripts-layer.en.md), and [Development Status](../development/status.en.md).
 
-### Future gates
+### Current limitations
 
-The future-gates domain explains what is intentionally not part of the current shipped baseline: permissionless collators, relay-beacon randomness, full indexed portfolio discovery, and richer materialized archives.
+This domain explains what is not part of the current shipped baseline: permissionless collators, relay-beacon randomness, full indexed portfolio discovery, and richer materialized archives.
 
 Read [Randomness Strategy](../overview/randomness-strategy.en.md) and [Development Status](../development/status.en.md).
 
@@ -112,7 +112,7 @@ A useful traversal is:
 7. Staking and rewards connect users to security and incentives.
 8. Client and read model expose the system without inventing truth.
 9. Tooling and validation keep the graph synchronized.
-10. Future gates prevent speculative work from masquerading as shipped reality.
+10. Current limitations distinguish available capabilities from unsupported ones.
 
 ## Related
 

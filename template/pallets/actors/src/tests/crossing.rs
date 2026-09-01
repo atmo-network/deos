@@ -109,6 +109,47 @@ fn observation_crossing_semantics_are_exact_and_hysteretic() {
   }
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn crossing_idle_loader_uses_primary_pending_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_contract_steps(),
+    );
+    let loaded = Actors::load_crossing_idle_activation_state(actor_id, 7)
+      .expect("frame-owned Crossing state loads");
+    assert!(!loaded.hot.pending_signal);
+    assert!(matches!(
+      loaded.hot.trigger_runtime_state,
+      TriggerRuntimeState::ObservationCrossing {
+        phase: CrossingPhase::Armed,
+        installed_at_revision: 1,
+      }
+    ));
+    assert!(enqueue_latched_actor(actor_id));
+    assert!(
+      Actors::load_crossing_idle_activation_state(actor_id, 7)
+        .expect("primary latch remains readable")
+        .hot
+        .pending_signal
+    );
+  });
+}
+
 #[test]
 fn observation_crossing_fire_charges_before_readiness() {
   new_test_ext().execute_with(|| {
@@ -168,7 +209,7 @@ fn observation_crossing_fire_charges_before_readiness() {
     assert_eq!(fee_collections(), vec![fee]);
     assert_eq!(native_balance(&sovereign), sovereign_before - fee);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before + fee);
-    let hot = ActorHot::<Test>::get(actor_id).expect("Crossing Actor remains active");
+    let hot = Actors::actor_hot(actor_id).expect("Crossing Actor remains active");
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
@@ -228,7 +269,7 @@ fn repeated_latched_crossing_fires_charge_only_the_useful_transition() {
 
     let fee = observation_crossing_trigger_fee();
     assert_eq!(fee_collections(), vec![fee]);
-    let hot = ActorHot::<Test>::get(actor_id).expect("Crossing Actor remains active");
+    let hot = Actors::actor_hot(actor_id).expect("Crossing Actor remains active");
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
     assert_eq!(
@@ -298,7 +339,7 @@ fn busy_crossing_fire_charges_and_latches_only_the_future_pipeline() {
     Actors::on_idle(1, Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     assert_eq!(
-      ActorHot::<Test>::get(actor_id).map(|hot| hot.cycle_state),
+      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
       Some(CycleState::Running)
     );
     clear_fee_collections();
@@ -314,7 +355,7 @@ fn busy_crossing_fire_charges_and_latches_only_the_future_pipeline() {
     drain_crossing_work();
 
     assert_eq!(fee_collections(), vec![observation_crossing_trigger_fee()]);
-    let hot = ActorHot::<Test>::get(actor_id).expect("busy Actor remains active");
+    let hot = Actors::actor_hot(actor_id).expect("busy Actor remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
     assert!(hot.pending_signal);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
@@ -361,7 +402,7 @@ fn underfunded_crossing_fire_advances_without_fee_readiness_or_apoptosis() {
 
     assert!(fee_collections().is_empty());
     assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-    let hot = ActorHot::<Test>::get(actor_id).expect("process remains live");
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none());
@@ -416,11 +457,11 @@ fn crossing_batch_falls_back_to_scalar_progress_for_an_underfunded_member() {
 
     assert!(Actors::crossing_transition_queue(7).is_none());
     assert!(Actors::crossing_worker_fault().is_none());
-    let underfunded_hot = ActorHot::<Test>::get(underfunded).expect("underfunded process remains");
+    let underfunded_hot = Actors::actor_hot(underfunded).expect("underfunded process remains");
     assert!(!underfunded_hot.pending_signal);
     assert!(underfunded_hot.queue_ticket.is_none());
     assert_eq!(crossing_phase(underfunded), CrossingPhase::WaitingForRearm);
-    let funded_hot = ActorHot::<Test>::get(funded).expect("funded process remains");
+    let funded_hot = Actors::actor_hot(funded).expect("funded process remains");
     assert!(funded_hot.pending_signal);
     assert!(funded_hot.queue_ticket.is_some() || funded_hot.wakeup_pointer.is_some());
     assert_eq!(fee_collections(), vec![observation_crossing_trigger_fee()]);
@@ -464,7 +505,7 @@ fn crossing_fire_collection_failure_advances_without_readiness() {
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
-    let hot = ActorHot::<Test>::get(actor_id).expect("process remains live");
+    let hot = Actors::actor_hot(actor_id).expect("process remains live");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none());
@@ -474,6 +515,63 @@ fn crossing_fire_collection_failure_advances_without_readiness() {
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn crossing_fire_collection_failure_uses_frame_authority_without_scalar_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_contract_steps(),
+    );
+    let sovereign = sovereign_account(actor_id);
+    let before = native_balance(&sovereign);
+    set_fail_fee_sink_transfer(true);
+
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    drain_crossing_work();
+    set_fail_fee_sink_transfer(false);
+
+    assert_eq!(native_balance(&sovereign), before);
+    let (_, _, hot, _) =
+      Actors::load_frame_control_authority(actor_id).expect("frame process remains live");
+    assert!(!hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
+    assert!(matches!(
+      hot.trigger_runtime_state,
+      TriggerRuntimeState::ObservationCrossing {
+        phase: CrossingPhase::WaitingForRearm,
+        ..
+      }
+    ));
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_some());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -657,12 +755,12 @@ fn dormant_crossing_initializes_only_during_active_installation() {
       contract_steps_with_step(make_step(Task::StopCycle)),
     )
     .expect("active Crossing contract");
-    let identity = Actors::actor_identities(actor_id).expect("dormant identity");
+    let identity = Actors::actor_identity(actor_id).expect("dormant identity");
     assert_noop!(
       Actors::activate_actor(RuntimeOrigin::root(), actor_id, contract.clone()),
       Error::<Test>::ObservationUnavailable
     );
-    assert_eq!(Actors::actor_identities(actor_id), Some(identity));
+    assert_eq!(Actors::actor_identity(actor_id), Some(identity));
     assert!(Actors::actor_hot(actor_id).is_none());
     assert!(Actors::crossing_membership(actor_id).is_none());
 
@@ -679,7 +777,7 @@ fn dormant_crossing_initializes_only_during_active_installation() {
       contract,
     ));
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
-    let hot = ActorHot::<Test>::get(actor_id).expect("active Crossing actor");
+    let hot = Actors::actor_hot(actor_id).expect("active Crossing actor");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
   });
@@ -708,7 +806,7 @@ fn active_crossing_initializes_without_retrofire_and_cleans_exact_index_state() 
     );
     let locator = Actors::crossing_membership(actor_id).expect("Crossing membership exists");
     assert!(matches!(
-      ActorHot::<Test>::get(actor_id).map(|hot| hot.trigger_runtime_state),
+      Actors::actor_hot(actor_id).map(|hot| hot.trigger_runtime_state),
       Some(TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::WaitingForRearm,
         ..
@@ -718,7 +816,7 @@ fn active_crossing_initializes_without_retrofire_and_cleans_exact_index_state() 
     assert_eq!(locator.key.traversal, crate::CrossingTraversal::Downward);
     assert_eq!(locator.key.threshold, 80);
     assert!(
-      !ActorHot::<Test>::get(actor_id)
+      !Actors::actor_hot(actor_id)
         .expect("hot state exists")
         .pending_signal
     );
@@ -764,7 +862,7 @@ fn exact_crossing_trigger_equality_preserves_canonical_and_physical_state() {
     );
     frame_system::Pallet::<Test>::set_block_number(2);
     let contract = Actors::load_actor_contract(actor_id).expect("active Actor Contract");
-    let hot = ActorHot::<Test>::get(actor_id).expect("active Actor hot state");
+    let hot = Actors::actor_hot(actor_id).expect("active Actor hot state");
     let locator = Actors::crossing_membership(actor_id).expect("Crossing membership");
     System::reset_events();
     assert_ok!(Actors::update_contract(
@@ -773,7 +871,7 @@ fn exact_crossing_trigger_equality_preserves_canonical_and_physical_state() {
       contract.clone(),
     ));
     assert_eq!(Actors::load_actor_contract(actor_id), Some(contract));
-    assert_eq!(ActorHot::<Test>::get(actor_id), Some(hot));
+    assert_eq!(Actors::actor_hot(actor_id), Some(hot));
     assert_eq!(Actors::crossing_membership(actor_id), Some(locator));
     assert!(System::events().is_empty());
   });
@@ -1079,13 +1177,23 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       cause_provenance: crate::TriggerCauseProvenance::Deferred,
       cause_block: 0,
     };
-    let homogeneous = Actors::preflight_crossing_cohort(&prefix, transition, false, None)
-      .expect("homogeneous preflight");
+    let homogeneous = Actors::preflight_crossing_cohort(
+      &prefix,
+      transition,
+      crate::crossing::CrossingFireClassification::Deferred,
+      None,
+    )
+    .expect("homogeneous preflight");
     assert_eq!(homogeneous.plan, crate::CrossingWorkPlan::FireCohortPending);
     assert_eq!(homogeneous.admitted_candidates, 2);
     assert_eq!(homogeneous.placed_immediate_fifo, None);
-    let placed_homogeneous = Actors::preflight_crossing_cohort(&prefix, transition, true, None)
-      .expect("homogeneous placed preflight");
+    let placed_homogeneous = Actors::preflight_crossing_cohort(
+      &prefix,
+      transition,
+      crate::crossing::CrossingFireClassification::Resolve,
+      None,
+    )
+    .expect("homogeneous placed preflight");
     assert_eq!(
       placed_homogeneous.plan,
       crate::CrossingWorkPlan::FireCohortPlaced
@@ -1108,15 +1216,23 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     let maximum_prefix =
       Actors::snapshot_crossing_source_prefix(locator.key, locator.page, &page, 0, 4)
         .expect("maximum production prefix");
-    let maximum_preflight =
-      Actors::preflight_crossing_cohort(&maximum_prefix, transition, true, None)
-        .expect("maximum placed preflight");
+    let maximum_preflight = Actors::preflight_crossing_cohort(
+      &maximum_prefix,
+      transition,
+      crate::crossing::CrossingFireClassification::Resolve,
+      None,
+    )
+    .expect("maximum placed preflight");
     assert_eq!(maximum_preflight.admitted_candidates, 4);
     assert_eq!(maximum_preflight.placed_immediate_fifo, Some(true));
     assert_eq!(maximum_preflight.queue_candidates.len(), 4);
     let maximum_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
-      Actors::test_placed_cohort_authority_count(&maximum_prefix, transition, false),
+      Actors::test_placed_cohort_authority_count(
+        &maximum_prefix,
+        transition,
+        crate::crossing::PlacedCohortFixtureFault::None,
+      ),
       Ok(4)
     );
     assert_eq!(Actors::test_queue_append_commits(), 1);
@@ -1126,7 +1242,11 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       "maximum cohort commit prototype must roll back membership and queue surfaces"
     );
     assert_eq!(
-      Actors::test_placed_cohort_authority_count(&maximum_prefix, transition, true),
+      Actors::test_placed_cohort_authority_count(
+        &maximum_prefix,
+        transition,
+        crate::crossing::PlacedCohortFixtureFault::MalformedLaterLocator,
+      ),
       Ok(4)
     );
     assert_eq!(
@@ -1134,7 +1254,10 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       maximum_root,
       "malformed later locator must roll back every cohort surface"
     );
-    assert!(Actors::preflight_paged_enqueue_cohort(maximum_preflight.queue_candidates).is_ok());
+    assert!(
+      Actors::preflight_paged_enqueue_cohort_with_authority(maximum_preflight.queue_candidates)
+        .is_ok()
+    );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       maximum_root,
@@ -1145,13 +1268,17 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     let mut wakeup_contract = original_contract.clone();
     wakeup_contract.cooldown_blocks = 10;
     assert_ok!(Actors::store_actor_contract(actors[2], wakeup_contract));
-    let mut wakeup_hot = ActorHot::<Test>::get(actors[2]).expect("second prefix actor");
+    let mut wakeup_hot = Actors::actor_hot(actors[2]).expect("second prefix actor");
     let original_wakeup_hot = wakeup_hot.clone();
     wakeup_hot.last_cycle_block = Some(1);
-    ActorHot::<Test>::insert(actors[2], wakeup_hot);
-    let placement_split =
-      Actors::preflight_crossing_cohort(&maximum_prefix, transition, true, None)
-        .expect("third-candidate placement split fallback");
+    mutate_actor_hot_coherent(actors[2], |hot| *hot = wakeup_hot);
+    let placement_split = Actors::preflight_crossing_cohort(
+      &maximum_prefix,
+      transition,
+      crate::crossing::CrossingFireClassification::Resolve,
+      None,
+    )
+    .expect("third-candidate placement split fallback");
     assert_eq!(
       placement_split.plan,
       crate::CrossingWorkPlan::FireCohortPlaced
@@ -1169,14 +1296,19 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     let wakeup_only =
       Actors::snapshot_crossing_source_prefix(locator.key, locator.page, &page, 2, 1)
         .expect("wakeup-only prefix");
-    let wakeup_preflight = Actors::preflight_crossing_cohort(&wakeup_only, transition, true, None)
-      .expect("wakeup-only preflight");
+    let wakeup_preflight = Actors::preflight_crossing_cohort(
+      &wakeup_only,
+      transition,
+      crate::crossing::CrossingFireClassification::Resolve,
+      None,
+    )
+    .expect("wakeup-only preflight");
     assert_eq!(wakeup_preflight.admitted_candidates, 1);
     assert_eq!(wakeup_preflight.placed_immediate_fifo, Some(false));
     assert_ok!(Actors::store_actor_contract(actors[2], original_contract));
-    ActorHot::<Test>::insert(actors[2], original_wakeup_hot);
+    mutate_actor_hot_coherent(actors[2], |hot| *hot = original_wakeup_hot);
 
-    let mut heterogeneous_hot = ActorHot::<Test>::get(actors[2]).expect("second prefix actor");
+    let mut heterogeneous_hot = Actors::actor_hot(actors[2]).expect("second prefix actor");
     let original_hot = heterogeneous_hot.clone();
     let TriggerRuntimeState::ObservationCrossing { phase, .. } =
       heterogeneous_hot.trigger_runtime_state
@@ -1187,15 +1319,20 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       phase,
       installed_at_revision: transition.revision,
     };
-    ActorHot::<Test>::insert(actors[2], heterogeneous_hot);
-    let heterogeneous = Actors::preflight_crossing_cohort(&prefix, transition, false, None)
-      .expect("heterogeneous fallback");
+    mutate_actor_hot_coherent(actors[2], |hot| *hot = heterogeneous_hot);
+    let heterogeneous = Actors::preflight_crossing_cohort(
+      &prefix,
+      transition,
+      crate::crossing::CrossingFireClassification::Deferred,
+      None,
+    )
+    .expect("heterogeneous fallback");
     assert_eq!(
       heterogeneous.plan,
       crate::CrossingWorkPlan::FireCohortPending
     );
     assert_eq!(heterogeneous.admitted_candidates, 1);
-    ActorHot::<Test>::insert(actors[2], original_hot);
+    mutate_actor_hot_coherent(actors[2], |hot| *hot = original_hot);
 
     let remainder =
       Actors::snapshot_crossing_source_prefix(locator.key, locator.page, &page, 1, u32::MAX)
@@ -1261,10 +1398,12 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
         None,
         contract_steps_with_step(make_step(Task::StopCycle)),
       );
-      assert!(Actors::paged_enqueue(actor_id));
+      assert!(enqueue_latched_actor(actor_id));
     }
     assert_eq!(Actors::queue_occupancy(), 31);
-    let actors = (0..20)
+    let crossing_page_size =
+      <<Test as crate::Config>::CrossingPageSize as Get<u32>>::get() as usize;
+    let actors = (0..crossing_page_size as u64 + 4)
       .map(|index| {
         create_system_with(
           100 + index,
@@ -1328,7 +1467,11 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
       Ok(4)
     );
     assert_eq!(
-      Actors::rewrite_non_tail_source(&source_prefix, &suffix, false),
+      Actors::rewrite_non_tail_source(
+        &source_prefix,
+        &suffix,
+        crate::crossing::CrossingRewriteDisposition::Preview,
+      ),
       Ok(true)
     );
     assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
@@ -1338,15 +1481,20 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
         .iter()
         .map(|candidate| candidate.member.actor_id)
         .collect::<Vec<_>>(),
-      actors[16..20]
+      actors[crossing_page_size..crossing_page_size + 4]
     );
     assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
     let corrupted = polkadot_sdk::frame_support::storage::with_transaction(|| {
-      CrossingMemberships::<Test>::mutate(actors[18], |locator| {
+      CrossingMemberships::<Test>::mutate(actors[crossing_page_size + 2], |locator| {
         locator.as_mut().expect("tail locator").generation += 1;
       });
       let rejected = Actors::snapshot_crossing_tail_suffix(source.key, source.page, 4).is_err()
-        && Actors::rewrite_non_tail_source(&source_prefix, &suffix, false).is_err();
+        && Actors::rewrite_non_tail_source(
+          &source_prefix,
+          &suffix,
+          crate::crossing::CrossingRewriteDisposition::Preview,
+        )
+        .is_err();
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<bool, DispatchError>(
         rejected,
       ))
@@ -1360,7 +1508,12 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
           locator.as_mut().expect("source locator").generation += 1;
         },
       );
-      let rejected = Actors::rewrite_non_tail_source(&source_prefix, &suffix, false).is_err();
+      let rejected = Actors::rewrite_non_tail_source(
+        &source_prefix,
+        &suffix,
+        crate::crossing::CrossingRewriteDisposition::Preview,
+      )
+      .is_err();
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<bool, DispatchError>(
         rejected,
       ))
@@ -1384,7 +1537,11 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
       .expect("trimmed tail suffix");
     assert_eq!(trimmed_suffix.start_offset, 2);
     assert_eq!(
-      Actors::rewrite_non_tail_source(&source_prefix, &trimmed_suffix, false),
+      Actors::rewrite_non_tail_source(
+        &source_prefix,
+        &trimmed_suffix,
+        crate::crossing::CrossingRewriteDisposition::Preview,
+      ),
       Ok(true)
     );
     assert_eq!(
@@ -1650,6 +1807,77 @@ fn crossing_pair_admits_at_exact_remaining_component_capacity() {
 }
 
 #[test]
+fn crossing_opening_executes_effectful_step_and_rearms_detector() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      BoundedVec::try_from(vec![
+        make_step(Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(7),
+        }),
+        make_step(Task::StopCycle),
+      ])
+      .expect("two-Step Contract fits"),
+    );
+    fund_native(actor_id, 1_000_000);
+    let recipient_before = MockAssetOps::balance(&BOB, TestAsset::Native);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 150,
+        observed_at: 1,
+      },
+    );
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      }
+    ));
+    drain_crossing_work();
+    assert!(
+      Actors::actor_hot(actor_id)
+        .expect("latched Actor exists")
+        .pending_signal
+    );
+    Actors::on_idle(1, Weight::MAX);
+    let hot = Actors::actor_hot(actor_id).expect("opened Actor remains active");
+    assert_eq!(hot.cycle_state, CycleState::Running);
+    assert!(!hot.pending_signal);
+    let run = ActorRunStateStore::<Test>::get(actor_id).expect("Opening publishes a Run");
+    assert_eq!(run.cursor, 1);
+    assert_eq!(run.last_committed_step_block, Some(1));
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 7
+    );
+    let membership =
+      Actors::crossing_membership(actor_id).expect("Opening rearms Crossing detector");
+    assert_eq!(membership.key.traversal, crate::CrossingTraversal::Downward);
+    assert_eq!(membership.key.threshold, 80);
+    #[cfg(feature = "try-runtime")]
+    Actors::do_try_state().expect("real Crossing Opening preserves canonical state");
+  });
+}
+
+#[test]
 fn crossing_worker_fires_then_rearms_in_revision_order_without_retrofire() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1688,7 +1916,7 @@ fn crossing_worker_fires_then_rearms_in_revision_order_without_retrofire() {
     assert_eq!(Actors::crossing_pending_feed_list().count, 0);
     let locator = Actors::crossing_membership(actor_id).expect("Crossing membership remains");
     assert!(matches!(
-      ActorHot::<Test>::get(actor_id).map(|hot| hot.trigger_runtime_state),
+      Actors::actor_hot(actor_id).map(|hot| hot.trigger_runtime_state),
       Some(TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::WaitingForRearm,
         ..
@@ -1697,7 +1925,7 @@ fn crossing_worker_fires_then_rearms_in_revision_order_without_retrofire() {
     assert_eq!(locator.key.traversal, crate::CrossingTraversal::Downward);
     assert_eq!(locator.key.threshold, 80);
     assert!(
-      ActorHot::<Test>::get(actor_id)
+      Actors::actor_hot(actor_id)
         .expect("hot state exists")
         .pending_signal
     );
@@ -1736,9 +1964,7 @@ fn falling_crossing_fires_and_rearms_without_duplicate_activation() {
     let fired = Actors::crossing_membership(actor_id).expect("membership remains");
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     assert_eq!(fired.key.traversal, crate::CrossingTraversal::Upward);
-    let ticket = ActorHot::<Test>::get(actor_id)
-      .expect("hot state")
-      .queue_ticket;
+    let ticket = Actors::actor_hot(actor_id).expect("hot state").queue_ticket;
     assert!(ticket.is_some());
 
     assert_ok!(Actors::note_observation_transition(
@@ -1754,9 +1980,7 @@ fn falling_crossing_fires_and_rearms_without_duplicate_activation() {
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     assert_eq!(rearmed.key.traversal, crate::CrossingTraversal::Upward);
     assert_eq!(
-      ActorHot::<Test>::get(actor_id)
-        .expect("hot state")
-        .queue_ticket,
+      Actors::actor_hot(actor_id).expect("hot state").queue_ticket,
       ticket,
       "rearm changes detection state only and cannot duplicate activation"
     );
@@ -1804,7 +2028,7 @@ fn paused_and_breaker_crossings_preserve_state_evolution_and_coalescing() {
       ));
       drain_crossing_work();
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
-      let first = ActorHot::<Test>::get(actor_id).expect("active Crossing actor");
+      let first = Actors::active_actor_view(actor_id).expect("active Crossing actor");
       assert!(first.pending_signal);
       assert_eq!(
         Actors::indexed_trigger_detection_disabled(actor_id),
@@ -1822,7 +2046,7 @@ fn paused_and_breaker_crossings_preserve_state_evolution_and_coalescing() {
       ));
       drain_crossing_work();
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
-      let rearmed = ActorHot::<Test>::get(actor_id).expect("active Crossing actor");
+      let rearmed = Actors::active_actor_view(actor_id).expect("active Crossing actor");
       assert!(rearmed.pending_signal);
       assert_eq!((rearmed.queue_ticket, rearmed.wakeup_pointer), placement);
 
@@ -1836,7 +2060,7 @@ fn paused_and_breaker_crossings_preserve_state_evolution_and_coalescing() {
       ));
       drain_crossing_work();
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
-      let fired_again = ActorHot::<Test>::get(actor_id).expect("active Crossing actor");
+      let fired_again = Actors::active_actor_view(actor_id).expect("active Crossing actor");
       assert!(fired_again.pending_signal);
       assert_eq!(
         (fired_again.queue_ticket, fired_again.wakeup_pointer),
@@ -1853,7 +2077,7 @@ fn paused_and_breaker_crossings_preserve_state_evolution_and_coalescing() {
         ));
       }
       run_idle(Weight::MAX);
-      let resumed = ActorHot::<Test>::get(actor_id).expect("Crossing actor survives StopCycle");
+      let resumed = Actors::active_actor_view(actor_id).expect("Crossing actor survives StopCycle");
       assert_eq!(
         resumed.trigger_runtime_state,
         TriggerRuntimeState::ObservationCrossing {
@@ -1904,7 +2128,7 @@ fn same_threshold_crossing_herd_spans_pages_without_loss_or_duplicate_ticket() {
     drain_crossing_work();
     let mut tickets = BTreeSet::new();
     for actor_id in actors {
-      let hot = ActorHot::<Test>::get(actor_id).expect("hot state");
+      let hot = Actors::actor_hot(actor_id).expect("hot state");
       assert!(hot.pending_signal);
       assert!(tickets.insert(hot.queue_ticket.expect("one live ticket")));
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
@@ -1938,8 +2162,7 @@ fn crossing_compaction_rewinds_cursor_for_an_unprocessed_tail_member() {
         )
       })
       .collect::<Vec<_>>();
-    ActorHot::<Test>::mutate(actors[0], |maybe_hot| {
-      let hot = maybe_hot.as_mut().expect("active Crossing actor");
+    mutate_actor_hot_coherent(actors[0], |hot| {
       let TriggerRuntimeState::ObservationCrossing { phase, .. } = hot.trigger_runtime_state else {
         panic!("actor owns Crossing runtime state");
       };
@@ -1969,7 +2192,7 @@ fn crossing_compaction_rewinds_cursor_for_an_unprocessed_tail_member() {
     assert_eq!((rewound.page, rewound.offset), (0, 0));
     drain_crossing_work();
     assert!(
-      ActorHot::<Test>::get(tail_actor)
+      Actors::actor_hot(tail_actor)
         .expect("tail actor remains")
         .pending_signal
     );
@@ -2018,7 +2241,7 @@ fn large_crossing_jump_visits_each_distinct_occupied_threshold_once() {
       .iter()
       .map(|actor_id| {
         assert_eq!(crossing_phase(*actor_id), CrossingPhase::WaitingForRearm);
-        ActorHot::<Test>::get(*actor_id)
+        Actors::actor_hot(*actor_id)
           .expect("hot state")
           .queue_ticket
           .expect("one live ticket")
@@ -2072,7 +2295,7 @@ fn sparse_crossing_range_preserves_bounded_leaf_suffix_across_service_passes() {
     let first_fired = actors
       .iter()
       .filter(|actor_id| {
-        ActorHot::<Test>::get(**actor_id)
+        Actors::actor_hot(**actor_id)
           .expect("actor remains active")
           .pending_signal
       })
@@ -2101,7 +2324,7 @@ fn sparse_crossing_range_preserves_bounded_leaf_suffix_across_service_passes() {
     let tickets = actors
       .iter()
       .map(|actor_id| {
-        ActorHot::<Test>::get(*actor_id)
+        Actors::actor_hot(*actor_id)
           .expect("actor remains active")
           .queue_ticket
           .expect("one live ticket")
@@ -2176,7 +2399,7 @@ fn crossing_scale_10k_zero_match_small_cohort_and_maximum_herd() {
     assert_eq!(zero_match.faults, 0);
     assert_eq!(Actors::combined_queue_occupancy(), 0);
     assert!(matched.iter().all(|actor_id| {
-      !ActorHot::<Test>::get(*actor_id)
+      !Actors::actor_hot(*actor_id)
         .expect("matched actor remains active")
         .pending_signal
     }));
@@ -2212,7 +2435,7 @@ fn crossing_scale_10k_zero_match_small_cohort_and_maximum_herd() {
     let tickets = matched
       .iter()
       .map(|actor_id| {
-        ActorHot::<Test>::get(*actor_id)
+        Actors::actor_hot(*actor_id)
           .expect("matched actor remains active")
           .queue_ticket
           .expect("matched actor owns one ticket")
@@ -2261,7 +2484,7 @@ fn crossing_scale_10k_zero_match_small_cohort_and_maximum_herd() {
     let mut deferred = 0u32;
     let mut placements = Vec::with_capacity(actor_count as usize);
     for actor_id in actors.iter().copied() {
-      let hot = ActorHot::<Test>::get(actor_id).expect("herd actor remains active");
+      let hot = Actors::actor_hot(actor_id).expect("herd actor remains active");
       assert!(hot.pending_signal);
       placements.push((hot.queue_ticket, hot.wakeup_pointer));
       match (hot.queue_ticket, hot.wakeup_pointer) {
@@ -2289,7 +2512,7 @@ fn crossing_scale_10k_zero_match_small_cohort_and_maximum_herd() {
     ));
     let rearm_herd_units = drain_crossing_work_with_limit(actor_count.saturating_mul(2));
     for (index, actor_id) in actors.iter().enumerate() {
-      let hot = ActorHot::<Test>::get(*actor_id).expect("herd actor remains active");
+      let hot = Actors::actor_hot(*actor_id).expect("herd actor remains active");
       assert_eq!(
         (
           crossing_phase(*actor_id),
@@ -2319,7 +2542,7 @@ fn crossing_scale_10k_zero_match_small_cohort_and_maximum_herd() {
     ));
     let repeated_herd_units = drain_crossing_work_with_limit(actor_count.saturating_mul(2));
     assert!(actors.iter().enumerate().all(|(index, actor_id)| {
-      let hot = ActorHot::<Test>::get(*actor_id).expect("herd actor remains active");
+      let hot = Actors::actor_hot(*actor_id).expect("herd actor remains active");
       crossing_phase(*actor_id) == CrossingPhase::WaitingForRearm
         && (hot.queue_ticket, hot.wakeup_pointer) == placements[index]
     }));
@@ -2406,8 +2629,8 @@ fn breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_e
     }
     assert!(Actors::crossing_transition_queue(7).is_none());
     assert!(Actors::dirty_observation_feeds(8).is_none());
-    let cadence_identity = ActorIdentities::<Test>::get(cadence_actor).expect("cadence identity");
-    let cadence_hot = ActorHot::<Test>::get(cadence_actor).expect("cadence hot state");
+    let cadence_identity = Actors::actor_identity(cadence_actor).expect("cadence identity");
+    let cadence_hot = Actors::actor_hot(cadence_actor).expect("cadence hot state");
     assert_eq!(cadence_identity.cycle_nonce, 0);
     assert!(cadence_hot.pending_signal);
     assert!(
@@ -2415,8 +2638,8 @@ fn breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_e
       "cadence must retain canonical queue or backpressure-retry placement under breaker"
     );
     for actor_id in crossing_actors {
-      let identity = ActorIdentities::<Test>::get(actor_id).expect("Crossing actor identity");
-      let hot = ActorHot::<Test>::get(actor_id).expect("Crossing actor hot state");
+      let identity = Actors::actor_identity(actor_id).expect("Crossing actor identity");
+      let hot = Actors::actor_hot(actor_id).expect("Crossing actor hot state");
       assert_eq!(identity.cycle_nonce, 0);
       assert!(hot.pending_signal);
       assert_eq!(
@@ -2428,8 +2651,8 @@ fn breaker_materializes_maximum_mixed_wakeup_crossing_and_broad_fanout_without_e
       );
     }
     for actor_id in change_actors {
-      let identity = ActorIdentities::<Test>::get(actor_id).expect("Change actor identity");
-      let hot = ActorHot::<Test>::get(actor_id).expect("Change actor hot state");
+      let identity = Actors::actor_identity(actor_id).expect("Change actor identity");
+      let hot = Actors::actor_hot(actor_id).expect("Change actor hot state");
       assert_eq!(identity.cycle_nonce, 0);
       assert!(hot.pending_signal);
     }
@@ -2565,9 +2788,9 @@ fn crossing_mixed_dense_sparse_directional_lifecycle_profile() {
         .into_iter()
         .chain(dense)
         .chain(falling)
-        .all(|actor_id| { ActorHot::<Test>::get(actor_id).is_some_and(|hot| hot.pending_signal) })
+        .all(|actor_id| { Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal) })
     );
-    let insolvent_hot = ActorHot::<Test>::get(insolvent).expect("insolvent Actor remains active");
+    let insolvent_hot = Actors::actor_hot(insolvent).expect("insolvent Actor remains active");
     assert!(!insolvent_hot.pending_signal);
     assert!(insolvent_hot.queue_ticket.is_none());
     assert_eq!(crossing_phase(insolvent), CrossingPhase::WaitingForRearm);
@@ -2611,7 +2834,7 @@ fn crossing_contract_replacement_removes_stale_pending_membership_before_worker_
     ));
     drain_crossing_work();
     assert!(Actors::crossing_membership(actor_id).is_none());
-    let hot = ActorHot::<Test>::get(actor_id).expect("hot state");
+    let hot = Actors::actor_hot(actor_id).expect("hot state");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
   });
@@ -2664,7 +2887,7 @@ fn semantic_crossing_replacement_reinitializes_from_current_observation() {
       None,
     ));
     assert_eq!(crossing_phase(actor_id), CrossingPhase::Armed);
-    let hot = ActorHot::<Test>::get(actor_id).expect("active Crossing actor");
+    let hot = Actors::actor_hot(actor_id).expect("active Crossing actor");
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_some());
     let locator = Actors::crossing_membership(actor_id).expect("replacement membership");
@@ -2711,7 +2934,7 @@ fn crossing_deactivation_and_close_remove_pending_members_without_stale_activati
       }
       drain_crossing_work();
       assert!(Actors::crossing_membership(actor_id).is_none());
-      assert!(ActorHot::<Test>::get(actor_id).is_none());
+      assert!(Actors::actor_hot(actor_id).is_none());
       assert_eq!(Actors::combined_queue_occupancy(), 0);
     });
   }
@@ -2821,7 +3044,7 @@ fn crossing_compact_authority_mismatch_truncates_at_first_middle_and_final_bound
           cause_provenance: crate::TriggerCauseProvenance::Deferred,
           cause_block: 1,
         },
-        true,
+        crate::crossing::CrossingFireClassification::Resolve,
         Some(crate::CrossingWorkPlan::FireCohortPlaced),
       )
       .expect("mismatch must select an exact scalar fallback or compact prefix");
@@ -2881,21 +3104,21 @@ fn crossing_same_tail_page_places_two_candidates_in_one_admitted_cohort() {
       },
     );
     let queue_capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
-    QueueOccupancy::<Test>::put(queue_capacity - 1);
+    crate::ActorReadyTail::<Test>::put(u64::from(queue_capacity - 1));
     assert_eq!(
       Actors::classify_crossing_work(),
       crate::CrossingWorkPlan::FireCohortPlaced,
       "a pair must downgrade before mutation when only one FIFO position remains"
     );
-    QueueOccupancy::<Test>::put(0);
-    crate::NextQueueTicket::<Test>::put(u64::MAX - 1);
+    crate::ActorReadyTail::<Test>::put(0);
+    crate::ActorReadyTail::<Test>::put(u64::MAX - 1);
     assert_eq!(
       Actors::classify_crossing_work(),
       crate::CrossingWorkPlan::FireCohortPlaced,
       "a pair must downgrade before its second ticket would exhaust the allocator"
     );
-    crate::NextQueueTicket::<Test>::put(0);
-    QueueTail::<Test>::put(1);
+    crate::ActorReadyTail::<Test>::put(0);
+    crate::ActorReadyHead::<Test>::put(1);
     let corrupt_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
       Actors::classify_crossing_work(),
@@ -2907,7 +3130,7 @@ fn crossing_same_tail_page_places_two_candidates_in_one_admitted_cohort() {
       corrupt_root,
       "pair classification must retain no partial queue authority"
     );
-    QueueTail::<Test>::put(0);
+    crate::ActorReadyHead::<Test>::put(0);
     assert_eq!(
       Actors::classify_crossing_work(),
       crate::CrossingWorkPlan::FireCohortPlacedBatch
@@ -2923,7 +3146,7 @@ fn crossing_same_tail_page_places_two_candidates_in_one_admitted_cohort() {
     assert_eq!(counters.closes, 0);
     assert_eq!(counters.faults, 0);
     for actor_id in [first, second] {
-      let hot = ActorHot::<Test>::get(actor_id).expect("cohort actor remains active");
+      let hot = Actors::actor_hot(actor_id).expect("cohort actor remains active");
       assert!(hot.pending_signal);
       assert!(hot.queue_ticket.is_some());
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
@@ -2962,6 +3185,83 @@ fn crossing_same_tail_page_places_two_candidates_in_one_admitted_cohort() {
     for actor_id in [first, second] {
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     }
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn crossing_placed_cohort_commits_from_frame_authority_without_scalar_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let schedule = Schedule {
+      trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+      cooldown_blocks: 0,
+    };
+    let steps = contract_steps_with_step(make_step(Task::StopCycle));
+    let first = create_system_with(ALICE, schedule.clone(), None, steps.clone());
+    let second = create_system_with(BOB, schedule, None, steps);
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    crate::CrossingRangeCursors::<Test>::insert(
+      7,
+      crate::CrossingRangeCursor {
+        revision: 2,
+        traversal: crate::CrossingTraversal::Upward,
+        search_bound: 150,
+        current_threshold: Some(100),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    Actors::test_reset_queue_append_commits();
+    let (_, counters) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
+    assert_eq!(counters.candidates, 2);
+    assert_eq!(counters.activations, 2);
+    assert_eq!(counters.faults, 0);
+    assert_eq!(Actors::test_queue_append_commits(), 1);
+    for actor_id in [first, second] {
+      let (location, _, hot, _) =
+        Actors::load_frame_control_authority(actor_id).expect("cohort frame authority survives");
+      assert!(matches!(
+        location,
+        crate::ActorControlLocation::Ready { .. }
+      ));
+      assert!(hot.pending_signal);
+      assert!(matches!(
+        hot.trigger_runtime_state,
+        TriggerRuntimeState::ObservationCrossing {
+          phase: CrossingPhase::WaitingForRearm,
+          ..
+        }
+      ));
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+      assert!(Actors::actor_control_cell(actor_id).is_some());
+    }
+    run_idle(Weight::MAX);
+    for actor_id in [first, second] {
+      assert!(has_actor_event(|event| matches!(
+        event,
+        Event::CycleSummary { actor_id: id, .. } if *id == actor_id
+      )));
+      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+      assert!(Actors::actor_control_cell(actor_id).is_some());
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -3029,10 +3329,10 @@ fn crossing_maximum_partial_page_batch_preserves_remainder_and_next_feed() {
     assert_eq!(Actors::test_queue_append_commits(), 1);
     assert_eq!(Actors::test_crossing_cursor_commits(), 1);
     for actor_id in [first, second, third, fourth] {
-      assert!(ActorHot::<Test>::get(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     }
-    let retained_hot = ActorHot::<Test>::get(retained).expect("retained source actor");
+    let retained_hot = Actors::actor_hot(retained).expect("retained source actor");
     assert!(!retained_hot.pending_signal);
     assert!(retained_hot.queue_ticket.is_none());
     assert_eq!(crossing_phase(retained), CrossingPhase::Armed);
@@ -3040,7 +3340,7 @@ fn crossing_maximum_partial_page_batch_preserves_remainder_and_next_feed() {
       Actors::crossing_membership(retained).map(|locator| locator.offset),
       Some(0)
     );
-    let isolated_hot = ActorHot::<Test>::get(isolated).expect("isolated feed actor");
+    let isolated_hot = Actors::actor_hot(isolated).expect("isolated feed actor");
     assert!(!isolated_hot.pending_signal);
     assert!(isolated_hot.queue_ticket.is_none());
     assert_eq!(crossing_phase(isolated), CrossingPhase::Armed);
@@ -3086,16 +3386,14 @@ fn crossing_pair_partial_cohort_preserves_second_actor_installation_barrier() {
         exhausted: false,
       },
     );
-    ActorHot::<Test>::mutate(second, |maybe_hot| {
-      let hot = maybe_hot.as_mut().expect("second cohort Actor exists");
-      let TriggerRuntimeState::ObservationCrossing {
-        installed_at_revision,
-        ..
-      } = &mut hot.trigger_runtime_state
-      else {
+    mutate_actor_hot_coherent(second, |hot| {
+      let TriggerRuntimeState::ObservationCrossing { phase, .. } = hot.trigger_runtime_state else {
         panic!("second cohort Actor uses Crossing state");
       };
-      *installed_at_revision = 2;
+      hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
+        phase,
+        installed_at_revision: 2,
+      };
     });
 
     assert_eq!(
@@ -3109,10 +3407,10 @@ fn crossing_pair_partial_cohort_preserves_second_actor_installation_barrier() {
     assert_eq!(counters.activations, 1);
     assert_eq!(counters.closes, 0);
     assert_eq!(counters.faults, 0);
-    assert!(ActorHot::<Test>::get(first).is_some_and(|hot| hot.pending_signal));
+    assert!(Actors::actor_hot(first).is_some_and(|hot| hot.pending_signal));
     assert_eq!(crossing_phase(first), CrossingPhase::WaitingForRearm);
     assert!(
-      ActorHot::<Test>::get(second)
+      Actors::actor_hot(second)
         .is_some_and(|hot| { !hot.pending_signal && hot.queue_ticket.is_none() })
     );
     assert_eq!(crossing_phase(second), CrossingPhase::Armed);
@@ -3157,8 +3455,8 @@ fn crossing_pair_preflight_fault_cannot_activate_its_valid_first_candidate() {
         exhausted: false,
       },
     );
-    let first_before = ActorHot::<Test>::get(first).expect("first cohort Actor exists");
-    let second_before = ActorHot::<Test>::get(second).expect("second cohort Actor exists");
+    let first_before = Actors::actor_hot(first).expect("first cohort Actor exists");
+    let second_before = Actors::actor_hot(second).expect("second cohort Actor exists");
     crate::CrossingMemberships::<Test>::mutate(second, |maybe_locator| {
       let locator = maybe_locator
         .as_mut()
@@ -3172,9 +3470,9 @@ fn crossing_pair_preflight_fault_cannot_activate_its_valid_first_candidate() {
     assert_eq!(counters.activations, 0);
     assert_eq!(counters.closes, 0);
     assert_eq!(counters.faults, 1);
-    assert_eq!(ActorHot::<Test>::get(first), Some(first_before));
-    assert_eq!(ActorHot::<Test>::get(second), Some(second_before));
-    assert_eq!(crate::QueueOccupancy::<Test>::get(), 0);
+    assert_eq!(Actors::actor_hot(first), Some(first_before));
+    assert_eq!(Actors::actor_hot(second), Some(second_before));
+    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 0);
     let fault = crate::CrossingWorkerFaultState::<Test>::get().expect("Crossing fault recorded");
     assert_eq!(
       actor_event_count(|event| matches!(
@@ -3270,6 +3568,62 @@ fn crossing_terminal_weight_is_separate_from_ordinary_placement() {
       terminal
     );
     assert_ne!(ordinary, terminal);
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn frame_only_zero_step_crossing_never_materializes_scalar_hot() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      BoundedVec::default(),
+    );
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    let (_, counters) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
+    assert_eq!(counters.activations, 1);
+    assert!(crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
+
+    Actors::execute_cycle(Weight::MAX);
+
+    assert!(!crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
+    assert!(crate::CrossingMemberships::<Test>::contains_key(actor_id));
+    let state = Actors::active_actor_state(actor_id).expect("Crossing successor remains active");
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(matches!(
+      state.hot.trigger_runtime_state,
+      TriggerRuntimeState::ObservationCrossing {
+        phase: CrossingPhase::Armed,
+        ..
+      }
+    ));
+    assert!(matches!(
+      crate::ActorControlLocators::<Test>::get(actor_id),
+      Some(crate::ActorControlLocation::Unsignaled)
+    ));
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -3618,7 +3972,7 @@ fn crossing_activation_under_saturated_fifo_latches_and_defers_exactly_once() {
       },
     ));
     drain_crossing_work();
-    let hot = ActorHot::<Test>::get(actor_id).expect("hot state");
+    let hot = Actors::actor_hot(actor_id).expect("hot state");
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
     assert_eq!(
@@ -3627,12 +3981,12 @@ fn crossing_activation_under_saturated_fifo_latches_and_defers_exactly_once() {
     );
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    let recovered = ActorHot::<Test>::get(actor_id).expect("actor survives StopCycle");
+    let recovered = Actors::actor_hot(actor_id).expect("actor survives StopCycle");
     assert!(!recovered.pending_signal);
     assert!(recovered.queue_ticket.is_none());
     assert!(recovered.wakeup_pointer.is_none());
     assert_eq!(
-      ActorIdentities::<Test>::get(actor_id)
+      Actors::actor_identity(actor_id)
         .expect("actor identity")
         .cycle_nonce,
       1
@@ -3660,7 +4014,8 @@ fn crossing_ticket_exhaustion_closes_and_cleans_detection_membership() {
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    crate::ActorReadyHead::<Test>::put(u64::MAX);
+    crate::ActorReadyTail::<Test>::put(u64::MAX);
     assert_ok!(Actors::note_observation_transition(
       7,
       crate::ObservationTransition {
@@ -3690,7 +4045,7 @@ fn crossing_ticket_exhaustion_closes_and_cleans_detection_membership() {
 }
 
 #[test]
-fn crossing_queue_index_exhaustion_rolls_back_the_actor_unit_exactly() {
+fn crossing_opening_rearm_uses_frozen_class_admission_and_frame_hot_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_observation(
@@ -3709,9 +4064,6 @@ fn crossing_queue_index_exhaustion_rolls_back_the_actor_unit_exactly() {
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    crate::QueueTail::<Test>::put(u64::MAX);
-    crate::NextQueueTicket::<Test>::put(5);
-    QueueOccupancy::<Test>::put(0);
     assert_ok!(Actors::note_observation_transition(
       7,
       crate::ObservationTransition {
@@ -3720,25 +4072,44 @@ fn crossing_queue_index_exhaustion_rolls_back_the_actor_unit_exactly() {
         current: 150,
       },
     ));
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    assert_noop!(
-      Actors::crossing_work_unit(),
-      Error::<Test>::SchedulerIndexExhausted
+    drain_crossing_work();
+    assert!(crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
+
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 70,
+        observed_at: 3,
+      },
     );
+    Actors::execute_cycle(Weight::MAX);
+
+    let crate::LoadedActorStateOf::Active(state) =
+      Actors::load_actor_state_for_frame_control(actor_id)
+    else {
+      panic!("rearmed Crossing frame state is active");
+    };
+    assert_eq!(state.identity.cycle_nonce, 1);
+    assert!(!state.hot.pending_signal);
+    assert!(state.hot.queue_ticket.is_none());
     assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-    let hot = ActorHot::<Test>::get(actor_id).expect("actor remains active");
-    assert!(matches!(
-      hot.trigger_runtime_state,
+      state.hot.trigger_runtime_state,
       TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::Armed,
-        ..
+        installed_at_revision: 1,
       }
-    ));
-    assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
+    );
+    assert_eq!(
+      CrossingMemberships::<Test>::get(actor_id)
+        .expect("rearmed Crossing membership exists")
+        .key
+        .threshold,
+      100
+    );
+    assert!(!crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_some());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -3834,16 +4205,20 @@ fn crossing_try_state_rejects_canonical_locator_radix_and_pending_list_corruptio
     crate::CrossingMemberPages::<Test>::insert(locator.key, locator.page, original_page);
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
-    let identity = ActorIdentities::<Test>::get(actor_id).expect("actor identity exists");
-    let hot = ActorHot::<Test>::get(actor_id).expect("actor hot state exists");
+    let identity = Actors::actor_identity(actor_id).expect("actor identity exists");
+    let hot = Actors::actor_hot(actor_id).expect("actor hot state exists");
     let contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
     let funding = ActorFunding::<Test>::get(actor_id).expect("actor funding exists");
-    ActorIdentities::<Test>::remove(actor_id);
-    assert!(crate::Pallet::<Test>::do_try_state().is_err());
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
     ActorIdentities::<Test>::insert(actor_id, identity);
-    ActorHot::<Test>::remove(actor_id);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorHot::<Test>::insert(actor_id, hot.clone());
+    ActorIdentities::<Test>::remove(actor_id);
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+    let primary_location =
+      crate::ActorControlLocators::<Test>::take(actor_id).expect("canonical locator exists");
+    assert!(crate::Pallet::<Test>::do_try_state().is_err());
+    crate::ActorControlLocators::<Test>::insert(actor_id, primary_location);
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
     assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
     assert_ok!(Actors::store_actor_contract(actor_id, contract));
@@ -3852,36 +4227,24 @@ fn crossing_try_state_rejects_canonical_locator_radix_and_pending_list_corruptio
     ActorFunding::<Test>::insert(actor_id, funding);
 
     let runtime_state = hot.trigger_runtime_state;
-    ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active Crossing actor")
-        .trigger_runtime_state = TriggerRuntimeState::Stateless;
+    mutate_actor_hot_coherent(actor_id, |hot| {
+      hot.trigger_runtime_state = TriggerRuntimeState::Stateless;
     });
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active Crossing actor")
-        .trigger_runtime_state = runtime_state.clone();
+    mutate_actor_hot_coherent(actor_id, |hot| {
+      hot.trigger_runtime_state = runtime_state.clone();
     });
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
-    ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active Crossing actor")
-        .trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
+    mutate_actor_hot_coherent(actor_id, |hot| {
+      hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::WaitingForRearm,
         installed_at_revision: u64::MAX,
       };
     });
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active Crossing actor")
-        .trigger_runtime_state = runtime_state;
+    mutate_actor_hot_coherent(actor_id, |hot| {
+      hot.trigger_runtime_state = runtime_state;
     });
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
@@ -3894,18 +4257,12 @@ fn crossing_try_state_rejects_canonical_locator_radix_and_pending_list_corruptio
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    ActorHot::<Test>::mutate(cadence_actor, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active cadence actor")
-        .trigger_runtime_state = TriggerRuntimeState::Stateless;
+    mutate_actor_hot_coherent(cadence_actor, |hot| {
+      hot.trigger_runtime_state = TriggerRuntimeState::Stateless;
     });
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorHot::<Test>::mutate(cadence_actor, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("active cadence actor")
-        .trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
+    mutate_actor_hot_coherent(cadence_actor, |hot| {
+      hot.trigger_runtime_state = TriggerRuntimeState::Cadenced { anchor_tick: None };
     });
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 

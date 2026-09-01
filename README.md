@@ -75,11 +75,12 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 | `web-client/` | Browser reference client | [`web-client/README.md`](./web-client/README.md) |
 | `simulator/` | Deterministic TMCTOL mathematical reference | [`simulator/README.md`](./simulator/README.md) |
 | `scripts/` | Bootstrap, validation, benchmarks, administration | [`scripts/README.md`](./scripts/README.md) |
-| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/index.en.md`](./wiki/index.en.md) |
+| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/index.en.md`](./wiki/index.en.md) [`wiki/index.ru.md`](./wiki/index.ru.md) |
 
 ### Core contracts
 
 - [TMCTOL Specification](./docs/tmctol.specification.en.md)
+- [Builder Economy Contract](./docs/builder-economy.contract.en.md)
 - [DEOS Actors Specification](./template/pallets/actors/docs/specification.en.md)
 - [DEOS Actors External Runtime Embedding Guide](./template/pallets/actors/docs/embedding.md)
 - [DEOS Actors Control-Plane Contract](./docs/actors-control-plane.contract.en.md)

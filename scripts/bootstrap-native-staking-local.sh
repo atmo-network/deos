@@ -311,13 +311,16 @@ try {
   const securityReadiness = securityView.readiness;
   const securityEpoch = securityView.current_epoch;
   if (mode === "check") {
-    const [stakingLiquidityHot, stakingLiquidityProgram] = await Promise.all([
-      api.query.Actors.ActorHot.getValue(actorId, { at: block.hash }),
-      api.query.Actors.ActorContract.getValue(actorId, { at: block.hash }),
-    ]);
-    const stakingLiquidityActor = stakingLiquidityHot != null && stakingLiquidityProgram != null
-      ? { hot: stakingLiquidityHot, program: stakingLiquidityProgram }
-      : null;
+    const actorEligibility = await api.apis.ActorEligibilityApi.actor_eligibility(actorId, { at: block.hash });
+    if (!actorEligibility.success) {
+      throw new Error(`Actor eligibility rejected bounded state: ${actorEligibility.value.type}`);
+    }
+    const actorState = actorEligibility.value;
+    if (!["Active", "Dormant", "NotRegistered"].includes(actorState.type)) {
+      throw new Error(`Unsupported Actor eligibility variant: ${actorState.type}`);
+    }
+    // Preserve the active-only check using the runtime's canonical bounded projection.
+    const stakingLiquidityActor = actorState.type === "Active" ? actorState.value : null;
     const checks = {
       securityModeKnown: securityMode?.type === "TrustedSet" || securityMode?.type === "LpBackedSelection",
       lpBackedSelectionActive: securityMode?.type === "LpBackedSelection",

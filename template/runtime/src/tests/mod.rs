@@ -25,8 +25,12 @@ pub mod load_testing;
 #[cfg(test)]
 pub mod oracle_integration_tests;
 #[cfg(test)]
+mod production_block_replay;
+#[cfg(test)]
 pub mod staking_integration_tests;
 #[cfg(test)]
 pub mod tmctol_integration_tests;
 #[cfg(test)]
 pub mod tmctol_invariants;
+#[cfg(test)]
+mod wasm_replay;

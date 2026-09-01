@@ -1,21 +1,21 @@
 use crate::{
-  ActiveLifecycle, ActorActivationPlacement, ActorAdmissionCertificates, ActorClass,
-  ActorClassification, ActorClassificationError, ActorContract, ActorEligibility,
-  ActorExecutionPhase, ActorFunding, ActorHot, ActorId, ActorIdentities, ActorRunAuthority,
-  ActorRunStateStore, ActorTriggerActivation, ActorType, AmountResolution, AssetFilter,
-  AssetFilterOf, AttemptDisposition, CancellationReason, CloseReason, CrossingDirection,
-  CrossingMemberPages, CrossingMemberships, CrossingPhase, CrossingTransition, CycleResult,
-  CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError, FeeEnvelopeInput, FundingSourcePolicy,
-  GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, InitialLifecycle, InputLimit,
-  LoadedActorStateOf, Mutability, NextActorId, ObservationCrossing, ObservationSubscriberPageList,
-  ObservationTiming, OpeningSurface, OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate,
-  QueueEntry, QueueHead, QueueOccupancy, QueuePages, QueueTail, RetryClass, ScheduleWindow,
+  ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
+  ActorClassificationError, ActorContract, ActorControlLocators, ActorEligibility,
+  ActorExecutionPhase, ActorFunding, ActorId, ActorIdentities, ActorReadyHead, ActorReadyOccupancy,
+  ActorReadyTail, ActorRunAuthority, ActorRunStateStore, ActorTriggerActivation, ActorType,
+  AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition, CancellationReason,
+  CloseReason, CrossingDirection, CrossingMemberPages, CrossingMemberships, CrossingPhase,
+  CrossingTransition, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
+  FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
+  IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf, Mutability, NextActorId,
+  ObservationCrossing, ObservationSubscriberPageList, ObservationTiming, OpeningSurface,
+  OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow,
   SimulationError, SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf,
   SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome,
   StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf,
-  TimedPredicate, Trigger, TriggerFamily, TriggerRuntimeState, WakeupBucketState, WakeupBuckets,
-  WakeupClock, WakeupEntry, WakeupKey, WakeupPage, WakeupPages, WakeupPointer, adapters::AssetOps,
-  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
+  TimedPredicate, Trigger, TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage,
+  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
+  mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -167,13 +167,75 @@ type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFo
 type TestWeightInfo = crate::weights::TestWeightInfo;
 
 fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
-  let admission =
-    ActorAdmissionCertificates::<Test>::get(actor_id).expect("Actor admission certificate exists");
+  let admission = Actors::actor_control_cell(actor_id)
+    .expect("Actor admission certificate exists")
+    .1
+    .admission;
   ActorRunAuthority {
     semantic_contract_id: admission.semantic_contract_id,
     body_commitment: admission.body_commitment,
     admission_identity: admission.admission_identity,
   }
+}
+
+fn restore_structural_queue_tombstone(actor_id: ActorId) {
+  assert_eq!(
+    ActorControlLocators::<Test>::get(actor_id),
+    Some(crate::ActorControlLocation::Unsignaled)
+  );
+  mutate_primary_control_cell(actor_id, |cell| cell.hot.pending_signal = false);
+  assert!(
+    Actors::actor_hot(actor_id)
+      .expect("invalidated Actor exists")
+      .queue_ticket
+      .is_none()
+  );
+}
+
+fn schedule_latched_service_wakeup(actor_id: ActorId, wakeup_block: MockBlockNumber) -> bool {
+  try_schedule_latched_service_wakeup(actor_id, wakeup_block).is_ok()
+}
+
+fn try_schedule_latched_service_wakeup(
+  actor_id: ActorId,
+  wakeup_block: MockBlockNumber,
+) -> Result<(), crate::scheduler::EnqueueOutcome> {
+  let (location, cell) = Actors::actor_control_cell(actor_id)
+    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+  let (identity, mut hot, admission) = Actors::project_control_cell(&cell, location)
+    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+  hot.pending_signal = true;
+  Actors::try_wakeup_substrate_schedule_transition_with_authority(
+    actor_id,
+    WakeupKey::Block(wakeup_block),
+    hot,
+    &identity,
+    cell.cursor,
+    &admission,
+    cell.resources,
+  )
+}
+
+fn enqueue_latched_actor(actor_id: ActorId) -> bool {
+  let Some(mut hot) = Actors::actor_hot(actor_id) else {
+    return false;
+  };
+  if hot.queue_ticket.is_some() {
+    return Actors::paged_enqueue(actor_id);
+  }
+  hot.pending_signal = true;
+  let result: Result<(), DispatchError> =
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = Actors::preflight_paged_enqueue_cohort_with_authority(vec![(actor_id, hot)])
+        .and_then(Actors::commit_paged_enqueue)
+        .map_err(|_| Error::<Test>::ActorInvariant.into());
+      if result.is_ok() {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      } else {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
+      }
+    });
+  result.is_ok()
 }
 
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
@@ -188,43 +250,30 @@ fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
   })
 }
 
-fn queue_entry(ticket: u64, actor_id: ActorId) -> QueueEntry<MockBlockNumber> {
-  QueueEntry {
-    actor_id,
-    cycle_nonce: 0,
-    cursor: 0,
-    ticket,
-    eligible_at: 0,
-    contract_commitment: crate::ActorContractCommitment {
-      semantic_contract_id: [0; 32],
-      body_commitment: [0; 32],
-    },
-  }
+fn canonical_scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
+  Actors::active_actor_view(actor_id).and_then(|actor| {
+    actor
+      .wakeup_pointer
+      .map(|pointer| match pointer.block {
+        WakeupKey::Block(block) => block,
+        WakeupKey::Tick(tick) => tick,
+      })
+      .or_else(|| actor.trigger_wakeup_pointer.map(|pointer| pointer.tick))
+  })
 }
 
 fn seed_saturated_tombstone_queue() {
-  let page_size: u32 = <Test as crate::Config>::QueuePageSize::get();
   let capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
-  for page_id in 0..capacity.div_ceil(page_size) {
-    let first = page_id * page_size;
-    let len = page_size.min(capacity - first);
-    let entries = (0..len)
-      .map(|offset| {
-        queue_entry(
-          u64::from(first + offset),
-          10_000_000 + u64::from(first + offset),
-        )
-      })
-      .collect::<Vec<_>>();
-    QueuePages::<Test>::insert(
+  for page_id in 0..capacity.div_ceil(32) {
+    crate::ActorReadyFrameChunks::<Test>::insert(
       u64::from(page_id),
-      BoundedVec::try_from(entries).expect("saturated queue page fits"),
+      crate::ActorControlChunkOf::<Test>::try_from(vec![None; 32])
+        .expect("canonical tombstone page fits"),
     );
   }
-  QueueHead::<Test>::put(0);
-  QueueTail::<Test>::put(u64::from(capacity));
-  QueueOccupancy::<Test>::put(capacity);
-  crate::NextQueueTicket::<Test>::put(u64::from(capacity));
+  crate::ActorReadyHead::<Test>::put(0);
+  crate::ActorReadyTail::<Test>::put(u64::from(capacity));
+  crate::ActorReadyOccupancy::<Test>::put(0);
 }
 
 fn assert_plain_storage_type<T: TypeInfo + 'static>(entry: &StorageEntryMetadataIR) {
@@ -314,7 +363,7 @@ fn prepare_crossing_pair_after_sparse_open() {
 }
 
 fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
-  match ActorHot::<Test>::get(actor_id)
+  match Actors::active_actor_view(actor_id)
     .expect("active Crossing actor")
     .trigger_runtime_state
   {
@@ -328,7 +377,7 @@ fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
 }
 
 fn drain_crossing_work() -> u32 {
-  drain_crossing_work_with_limit(128)
+  drain_crossing_work_with_limit(512)
 }
 
 fn drain_crossing_work_with_limit(limit: u32) -> u32 {
@@ -349,7 +398,7 @@ fn assert_on_idle_wakeup_insufficiency_preserves_state(wakeup_budget: Weight) {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     GlobalCircuitBreaker::<Test>::put(true);
     let hot_before = Actors::actor_hot(actor_id).expect("actor before bounded wakeup pass");
     let bucket_before = Actors::wakeup_buckets(10).expect("due wakeup bucket");
@@ -611,11 +660,8 @@ fn age_fixture_control_clock(actor_id: ActorId) {
     frame_system::Pallet::<Test>::set_block_number(1);
     return;
   }
-  ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-    maybe
-      .as_mut()
-      .expect("fixture actor identity exists")
-      .last_control_mutation_block = now.saturating_sub(1);
+  mutate_actor_identity_coherent(actor_id, |identity| {
+    identity.last_control_mutation_block = now.saturating_sub(1);
   });
 }
 
@@ -662,6 +708,40 @@ fn sovereign_account(actor_id: u64) -> AccountId {
 fn fund_native(actor_id: u64, amount: Balance) {
   let actor_acc = sovereign_account(actor_id);
   let _ = <Balances as frame::traits::Currency<AccountId>>::deposit_creating(&actor_acc, amount);
+}
+
+fn mutate_actor_hot_coherent(
+  actor_id: ActorId,
+  mutate: impl FnOnce(&mut crate::ActorHotStateOf<Test>),
+) {
+  assert_ok!(Actors::try_mutate_control_hot(
+    actor_id,
+    Error::<Test>::ActorNotFound,
+    |hot| {
+      mutate(hot);
+      Ok(())
+    }
+  ));
+}
+
+fn mutate_actor_identity_coherent(
+  actor_id: ActorId,
+  mutate: impl FnOnce(&mut crate::ActorIdentityOf<Test>),
+) {
+  assert_ok!(Actors::try_mutate_control_identity(
+    actor_id,
+    Error::<Test>::ActorNotFound,
+    |identity| {
+      mutate(identity);
+      Ok(())
+    }
+  ));
+}
+
+fn set_actor_cycle_nonce_coherent(actor_id: ActorId, cycle_nonce: u64) {
+  mutate_actor_identity_coherent(actor_id, |identity| {
+    identity.cycle_nonce = cycle_nonce;
+  });
 }
 
 fn native_balance(who: &AccountId) -> Balance {
@@ -824,7 +904,10 @@ fn run_idle(weight: Weight) {
   let max_blocks =
     <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get().saturating_mul(2u32);
   for _ in 1..max_blocks {
-    if !ActorHot::<Test>::iter_values().any(|hot| hot.cycle_state == CycleState::Running) {
+    if !ActorControlLocators::<Test>::iter_keys()
+      .filter_map(Actors::actor_hot)
+      .any(|hot| hot.cycle_state == CycleState::Running)
+    {
       break;
     }
     let Some(next) = now.checked_add(1) else {
@@ -843,7 +926,7 @@ fn starvation_observation_weight() -> Weight {
 }
 
 /// Proof-limited on_idle budget that admits the wakeup cursor, queue scan, hot/contract probes, and
-/// the head consume, but not the actor's full cycle admission. This materializes a live FIFO head
+/// the head consume, but not the actor's current Step admission. This materializes a live FIFO head
 /// blocked by weight with no admitted attempt, the only spec 8.6.3 starvation trigger.
 fn starvation_blocked_budget(actor_id: u64) -> Weight {
   let base = starvation_observation_weight();
@@ -852,15 +935,14 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
   let state_probe = Actors::scheduler_actor_state_probe_weight_upper();
   let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
-  let instance = Actors::active_actor_view(actor_id).expect("actor exists");
-  let cycle =
-    Actors::compute_cycle_weight_upper(instance.actor_class.actor_type(), &instance.steps);
+  let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
+  let step = cell.resources.control.saturating_add(cell.resources.effect);
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
     .saturating_add(state_probe)
     .saturating_add(consume)
-    .saturating_add(cycle);
+    .saturating_add(step);
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
 }
 
@@ -946,8 +1028,15 @@ fn mixed_materialization_ticket_trace() -> Vec<u64> {
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
-    let mut trace = QueuePages::<Test>::iter()
-      .flat_map(|(_, page)| page.into_iter().map(|entry| (entry.ticket, entry.actor_id)))
+    let mut trace = crate::ActorReadyFrameChunks::<Test>::iter()
+      .flat_map(|(page_id, page)| {
+        page
+          .into_iter()
+          .enumerate()
+          .filter_map(move |(slot, cell)| {
+            cell.map(|cell| (page_id * 32 + slot as u64, cell.actor_id))
+          })
+      })
       .collect::<Vec<_>>();
     trace.sort_unstable_by_key(|(ticket, _)| *ticket);
     let actor_trace = trace
@@ -1004,22 +1093,15 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       }
       CloseReason::CycleNonceExhausted => {
         fund_native(actor_id, 1_000);
-        ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-          maybe.as_mut().expect("actor identity exists").cycle_nonce = u64::MAX - 1;
-        });
+        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX - 1);
       }
       CloseReason::ConsecutiveFailures => {
-        ActorHot::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("actor hot state exists")
-            .unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
+        mutate_actor_hot_coherent(actor_id, |hot| {
+          hot.unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
         });
       }
       CloseReason::AutoCloseNonceReached => {
-        ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-          maybe.as_mut().expect("actor identity exists").cycle_nonce = 1;
-        });
+        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = 1);
         let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
         contract.auto_close_at_cycle_nonce = Some(1);
         assert_ok!(Actors::store_actor_contract(actor_id, contract));
@@ -1031,9 +1113,7 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
       actor_id
     ));
     if reason == CloseReason::CycleNonceExhausted {
-      ActorIdentities::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("actor identity exists").cycle_nonce = u64::MAX;
-      });
+      mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX);
     }
     if reason == CloseReason::WindowExpired {
       let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
@@ -1042,7 +1122,7 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
     }
     let before = Actors::actor_hot(actor_id)
       .unwrap_or_else(|| panic!("{reason:?} actor remains active before scheduler admission"));
-    let queue_head = QueueHead::<Test>::get();
+    let queue_head = ActorReadyHead::<Test>::get();
     frame_system::Pallet::<Test>::reset_events();
     let discovery = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
     // Wakeups drain in the on_idle phase before execute_cycle, so the execute_cycle
@@ -1064,7 +1144,7 @@ fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall:
     let after =
       Actors::actor_hot(actor_id).expect("incomplete atomic close budget preserves actor");
     assert_eq!(after.queue_ticket, before.queue_ticket);
-    assert_eq!(QueueHead::<Test>::get(), queue_head);
+    assert_eq!(ActorReadyHead::<Test>::get(), queue_head);
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::ActorClosed { actor_id: id, .. } if *id == actor_id
@@ -1083,11 +1163,10 @@ mod proptest_actor {
     run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorFunding, ActorHot, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
-    CrossingDirection, CrossingPhase, CrossingTransition, CycleState, Event, FundingSourcePolicy,
-    Mutability, ObservationCrossing, QueueOccupancy, QueuePages, SourceFilter, StepErrorPolicy,
-    StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, WakeupBuckets, WakeupPages,
-    mock::*,
+    ActorControlLocators, ActorFunding, ActorIdentities, ActorReadyOccupancy, ActorRunStateStore,
+    AmountResolution, AssetFilter, CrossingDirection, CrossingPhase, CrossingTransition,
+    CycleState, Event, FundingSourcePolicy, Mutability, ObservationCrossing, SourceFilter,
+    StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -1467,14 +1546,15 @@ mod proptest_actor {
     tracked_accounts: &std::collections::BTreeSet<AccountId>,
     conserved_total: Balance,
   ) {
-    let hot_ids: std::collections::BTreeSet<_> = ActorHot::<Test>::iter_keys().collect();
+    let hot_ids: std::collections::BTreeSet<_> =
+      ActorControlLocators::<Test>::iter_keys().collect();
     let contract_ids: std::collections::BTreeSet<_> =
       crate::ActorContractHeads::<Test>::iter_keys().collect();
     let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
+    let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
+    assert!(hot_ids.is_disjoint(&dormant_ids));
     let identity_ids: std::collections::BTreeSet<_> =
-      ActorIdentities::<Test>::iter_keys().collect();
-    let dormant_ids: std::collections::BTreeSet<_> =
-      identity_ids.difference(&hot_ids).copied().collect();
+      hot_ids.union(&dormant_ids).copied().collect();
     let run_ids: std::collections::BTreeSet<_> = ActorRunStateStore::<Test>::iter_keys().collect();
     assert_eq!(hot_ids, contract_ids);
     assert_eq!(hot_ids, funding_ids);
@@ -1482,12 +1562,45 @@ mod proptest_actor {
     assert!(hot_ids.is_subset(&identity_ids));
     assert_eq!(Actors::active_actor_count() as usize, hot_ids.len());
     assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
+    let primary_ids: Vec<_> = crate::ActorUnsignaledControlCells::<Test>::iter_values()
+      .map(|cell| cell.actor_id)
+      .chain(
+        crate::ActorReadyFrameChunks::<Test>::iter_values()
+          .flat_map(|page| page.into_iter().flatten().map(|cell| cell.actor_id)),
+      )
+      .chain(
+        crate::ActorWaitingFrameChunks::<Test>::iter_values().flat_map(|page| {
+          page
+            .entries
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.into_primary().map(|cell| cell.actor_id))
+        }),
+      )
+      .collect();
+    assert_eq!(
+      primary_ids.len(),
+      hot_ids.len(),
+      "each active Actor has exactly one primary"
+    );
+    assert_eq!(
+      primary_ids
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>(),
+      hot_ids
+    );
+    let run_payload_ids: std::collections::BTreeSet<_> =
+      crate::ActorRunPayloads::<Test>::iter_keys().collect();
+    assert_eq!(
+      run_ids, run_payload_ids,
+      "Run head and payload inventories agree"
+    );
 
     let mut live_tickets = std::collections::BTreeSet::new();
     let mut live_wakeups = std::collections::BTreeSet::new();
     for actor_id in &hot_ids {
-      let hot = ActorHot::<Test>::get(actor_id).expect("hot key resolves");
-      let identity = ActorIdentities::<Test>::get(actor_id).expect("identity key resolves");
+      let hot = Actors::actor_hot(*actor_id).expect("primary hot state resolves");
+      let identity = Actors::actor_identity(*actor_id).expect("primary identity resolves");
       assert_eq!(
         Actors::sovereign_index(&identity.sovereign_account),
         Some(*actor_id)
@@ -1526,11 +1639,9 @@ mod proptest_actor {
           live_tickets.insert(ticket),
           "duplicate live queue ticket {ticket}"
         );
-        let resolves = QueuePages::<Test>::iter().any(|(_, page)| {
-          page
-            .iter()
-            .any(|entry| entry.ticket == ticket && entry.actor_id == *actor_id)
-        });
+        let resolves = crate::ActorReadyFrameChunks::<Test>::get(ticket / 32)
+          .and_then(|page| page.get((ticket % 32) as usize).cloned().flatten())
+          .is_some_and(|cell| cell.actor_id == *actor_id);
         assert!(resolves, "live ticket resolves inside the canonical FIFO");
       }
       if let Some(pointer) = hot.wakeup_pointer {
@@ -1538,13 +1649,28 @@ mod proptest_actor {
           live_wakeups.insert((pointer.block, pointer.page_id, pointer.slot)),
           "duplicate live wakeup pointer"
         );
-        let page = WakeupPages::<Test>::get((pointer.block, pointer.page_id))
+        let page = crate::ActorWaitingFrameChunks::<Test>::get((pointer.block, pointer.page_id))
           .expect("live wakeup page exists");
         assert_eq!(
-          page.entries.get(pointer.slot as usize),
-          Some(&Some(crate::WakeupEntry {
-            actor_id: *actor_id
-          }))
+          page
+            .entries
+            .get(pointer.slot as usize)
+            .and_then(Option::as_ref)
+            .map(|entry| match entry {
+              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
+              crate::ActorWaitingEntry::Reference(reference) => {
+                assert_eq!(
+                  reference.admission_identity,
+                  Actors::actor_control_cell(*actor_id)
+                    .expect("primary admission")
+                    .1
+                    .admission
+                    .admission_identity
+                );
+                reference.actor_id
+              }
+            }),
+          Some(*actor_id)
         );
       }
       if let Some(pointer) = hot.trigger_wakeup_pointer {
@@ -1553,13 +1679,28 @@ mod proptest_actor {
           live_wakeups.insert((key, pointer.page_id, pointer.slot)),
           "duplicate live Trigger wakeup pointer"
         );
-        let page = WakeupPages::<Test>::get((key, pointer.page_id))
+        let page = crate::ActorWaitingFrameChunks::<Test>::get((key, pointer.page_id))
           .expect("live Trigger wakeup page exists");
         assert_eq!(
-          page.entries.get(pointer.slot as usize),
-          Some(&Some(crate::WakeupEntry {
-            actor_id: *actor_id
-          }))
+          page
+            .entries
+            .get(pointer.slot as usize)
+            .and_then(Option::as_ref)
+            .map(|entry| match entry {
+              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
+              crate::ActorWaitingEntry::Reference(reference) => {
+                assert_eq!(
+                  reference.admission_identity,
+                  Actors::actor_control_cell(*actor_id)
+                    .expect("primary admission")
+                    .1
+                    .admission
+                    .admission_identity
+                );
+                reference.actor_id
+              }
+            }),
+          Some(*actor_id)
         );
       }
     }
@@ -1569,7 +1710,7 @@ mod proptest_actor {
         Actors::sovereign_index(&identity.sovereign_account),
         Some(*actor_id)
       );
-      assert!(ActorHot::<Test>::get(actor_id).is_none());
+      assert!(Actors::actor_hot(*actor_id).is_none());
     }
 
     if let Some(actor_id) = system_id {
@@ -1578,7 +1719,7 @@ mod proptest_actor {
           SystemSovereigns::<Test>::get(actor_id),
           Some(SystemSovereignState::Vacant)
         );
-        assert!(ActorHot::<Test>::get(actor_id).is_none());
+        assert!(Actors::actor_hot(actor_id).is_none());
         assert!(ActorIdentities::<Test>::get(actor_id).is_none());
         if let Some(sovereign) = system_sovereign {
           assert_eq!(Actors::sovereign_index(sovereign), None);
@@ -1741,13 +1882,13 @@ mod proptest_actor {
             );
             actor_ids.push((actor_id, owner));
           }
-          let after_create = ActorHot::<Test>::iter_keys().count();
+          let after_create = ActorControlLocators::<Test>::iter_keys().count();
           let close_count = closes.min(creates);
           for i in 0..close_count {
             let (actor_id, owner) = actor_ids[i as usize];
             assert_ok!(Actors::close_actor(RuntimeOrigin::signed(owner), actor_id));
           }
-          let after_close = ActorHot::<Test>::iter_keys().count();
+          let after_close = ActorControlLocators::<Test>::iter_keys().count();
           (after_create, after_close, (creates - close_count) as usize)
         });
       prop_assert_eq!(active_after_create, creates as usize);
@@ -1777,19 +1918,17 @@ mod proptest_actor {
         let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
         let rejected = match corruption {
           0 => {
-            assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-            WakeupBuckets::<Test>::mutate(crate::WakeupKey::Block(10), |maybe_bucket| {
-              maybe_bucket.as_mut().expect("bucket").cursor_index = None;
-            });
+            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
+            crate::ActorWaitingCursorIndices::<Test>::remove(crate::WakeupKey::Block(10));
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
             let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
             prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
             rejected
           }
           1 => {
-            assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-            ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-              maybe_hot.as_mut().expect("hot").wakeup_pointer
+            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
+            super::mutate_primary_control_cell(actor_id, |cell| {
+              cell.hot.wakeup_pointer
                 .as_mut().expect("pointer").slot = 7;
             });
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -1798,28 +1937,26 @@ mod proptest_actor {
             rejected
           }
           2 => {
-            assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-            WakeupBuckets::<Test>::mutate(crate::WakeupKey::Block(10), |maybe_bucket| {
-              maybe_bucket.as_mut().expect("bucket").live_entries = 0;
-            });
+            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
+            crate::ActorWaitingOccupancies::<Test>::insert(crate::WakeupKey::Block(10), 0);
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
             let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
             prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
             rejected
           }
           3 => {
-            assert!(Actors::paged_enqueue(actor_id));
+            assert!(super::enqueue_latched_actor(actor_id));
             assert!(Actors::paged_invalidate(actor_id).is_some());
-            QueueOccupancy::<Test>::put(0);
+            ActorReadyOccupancy::<Test>::put(2);
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
             let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
             prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
             rejected
           }
           _ => {
-            assert!(Actors::paged_enqueue(actor_id));
+            assert!(super::enqueue_latched_actor(actor_id));
             assert!(Actors::paged_invalidate(actor_id).is_some());
-            QueuePages::<Test>::remove(0);
+            crate::ActorReadyFrameChunks::<Test>::remove(0);
             let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
             let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
             prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
@@ -1891,9 +2028,11 @@ mod proptest_actor {
         for (index, operation) in operations.iter().enumerate() {
           let block = (index as u64).saturating_add(2);
           frame_system::Pallet::<Test>::set_block_number(block);
-          let before_hot: std::collections::BTreeMap<_, _> = ActorHot::<Test>::iter().collect();
+          let before_hot: std::collections::BTreeMap<_, _> = ActorControlLocators::<Test>::iter_keys()
+            .map(|id| (id, Actors::actor_hot(id).expect("active primary"))).collect();
           let before_identities: std::collections::BTreeMap<_, _> =
-            ActorIdentities::<Test>::iter().collect();
+            ActorIdentities::<Test>::iter().chain(ActorControlLocators::<Test>::iter_keys()
+              .map(|id| (id, Actors::actor_identity(id).expect("active identity")))).collect();
           let before_continuation = ActorRunStateStore::<Test>::get(system_id);
           let before_funding = ActorFunding::<Test>::get(system_id);
           let before_system_balance = Balances::free_balance(system_sovereign);
@@ -1905,21 +2044,21 @@ mod proptest_actor {
             ModelOp::Activate
               if !closed
                 && ActorIdentities::<Test>::contains_key(system_id)
-                && !ActorHot::<Test>::contains_key(system_id) => {
+                && !ActorControlLocators::<Test>::contains_key(system_id) => {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
                 system_contract(Trigger::manual()).expect("direct Actor Contract"),
               );
             }
-            ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::Deactivate if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let _ = Actors::deactivate_actor(RuntimeOrigin::root(), system_id);
             }
             ModelOp::Fund if !closed => {
-              let recipient = ActorIdentities::<Test>::get(system_id)
+              let recipient = Actors::actor_identity(system_id)
                 .map(|identity| identity.sovereign_account);
               if let Some(recipient) = recipient {
-                if ActorHot::<Test>::contains_key(system_id) {
+                if ActorControlLocators::<Test>::contains_key(system_id) {
                   let provenance = crate::FundingProvenance::Signed;
                   if Actors::preflight_funding_event(
                     system_id,
@@ -1953,7 +2092,7 @@ mod proptest_actor {
                 }
               }
             }
-            ModelOp::Signal if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::Signal if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let schedule = Schedule {
                 trigger: Trigger::address_event(
                   SourceFilter::Any,
@@ -1962,7 +2101,7 @@ mod proptest_actor {
                 cooldown_blocks: 0,
               };
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
-              if let Some(identity) = ActorIdentities::<Test>::get(system_id) {
+              if let Some(identity) = Actors::actor_identity(system_id) {
                 let provenance = crate::FundingProvenance::Signed;
                 if Actors::preflight_funding_event(
                   system_id,
@@ -1989,17 +2128,17 @@ mod proptest_actor {
               }
             }
             ModelOp::ManualTrigger | ModelOp::Enqueue
-              if !closed && ActorHot::<Test>::contains_key(system_id) =>
+              if !closed && ActorControlLocators::<Test>::contains_key(system_id) =>
             {
               let _ = Actors::manual_trigger(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Pause if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::Pause if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let _ = Actors::pause_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Resume if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::Resume if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let _ = Actors::resume_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::UpdateContract if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateContract if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let _ = update_contract_partial!(
                 RuntimeOrigin::root(),
                 system_id,
@@ -2007,11 +2146,11 @@ mod proptest_actor {
                 crate::CompletionPolicy::Persistent,
               );
             }
-            ModelOp::Wakeup if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::Wakeup if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let schedule = timer_schedule_pt(2);
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
             }
-            ModelOp::UpdateCrossing if !closed && ActorHot::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateCrossing if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
               let schedule = Schedule {
                 trigger: Trigger::observation_crossing(
                   9,
@@ -2047,10 +2186,10 @@ mod proptest_actor {
               let _ = Actors::on_idle(block, Weight::MAX);
             }
             ModelOp::Suspend if !closed => {
-              if let Some(hot) = ActorHot::<Test>::get(system_id)
+              if let Some(hot) = Actors::actor_hot(system_id)
                 && !hot.lifecycle.is_paused()
               {
-                let identity = ActorIdentities::<Test>::get(system_id)
+                let identity = Actors::actor_identity(system_id)
                   .expect("active actor identity exists");
                 let _ = update_contract_partial!(
                   RuntimeOrigin::root(),
@@ -2162,7 +2301,7 @@ mod proptest_actor {
             }), "unexpected control-event delta: {actor_event_delta:?}");
           }
           if !closed
-            && !ActorHot::<Test>::contains_key(system_id)
+            && !ActorControlLocators::<Test>::contains_key(system_id)
             && !ActorIdentities::<Test>::contains_key(system_id)
             && SystemSovereigns::<Test>::get(system_id) == Some(SystemSovereignState::Vacant)
           {
@@ -2188,7 +2327,7 @@ mod proptest_actor {
           }
           if matches!(operation, ModelOp::Pause | ModelOp::Resume)
             && before_continuation.is_some()
-            && ActorHot::<Test>::contains_key(system_id)
+            && ActorControlLocators::<Test>::contains_key(system_id)
           {
             assert_eq!(
               after_continuation.as_ref().map(Encode::encode),
@@ -2199,7 +2338,7 @@ mod proptest_actor {
             before_continuation.as_ref(),
             after_continuation.as_ref(),
             before_identities.get(&system_id),
-            ActorIdentities::<Test>::get(system_id),
+            Actors::actor_identity(system_id),
           ) && previous_identity.cycle_nonce == current_identity.cycle_nonce
           {
             assert!(after.cursor >= before.cursor);
@@ -2211,9 +2350,9 @@ mod proptest_actor {
 
           for (actor_id, previous) in &before_hot {
             if let (Some(_hot), Some(previous_identity), Some(identity)) = (
-              ActorHot::<Test>::get(actor_id),
+              Actors::actor_hot(*actor_id),
               before_identities.get(actor_id),
-              ActorIdentities::<Test>::get(actor_id),
+              Actors::actor_identity(*actor_id),
             ) {
               assert!(identity.cycle_nonce <= previous_identity.cycle_nonce.saturating_add(1));
               if matches!(operation, ModelOp::Execute) && previous.lifecycle.is_paused() {
@@ -2652,6 +2791,14 @@ fn parity_expected_steps(case: StepParityCase) -> Vec<SimulationStepRecord> {
   steps
 }
 
+fn ample_simulation_budget() -> crate::SimulationBudget {
+  let half = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
+  crate::SimulationBudget {
+    actor_control: half,
+    shared_economic: half,
+  }
+}
+
 fn observed_attempt_projection(
   actor_id: ActorId,
 ) -> (AttemptDisposition, OutcomeTotals, Option<u32>, Option<u32>) {
@@ -2684,7 +2831,14 @@ fn observed_attempt_projection(
   }
   if let Some(continuation) = Actors::actor_run_state(actor_id) {
     return (
-      AttemptDisposition::Suspended,
+      match Actors::actor_hot(actor_id)
+        .expect("persisted Run has canonical hot state")
+        .cycle_state
+      {
+        CycleState::Running => AttemptDisposition::Continued,
+        CycleState::Suspended => AttemptDisposition::Suspended,
+        CycleState::Idle => panic!("Idle cannot own a Run"),
+      },
       continuation.cumulative_outcomes,
       Some(continuation.cursor),
       Some(continuation.unsuccessful_attempts_at_cursor),
@@ -2712,6 +2866,8 @@ fn active_eligibility(actor_id: ActorId) -> ActorClassification<u64> {
   }
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+mod candidate_geometry;
 mod core;
 mod crossing;
 mod execution;
@@ -2721,4 +2877,41 @@ mod market_tasks;
 mod observations;
 mod scheduling;
 mod storage_and_api;
+#[cfg(feature = "runtime-benchmarks")]
+mod waiting_integrity;
 mod wakeups;
+
+/// Change only the already-located canonical primary, including deliberate corruption.
+/// This fixture helper neither repairs topology nor relocates authority.
+fn mutate_primary_control_cell(
+  actor_id: ActorId,
+  mutate: impl FnOnce(&mut crate::ActorControlCellOf<Test>),
+) {
+  let (location, mut cell) =
+    Actors::actor_control_cell(actor_id).expect("canonical primary fixture");
+  mutate(&mut cell);
+  match location {
+    crate::ActorControlLocation::Unsignaled => {
+      crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
+    }
+    crate::ActorControlLocation::Ready { ticket } => {
+      crate::ActorReadyFrameChunks::<Test>::mutate(ticket / 32, |page| {
+        *page
+          .as_mut()
+          .expect("Ready page fixture")
+          .get_mut((ticket % 32) as usize)
+          .expect("Ready slot fixture") = Some(cell);
+      });
+    }
+    crate::ActorControlLocation::Waiting { key, page, slot } => {
+      crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |page| {
+        *page
+          .as_mut()
+          .expect("Waiting page fixture")
+          .entries
+          .get_mut(usize::from(slot))
+          .expect("Waiting slot fixture") = Some(crate::ActorWaitingEntry::Primary(cell));
+      });
+    }
+  }
+}

@@ -4,7 +4,7 @@ title: Open Knowledge Format v0.2
 description: Full supplied specification for the Open Knowledge Format version 0.2.
 status: stable
 sources:
-  - resource: https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md
+  - resource: https://raw.githubusercontent.com/GoogleCloudPlatform/open-knowledge-format/refs/heads/main/SPEC.md
     title: Upstream OKF specification
 lock:
   schema_version: 2

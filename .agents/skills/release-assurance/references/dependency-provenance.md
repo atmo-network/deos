@@ -14,9 +14,9 @@ Every retained material finding states runtime reachability, rationale, and an e
 
 ## 3. Current Release Evidence
 
-The 2026-08-21 review used Cargo Audit `0.22.2`, Cargo Deny `0.20.2`, RustSec database commit `bf5c0d245a92671908518d7e765914d437954ed6`, Node `22.22.0`, and npm `11.7.0`. Cargo metadata resolved with `--locked`, npm's lock graph reproduced with `npm ci --ignore-scripts --dry-run`, Cargo licenses and sources passed, and every npm registry package carried lockfile integrity.
+The 2026-09-05 review used Cargo Audit `0.22.2`, Cargo Deny `0.20.2`, RustSec database commit `5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5`, Node `22.22.0`, and npm `11.7.0`. It includes the runtime's dev-only Wasm replay dependencies. Cargo metadata resolved with `--locked`, npm's lock graph reproduced with `npm ci --ignore-scripts --dry-run`, Cargo licenses and sources passed, and every npm registry package carried lockfile integrity.
 
-The review found 17 unique material finding identities: 13 RustSec vulnerability/unsoundness IDs and four npm high aggregate package entries. No npm critical finding existed. The active h2 line was advanced from `0.4.15` to `0.4.16`, and the native Wasmtime toolchain line from `36.0.12` to `36.0.13`; both known patched versions remain fixed in `template/Cargo.lock`.
+The review retained 17 unique material finding identities: 13 RustSec vulnerability/unsoundness IDs and four npm high aggregate package entries. No npm critical finding existed. The active h2 line remains `0.4.16`; the native Wasmtime toolchain and coupled Pulley/Winch/Cranelift family were advanced to Wasmtime `36.0.14` for `RUSTSEC-2026-0269`, without adding an advisory exception. The affected WASI filesystem capability is absent from the resolved DEOS graph; the patch nevertheless removes the affected Wasmtime version. `template/Cargo.lock` owns the exact patched identities.
 
 No retained RustSec finding reaches the no-std consensus runtime graph. Twelve IDs occur only in lockfile alternatives absent from the all-feature, all-target workspace graph. `RUSTSEC-2025-0055` reaches native Polkadot SDK tracing only, is excluded from runtime Wasm, and cannot be patched independently because `sc-tracing` pins `tracing-subscriber = 0.3.19` exactly.
 

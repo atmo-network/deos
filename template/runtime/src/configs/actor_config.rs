@@ -43,10 +43,10 @@ parameter_types! {
 
   // --- Execution-plan and task bounds ---
 
-  pub const ActorMaxContractSteps: u32 = 32;
+  pub const ActorMaxContractSteps: u32 = 12;
   pub const ActorMaxFundingTrackedAssets: u32 = 40;
-  pub const ActorMaxOpeningSnapshotEntries: u32 = 64;
-  pub const ActorMaxOpeningPredicateResults: u32 = 128;
+  pub const ActorMaxOpeningSnapshotEntries: u32 = 24;
+  pub const ActorMaxOpeningPredicateResults: u32 = 48;
   pub const ActorMaxPreconditionClauses: u32 = 4;
   pub const ActorMaxPredicatesPerClause: u32 = 4;
   pub const ActorMaxPredicatesPerStep: u32 = 4;
@@ -71,7 +71,7 @@ parameter_types! {
   pub const ActorWakeupPageSize: u32 = 32;
   /// Broad ObservationChange subscriber/fanout page granularity.
   pub const ActorObservationPageSize: u32 = 64;
-  /// ObservationCrossing membership page granularity selected by EXP-0008/EXP-0009.
+  /// ObservationCrossing membership page granularity selected by bounded observation fanout requirements.
   pub const ActorCrossingPageSize: u32 = 128;
   pub const ActorMaxCrossingTransitionsPerFeed: u32 = 64;
   pub const ActorMaxCrossingMembersPerFeed: u32 = 10_000;
@@ -446,7 +446,7 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     Some(
       (
         *b"DEOS_ACTOR_STEP_CONTROL_WEIGHT",
-        *b"DEOS_ACTOR_CONTROL_ACTUAL_V2",
+        *b"DEOS_ACTOR_CONTROL_ACTUAL_V3",
         (
           ControlWeights::scheduler_paged_tombstone_drain(1),
           ControlWeights::scheduler_actor_state_probe(),
@@ -489,6 +489,7 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
         (
           ControlWeights::scheduler_wakeup_append_new_page(),
           ControlWeights::close_actor(),
+          ControlWeights::fee_collection(),
         ),
       )
         .using_encoded(polkadot_sdk::sp_io::hashing::blake2_256),
@@ -496,6 +497,44 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
   }
 
   fn maximum_control_weight(
+    context: pallet_deos_actors::StepControlWeightContext,
+    step: &pallet_deos_actors::StepOf<Runtime>,
+  ) -> Option<Weight> {
+    Self::base_maximum_control_weight(context, step)?
+      .checked_add(&Self::action_collection_allowance(step))
+  }
+
+  fn actual_control_weight(
+    context: pallet_deos_actors::StepControlWeightContext,
+    step: &pallet_deos_actors::StepOf<Runtime>,
+    maximum: Weight,
+    execution: StepControlExecution,
+  ) -> Option<Weight> {
+    let allowance = Self::action_collection_allowance(step);
+    if execution.action_fee_collected && allowance == Weight::zero() {
+      return None;
+    }
+    let base =
+      Self::base_actual_control_weight(context, step, maximum.checked_sub(&allowance)?, execution)?;
+    let actual = base.checked_add(&if execution.action_fee_collected {
+      allowance
+    } else {
+      Weight::zero()
+    })?;
+    actual.all_lte(maximum).then_some(actual)
+  }
+}
+
+impl RuntimeStepControlWeight {
+  fn action_collection_allowance(step: &pallet_deos_actors::StepOf<Runtime>) -> Weight {
+    if matches!(step.task, Task::StopCycle) {
+      Weight::zero()
+    } else {
+      crate::weights::pallet_deos_actors::SubstrateWeight::<Runtime>::fee_collection()
+    }
+  }
+
+  fn base_maximum_control_weight(
     context: pallet_deos_actors::StepControlWeightContext,
     _: &pallet_deos_actors::StepOf<Runtime>,
   ) -> Option<Weight> {
@@ -520,12 +559,6 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
       && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
       && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
       && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
-    if maximum_opening {
-      return Some(Self::component_max(
-        ControlWeights::scheduler_paged_execute_opening_max(),
-        ControlWeights::scheduler_inner_opening_progress_max(maximum_opening_tail_chunks),
-      ));
-    }
     let plan = if context.cursor == 0 {
       if context.steps_in_fragment != 1 {
         return None;
@@ -641,7 +674,14 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     } else if maximal_opening {
       Self::component_max(
         composed,
-        ControlWeights::scheduler_inner_opening_progress_max(context.opening_tail_chunks),
+        Self::component_max(
+          ControlWeights::scheduler_inner_opening_progress_max(context.opening_tail_chunks),
+          if maximum_opening {
+            ControlWeights::scheduler_paged_execute_opening_max()
+          } else {
+            Weight::zero()
+          },
+        ),
       )
     } else if maximal_opening_completion {
       Self::component_max(
@@ -756,14 +796,14 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
     Some(composed)
   }
 
-  fn actual_control_weight(
+  fn base_actual_control_weight(
     context: pallet_deos_actors::StepControlWeightContext,
     step: &pallet_deos_actors::StepOf<Runtime>,
     maximum: Weight,
     execution: StepControlExecution,
   ) -> Option<Weight> {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    let expected_context_maximum = Self::maximum_control_weight(context, step)?;
+    let expected_context_maximum = Self::base_maximum_control_weight(context, step)?;
     if execution.phase == StepControlPhase::Opening && expected_context_maximum != maximum {
       return None;
     }
@@ -846,9 +886,9 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
             .min(ActorMaxOpeningPredicateResults::get())
         && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
       {
-        return Some(ControlWeights::scheduler_inner_opening_progress_max(
-          context.opening_tail_chunks,
-        ));
+        // The direct profile does not bound independent amount/predicate sources.
+        // Retain the admitted composed envelope until complete-path coverage is regenerated.
+        return Some(maximum);
       }
     }
     if execution.phase == StepControlPhase::Opening
@@ -2018,7 +2058,7 @@ const SYSTEM_ACTOR_TOPOLOGY_IDS: [pallet_deos_actors::ActorId; 15] = [
   ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
   ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
   ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
-  ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+  ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
   ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
   ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
 ];
@@ -2026,7 +2066,7 @@ const SYSTEM_ACTOR_TOPOLOGY_IDS: [pallet_deos_actors::ActorId; 15] = [
 const SYSTEM_ACTIVATION_MANIFEST_EDGES: [(
   pallet_deos_actors::ActorId,
   pallet_deos_actors::ActorId,
-); 12] = [
+); 11] = [
   (
     ecosystem::actor_ids::FEE_SINK_ACTORS_ID,
     ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
@@ -2069,11 +2109,7 @@ const SYSTEM_ACTIVATION_MANIFEST_EDGES: [(
   ),
   (
     ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
-    ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
-  ),
-  (
-    ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
-    ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+    ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
   ),
 ];
 
@@ -2520,30 +2556,66 @@ impl
     ]
   }
 
-  fn system_custody_accounts() -> alloc::vec::Vec<pallet_deos_actors::ActorId> {
-    alloc::vec![
-      ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
-      ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
-    ]
-  }
-
-  fn dormant_system_actors() -> alloc::vec::Vec<(pallet_deos_actors::ActorId, AccountId)> {
+  fn dormant_system_actors() -> alloc::vec::Vec<(
+    pallet_deos_actors::ActorId,
+    AccountId,
+    pallet_deos_actors::Mutability,
+  )> {
+    use pallet_deos_actors::Mutability;
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     let governance: AccountId = ActorsPalletId::get().into_account_truncating();
     alloc::vec![
-      ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
-      ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
-      ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
-      ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
-      ecosystem::actor_ids::TREASURY_B_ACTORS_ID,
-      ecosystem::actor_ids::TREASURY_C_ACTORS_ID,
-      ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
-      ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
-      ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
-      ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+      (
+        ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+        Mutability::Immutable,
+      ),
+      (
+        ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TREASURY_B_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TREASURY_C_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
+        Mutability::Immutable,
+      ),
+      (
+        ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+        Mutability::Mutable,
+      ),
+      (
+        ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
+        Mutability::Mutable,
+      ),
     ]
     .into_iter()
-    .map(|actor_id| (actor_id, governance.clone()))
+    .map(|(actor_id, mutability)| (actor_id, governance.clone(), mutability))
     .collect()
   }
 
@@ -2566,7 +2638,7 @@ impl
         "executable System Actor owner must be the non-signable Actors pallet account",
       );
     }
-    for (_, owner) in Self::dormant_system_actors() {
+    for (_, owner, _) in Self::dormant_system_actors() {
       assert_eq!(
         owner, system_control_account,
         "dormant System Actor owner must be the non-signable Actors pallet account",
@@ -2606,7 +2678,9 @@ impl
     assert!(
       Self::dormant_system_actors()
         .iter()
-        .any(|(actor_id, _)| *actor_id == ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID),
+        .any(|(actor_id, _, _)| {
+          *actor_id == ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID
+        }),
       "Fee Sink liquidity ingress must retain its System sovereign locator",
     );
     let staking_pool = crate::Staking::pool_account_for(0);
@@ -3061,7 +3135,7 @@ impl TmctolGenesisSystemActors {
   ///
   /// Contract steps:
   /// 1. AddLiquidity(NTVE, BLDR) — opportunistic at current pool ratio
-  /// 2. SplitTransfer(LP → BLDR Bucket A, 100%)
+  /// 2. Transfer(LP → BLDR Anchor, 100%)
   pub fn build_bldr_liquidity_contract_steps(
     bldr_asset: AssetKind,
     lp_asset: AssetKind,
@@ -3086,8 +3160,8 @@ impl TmctolGenesisSystemActors {
         },
       ])
     };
-    let bldr_bucket_a = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-      ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+    let bldr_anchor = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+      ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
     );
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
       Step {
@@ -3104,7 +3178,7 @@ impl TmctolGenesisSystemActors {
       Step {
         precondition: dust_guard(lp_asset),
         task: Task::Transfer {
-          to: bldr_bucket_a,
+          to: bldr_anchor,
           asset: lp_asset,
           amount: AmountResolution::AllAvailable,
         },
@@ -3790,6 +3864,81 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       return Err(DispatchError::Other("UnstakeSharesMissing"));
     }
     Ok((asset, shares))
+  }
+
+  fn set_asset_account_frozen(
+    owner: &AccountId,
+    who: &AccountId,
+    asset: AssetKind,
+    frozen: bool,
+  ) -> DispatchResult {
+    let AssetKind::Local(id) = asset else {
+      return Err(DispatchError::Other("UnsupportedAccountFreezeAsset"));
+    };
+    let balance = crate::Assets::balance(id, who);
+    let issuance =
+      <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::total_issuance(id);
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        if frozen {
+          crate::Assets::freeze(RuntimeOrigin::signed(owner.clone()), id, who.clone().into())?;
+        } else {
+          crate::Assets::thaw(RuntimeOrigin::signed(owner.clone()), id, who.clone().into())?;
+        }
+        if crate::Assets::balance(id, who) != balance
+          || <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::total_issuance(id)
+            != issuance
+        {
+          return Err(DispatchError::Other("AccountFreezeChangedCustody"));
+        }
+        if frozen && TmctolAssetOps::balance(who, asset) != 0 {
+          return Err(DispatchError::Other("FrozenAssetStillSpendable"));
+        }
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
+  fn remove_empty_staking_receipt(owner: &AccountId, asset: AssetKind) -> DispatchResult {
+    if !matches!(asset, AssetKind::Native | AssetKind::Local(_)) {
+      return Err(DispatchError::Other("UnsupportedStakingReceiptAsset"));
+    }
+    let share_asset = || {
+      <TmctolStakingOps as pallet_deos_actors::adapters::StakingOps<
+        AccountId,
+        AssetKind,
+        Balance,
+      >>::share_asset(asset)
+    };
+    let Some(AssetKind::Local(receipt)) = share_asset() else {
+      return Err(DispatchError::Other("LiveStakingReceiptMissing"));
+    };
+    if <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::total_issuance(receipt) != 0
+    {
+      return Err(DispatchError::Other("StakingReceiptNotEmpty"));
+    }
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        crate::Assets::start_destroy(RuntimeOrigin::root(), receipt)?;
+        crate::Assets::finish_destroy(RuntimeOrigin::signed(owner.clone()), receipt)?;
+        if share_asset().is_some() {
+          return Err(DispatchError::Other("StakingReceiptMappingRemains"));
+        }
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
   }
 
   fn setup_swap_exact_in(

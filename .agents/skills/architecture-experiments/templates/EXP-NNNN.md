@@ -139,3 +139,7 @@ target → measured gap → binding dimension → dominant contributor
 - `Baseline of`: None.
 - `Confirms`: None.
 - `Invalidates`: None.
+- `Uses evidence from`: Exact historical experiment/evidence links; distinguish borrowed observations from required accepted inputs.
+- `Transfers question to`: Experiment links and the specific transferred question, or None.
+- `Produces input for`: Downstream experiment links and deliverable, or None.
+- `Reopen trigger`: Exact failed assumption/invariant and required evidence; cost alone does not reopen a frozen physical baseline.

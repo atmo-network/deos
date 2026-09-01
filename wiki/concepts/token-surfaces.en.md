@@ -1,7 +1,7 @@
 ---
 type: concept
 title: Token Surfaces
-description: A compact map of the main DEOS/TMCTOL token surfaces, including Native, VETO, BLDR, stNTVE, LP tokens, and how each token participates in economics, governance, staking, and read-model boundaries.
+description: A compact map of the main DEOS/TMCTOL token surfaces, including Native, $VETO, $BLDR, stNTVE, LP tokens, and how each token participates in economics, governance, staking, and read-model boundaries.
 locale: en
 canonical_page_id: token-surfaces
 translation_status: source
@@ -49,13 +49,13 @@ This page is a compact map. It does not replace the exact formulas, governance r
 
 ### `$BLDR`
 
-`$BLDR` is the flagship tactical governance token for builder coordination. In the current line it is associated with invoice-style tactical governance, labor funding, protocol-owned liquidity, and BLDR-specific coordination lanes. [$BLDR Builder Economy](builder-economy.en.md) owns the full pattern. Its value story is not just emission; it depends on whether the downstream builder ecosystem gives that coordination surface real demand.
+`$BLDR` is the flagship tactical governance token for builder coordination. In the current line it is associated with invoice-style tactical governance, labor funding, protocol-owned liquidity, and `$BLDR`-specific coordination lanes. [$BLDR Builder Economy](builder-economy.en.md) owns the full pattern. Its value story is not just emission; it depends on whether the downstream builder ecosystem gives that coordination surface real demand.
 
 ## Receipt and Position Tokens
 
 ### `stNTVE`
 
-`stNTVE` is the native liquid staking receipt. It represents share-vault ownership, not direct collator nomination by itself. Collator security uses explicit locked `NTVE/stNTVE` LP custody.
+`stNTVE` is the native liquid staking receipt. It represents share-vault ownership, not direct collator nomination by itself. Collator security uses explicit locked `$NTVE/stNTVE` LP custody.
 
 ### LP Tokens
 

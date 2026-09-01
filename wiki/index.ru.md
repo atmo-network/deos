@@ -61,7 +61,7 @@ DEOS — фреймворк среды исполнения для програ�
 - [Стандарт TMCTOL](concepts/tmctol-standard.ru.md) — экономический стандарт и правила обращения токена;
 - [Сценарии корзин TOL](concepts/tol-bucket-scenarios.ru.md) — конкретные пробуждения корзин A/B/C/D и направления средств казны;
 - [Экономика созидателей $BLDR](concepts/builder-economy.ru.md) — оплата полезной работы, целевое финансирование и модель основателя как первого участника труда;
-- [Роли токенов](concepts/token-surfaces.ru.md) — назначение Native, VETO, BLDR, расписок и LP;
+- [Роли токенов](concepts/token-surfaces.ru.md) — назначение Native, `$VETO`, `$BLDR`, расписок и LP;
 - [Система Actors](overview/actor-system.ru.md) — автономные исполнители протокола;
 - [DEOS Router](overview/router.ru.md) — маршрутизация, комиссии и выбор ликвидности;
 - [Типизированные наблюдения](overview/typed-observations.ru.md) — актуальные скалярные данные и доставка изменений;

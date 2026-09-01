@@ -356,7 +356,7 @@ Semantic owners:
 
 Composite Actor values and runtime API views are read-only and MUST NOT become write models.
 
-Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, funding, run state, detector membership, ticket, wakeup, or Active-state hold.
+Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, funding, run state, detector membership, ticket, wakeup, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity, which can never activate or close through Actor control.
 
 ---
 
@@ -1016,7 +1016,7 @@ Rules:
 - Elapsed time does not change it;
 - No recurring collection exists;
 - Active identity/head/body/detector/funding state is held by actual retained geometry;
-- Zero/one-Step Contracts MUST NOT reserve a 32-Step body footprint;
+- Zero/one-Step Contracts MUST NOT reserve a maximum-size body footprint;
 - Active installation reserves one type-derived maximum admitted run-state hold before autonomous Trigger service becomes possible;
 - The maximum is derived from bounded runtime types and MUST NOT use a hand-maintained byte constant;
 - Opening, Q1 progress, retry, suspension, Cycle boundary, and cancellation MUST NOT mutate or release the run-state hold;
@@ -1298,7 +1298,7 @@ Actor-scoped authorization:
 
 User Mutable MAY update Contract, pause/resume, cancel a run, deactivate, reactivate, and explicitly close.
 
-Dormant creation requires `Mutable`. Immutable creation MUST install an Active Contract because no later activation authority exists.
+Public Dormant creation requires `Mutable`. Public Immutable creation MUST install an Active Contract because no later activation authority exists. A host genesis configuration MAY declare an Immutable Dormant System identity as a permanently sealed no-Contract role; activation and owner close MUST reject it as Immutable.
 
 User Immutable:
 
@@ -1928,7 +1928,7 @@ A deployed change MUST NOT make previously reattachable custody unreachable with
 
 Required relations:
 
-1. `0 < MaxContractSteps <= 255`; production reference is 32.
+1. `0 < MaxContractSteps <= 255`; each host runtime selects its bounded value.
 2. `0 < MaxOwnerSlots <= 255`; reference is 255.
 3. `MaxRetryAttempts >= 2`; reference is 10.
 4. `MaxContractSteps * MaxRetryAttempts` fits outcome counters.
@@ -1952,12 +1952,12 @@ TargetBlockTime = 6 seconds
 CadenceTick = 500 milliseconds
 MaxActiveActors = 10_000
 MaxOwnerSlots = 255
-MaxContractSteps = 32
+MaxContractSteps = 12
 MaxRetryAttempts = 10
 MaxConsecutiveFailures = 10
 MaxFundingTrackedAssets = 40
-MaxOpeningSnapshotEntries = 64
-MaxOpeningPredicateResults = 128
+MaxOpeningSnapshotEntries = 24
+MaxOpeningPredicateResults = 48
 MaxPreconditionClauses = 4
 MaxPredicatesPerClause = 4
 MaxPredicatesPerStep = 4

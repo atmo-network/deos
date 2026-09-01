@@ -90,7 +90,7 @@ This is intentionally a domain-level walkthrough. Bucket ratios and formulas bel
 
 1. A user stakes `$NTVE` and receives liquid `stNTVE` receipt shares.
 2. Collator security is not inferred from wallet `stNTVE` balances.
-3. The security path uses explicit locked `NTVE/stNTVE` LP custody.
+3. The security path uses explicit locked `$NTVE/stNTVE` LP custody.
 4. Native nomination reward paths stay separate from generic same-asset staking rewards.
 5. Governance-conditioned participation can influence reward coefficients, but governance and staking remain separate subsystems.
 

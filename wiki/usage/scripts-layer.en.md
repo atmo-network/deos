@@ -64,7 +64,7 @@ Important examples include:
 - `seed-web-client-state.sh`: Prepare wallet, swap, and native-staking state for live web-client testing
 - `export-papi-metadata.sh`: Export Rust runtime metadata and regenerate PAPI descriptors for the web client
 - `bootstrap-native-staking-local.sh check`: Read native staking bootstrap readiness without submitting transactions
-- `bootstrap-native-staking-local.sh prepare-calls`: Emit the next plan-only Root/governance staking-admin or signed operator call data needed to register/initialize native staking, create the canonical `NTVE/stNTVE` pool, or seed initial liquidity
+- `bootstrap-native-staking-local.sh prepare-calls`: Emit the next plan-only Root/governance staking-admin or signed operator call data needed to register/initialize native staking, create the canonical `$NTVE/stNTVE` pool, or seed initial liquidity
 - `authorized-upgrade-local.sh check`: Pin finalized runtime identity, compare live and local code, inspect strategic submission authority and `$VETO` issuance, and verify any pending authorized hash without submitting
 - `authorized-upgrade-local.sh prepare-authorization`: Emit candidate-bound stake, preimage, and strategic proposal call data without signing; protection `Pass` remains unavailable until the lifecycle is ready
 - `authorized-upgrade-local.sh apply`: Relay already-authorized runtime code bytes only with explicit `--submit`
@@ -76,7 +76,7 @@ Important examples include:
 The native staking bootstrap path is split into two operator-safe tools:
 
 1. `bootstrap-native-staking-local.sh prepare-calls` reads live state and prepares the next call data for the production/operator path
-2. `bootstrap-native-staking-local.sh check` verifies that the canonical `NTVE/stNTVE` pool, native staking exchange rate, and dormant Native Staking Liquidity Actor are ready
+2. `bootstrap-native-staking-local.sh check` verifies that the canonical `$NTVE/stNTVE` pool, native staking exchange rate, and dormant Native Staking Liquidity Actor are ready
 
 Both helpers are plan/read-only by default. The preparation helper never signs or submits transactions; it only emits call data plus the expected authority for each step.
 

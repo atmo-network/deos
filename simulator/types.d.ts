@@ -32,8 +32,19 @@ export type SystemConfig = {
   tol: TolConfig;
 };
 
+export type SystemConfigOverride = {
+  router?: Partial<RouterConfig>;
+  xyk?: Partial<XykConfig>;
+  tmc?: Omit<Partial<TmcConfig>, "mint_shares"> & {
+    mint_shares?: Partial<MintShareConfig>;
+  };
+  tol?: {
+    bucket_shares?: TolBucketConfig;
+  };
+};
+
 export type BucketBalance = {
-  lp_tokens: bigint;
+  balance_lp: bigint;
   contributed_native: bigint;
   contributed_foreign: bigint;
 };

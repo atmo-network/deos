@@ -2,7 +2,7 @@
 
 ## Abstract
 
-TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a tokenomic standard for DEOS, establishing mathematically defined price boundaries through treasury-controlled liquidity accumulation. The system combines unidirectional token emission with automated XYK reserve allocation to create calculable downside protection ranging from 11% to 25% of equilibrium price, contingent on governance maintaining specified system parameters.
+TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a project-independent tokenomic standard establishing mathematically defined price boundaries through treasury-controlled liquidity accumulation. The system combines unidirectional token emission with automated XYK reserve allocation to create calculable downside protection ranging from 11% to 25% of equilibrium price, contingent on governance maintaining specified system parameters.
 
 `Key Properties`:
 
@@ -30,14 +30,14 @@ TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a tokenomic standard 
 - `TBC`: Bidirectional mint/redeem curve model, typically symmetric in formula-space (reserve-extraction path exists)
 - `TMC`: Unidirectional mint-only curve model, inherently asymmetric in market structure (reserve-extraction path does not exist)
 - `POL`: Protocol-Owned Liquidity — ownership class where LP inventory is held by protocol accounts; permanence depends on policy (hard-locked or governance-withdrawable)
-- `TOL`: Treasury-Owned Liquidity — treasury policy framework over protocol-owned liquidity with explicit bucket roles; in TMCTOL, Bucket_A is the anchor permanence layer while B/C/D are policy-flex buckets
+- `TOL`: Treasury-Owned Liquidity — treasury policy framework over protocol-owned liquidity with explicit reserve roles; a realization may use one or several accounting positions while preserving declared protection and reporting rules
 
 `Combination Profiles`:
 
 - `TBC + POL`: Possible only with an explicit accumulation source such as fees, spread, surplus, or seed capital. Otherwise the redeem flow tends to consume reserves and POL cannot grow sustainably
 - `TBC + TOL`: Adds treasury discipline and segmentation, but still requires dedicated LP inflow into treasury logic. The redeem path continues to create extraction pressure
 - `TMC + POL`: Naturally supports reserve accumulation when mint-side allocations route into protocol LP. Floor quality then depends on treasury policy strictness
-- `TMC + TOL`: Combines unidirectional minting with explicit treasury floor policy across Anchor, Building, Capital, and Dormant buckets. This maximizes floor hardness and governance clarity
+- `TMC + TOL`: Combines unidirectional minting with explicit treasury floor policy. A realization declares its own custody topology without changing the underlying curve, reserve, and conservation mathematics
 
 `Relationship note`: TOL is a structured policy layer over POL. All TOL LP is POL by ownership, but not every POL design is TOL.
 
@@ -140,12 +140,12 @@ Distribution occurs atomically within minting transaction; no newly minted token
 
 `Bucket Structure (66.6% total allocation)`:
 
-- `Bucket_A (33.3% total supply)`: Anchor liquidity — primary floor protection mechanism. Bucket_A is protected floor capital while it remains in an anchor-qualified state under Section 6.2. If Bucket_A exceeds its required anchor target due to supply compression or strategic accumulation, governance may migrate only the excess under the migration rules below
-- `Bucket_B (11.1% total supply)`: Building budget — ecosystem construction spending through governed LP unwind, buyback, treasury, or deployment actions
-- `Bucket_C (11.1% total supply)`: Capital bucket — operational liquidity reserve for controlled redeployment between LP positions and treasury balances
-- `Bucket_D (11.1% total supply)`: Dormant LP reserve — governance-controlled LP held in a passive or delayed-use state until a later policy activates it
+- `Bucket_A / Anchor (33.3% total supply)`: Immutable anchor liquidity — primary floor protection mechanism. Bucket_A is protected floor capital under Section 6.2
+- `Bucket_B / Builder (11.1% total supply)`: Ecosystem-construction budget for governed LP unwind, buyback, treasury, or deployment actions
+- `Bucket_C / Capital (11.1% total supply)`: Operational liquidity reserve for controlled redeployment between LP positions and treasury balances
+- `Bucket_D / Dormant (11.1% total supply)`: Sleeping LP reserve for later demand, distribution, or marketing policy activated through explicit governance
 
-`Allocation vs. Circulating Share`: Initial bucket allocations represent fixed percentages of total supply at minting. However, circulating shares (percentage of current supply held by each bucket) evolve dynamically through token burning and strategic reallocations. This distinction enables the system to maintain floor protection guarantees while allowing treasury expansion.
+`Allocation vs. Circulating Share`: Initial bucket allocations represent fixed percentages of total supply at minting. Circulating shares evolve through token burning and non-Anchor strategic reallocations, while Anchor custody remains immutable. This distinction permits treasury activity without converting protected Anchor capital into a spending reserve.
 
 `Capital Efficiency`: Four independent bucket positions target near-full reserve deployment rather than idle treasury custody. This does not imply one deep pool or identical user slippage across buckets. Any realization that advertises aggregate utilization MUST also report whether floor depth is concentrated, fragmented, migrated, or externally deployed.
 
@@ -154,9 +154,9 @@ Distribution occurs atomically within minting transaction; no newly minted token
 - `Maximum model case (25%)`: All TOL buckets are in floor-supporting reserve state under the same stress metric
 - `Minimum model case (11%)`: Only Bucket_A is in floor-supporting reserve state and other buckets are treated as sellable pressure or non-supporting deployment
 - `Typical live state`: Governance balances protection, development, capital use, and external deployment; clients MUST report the current bucket-state classification rather than assuming either endpoint
-- `Excess Liquidity Migration`: Token burning increases Bucket_A's relative share of circulating supply. Governance MAY migrate only Bucket_A liquidity above the required anchor target, and the migrated portion MUST stop counting toward in-domain floor support unless it satisfies the external LP reporting rules in Section 6.2
+- `Anchor immutability`: Token burning may increase Bucket_A's relative share of circulating supply, but no resulting excess becomes withdrawable or migratable under ordinary governance; changing this guarantee requires a fork or explicit standard revision
 
-### 2.5 DEOS Router Mechanism
+### 2.5 Router Mechanism
 
 `Price Discovery Gateway`:
 
@@ -292,6 +292,8 @@ A conforming report MUST state:
 - `Supply basis`: whether `S_total`, `S_curve`, or `S_circ` is used
 - `Sellable pressure`: the chosen `λ_reported` assumption and rationale
 - `Governance state`: intact, degraded, emergency, or forked guarantee surface
+
+Counted reserves MUST derive from each support position's current pro-rata reserve claim. Historical contribution or cost-basis telemetry MUST NOT be added to the same live pool reserves. Missing live Bucket_A anchor support automatically degrades the governance state, and a named pressure preset MUST derive from the configured allocation shares rather than hardcoded default percentages.
 
 `Reference-state assumption for ratio estimates`:
 
@@ -603,7 +605,7 @@ where burn_rate = f_router × V_trade
 
 `Flexibility`: Bucket independence enables:
 
-- `Bucket_A`: Dedicated baseline floor support target; governance policy should treat it as protected capital and minimize withdrawal paths
+- `Bucket_A / Anchor`: Immutable baseline floor support with no ordinary governance withdrawal path
 - `Buckets 2-4`: Strategic deployment per governance decisions
 - Effective floor ranges 11% minimum (only Bucket_A) to 25% maximum (all buckets) based on deployment choices
 
@@ -691,7 +693,7 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 
 `Maturing Growth Phase`:
 
-- Governance deploys TOL strategically (parachain expansion, development funding)
+- Governance deploys TOL strategically (external expansion, development funding)
 - Framework flexibility enables growth without sacrificing floor protection
 - Burn effects create deflationary pressure
 
@@ -759,7 +761,7 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 - `XYK fee`: bounded-mutable by governance only when the floor and best-execution impact is disclosed
 - `Burn threshold and cooldown`: bounded-mutable operational parameters; changes MUST preserve the burn liveness contract
 - `Zap slippage bounds`: bounded-mutable operational parameters; changes MUST preserve the Zap postconditions
-- `Bucket migration policy`: governance-mutable only for non-anchor or anchor-excess liquidity; protected anchor liquidity follows the TOL Anchor Invariant
+- `Bucket migration policy`: governance-mutable only for non-Anchor buckets; Anchor liquidity follows the immutable TOL Anchor Invariant
 - `Emergency controls`: unavailable by default unless a realization defines scope, duration, authority, veto/timelock, and reporting semantics
 
 ### 6.2 Critical Invariants
@@ -786,9 +788,9 @@ Bucket_A counted as protected anchor support MUST satisfy all conditions below:
 
 - It is held in protocol-owned or treasury-owned accounts governed by the default protected governance surface
 - It is deployed in an in-domain XYK pool or another explicitly qualifying floor-supporting reserve position
-- It is held by a System Immutable Actors or equivalent hard protocol anchor that runtime extrinsics, including governance/root, cannot mutate, pause, close, or reopen
+- It is held by an immutable protocol anchor that ordinary or privileged implementation calls cannot mutate, pause, close, or reopen
 - It cannot be withdrawn, migrated, spent, or reclassified by unilateral admin authority
-- Any migration is limited to anchor-excess liquidity above the required anchor target unless a runtime upgrade, fork, or explicit standard revision degrades the guarantee surface
+- No burn-created or strategically accumulated Anchor excess becomes withdrawable; only a fork or explicit standard revision may replace this guarantee surface
 - Any emergency path that can bypass this invariant MUST classify the floor state as emergency or degraded before users can rely on the former reported floor
 
 `Bucket and LP Accounting`:
@@ -848,7 +850,7 @@ Current required coverage:
 - `Elasticity inversion`: analytical unless the simulator/runtime test suite explicitly covers the selected formula and parameters
 - `Relative compression, absolute-gap compression, and overtake`: analytical until each regime has dedicated conformance vectors
 
-A conforming reference runtime SHOULD expose a bounded live guarantee-state projection for inspection. This projection MUST NOT add dashboard/history storage; it MAY report uninitialized or explicitly non-guaranteed classes separately from violations. Native burn liveness and BLDR buyback/burn liveness MUST be reported as separate domains when both exist. Zap postcondition inspection MUST verify the configured liquidity-add, residual swap, and LP bucket split as one coherent plan before reporting the Zap domain as satisfied.
+A conforming implementation SHOULD expose a bounded live guarantee-state projection for inspection. This projection MUST NOT add unbounded history storage; it MAY report uninitialized or explicitly non-guaranteed classes separately from violations. Distinct burn domains MUST be reported independently when a realization defines more than one. Zap postcondition inspection MUST verify the configured liquidity-add, residual swap, and LP bucket split as one coherent plan before reporting the Zap domain as satisfied.
 
 ### 6.4 Economic Conditions
 
