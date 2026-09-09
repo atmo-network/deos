@@ -63,46 +63,15 @@ The framework may ship reference defaults and examples. Those defaults help a fo
 
 ## 5. Builder Pattern Boundary
 
-The builder pattern is an optional governance-mediated labor-funding primitive.
+The builder pattern is an optional governance-mediated labor-funding primitive. [`builder-economy.contract.en.md`](./builder-economy.contract.en.md) owns the complete DEOS reference composition across second-order TMCTOL, `$BLDR` governance, invoices, BLDR Anchor, BLDR Treasury, and the parent-capital bridge.
 
-Generic mechanism:
+DEOS owns safe reusable invoice, governance, treasury, liquidity, and execution mechanisms. An instance decides whether to enable the pattern and owns work norms, invoice etiquette, contributor culture, payout appetite, naming, and demand strategy.
 
-1. Useful completed work is represented as a public invoice payload.
-2. Governance evaluates the invoice under explicit domain rules.
-3. Governance may approve, reject, reduce, or amplify payout.
-4. Execution pays from a declared funding source under bounded caps and transactional rules.
+## 6. TOL Capital Boundary
 
-Framework responsibility:
+TOL is an asset-scoped treasury-owned liquidity topology, not a synonym for one fixed bucket count. The TMCTOL specification owns the project-independent standard mathematics and reference first-order model; the Builder Economy contract owns the concrete second-order `$BLDR` specialization.
 
-- Define safe invoice payloads, lifecycle, execution, observability, caps, and failure semantics.
-- Keep invoice voting bounded and auditable.
-- Avoid hardcoding one instance's contributor culture into generic pallets.
-
-Instance responsibility:
-
-- Decide whether builder invoices are used at all.
-- Define accepted work norms, individual/team invoice expectations, social review culture, and payout appetite.
-- Decide whether contributor funding uses a builder token, a treasury asset, another domain token, or no invoice system.
-
-## 6. Bucketed Capital Boundary
-
-TMCTOL's reference buckets are a canonical standard-level topology, not a requirement that every DEOS fork must preserve identical names or percentages.
-
-Reusable pattern:
-
-- Protocol capital is segmented into explicit roles.
-- Each segment has a clear policy boundary.
-- Governance authority over each segment is bounded and named.
-- Automation moves capital only through declared Actor Contracts.
-
-Reference TMCTOL semantics:
-
-- Bucket A: anchor / protection / floor-support gravity.
-- Bucket B: building / contributor-development funding.
-- Bucket C: capital / operations.
-- Bucket D: dormant reserve or future demand/expansion policy.
-
-A fork may rename, resize, merge, remove, or add buckets if it updates the claimed standard and validation surface honestly.
+Reusable framework requirements remain limited to explicit capital roles, bounded governance authority, protected custody, honest floor accounting, and declared execution paths. A fork may rename, resize, merge, remove, or add anchors, buckets, and treasuries if it updates its claimed contract and validation surface honestly.
 
 ## 7. Actors Extraction Rule
 

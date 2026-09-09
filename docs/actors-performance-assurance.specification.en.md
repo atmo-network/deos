@@ -29,6 +29,8 @@ Setup, genesis construction, prefunding, and deterministic population generation
 
 All populations, market state, authored bounds, transaction demand, and seeds MUST be deterministic and retained by the project harness. Weight fairness and deltas are component-wise; no scalar score may combine RefTime and ProofSize. Database reads/writes, persistent bytes, block count, and faults remain separately reported.
 
+Independent RefTime-heavy and ProofSize-heavy user witnesses MUST be attempted. When the production call surface cannot saturate one component before another production bound rejects the next valid call, retain the highest justified reachable witness, identify the binding component and next-call deficit, report the unused component without calling it saturated, and keep the impossibility claim subordinate to an explicit callable-surface audit.
+
 Architecture-affecting candidate comparisons use Experiment Records. The accepted project harness and generated Weight remain project truth; release assurance may review their exact-tree identity but is not a project validation dependency.
 
 Maximum-context evidence MUST use the runtime-admitted DMP message, HRMP message, and HRMP channel bounds together, preserve the full/hashed split produced by the configured PoV allocator, execute the actual context inherent in benchmark Wasm, and record the fixture and benchmark-Wasm identities. A registered SDK composition may own the fixed envelope only after component-wise dominance over the complete measured path is proved without additive double accounting.
@@ -221,13 +223,13 @@ The target fails on any combined Trigger/Pipeline charge, Actor-specific evaluat
 
 ### 4.1 Short Contracts Under Global Ceilings
 
-Benchmark semantically identical one-, two-, and three-Step Contracts under `MaxContractSteps = 8`, `16`, and `32`. For each current Step report control/effect Weight, ProofSize, loaded fragments, state hold, create/update/close Weight, and persisted run footprint.
+Benchmark semantically identical one-, two-, and three-Step Contracts under `MaxContractSteps = 4`, `8`, and `12`. For each current Step report control/effect Weight, ProofSize, loaded fragments, state hold, create/update/close Weight, and persisted run footprint.
 
 Raising the global ceiling MUST NOT add cold body reads, unused Predicate work, maximum-pipeline ProofSize, or a fee for unauthored machine geometry to the identical short Contract. Any fixed difference requires an explicit runtime-owned cause and production evidence.
 
 ### 4.2 Maximum Contract Pacing
 
-A 32-Step Actor with every Step executable MUST use exactly 32 distinct committed-Step blocks, with at most one committed Step in each block, and MUST NOT complete before its thirty-second eligible execution block. Consecutive execution blocks are required only in a fixture that guarantees no FIFO or resource congestion. The profile records every cursor, ticket, source block, successor eligibility, execution block, outcome, and final nonce. Congestion may make completion later but never earlier.
+A maximum 12-Step DEOS Actor with every Step executable MUST use exactly 12 distinct committed-Step blocks, with at most one committed Step in each block, and MUST NOT complete before its twelfth eligible execution block. Consecutive execution blocks are required only in a fixture that guarantees no FIFO or resource congestion. The profile records every cursor, ticket, source block, successor eligibility, execution block, outcome, and final nonce. Congestion may make completion later but never earlier.
 
 ### 4.3 Mixed Complexity
 
@@ -236,7 +238,7 @@ Construct:
 ```text
 9,500 one-Step Actors
 400 three-Step Actors
-100 thirty-two-Step Actors
+100 twelve-Step Actors
 ```
 
 Activate all through one deterministic profile while preserving strict FIFO and block pacing. Report `S`, `A`, service gaps, progress, and completion separately by complexity class. Every admitted Actor must make eventual progress under recurring conforming capacity; short Actors receive no class priority, and maximum Contracts cannot create cold-body or whole-cycle admission cost for unrelated short Actors.
@@ -245,7 +247,7 @@ No ten-minute completion promise applies to all Steps in this mixed workload unl
 
 ### 4.4 Mixed-Length Shared-Trigger Step 0
 
-Construct one shared Trigger instance whose affected causal cohort contains an equal deterministic mix of Contracts with lengths `0`, `1`, `4`, `8`, and `32`. Nonempty members use the same semantic Step-0 Predicate/Task/resource shape; only zero-Step absence or unreachable suffix length/content differs. Run populations `10/100/1,000/10,000` under both T+1 and any specification-admitted T0 candidate.
+Construct one shared Trigger instance whose affected causal cohort contains an equal deterministic mix of Contracts with lengths `0`, `1`, `4`, `8`, and `12`. Nonempty members use the same semantic Step-0 Predicate/Task/resource shape; only zero-Step absence or unreachable suffix length/content differs. Run populations `10/100/1,000/10,000` under both T+1 and any specification-admitted T0 candidate.
 
 Report cohort discovery/materialization, first Opening/Step-0 control/effect Weight, ProofSize, reads/writes, loaded fragments, first-reaction latency, zero-Step completions, Step-0 commits, one-Step completions, and multi-Step transitions into independent Q1 Running service. After Step 0, report continuations separately by Contract length; they are not cohort work.
 
@@ -275,7 +277,7 @@ TryRuntime or offline integrity cost for constructing/checking the full stress s
 
 Passing these profiles supports only the exact populations, Tasks, runtime constants, state geometry, production Weight, and source tree measured. It does not establish:
 
-- 10,000 maximum-cost 32-Step Cycles in ten minutes.
+- 10,000 maximum-cost 12-Step Cycles in ten minutes.
 - One million Active Actors.
 - Exact execution-block SLAs for individual Actors.
 - Market success, fair price, MEV protection, or permanent liquidity.

@@ -9,19 +9,21 @@ This hub routes readers to canonical contracts and shipped architecture. `DEOS` 
 - [Read-Model Contract](./read-model.contract.en.md)
 - [Manifesto](./manifesto.en.md)
 
-## Economic Standard
+## Economic Standard and Reference Economy
 
 - [TMCTOL Specification](./tmctol.specification.en.md)
+- [Builder Economy Contract](./builder-economy.contract.en.md)
 - [TMC Architecture](../template/pallets/tmc/docs/architecture.en.md)
 - [Asset Registry Architecture](../template/pallets/asset-registry/docs/architecture.en.md)
 
-The simulator is the executable authority for TMCTOL formulas, thresholds, and invariant scenarios.
+The TMCTOL specification owns project-independent standard mathematics. The Builder Economy contract composes its second-order reference contour with DEOS Governance, while the simulator remains executable authority for formulas, thresholds, and invariant scenarios.
 
 ## DEOS Actors
 
 - [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
 - [DEOS Actors Resource Policy Specification](./actors-resource-policy.specification.en.md)
 - [DEOS Actors Performance Assurance Specification](./actors-performance-assurance.specification.en.md)
+- [DEOS Actors Local Causal Introspection Specification](./actors-causal-introspection.specification.en.md)
 - [Package Architecture](../template/pallets/actors/docs/architecture.en.md)
 - [Embedding Guide](../template/pallets/actors/docs/embedding.md)
 - [DEOS Actors Integration](./actors.integration.en.md)

@@ -1,6 +1,24 @@
-use deos_runtime::Runtime;
-use polkadot_sdk::{sp_core::storage::Storage, sp_io::TestExternalities};
+use deos_runtime::{PARACHAIN_ID, ParachainInfoConfig, Runtime, RuntimeGenesisConfig};
+use polkadot_sdk::{
+  cumulus_primitives_core::ParaId, sp_core::storage::Storage, sp_io::TestExternalities,
+  sp_runtime::BuildStorage,
+};
 use std::{env, path::PathBuf, process};
+
+fn canonical_metadata_storage() -> Result<Storage, String> {
+  // Metadata constants such as ParachainSystem::SelfParaId and
+  // PolkadotXcm::UniversalLocation are storage-backed. Export under the same
+  // canonical parachain identity used by every reference preset rather than
+  // silently encoding the empty-externalities default (ParaId 100).
+  RuntimeGenesisConfig {
+    parachain_info: ParachainInfoConfig {
+      parachain_id: ParaId::from(PARACHAIN_ID),
+      ..Default::default()
+    },
+    ..Default::default()
+  }
+  .build_storage()
+}
 
 fn usage() {
   eprintln!("Usage: export_metadata <output-path> [metadata-version]");
@@ -23,7 +41,11 @@ fn main() {
       })
     })
     .unwrap_or(16);
-  let mut ext = TestExternalities::new(Storage::default());
+  let storage = canonical_metadata_storage().unwrap_or_else(|error| {
+    eprintln!("Failed to build canonical metadata externalities: {error}");
+    process::exit(1);
+  });
+  let mut ext = TestExternalities::new(storage);
   let metadata = ext.execute_with(|| {
     Runtime::metadata_at_version(metadata_version).unwrap_or_else(|| {
       eprintln!("Runtime metadata version {metadata_version} is unavailable");
@@ -50,4 +72,22 @@ fn main() {
     "Wrote metadata v{metadata_version} to {}",
     output_path.display()
   );
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn metadata_externalities_use_the_reference_parachain_identity() {
+    let mut ext = TestExternalities::new(
+      canonical_metadata_storage().expect("canonical metadata storage builds"),
+    );
+    ext.execute_with(|| {
+      assert_eq!(
+        deos_runtime::ParachainInfo::parachain_id(),
+        ParaId::from(PARACHAIN_ID)
+      );
+    });
+  }
 }

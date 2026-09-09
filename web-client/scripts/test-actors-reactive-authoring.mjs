@@ -25,6 +25,10 @@ const runtime = {
   specVersion: 1,
   transactionVersion: 1,
 };
+const simulationBudget = {
+  actorControl: { refTime: 1_000_000_000_000n, proofSize: 10_000_000n },
+  sharedEconomic: { refTime: 1_000_000_000_000n, proofSize: 10_000_000n },
+};
 const native = { type: 'Native' };
 const quoteAsset = { type: 'Local', id: 7 };
 const feed = {
@@ -330,7 +334,8 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
       stateSource: 'FinalizedBlock',
     },
     runtimeApi: 'ActorSimulationApi_simulate_current_contract',
-    runtimeApiVersion: 1,
+    runtimeApiVersion: 2,
+    simulationBudget,
     provider: {
       async simulate(request) {
         requestedContractId = request.pin.contractId;

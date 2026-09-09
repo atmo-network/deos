@@ -509,7 +509,8 @@ impl<T: Config> Pallet<T> {
       let slot = ObservationSubscriptionSlot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
         "observation feed owner has no subscription slot",
       ))?;
-      if !owned_slots.insert(slot)
+      if slot >= next_slot
+        || !owned_slots.insert(slot)
         || ObservationSubscriptionSlotOwner::<T>::get(slot) != Some(actor_id)
       {
         return Err(TryRuntimeError::Other(
@@ -563,6 +564,12 @@ impl<T: Config> Pallet<T> {
       let page = ObservationFreeSlotPages::<T>::get(page_id).ok_or(TryRuntimeError::Other(
         "observation free-slot page is missing",
       ))?;
+      let expected_len = page_size.min(free_len.saturating_sub(page_id.saturating_mul(page_size)));
+      if page.len() as u32 != expected_len {
+        return Err(TryRuntimeError::Other(
+          "observation free-slot page length disagrees with its stack position",
+        ));
+      }
       for slot in page {
         if slot >= next_slot
           || !free_slots.insert(slot)
@@ -664,6 +671,22 @@ impl<T: Config> Pallet<T> {
           "observation occupied-page list bounds disagree",
         ));
       }
+      let mut current = Some(list.head);
+      for _ in 0..list.count {
+        let page_id = current.ok_or(TryRuntimeError::Other(
+          "observation occupied-page chain omits stored pages",
+        ))?;
+        current = ObservationSubscriberPages::<T>::get(feed, page_id)
+          .ok_or(TryRuntimeError::Other(
+            "observation occupied-page chain has a missing page",
+          ))?
+          .next;
+      }
+      if current.is_some() {
+        return Err(TryRuntimeError::Other(
+          "observation occupied-page chain does not terminate at its declared count",
+        ));
+      }
       page_list_count = page_list_count
         .checked_add(1)
         .ok_or(TryRuntimeError::Other(
@@ -690,15 +713,14 @@ impl<T: Config> Pallet<T> {
       ));
     }
     for actor_id in IndexedTriggerDetectionDisabled::<T>::iter_keys() {
-      let hot = ActorHot::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
-        "disabled indexed detector has no active Actor",
-      ))?;
-      let contract = Self::load_actor_contract(actor_id).ok_or(TryRuntimeError::Other(
-        "disabled indexed detector has no Actor Contract",
-      ))?;
-      if !hot.pending_signal
+      let LoadedActorStateOf::Active(state) = Self::load_frame_actor_state(actor_id) else {
+        return Err(TryRuntimeError::Other(
+          "disabled indexed detector has no active Actor",
+        ));
+      };
+      if !state.hot.pending_signal
         || !matches!(
-          contract.trigger,
+          state.contract.trigger,
           Trigger::ObservationChange { .. } | Trigger::ObservationCrossing { .. }
         )
       {

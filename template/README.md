@@ -3,7 +3,7 @@
 This directory is the Rust/FRAME implementation workspace for DEOS.
 It contains the reusable parachain runtime components that realize the living contracts described in `../docs/` and, when tokenomics or invariants change, can be cross-checked against the mathematical reference in `../simulator/`. The current flagship economic standard shipped on this runtime kernel is TMCTOL.
 
-The `0.7.22` reference runtime supports fresh genesis only. It is not an upgrade artifact for a `0.7.21` chain, carries no deployed storage lineage, and provides no `0.7.21`-to-`0.7.22` migration contract.
+The pre-`1.0` reference runtime supports fresh genesis only. It is not an upgrade artifact for an earlier release, carries no deployed storage lineage, and provides no production migration contract.
 
 ## Purpose
 

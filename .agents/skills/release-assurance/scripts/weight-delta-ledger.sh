@@ -14,7 +14,7 @@ usage() {
     cat <<'EOF'
 Usage: weight-delta-ledger.sh [--check]
 
-Generates or verifies the v0.7.22-to-v0.7.23-candidate production Weight delta ledger.
+Generates or verifies the v0.7.24-to-v0.7.25-candidate production Weight delta ledger.
 
 Options:
   --check           Fail when the committed ledger differs from current weights

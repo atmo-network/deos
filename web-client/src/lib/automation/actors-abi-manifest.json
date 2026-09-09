@@ -2,7 +2,7 @@
   "format": "deos.actor.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "27984891721c42acbce79d4e458e9b40dd6b9a046228438a072f4f2c1bd0f74e",
+    "sha256": "75868ea75fd85e7b79db12650a7407e89e249f5564b2157d55ac46cd26cb5d12",
     "version": 16
   },
   "pallet": {
@@ -159,17 +159,17 @@
       },
       { "name": "MinWindowLength", "type": 14, "value": "0x64000000" },
       { "name": "PalletId", "type": 446, "value": "0x6163746f72733030" },
-      { "name": "MaxContractSteps", "type": 14, "value": "0x20000000" },
+      { "name": "MaxContractSteps", "type": 14, "value": "0x0c000000" },
       { "name": "MaxFundingTrackedAssets", "type": 14, "value": "0x28000000" },
       {
         "name": "MaxOpeningSnapshotEntries",
         "type": 14,
-        "value": "0x40000000"
+        "value": "0x18000000"
       },
       {
         "name": "MaxOpeningPredicateResults",
         "type": 14,
-        "value": "0x80000000"
+        "value": "0x30000000"
       },
       { "name": "MaxPreconditionClauses", "type": 14, "value": "0x04000000" },
       { "name": "MaxPredicatesPerClause", "type": 14, "value": "0x04000000" },
@@ -813,7 +813,7 @@
       },
       {
         "modifier": 0,
-        "name": "ActorHot",
+        "name": "ActorContractHead",
         "type": {
           "tag": "map",
           "value": {
@@ -825,37 +825,13 @@
       },
       {
         "modifier": 0,
-        "name": "ActorContractHead",
-        "type": {
-          "tag": "map",
-          "value": {
-            "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 10,
-            "value": 667
-          }
-        }
-      },
-      {
-        "modifier": 0,
         "name": "ActorActivationAuthority",
         "type": {
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 673
-          }
-        }
-      },
-      {
-        "modifier": 0,
-        "name": "ActorAdmissionCertificate",
-        "type": {
-          "tag": "map",
-          "value": {
-            "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 10,
-            "value": 674
+            "value": 664
           }
         }
       },
@@ -869,8 +845,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 675,
-            "value": 676
+            "key": 665,
+            "value": 666
           }
         }
       },
@@ -882,7 +858,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 681
+            "value": 671
           }
         }
       },
@@ -894,7 +870,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 686
+            "value": 676
           }
         }
       },
@@ -906,7 +882,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 692
+            "value": 682
           }
         }
       },
@@ -918,7 +894,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 702
+            "value": 692
           }
         }
       },
@@ -935,7 +911,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 703
+            "value": 693
           }
         }
       },
@@ -952,7 +928,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 705
+            "value": 695
           }
         }
       },
@@ -962,73 +938,128 @@
         "type": { "tag": "plain", "value": 14 }
       },
       {
-        "modifier": 1,
-        "name": "NextQueueTicket",
-        "type": { "tag": "plain", "value": 10 }
-      },
-      {
         "modifier": 0,
         "name": "PrepassExecutionCutoff",
-        "type": { "tag": "plain", "value": 706 }
+        "type": { "tag": "plain", "value": 696 }
       },
       {
         "modifier": 0,
         "name": "CurrentBlockResourceState",
-        "type": { "tag": "plain", "value": 707 }
+        "type": { "tag": "plain", "value": 697 }
       },
       {
         "modifier": 0,
         "name": "FinalizedBlockResourceTelemetry",
-        "type": { "tag": "plain", "value": 710 }
-      },
-      {
-        "modifier": 1,
-        "name": "QueueHead",
-        "type": { "tag": "plain", "value": 10 }
-      },
-      {
-        "modifier": 1,
-        "name": "QueueTail",
-        "type": { "tag": "plain", "value": 10 }
-      },
-      {
-        "modifier": 1,
-        "name": "QueueOccupancy",
-        "type": { "tag": "plain", "value": 14 }
+        "type": { "tag": "plain", "value": 700 }
       },
       {
         "modifier": 0,
-        "name": "QueuePages",
+        "name": "ActorUnsignaledControlCells",
         "type": {
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 711
+            "value": 701
           }
         }
       },
       {
         "modifier": 0,
-        "name": "WakeupPages",
+        "name": "ActorReadyFrameChunks",
         "type": {
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 715,
-            "value": 716
+            "key": 10,
+            "value": 713
           }
         }
       },
       {
         "modifier": 0,
-        "name": "WakeupBuckets",
+        "name": "ActorWaitingFrameChunks",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 716,
+            "value": 717
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorControlLocators",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 723
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorReadyHead",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorReadyTail",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorReadyOccupancy",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorWaitingHeads",
         "type": {
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 364,
-            "value": 721
+            "value": 10
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorWaitingTails",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 364,
+            "value": 10
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorWaitingOccupancies",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 364,
+            "value": 14
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorWaitingCursorIndices",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 364,
+            "value": 14
           }
         }
       },
@@ -1039,8 +1070,8 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 722,
-            "value": 724
+            "key": 724,
+            "value": 726
           }
         }
       },
@@ -1051,7 +1082,7 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 723,
+            "key": 725,
             "value": 14
           }
         }
@@ -1059,7 +1090,7 @@
       {
         "modifier": 1,
         "name": "NextWakeupClock",
-        "type": { "tag": "plain", "value": 723 }
+        "type": { "tag": "plain", "value": 725 }
       },
       {
         "modifier": 0,
@@ -1115,7 +1146,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 726
+            "value": 728
           }
         }
       },
@@ -1161,7 +1192,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 727
+            "value": 729
           }
         }
       },
@@ -1175,8 +1206,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 728,
-            "value": 729
+            "key": 730,
+            "value": 731
           }
         }
       },
@@ -1188,7 +1219,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 216,
-            "value": 732
+            "value": 734
           }
         }
       },
@@ -1229,14 +1260,14 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 216,
-            "value": 733
+            "value": 735
           }
         }
       },
       {
         "modifier": 1,
         "name": "DirtyObservationListState",
-        "type": { "tag": "plain", "value": 736 }
+        "type": { "tag": "plain", "value": 738 }
       },
       {
         "modifier": 0,
@@ -1251,7 +1282,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 737
+            "value": 739
           }
         }
       },
@@ -1265,8 +1296,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 740,
-            "value": 741
+            "key": 742,
+            "value": 743
           }
         }
       },
@@ -1277,8 +1308,8 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 738,
-            "value": 745
+            "key": 740,
+            "value": 747
           }
         }
       },
@@ -1289,7 +1320,7 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 746,
+            "key": 748,
             "value": 327
           }
         }
@@ -1326,7 +1357,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 216,
-            "value": 747
+            "value": 749
           }
         }
       },
@@ -1338,14 +1369,14 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 216,
-            "value": 750
+            "value": 752
           }
         }
       },
       {
         "modifier": 1,
         "name": "CrossingPendingFeedListState",
-        "type": { "tag": "plain", "value": 751 }
+        "type": { "tag": "plain", "value": 753 }
       },
       {
         "modifier": 0,
@@ -1355,7 +1386,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 216,
-            "value": 752
+            "value": 754
           }
         }
       },
@@ -1377,7 +1408,7 @@
       {
         "modifier": 1,
         "name": "IdleStarvationState",
-        "type": { "tag": "plain", "value": 753 }
+        "type": { "tag": "plain", "value": 755 }
       }
     ]
   },
@@ -5045,284 +5076,24 @@
       "def": {
         "tag": "composite",
         "value": [
-          {
-            "docs": [],
-            "name": "lifecycle",
-            "type": 659,
-            "typeName": "ActiveLifecycle"
-          },
-          {
-            "docs": [],
-            "name": "cycle_state",
-            "type": 660,
-            "typeName": "CycleState"
-          },
-          {
-            "docs": [],
-            "name": "trigger_runtime_state",
-            "type": 661,
-            "typeName": "TriggerRuntimeState"
-          },
-          {
-            "docs": [],
-            "name": "unsuccessful_attempt_streak",
-            "type": 14,
-            "typeName": "u32"
-          },
-          {
-            "docs": [],
-            "name": "pending_signal",
-            "type": 50,
-            "typeName": "bool"
-          },
-          {
-            "docs": [],
-            "name": "queue_ticket",
-            "type": 189,
-            "typeName": "Option<u64>"
-          },
-          {
-            "docs": [],
-            "name": "wakeup_pointer",
-            "type": 663,
-            "typeName": "Option<WakeupPointer<BlockNumber>>"
-          },
-          {
-            "docs": [],
-            "name": "trigger_wakeup_pointer",
-            "type": 665,
-            "typeName": "Option<TriggerWakeupPointer>"
-          },
-          {
-            "docs": [],
-            "name": "terminal_at",
-            "type": 186,
-            "typeName": "Option<BlockNumber>"
-          },
-          {
-            "docs": [],
-            "name": "schedule_anchor",
-            "type": 14,
-            "typeName": "BlockNumber"
-          },
-          {
-            "docs": [],
-            "name": "last_cycle_block",
-            "type": 186,
-            "typeName": "Option<BlockNumber>"
-          }
-        ]
-      },
-      "id": 658,
-      "params": [{ "name": "BlockNumber", "type": 14 }],
-      "path": ["pallet_deos_actors", "types", "lifecycle", "ActorHotState"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "Active" },
-          { "docs": [], "fields": [], "index": 1, "name": "Paused" }
-        ]
-      },
-      "id": 659,
-      "params": [],
-      "path": ["pallet_deos_actors", "types", "lifecycle", "ActiveLifecycle"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "Idle" },
-          { "docs": [], "fields": [], "index": 1, "name": "Running" },
-          { "docs": [], "fields": [], "index": 2, "name": "Suspended" }
-        ]
-      },
-      "id": 660,
-      "params": [],
-      "path": ["pallet_deos_actors", "types", "lifecycle", "CycleState"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "Stateless" },
-          {
-            "docs": [],
-            "fields": [
-              {
-                "docs": [],
-                "name": "phase",
-                "type": 662,
-                "typeName": "CrossingPhase"
-              },
-              {
-                "docs": [],
-                "name": "installed_at_revision",
-                "type": 10,
-                "typeName": "u64"
-              }
-            ],
-            "index": 1,
-            "name": "ObservationCrossing"
-          },
-          {
-            "docs": [],
-            "fields": [
-              {
-                "docs": [],
-                "name": "anchor_tick",
-                "type": 189,
-                "typeName": "Option<u64>"
-              },
-              { "docs": [], "name": "consumed", "type": 50, "typeName": "bool" }
-            ],
-            "index": 2,
-            "name": "AtTime"
-          },
-          {
-            "docs": [],
-            "fields": [
-              {
-                "docs": [],
-                "name": "anchor_tick",
-                "type": 189,
-                "typeName": "Option<u64>"
-              }
-            ],
-            "index": 3,
-            "name": "Cadenced"
-          }
-        ]
-      },
-      "id": 661,
-      "params": [],
-      "path": [
-        "pallet_deos_actors",
-        "types",
-        "lifecycle",
-        "TriggerRuntimeState"
-      ]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "Armed" },
-          { "docs": [], "fields": [], "index": 1, "name": "WaitingForRearm" }
-        ]
-      },
-      "id": 662,
-      "params": [],
-      "path": ["pallet_deos_actors", "types", "contract", "CrossingPhase"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "None" },
-          {
-            "docs": [],
-            "fields": [{ "docs": [], "type": 664 }],
-            "index": 1,
-            "name": "Some"
-          }
-        ]
-      },
-      "id": 663,
-      "params": [{ "name": "T", "type": 664 }],
-      "path": ["Option"]
-    },
-    {
-      "def": {
-        "tag": "composite",
-        "value": [
-          {
-            "docs": [],
-            "name": "block",
-            "type": 364,
-            "typeName": "WakeupKey<BlockNumber>"
-          },
-          {
-            "docs": [],
-            "name": "page_id",
-            "type": 10,
-            "typeName": "WakeupPageId"
-          },
-          { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
-        ]
-      },
-      "id": 664,
-      "params": [{ "name": "BlockNumber", "type": 14 }],
-      "path": ["pallet_deos_actors", "types", "scheduler", "WakeupPointer"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "None" },
-          {
-            "docs": [],
-            "fields": [{ "docs": [], "type": 666 }],
-            "index": 1,
-            "name": "Some"
-          }
-        ]
-      },
-      "id": 665,
-      "params": [{ "name": "T", "type": 666 }],
-      "path": ["Option"]
-    },
-    {
-      "def": {
-        "tag": "composite",
-        "value": [
-          {
-            "docs": [],
-            "name": "tick",
-            "type": 10,
-            "typeName": "SchedulerTick"
-          },
-          {
-            "docs": [],
-            "name": "page_id",
-            "type": 10,
-            "typeName": "WakeupPageId"
-          },
-          { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
-        ]
-      },
-      "id": 666,
-      "params": [],
-      "path": [
-        "pallet_deos_actors",
-        "types",
-        "scheduler",
-        "TriggerWakeupPointer"
-      ]
-    },
-    {
-      "def": {
-        "tag": "composite",
-        "value": [
-          { "docs": [], "name": "header", "type": 668, "typeName": "Header" },
+          { "docs": [], "name": "header", "type": 659, "typeName": "Header" },
           {
             "docs": [],
             "name": "first_step",
-            "type": 670,
+            "type": 661,
             "typeName": "Option<Step>"
           },
           {
             "docs": [],
             "name": "first_step_resources",
-            "type": 671,
+            "type": 662,
             "typeName": "Option<ActorStepResourceEnvelope>"
           }
         ]
       },
-      "id": 667,
+      "id": 658,
       "params": [
-        { "name": "Header", "type": 668 },
+        { "name": "Header", "type": 659 },
         { "name": "Step", "type": 235 }
       ],
       "path": ["pallet_deos_actors", "types", "contract", "ActorContractHead"]
@@ -5384,12 +5155,12 @@
           {
             "docs": [],
             "name": "pipeline_machine_envelope",
-            "type": 669,
+            "type": 660,
             "typeName": "PipelineMachineEnvelope<Balance>"
           }
         ]
       },
-      "id": 668,
+      "id": 659,
       "params": [
         { "name": "Trigger", "type": 227 },
         { "name": "BlockNumber", "type": 14 },
@@ -5417,7 +5188,7 @@
           }
         ]
       },
-      "id": 669,
+      "id": 660,
       "params": [{ "name": "Balance", "type": 49 }],
       "path": [
         "pallet_deos_actors",
@@ -5439,7 +5210,7 @@
           }
         ]
       },
-      "id": 670,
+      "id": 661,
       "params": [{ "name": "T", "type": 235 }],
       "path": ["Option"]
     },
@@ -5450,14 +5221,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 672 }],
+            "fields": [{ "docs": [], "type": 663 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 671,
-      "params": [{ "name": "T", "type": 672 }],
+      "id": 662,
+      "params": [{ "name": "T", "type": 663 }],
       "path": ["Option"]
     },
     {
@@ -5478,7 +5249,7 @@
           }
         ]
       },
-      "id": 672,
+      "id": 663,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -5535,7 +5306,7 @@
           }
         ]
       },
-      "id": 673,
+      "id": 664,
       "params": [
         { "name": "ObservationFeedId", "type": 216 },
         { "name": "BlockNumber", "type": 14 },
@@ -5549,71 +5320,8 @@
       ]
     },
     {
-      "def": {
-        "tag": "composite",
-        "value": [
-          {
-            "docs": [],
-            "name": "semantic_contract_id",
-            "type": 2,
-            "typeName": "[u8; 32]"
-          },
-          {
-            "docs": [],
-            "name": "body_commitment",
-            "type": 2,
-            "typeName": "[u8; 32]"
-          },
-          {
-            "docs": [],
-            "name": "runtime_actor_semantics_version",
-            "type": 14,
-            "typeName": "u32"
-          },
-          {
-            "docs": [],
-            "name": "production_weight_identity",
-            "type": 2,
-            "typeName": "[u8; 32]"
-          },
-          {
-            "docs": [],
-            "name": "body_geometry_version",
-            "type": 14,
-            "typeName": "u32"
-          },
-          {
-            "docs": [],
-            "name": "configured_bounds_commitment",
-            "type": 2,
-            "typeName": "[u8; 32]"
-          },
-          {
-            "docs": [],
-            "name": "maximum_lifecycle_weight",
-            "type": 109,
-            "typeName": "Weight"
-          },
-          {
-            "docs": [],
-            "name": "admission_identity",
-            "type": 2,
-            "typeName": "[u8; 32]"
-          }
-        ]
-      },
-      "id": 674,
-      "params": [{ "name": "Resources" }],
-      "path": [
-        "pallet_deos_actors",
-        "types",
-        "contract",
-        "ActorAdmissionCertificate"
-      ]
-    },
-    {
       "def": { "tag": "tuple", "value": [10, 14] },
-      "id": 675,
+      "id": 665,
       "params": [],
       "path": []
     },
@@ -5624,7 +5332,7 @@
           {
             "docs": [],
             "name": "authority",
-            "type": 680,
+            "type": 670,
             "typeName": "ActorBodyAuthority<ActorId, Hash>"
           },
           {
@@ -5633,21 +5341,21 @@
             "type": 14,
             "typeName": "u32"
           },
-          { "docs": [], "name": "steps", "type": 677, "typeName": "Steps" },
+          { "docs": [], "name": "steps", "type": 667, "typeName": "Steps" },
           {
             "docs": [],
             "name": "step_resources",
-            "type": 678,
+            "type": 668,
             "typeName": "Resources"
           }
         ]
       },
-      "id": 676,
+      "id": 666,
       "params": [
         { "name": "ActorId", "type": 10 },
         { "name": "Hash", "type": 2 },
-        { "name": "Steps", "type": 677 },
-        { "name": "Resources", "type": 678 }
+        { "name": "Steps", "type": 667 },
+        { "name": "Resources", "type": 668 }
       ],
       "path": ["pallet_deos_actors", "types", "contract", "ActorStepChunk"]
     },
@@ -5656,22 +5364,22 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 252, "typeName": "Vec<T>" }]
       },
-      "id": 677,
+      "id": 667,
       "params": [{ "name": "T", "type": 235 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 679, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 669, "typeName": "Vec<T>" }]
       },
-      "id": 678,
-      "params": [{ "name": "T", "type": 672 }, { "name": "S" }],
+      "id": 668,
+      "params": [{ "name": "T", "type": 663 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
-      "def": { "tag": "sequence", "value": 672 },
-      "id": 679,
+      "def": { "tag": "sequence", "value": 663 },
+      "id": 669,
       "params": [],
       "path": []
     },
@@ -5700,7 +5408,7 @@
           }
         ]
       },
-      "id": 680,
+      "id": 670,
       "params": [
         { "name": "ActorId", "type": 10 },
         { "name": "Hash", "type": 2 }
@@ -5714,30 +5422,30 @@
           {
             "docs": [],
             "name": "funding_accumulated",
-            "type": 682,
+            "type": 672,
             "typeName": "FundingAccumulated"
           },
           {
             "docs": [],
             "name": "funding_tracked_assets",
-            "type": 684,
+            "type": 674,
             "typeName": "FundingTrackedAssets"
           }
         ]
       },
-      "id": 681,
+      "id": 671,
       "params": [
-        { "name": "FundingAccumulated", "type": 682 },
-        { "name": "FundingTrackedAssets", "type": 684 }
+        { "name": "FundingAccumulated", "type": 672 },
+        { "name": "FundingTrackedAssets", "type": 674 }
       ],
       "path": ["pallet_deos_actors", "types", "contract", "ActorFundingState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 683, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 673, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 682,
+      "id": 672,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 },
@@ -5747,7 +5455,7 @@
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 320 }] },
-      "id": 683,
+      "id": 673,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 }
@@ -5757,15 +5465,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 685, "typeName": "BTreeSet<T>" }]
+        "value": [{ "docs": [], "type": 675, "typeName": "BTreeSet<T>" }]
       },
-      "id": 684,
+      "id": 674,
       "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 232 }] },
-      "id": 685,
+      "id": 675,
       "params": [{ "name": "T", "type": 197 }],
       "path": ["BTreeSet"]
     },
@@ -5776,7 +5484,7 @@
           {
             "docs": [],
             "name": "contract_authority",
-            "type": 687,
+            "type": 677,
             "typeName": "ActorRunAuthority<[u8; 32]>"
           },
           {
@@ -5832,18 +5540,18 @@
           {
             "docs": [],
             "name": "last_step_outcome",
-            "type": 688,
+            "type": 678,
             "typeName": "Option<StepOutcome>"
           },
           {
             "docs": [],
             "name": "suspension",
-            "type": 691,
+            "type": 681,
             "typeName": "Option<SuspensionReason>"
           }
         ]
       },
-      "id": 686,
+      "id": 676,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "lifecycle", "ActorRunHead"]
     },
@@ -5871,7 +5579,7 @@
           }
         ]
       },
-      "id": 687,
+      "id": 677,
       "params": [{ "name": "Hash", "type": 2 }],
       "path": ["pallet_deos_actors", "types", "lifecycle", "ActorRunAuthority"]
     },
@@ -5882,14 +5590,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 689 }],
+            "fields": [{ "docs": [], "type": 679 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 688,
-      "params": [{ "name": "T", "type": 689 }],
+      "id": 678,
+      "params": [{ "name": "T", "type": 679 }],
       "path": ["Option"]
     },
     {
@@ -5915,14 +5623,14 @@
           {
             "docs": [],
             "fields": [
-              { "docs": [], "type": 690, "typeName": "crate::TaskFailure" }
+              { "docs": [], "type": 680, "typeName": "crate::TaskFailure" }
             ],
             "index": 4,
             "name": "Failed"
           }
         ]
       },
-      "id": 689,
+      "id": 679,
       "params": [],
       "path": ["pallet_deos_actors", "types", "lifecycle", "StepOutcome"]
     },
@@ -5939,7 +5647,7 @@
           { "docs": [], "name": "retry", "type": 354, "typeName": "RetryClass" }
         ]
       },
-      "id": 690,
+      "id": 680,
       "params": [],
       "path": ["pallet_deos_actors", "adapters", "TaskFailure"]
     },
@@ -5956,7 +5664,7 @@
           }
         ]
       },
-      "id": 691,
+      "id": 681,
       "params": [{ "name": "T", "type": 351 }],
       "path": ["Option"]
     },
@@ -5967,24 +5675,24 @@
           {
             "docs": [],
             "name": "opening_snapshot",
-            "type": 693,
+            "type": 683,
             "typeName": "BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>"
           },
           {
             "docs": [],
             "name": "opening_predicate_results",
-            "type": 698,
+            "type": 688,
             "typeName": "BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>"
           },
           {
             "docs": [],
             "name": "funding_snapshot",
-            "type": 682,
+            "type": 672,
             "typeName": "BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>"
           }
         ]
       },
-      "id": 692,
+      "id": 682,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -5997,11 +5705,11 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 695, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 685, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 693,
+      "id": 683,
       "params": [
-        { "name": "K", "type": 694 },
+        { "name": "K", "type": 684 },
         { "name": "V", "type": 49 },
         { "name": "S" }
       ],
@@ -6031,38 +5739,38 @@
           }
         ]
       },
-      "id": 694,
+      "id": 684,
       "params": [{ "name": "AssetId", "type": 197 }],
       "path": ["pallet_deos_actors", "types", "contract", "OpeningSurface"]
     },
     {
-      "def": { "tag": "composite", "value": [{ "docs": [], "type": 696 }] },
-      "id": 695,
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 686 }] },
+      "id": 685,
       "params": [
-        { "name": "K", "type": 694 },
+        { "name": "K", "type": 684 },
         { "name": "V", "type": 49 }
       ],
       "path": ["BTreeMap"]
     },
     {
-      "def": { "tag": "sequence", "value": 697 },
-      "id": 696,
+      "def": { "tag": "sequence", "value": 687 },
+      "id": 686,
       "params": [],
       "path": []
     },
     {
-      "def": { "tag": "tuple", "value": [694, 49] },
-      "id": 697,
+      "def": { "tag": "tuple", "value": [684, 49] },
+      "id": 687,
       "params": [],
       "path": []
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 701, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 691, "typeName": "Vec<T>" }]
       },
-      "id": 698,
-      "params": [{ "name": "T", "type": 699 }, { "name": "S" }],
+      "id": 688,
+      "params": [{ "name": "T", "type": 689 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -6077,16 +5785,16 @@
           },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 700 }],
+            "fields": [{ "docs": [], "type": 690 }],
             "index": 1,
             "name": "Err"
           }
         ]
       },
-      "id": 699,
+      "id": 689,
       "params": [
         { "name": "T", "type": 50 },
-        { "name": "E", "type": 700 }
+        { "name": "E", "type": 690 }
       ],
       "path": ["Result"]
     },
@@ -6097,13 +5805,13 @@
           { "docs": [], "fields": [], "index": 0, "name": "InvalidObservation" }
         ]
       },
-      "id": 700,
+      "id": 690,
       "params": [],
       "path": ["pallet_deos_actors", "types", "contract", "PredicateError"]
     },
     {
-      "def": { "tag": "sequence", "value": 699 },
-      "id": 701,
+      "def": { "tag": "sequence", "value": 689 },
+      "id": 691,
       "params": [],
       "path": []
     },
@@ -6139,7 +5847,7 @@
           }
         ]
       },
-      "id": 702,
+      "id": 692,
       "params": [
         { "name": "AccountId", "type": 1 },
         { "name": "BlockNumber", "type": 14 }
@@ -6154,12 +5862,12 @@
           {
             "docs": [],
             "name": "breakdown",
-            "type": 704,
+            "type": 694,
             "typeName": "ActorStateHoldBreakdown<Balance>"
           }
         ]
       },
-      "id": 703,
+      "id": 693,
       "params": [
         { "name": "AccountId", "type": 1 },
         { "name": "Balance", "type": 49 }
@@ -6193,7 +5901,7 @@
           { "docs": [], "name": "run", "type": 49, "typeName": "Balance" }
         ]
       },
-      "id": 704,
+      "id": 694,
       "params": [{ "name": "Balance", "type": 49 }],
       "path": [
         "pallet_deos_actors",
@@ -6215,7 +5923,7 @@
           }
         ]
       },
-      "id": 705,
+      "id": 695,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -6226,7 +5934,7 @@
     },
     {
       "def": { "tag": "tuple", "value": [14, 10] },
-      "id": 706,
+      "id": 696,
       "params": [],
       "path": []
     },
@@ -6243,13 +5951,13 @@
           {
             "docs": [],
             "name": "phase",
-            "type": 708,
+            "type": 698,
             "typeName": "BlockResourcePhase"
           },
           {
             "docs": [],
             "name": "usage",
-            "type": 709,
+            "type": 699,
             "typeName": "BlockResourceUsage"
           },
           {
@@ -6272,7 +5980,7 @@
           }
         ]
       },
-      "id": 707,
+      "id": 697,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "resource", "BlockResourceState"]
     },
@@ -6287,7 +5995,7 @@
           { "docs": [], "fields": [], "index": 4, "name": "Finalizable" }
         ]
       },
-      "id": 708,
+      "id": 698,
       "params": [],
       "path": ["pallet_deos_actors", "types", "resource", "BlockResourcePhase"]
     },
@@ -6315,7 +6023,7 @@
           }
         ]
       },
-      "id": 709,
+      "id": 699,
       "params": [],
       "path": ["pallet_deos_actors", "types", "resource", "BlockResourceUsage"]
     },
@@ -6338,7 +6046,7 @@
           {
             "docs": [],
             "name": "usage",
-            "type": 709,
+            "type": 699,
             "typeName": "BlockResourceUsage"
           },
           {
@@ -6349,7 +6057,7 @@
           }
         ]
       },
-      "id": 710,
+      "id": 700,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": [
         "pallet_deos_actors",
@@ -6361,45 +6069,48 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 714, "typeName": "Vec<T>" }]
-      },
-      "id": 711,
-      "params": [{ "name": "T", "type": 712 }, { "name": "S" }],
-      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
-    },
-    {
-      "def": {
-        "tag": "composite",
         "value": [
           { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" },
-          { "docs": [], "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          {
+            "docs": [],
+            "name": "identity",
+            "type": 703,
+            "typeName": "ActorControlIdentity<AccountId, BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "hot",
+            "type": 704,
+            "typeName": "ActorControlHotState<BlockNumber>"
+          },
           { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
           {
             "docs": [],
-            "name": "ticket",
-            "type": 10,
-            "typeName": "QueueTicket"
-          },
-          {
-            "docs": [],
             "name": "eligible_at",
-            "type": 14,
-            "typeName": "BlockNumber"
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
           },
           {
             "docs": [],
-            "name": "contract_commitment",
-            "type": 713,
-            "typeName": "ContractCommitment"
+            "name": "admission",
+            "type": 702,
+            "typeName": "Admission"
+          },
+          {
+            "docs": [],
+            "name": "resources",
+            "type": 663,
+            "typeName": "ActorStepResourceEnvelope"
           }
         ]
       },
-      "id": 712,
+      "id": 701,
       "params": [
+        { "name": "AccountId", "type": 1 },
         { "name": "BlockNumber", "type": 14 },
-        { "name": "ContractCommitment", "type": 713 }
+        { "name": "Admission", "type": 702 }
       ],
-      "path": ["pallet_deos_actors", "types", "scheduler", "ActorStepTicket"]
+      "path": ["pallet_deos_actors", "pallet", "ActorControlCell"]
     },
     {
       "def": {
@@ -6409,34 +6120,383 @@
             "docs": [],
             "name": "semantic_contract_id",
             "type": 2,
-            "typeName": "Hash"
+            "typeName": "[u8; 32]"
           },
           {
             "docs": [],
             "name": "body_commitment",
             "type": 2,
-            "typeName": "Hash"
+            "typeName": "[u8; 32]"
+          },
+          {
+            "docs": [],
+            "name": "runtime_actor_semantics_version",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "production_weight_identity",
+            "type": 2,
+            "typeName": "[u8; 32]"
+          },
+          {
+            "docs": [],
+            "name": "body_geometry_version",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "configured_bounds_commitment",
+            "type": 2,
+            "typeName": "[u8; 32]"
+          },
+          {
+            "docs": [],
+            "name": "maximum_lifecycle_weight",
+            "type": 109,
+            "typeName": "Weight"
+          },
+          {
+            "docs": [],
+            "name": "admission_identity",
+            "type": 2,
+            "typeName": "[u8; 32]"
           }
         ]
       },
-      "id": 713,
-      "params": [{ "name": "Hash", "type": 2 }],
+      "id": 702,
+      "params": [{ "name": "Resources" }],
       "path": [
         "pallet_deos_actors",
         "types",
         "contract",
-        "ActorContractCommitment"
+        "ActorAdmissionCertificate"
       ]
     },
     {
-      "def": { "tag": "sequence", "value": 712 },
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "owner", "type": 1, "typeName": "AccountId" },
+          {
+            "docs": [],
+            "name": "actor_class",
+            "type": 346,
+            "typeName": "ActorClass"
+          },
+          {
+            "docs": [],
+            "name": "mutability",
+            "type": 224,
+            "typeName": "Mutability"
+          },
+          { "docs": [], "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          {
+            "docs": [],
+            "name": "last_control_mutation_block",
+            "type": 14,
+            "typeName": "BlockNumber"
+          }
+        ]
+      },
+      "id": 703,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "BlockNumber", "type": 14 }
+      ],
+      "path": ["pallet_deos_actors", "pallet", "ActorControlIdentity"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "lifecycle",
+            "type": 705,
+            "typeName": "ActiveLifecycle"
+          },
+          {
+            "docs": [],
+            "name": "cycle_state",
+            "type": 706,
+            "typeName": "CycleState"
+          },
+          {
+            "docs": [],
+            "name": "trigger_runtime_state",
+            "type": 707,
+            "typeName": "TriggerRuntimeState"
+          },
+          {
+            "docs": [],
+            "name": "unsuccessful_attempt_streak",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "pending_signal",
+            "type": 50,
+            "typeName": "bool"
+          },
+          {
+            "docs": [],
+            "name": "wakeup_pointer",
+            "type": 709,
+            "typeName": "Option<WakeupPointer<BlockNumber>>"
+          },
+          {
+            "docs": [],
+            "name": "trigger_wakeup_pointer",
+            "type": 711,
+            "typeName": "Option<TriggerWakeupPointer>"
+          },
+          {
+            "docs": [],
+            "name": "terminal_at",
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "schedule_anchor",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          {
+            "docs": [],
+            "name": "last_cycle_block",
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
+          }
+        ]
+      },
+      "id": 704,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_deos_actors", "pallet", "ActorControlHotState"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Active" },
+          { "docs": [], "fields": [], "index": 1, "name": "Paused" }
+        ]
+      },
+      "id": 705,
+      "params": [],
+      "path": ["pallet_deos_actors", "types", "lifecycle", "ActiveLifecycle"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Idle" },
+          { "docs": [], "fields": [], "index": 1, "name": "Running" },
+          { "docs": [], "fields": [], "index": 2, "name": "Suspended" }
+        ]
+      },
+      "id": 706,
+      "params": [],
+      "path": ["pallet_deos_actors", "types", "lifecycle", "CycleState"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Stateless" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "phase",
+                "type": 708,
+                "typeName": "CrossingPhase"
+              },
+              {
+                "docs": [],
+                "name": "installed_at_revision",
+                "type": 10,
+                "typeName": "u64"
+              }
+            ],
+            "index": 1,
+            "name": "ObservationCrossing"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "anchor_tick",
+                "type": 189,
+                "typeName": "Option<u64>"
+              },
+              { "docs": [], "name": "consumed", "type": 50, "typeName": "bool" }
+            ],
+            "index": 2,
+            "name": "AtTime"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "anchor_tick",
+                "type": 189,
+                "typeName": "Option<u64>"
+              }
+            ],
+            "index": 3,
+            "name": "Cadenced"
+          }
+        ]
+      },
+      "id": 707,
+      "params": [],
+      "path": [
+        "pallet_deos_actors",
+        "types",
+        "lifecycle",
+        "TriggerRuntimeState"
+      ]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Armed" },
+          { "docs": [], "fields": [], "index": 1, "name": "WaitingForRearm" }
+        ]
+      },
+      "id": 708,
+      "params": [],
+      "path": ["pallet_deos_actors", "types", "contract", "CrossingPhase"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 710 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 709,
+      "params": [{ "name": "T", "type": 710 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "block",
+            "type": 364,
+            "typeName": "WakeupKey<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "page_id",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
+        ]
+      },
+      "id": 710,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_deos_actors", "types", "scheduler", "WakeupPointer"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 712 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 711,
+      "params": [{ "name": "T", "type": 712 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "tick",
+            "type": 10,
+            "typeName": "SchedulerTick"
+          },
+          {
+            "docs": [],
+            "name": "page_id",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
+        ]
+      },
+      "id": 712,
+      "params": [],
+      "path": [
+        "pallet_deos_actors",
+        "types",
+        "scheduler",
+        "TriggerWakeupPointer"
+      ]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 715, "typeName": "Vec<T>" }]
+      },
+      "id": 713,
+      "params": [{ "name": "T", "type": 714 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 701 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
       "id": 714,
+      "params": [{ "name": "T", "type": 701 }],
+      "path": ["Option"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 714 },
+      "id": 715,
       "params": [],
       "path": []
     },
     {
       "def": { "tag": "tuple", "value": [364, 10] },
-      "id": 715,
+      "id": 716,
       "params": [],
       "path": []
     },
@@ -6444,7 +6504,7 @@
       "def": {
         "tag": "composite",
         "value": [
-          { "docs": [], "name": "entries", "type": 717, "typeName": "Entries" },
+          { "docs": [], "name": "entries", "type": 718, "typeName": "Entries" },
           { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
           {
             "docs": [],
@@ -6466,17 +6526,17 @@
           }
         ]
       },
-      "id": 716,
-      "params": [{ "name": "Entries", "type": 717 }],
+      "id": 717,
+      "params": [{ "name": "Entries", "type": 718 }],
       "path": ["pallet_deos_actors", "types", "scheduler", "WakeupPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 720, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 722, "typeName": "Vec<T>" }]
       },
-      "id": 717,
-      "params": [{ "name": "T", "type": 718 }, { "name": "S" }],
+      "id": 718,
+      "params": [{ "name": "T", "type": 719 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -6486,71 +6546,105 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 719 }],
+            "fields": [{ "docs": [], "type": 720 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 718,
-      "params": [{ "name": "T", "type": 719 }],
+      "id": 719,
+      "params": [{ "name": "T", "type": 720 }],
       "path": ["Option"]
     },
     {
       "def": {
-        "tag": "composite",
+        "tag": "variant",
         "value": [
-          { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" }
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 701, "typeName": "Cell" }],
+            "index": 0,
+            "name": "Primary"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "type": 721, "typeName": "ActorWakeupReference" }
+            ],
+            "index": 1,
+            "name": "Reference"
+          }
         ]
       },
-      "id": 719,
-      "params": [],
-      "path": ["pallet_deos_actors", "types", "scheduler", "WakeupEntry"]
-    },
-    {
-      "def": { "tag": "sequence", "value": 718 },
       "id": 720,
-      "params": [],
-      "path": []
+      "params": [{ "name": "Cell", "type": 701 }],
+      "path": ["pallet_deos_actors", "pallet", "ActorWaitingEntry"]
     },
     {
       "def": {
         "tag": "composite",
         "value": [
+          { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" },
           {
             "docs": [],
-            "name": "head_page",
-            "type": 10,
-            "typeName": "WakeupPageId"
-          },
-          {
-            "docs": [],
-            "name": "tail_page",
-            "type": 10,
-            "typeName": "WakeupPageId"
-          },
-          {
-            "docs": [],
-            "name": "next_page_id",
-            "type": 10,
-            "typeName": "WakeupPageId"
-          },
-          { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
-          {
-            "docs": [],
-            "name": "cursor_index",
-            "type": 186,
-            "typeName": "Option<WakeupCursorIndex>"
+            "name": "admission_identity",
+            "type": 2,
+            "typeName": "[u8; 32]"
           }
         ]
       },
       "id": 721,
       "params": [],
-      "path": ["pallet_deos_actors", "types", "scheduler", "WakeupBucketState"]
+      "path": ["pallet_deos_actors", "pallet", "ActorWakeupReference"]
     },
     {
-      "def": { "tag": "tuple", "value": [723, 10] },
+      "def": { "tag": "sequence", "value": 719 },
       "id": 722,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Unsignaled" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "key",
+                "type": 364,
+                "typeName": "WakeupKey<BlockNumber>"
+              },
+              { "docs": [], "name": "page", "type": 10, "typeName": "u64" },
+              { "docs": [], "name": "slot", "type": 3, "typeName": "u8" }
+            ],
+            "index": 1,
+            "name": "Waiting"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "ticket",
+                "type": 10,
+                "typeName": "QueueTicket"
+              }
+            ],
+            "index": 2,
+            "name": "Ready"
+          }
+        ]
+      },
+      "id": 723,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_deos_actors", "pallet", "ActorControlLocation"]
+    },
+    {
+      "def": { "tag": "tuple", "value": [725, 10] },
+      "id": 724,
       "params": [],
       "path": []
     },
@@ -6562,22 +6656,22 @@
           { "docs": [], "fields": [], "index": 1, "name": "Tick" }
         ]
       },
-      "id": 723,
+      "id": 725,
       "params": [],
       "path": ["pallet_deos_actors", "types", "scheduler", "WakeupClock"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 725, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 727, "typeName": "Vec<T>" }]
       },
-      "id": 724,
+      "id": 726,
       "params": [{ "name": "T", "type": 364 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 364 },
-      "id": 725,
+      "id": 727,
       "params": [],
       "path": []
     },
@@ -6586,7 +6680,7 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 651, "typeName": "Vec<T>" }]
       },
-      "id": 726,
+      "id": 728,
       "params": [{ "name": "T", "type": 216 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
@@ -6595,13 +6689,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 203, "typeName": "Vec<T>" }]
       },
-      "id": 727,
+      "id": 729,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "tuple", "value": [216, 14] },
-      "id": 728,
+      "id": 730,
       "params": [],
       "path": []
     },
@@ -6624,12 +6718,12 @@
           {
             "docs": [],
             "name": "entries",
-            "type": 730,
+            "type": 732,
             "typeName": "BoundedVec<Option<ActorId>, MaxEntries>"
           }
         ]
       },
-      "id": 729,
+      "id": 731,
       "params": [{ "name": "MaxEntries" }],
       "path": [
         "pallet_deos_actors",
@@ -6641,15 +6735,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 731, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 733, "typeName": "Vec<T>" }]
       },
-      "id": 730,
+      "id": 732,
       "params": [{ "name": "T", "type": 189 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 189 },
-      "id": 731,
+      "id": 733,
       "params": [],
       "path": []
     },
@@ -6662,7 +6756,7 @@
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 732,
+      "id": 734,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -6684,7 +6778,7 @@
           {
             "docs": [],
             "name": "latest_cause_provenance",
-            "type": 734,
+            "type": 736,
             "typeName": "crate::TriggerCauseProvenance"
           },
           {
@@ -6702,7 +6796,7 @@
           {
             "docs": [],
             "name": "fanout_cause_provenance",
-            "type": 734,
+            "type": 736,
             "typeName": "crate::TriggerCauseProvenance"
           },
           {
@@ -6744,18 +6838,18 @@
           {
             "docs": [],
             "name": "previous_dirty_feed",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "next_dirty_feed",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           }
         ]
       },
-      "id": 733,
+      "id": 735,
       "params": [
         { "name": "FeedId", "type": 216 },
         { "name": "BlockNumber", "type": 14 }
@@ -6775,7 +6869,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Deferred" }
         ]
       },
-      "id": 734,
+      "id": 736,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -6797,7 +6891,7 @@
           }
         ]
       },
-      "id": 735,
+      "id": 737,
       "params": [{ "name": "T", "type": 216 }],
       "path": ["Option"]
     },
@@ -6808,25 +6902,25 @@
           {
             "docs": [],
             "name": "head",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "tail",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "cursor",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 736,
+      "id": 738,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": [
         "pallet_deos_actors",
@@ -6842,7 +6936,7 @@
           {
             "docs": [],
             "name": "key",
-            "type": 738,
+            "type": 740,
             "typeName": "CrossingLeafKey<FeedId>"
           },
           { "docs": [], "name": "page", "type": 14, "typeName": "u32" },
@@ -6850,7 +6944,7 @@
           { "docs": [], "name": "generation", "type": 10, "typeName": "u64" }
         ]
       },
-      "id": 737,
+      "id": 739,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": [
         "pallet_deos_actors",
@@ -6867,7 +6961,7 @@
           {
             "docs": [],
             "name": "traversal",
-            "type": 739,
+            "type": 741,
             "typeName": "CrossingTraversal"
           },
           {
@@ -6878,7 +6972,7 @@
           }
         ]
       },
-      "id": 738,
+      "id": 740,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": ["pallet_deos_actors", "types", "observation", "CrossingLeafKey"]
     },
@@ -6890,7 +6984,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Downward" }
         ]
       },
-      "id": 739,
+      "id": 741,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -6900,8 +6994,8 @@
       ]
     },
     {
-      "def": { "tag": "tuple", "value": [738, 14] },
-      "id": 740,
+      "def": { "tag": "tuple", "value": [740, 14] },
+      "id": 742,
       "params": [],
       "path": []
     },
@@ -6912,12 +7006,12 @@
           {
             "docs": [],
             "name": "entries",
-            "type": 742,
+            "type": 744,
             "typeName": "BoundedVec<CrossingMember, MaxEntries>"
           }
         ]
       },
-      "id": 741,
+      "id": 743,
       "params": [{ "name": "MaxEntries" }],
       "path": [
         "pallet_deos_actors",
@@ -6929,10 +7023,10 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 744, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 746, "typeName": "Vec<T>" }]
       },
-      "id": 742,
-      "params": [{ "name": "T", "type": 743 }, { "name": "S" }],
+      "id": 744,
+      "params": [{ "name": "T", "type": 745 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -6955,13 +7049,13 @@
           }
         ]
       },
-      "id": 743,
+      "id": 745,
       "params": [],
       "path": ["pallet_deos_actors", "types", "observation", "CrossingMember"]
     },
     {
-      "def": { "tag": "sequence", "value": 743 },
-      "id": 744,
+      "def": { "tag": "sequence", "value": 745 },
+      "id": 746,
       "params": [],
       "path": []
     },
@@ -6974,7 +7068,7 @@
           { "docs": [], "name": "member_count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 745,
+      "id": 747,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -6991,7 +7085,7 @@
           {
             "docs": [],
             "name": "traversal",
-            "type": 739,
+            "type": 741,
             "typeName": "CrossingTraversal"
           },
           { "docs": [], "name": "depth", "type": 3, "typeName": "u8" },
@@ -7003,7 +7097,7 @@
           }
         ]
       },
-      "id": 746,
+      "id": 748,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": [
         "pallet_deos_actors",
@@ -7015,10 +7109,10 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 749, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 751, "typeName": "Vec<T>" }]
       },
-      "id": 747,
-      "params": [{ "name": "T", "type": 748 }, { "name": "S" }],
+      "id": 749,
+      "params": [{ "name": "T", "type": 750 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -7046,13 +7140,13 @@
           {
             "docs": [],
             "name": "cause_provenance",
-            "type": 734,
+            "type": 736,
             "typeName": "crate::TriggerCauseProvenance"
           },
           { "docs": [], "name": "cause_block", "type": 10, "typeName": "u64" }
         ]
       },
-      "id": 748,
+      "id": 750,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -7062,8 +7156,8 @@
       ]
     },
     {
-      "def": { "tag": "sequence", "value": 748 },
-      "id": 749,
+      "def": { "tag": "sequence", "value": 750 },
+      "id": 751,
       "params": [],
       "path": []
     },
@@ -7074,18 +7168,18 @@
           {
             "docs": [],
             "name": "previous",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "next",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           }
         ]
       },
-      "id": 750,
+      "id": 752,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": [
         "pallet_deos_actors",
@@ -7101,25 +7195,25 @@
           {
             "docs": [],
             "name": "head",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "tail",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "cursor",
-            "type": 735,
+            "type": 737,
             "typeName": "Option<FeedId>"
           },
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 751,
+      "id": 753,
       "params": [{ "name": "FeedId", "type": 216 }],
       "path": [
         "pallet_deos_actors",
@@ -7141,7 +7235,7 @@
           {
             "docs": [],
             "name": "traversal",
-            "type": 739,
+            "type": 741,
             "typeName": "CrossingTraversal"
           },
           {
@@ -7161,7 +7255,7 @@
           { "docs": [], "name": "exhausted", "type": 50, "typeName": "bool" }
         ]
       },
-      "id": 752,
+      "id": 754,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -7203,7 +7297,7 @@
           }
         ]
       },
-      "id": 753,
+      "id": 755,
       "params": [],
       "path": [
         "pallet_deos_actors",
@@ -7645,7 +7739,7 @@
           }
         ]
       },
-      "id": 754,
+      "id": 756,
       "params": [{ "name": "T" }],
       "path": ["pallet_deos_actors", "pallet", "Error"]
     }

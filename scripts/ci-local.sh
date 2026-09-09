@@ -7,6 +7,7 @@ ONLY_CHECK="all"
 FIX_FORMAT=0
 TARGET_PACKAGE=""
 TEST_FILTER=""
+RELEASE_TESTS=0
 FEATURE_MODE="auto"
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
 if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
@@ -28,6 +29,7 @@ Options:
   --only CHECK       Run one compact check: clippy, tests, docs, format, or check
   --package NAME     Scope clippy, tests, docs, or check to one Cargo package
   --test-filter NAME Scope --only tests to one Cargo test-name filter
+  --release          Use optimized tests; requires --only tests
   --all-features     Enable all Cargo features (Clippy default)
   --default-features Use package default features, including for Clippy
   --fix              Apply formatting; requires --only format
@@ -77,6 +79,9 @@ parse_args() {
                 shift 2
                 continue
                 ;;
+            --release)
+                RELEASE_TESTS=1
+                ;;
             --all-features)
                 FEATURE_MODE="all"
                 ;;
@@ -108,6 +113,10 @@ parse_args() {
     fi
     if [[ -n "$TARGET_PACKAGE" && "$ONLY_CHECK" == "format" ]]; then
         log_error "--package does not apply to formatting"
+        exit 2
+    fi
+    if (( RELEASE_TESTS == 1 )) && [[ "$ONLY_CHECK" != "tests" ]]; then
+        log_error "--release requires --only tests"
         exit 2
     fi
     if [[ -n "$TEST_FILTER" && "$ONLY_CHECK" != "tests" ]]; then
@@ -170,11 +179,14 @@ run_primary_checks() {
     fi
 
     if selected tests; then
-        local feature_args
+        local feature_args profile_args=""
         feature_args="$(cargo_feature_args tests)"
+        if (( RELEASE_TESTS == 1 )); then
+            profile_args="--release"
+        fi
         run_shell_step "Tests" \
             "15" \
-            "cargo test --locked $feature_args $scope_args$test_filter"
+            "cargo test --locked $profile_args $feature_args $scope_args$test_filter"
     fi
 
     if selected docs; then

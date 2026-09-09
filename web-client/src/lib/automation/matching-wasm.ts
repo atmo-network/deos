@@ -14,6 +14,7 @@ import {
 } from './contract-artifact.ts';
 import {
   type ActorDecodedRuntimeSimulationOutcome,
+  type ActorRuntimeSimulationBudget,
   decodeActorRuntimeSimulationResult,
 } from './runtime-simulation-codec.ts';
 
@@ -30,6 +31,7 @@ export type ActorMatchingWasmPin = {
   transactionVersion: number;
   runtimeApi: string;
   runtimeApiVersion: number;
+  simulationBudget: ActorRuntimeSimulationBudget;
 };
 
 export type ActorRuntimeSimulationOutcome =
@@ -51,6 +53,7 @@ export type ActorMatchingWasmProvider = {
     contractScale: ActorContractHex;
     actorType: ActorContractArtifact['actorType'];
     mutability: ActorContractArtifact['mutability'];
+    simulationBudget: ActorRuntimeSimulationBudget;
   }): Promise<ActorMatchingWasmResponse>;
 };
 
@@ -69,10 +72,54 @@ function validateIndex(value: number, field: string) {
   }
 }
 
+function sameWeight(
+  left: ActorRuntimeSimulationBudget['actorControl'],
+  right: ActorRuntimeSimulationBudget['actorControl'],
+) {
+  return left.refTime === right.refTime && left.proofSize === right.proofSize;
+}
+
 function samePin(left: ActorMatchingWasmPin, right: ActorMatchingWasmPin) {
-  return (Object.keys(left) as Array<keyof ActorMatchingWasmPin>).every(
-    (key) => left[key] === right[key],
+  return (
+    left.contractId === right.contractId &&
+    left.genesisHash === right.genesisHash &&
+    left.blockHash === right.blockHash &&
+    left.blockNumber === right.blockNumber &&
+    left.stateRoot === right.stateRoot &&
+    left.stateSource === right.stateSource &&
+    left.runtimeCodeHash === right.runtimeCodeHash &&
+    left.metadataHash === right.metadataHash &&
+    left.specVersion === right.specVersion &&
+    left.transactionVersion === right.transactionVersion &&
+    left.runtimeApi === right.runtimeApi &&
+    left.runtimeApiVersion === right.runtimeApiVersion &&
+    sameWeight(
+      left.simulationBudget.actorControl,
+      right.simulationBudget.actorControl,
+    ) &&
+    sameWeight(
+      left.simulationBudget.sharedEconomic,
+      right.simulationBudget.sharedEconomic,
+    )
   );
+}
+
+function validateWeight(
+  value: ActorRuntimeSimulationBudget['actorControl'],
+  field: string,
+) {
+  const maximum = (1n << 64n) - 1n;
+  if (
+    value == null ||
+    typeof value.refTime !== 'bigint' ||
+    typeof value.proofSize !== 'bigint' ||
+    value.refTime < 0n ||
+    value.refTime > maximum ||
+    value.proofSize < 0n ||
+    value.proofSize > maximum
+  ) {
+    throw new Error(`${field} must contain unsigned 64-bit Weight components`);
+  }
 }
 
 export async function runActorMatchingWasmSimulation(input: {
@@ -90,6 +137,7 @@ export async function runActorMatchingWasmSimulation(input: {
   };
   runtimeApi: string;
   runtimeApiVersion: number;
+  simulationBudget: ActorRuntimeSimulationBudget;
   provider: ActorMatchingWasmProvider;
 }): Promise<ActorMatchingWasmResponse> {
   const inspection = inspectActorContractArtifact(
@@ -122,6 +170,19 @@ export async function runActorMatchingWasmSimulation(input: {
     );
   }
   validateIndex(input.runtimeApiVersion, 'runtimeApiVersion');
+  if (
+    input.simulationBudget == null ||
+    typeof input.simulationBudget !== 'object'
+  ) {
+    throw new Error(
+      'simulationBudget must identify both synthetic resource lanes',
+    );
+  }
+  validateWeight(input.simulationBudget.actorControl, 'actorControl budget');
+  validateWeight(
+    input.simulationBudget.sharedEconomic,
+    'sharedEconomic budget',
+  );
   if (input.runtimeApi.trim().length === 0) {
     throw new Error('runtimeApi must identify the executed runtime method');
   }
@@ -147,6 +208,7 @@ export async function runActorMatchingWasmSimulation(input: {
     transactionVersion: input.artifact.transactionVersion,
     runtimeApi: input.runtimeApi.trim(),
     runtimeApiVersion: input.runtimeApiVersion,
+    simulationBudget: input.simulationBudget,
   };
   const response = await input.provider.simulate({
     pin,
@@ -155,6 +217,7 @@ export async function runActorMatchingWasmSimulation(input: {
     contractScale: input.artifact.contractScale,
     actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
+    simulationBudget: input.simulationBudget,
   });
   if (response.engine !== 'RuntimeWasm') {
     throw new Error('Provider did not attest RuntimeWasm execution');
@@ -211,7 +274,9 @@ function validateOutcome(
   maxSteps: number,
 ) {
   if (
-    !['Completed', 'Failed', 'Suspended', 'Closed'].includes(outcome.status)
+    !['Completed', 'Continued', 'Failed', 'Suspended', 'Closed'].includes(
+      outcome.status,
+    )
   ) {
     throw new Error('Unsupported runtime simulation status');
   }
@@ -223,6 +288,9 @@ function validateOutcome(
     throw new Error(
       'outcome.resultScale must be canonical lowercase SCALE hex',
     );
+  }
+  if (outcome.steps.length > 1) {
+    throw new Error('Runtime simulation may expose at most one Step record');
   }
   if (outcome.steps.length > maxSteps) {
     throw new Error('Runtime Step evidence exceeds admitted Contract Steps');
@@ -241,9 +309,11 @@ function validateOutcome(
     }
     previousStep = step.stepIndex;
   }
-  if (outcome.status === 'Suspended') {
+  if (outcome.status === 'Suspended' || outcome.status === 'Continued') {
     if (outcome.runCursor == null) {
-      throw new Error('Suspended runtime outcomes require an Actor run cursor');
+      throw new Error(
+        'Suspended and Continued runtime outcomes require an Actor run cursor',
+      );
     }
     validateIndex(outcome.runCursor, 'outcome.runCursor');
     if (outcome.runCursor >= maxSteps) {
@@ -254,7 +324,7 @@ function validateOutcome(
     }
   } else if (outcome.runCursor != null) {
     throw new Error(
-      'Only Suspended runtime outcomes may expose an Actor run cursor',
+      'Only Suspended and Continued runtime outcomes may expose an Actor run cursor',
     );
   }
 }

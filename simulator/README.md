@@ -63,13 +63,17 @@ const buy = system.router.swap_foreign_to_native(100n * PRECISION);
 console.log(buy.route, buy.native_out?.toString());
 ```
 
+Configuration overrides follow the nested model shape, for example `tmc: { slope: ... }`.
+
 ---
 
 ## Unit and scaling conventions
 
 - Token balances and prices use fixed-point `PRECISION` (`10^12`)
 - Fractions/ratios use `PPB` (`10^9`) and `_ppb` naming
-- Arithmetic is done in `BigInt` only
+- Arithmetic is done in unbounded JavaScript `BigInt` only
+- `contributed_native` and `contributed_foreign` are historical cost-basis telemetry and must not be added to the same assets already counted in live XYK reserves
+- Floor ratios use `PRECISION`, while pressure fractions use `PPB`
 
 This mirrors the project rule: spec model prioritizes mathematical clarity and precision before runtime constraints.
 
@@ -93,6 +97,8 @@ It is **not** authoritative for:
 - Actors scheduling, actor lifecycle, or runtime adapter behavior
 - Governance execution, XCM, collator/session logic, or frontend flows
 - Market/MEV guarantees beyond the explicit economic assumptions modeled in the tests
+- Runtime `U256` overflow behavior; unbounded `BigInt` scenarios prove formula determinism, not runtime arithmetic limits
+- Actor retry, cooldown, scheduling, or liveness state machines
 
 For runtime behavior and pallet wiring, see implementation docs in `docs/` and tests under `template/`.
 

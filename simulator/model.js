@@ -17,6 +17,7 @@
 /** @typedef {import('./types').XykConfig} XykConfig */
 /** @typedef {import('./types').RouterConfig} RouterConfig */
 /** @typedef {import('./types').SystemConfig} SystemConfig */
+/** @typedef {import('./types').SystemConfigOverride} SystemConfigOverride */
 
 // --- Helpers ---
 
@@ -220,10 +221,11 @@ export class Tol {
     this.bucket_keys = Object.keys(config.bucket_shares).map((key) =>
       key.replace(/_ppb$/, ""),
     );
-    const sum_buckets = Object.values(config.bucket_shares).reduce(
-      (sum, val) => sum + val,
-      0n,
-    );
+    const bucket_shares = Object.values(config.bucket_shares);
+    if (bucket_shares.some((share) => share < 0n || share > PPB)) {
+      throw new Error("Bucket shares must each be in [0, 1]");
+    }
+    const sum_buckets = bucket_shares.reduce((sum, val) => sum + val, 0n);
     if (sum_buckets !== PPB) {
       throw new Error(`Bucket shares must sum to ${PPB}, got ${sum_buckets}`);
     }
@@ -306,7 +308,7 @@ export class Tol {
     /** @type {bigint} */ total_foreign,
   ) {
     if (total_native === 0n || total_foreign === 0n) {
-      return Ok(this.#create_empty_zap_result());
+      return Ok(this.#create_empty_zap_result(total_native, total_foreign));
     }
     try {
       const result = this.xyk.add_liquidity(total_native, total_foreign);
@@ -425,7 +427,7 @@ export class Tol {
     const fractions = {};
     let sum_shares = 0n;
     this.bucket_keys.forEach((key) => {
-      const ppb_key = `${key}_ppb`;
+      const ppb_key = /** @type {keyof TolBucketConfig} */ (`${key}_ppb`);
       const share = BigMath.mul_div(total, this.bucket_config[ppb_key], PPB);
       shares[key] = share;
       sum_shares += share;
@@ -441,13 +443,16 @@ export class Tol {
     return shares;
   }
 
-  #create_empty_zap_result() {
+  #create_empty_zap_result(
+    /** @type {bigint} */ leftover_native = 0n,
+    /** @type {bigint} */ leftover_foreign = 0n,
+  ) {
     return {
       total_lp_minted: 0n,
       total_native_used: 0n,
       total_foreign_used: 0n,
-      leftover_native: 0n,
-      leftover_foreign: 0n,
+      leftover_native,
+      leftover_foreign,
     };
   }
 
@@ -463,8 +468,8 @@ export class Tol {
 
 export class Xyk {
   constructor(/** @type {XykConfig} */ config) {
-    if (config.fee_xyk_ppb >= PPB) {
-      throw new Error("Fee must be < 100%");
+    if (config.fee_xyk_ppb < 0n || config.fee_xyk_ppb >= PPB) {
+      throw new Error("Fee must be in [0, 100%)");
     }
     this.fee_ppb = config.fee_xyk_ppb;
     this.reserve_native = 0n;
@@ -695,6 +700,14 @@ export class Tmc {
     this.tol_ppb = config.mint_shares.tol_ppb;
     this.tol = tol;
     this.supply = 0n;
+    if (
+      this.user_ppb < 0n ||
+      this.user_ppb > PPB ||
+      this.tol_ppb < 0n ||
+      this.tol_ppb > PPB
+    ) {
+      throw new Error("Mint shares must each be in [0, 1]");
+    }
     const sum_shares = this.user_ppb + this.tol_ppb;
     if (sum_shares !== PPB) {
       throw new Error(`Shares must sum to ${PPB}, got ${sum_shares}`);
@@ -1008,6 +1021,12 @@ export class Router {
     /** @type {FeeManager} */ fee_manager,
     /** @type {RouterConfig} */ config,
   ) {
+    if (config.fee_router_ppb < 0n || config.fee_router_ppb >= PPB) {
+      throw new Error("Router fee must be in [0, 100%)");
+    }
+    if (config.min_swap_foreign <= 0n || config.min_initial_foreign <= 0n) {
+      throw new Error("Router minimum amounts must be positive");
+    }
     this.xyk = xyk;
     this.tmc = tmc;
     this.fee_manager = fee_manager;
@@ -1122,7 +1141,9 @@ export function distribute_fee_sink_trusted_set(/** @type {bigint} */ amount) {
   };
 }
 
-export function distribute_fee_sink_permissionless_target(/** @type {bigint} */ amount) {
+export function distribute_fee_sink_permissionless_target(
+  /** @type {bigint} */ amount,
+) {
   const one_third = amount / 3n;
   return {
     security_rewards: one_third,
@@ -1135,13 +1156,27 @@ export function distribute_fee_sink_permissionless_target(/** @type {bigint} */ 
 // --- Factory ---
 
 export function create_system(
-  /** @type {Partial<SystemConfig>} */ config_override = {},
+  /** @type {SystemConfigOverride} */ config_override = {},
 ) {
   const config = {
     router: { ...DEFAULT_CONFIG.router, ...config_override.router },
     xyk: { ...DEFAULT_CONFIG.xyk, ...config_override.xyk },
-    tmc: { ...DEFAULT_CONFIG.tmc, ...config_override.tmc },
-    tol: { ...DEFAULT_CONFIG.tol, ...config_override.tol },
+    tmc: {
+      ...DEFAULT_CONFIG.tmc,
+      ...config_override.tmc,
+      mint_shares: {
+        ...DEFAULT_CONFIG.tmc.mint_shares,
+        ...config_override.tmc?.mint_shares,
+      },
+    },
+    tol: {
+      ...DEFAULT_CONFIG.tol,
+      ...config_override.tol,
+      bucket_shares: {
+        ...DEFAULT_CONFIG.tol.bucket_shares,
+        ...config_override.tol?.bucket_shares,
+      },
+    },
   };
   const xyk = new Xyk(config.xyk);
   const tol = new Tol(xyk, config.tol);

@@ -21,6 +21,7 @@ import {
 import {
   ACTORS_SIMULATION_RUNTIME_API,
   ACTORS_SIMULATION_RUNTIME_API_VERSION,
+  type ActorRuntimeSimulationBudget,
   decodeActorRuntimeSimulationResult,
   encodeActorRuntimeSimulationResult,
 } from '../../automation/runtime-simulation-codec.ts';
@@ -32,11 +33,13 @@ const HEX_PATTERN = /^0x(?:[0-9a-fA-F]{2})+$/;
 const PLAN_HEX_PATTERN = /^0x(?:[0-9a-f]{2})+$/;
 
 export type ActorFinalizedSimulationMode = 'FreshCurrentPlan' | 'CurrentRun';
+export type ActorFinalizedSimulationBudget = ActorRuntimeSimulationBudget;
 
 export type ActorFinalizedSimulationInput = {
   artifact: ActorContractArtifact;
   actorId: bigint;
   mode: ActorFinalizedSimulationMode;
+  simulationBudget: ActorRuntimeSimulationBudget;
   finalizedBlock?: { hash: ActorContractHex; number: number };
 };
 
@@ -172,6 +175,7 @@ async function executeSimulation(
     mutability: ActorContractArtifact['mutability'];
     runtimeProgram: RuntimeSimulationProgram;
     mode: ActorFinalizedSimulationMode;
+    simulationBudget: ActorRuntimeSimulationBudget;
   },
 ) {
   return typedApi.apis.ActorSimulationApi.simulate_current_contract(
@@ -180,6 +184,16 @@ async function executeSimulation(
     { type: request.mutability, value: undefined },
     request.runtimeProgram,
     { type: request.mode, value: undefined },
+    {
+      actor_control: {
+        ref_time: request.simulationBudget.actorControl.refTime,
+        proof_size: request.simulationBudget.actorControl.proofSize,
+      },
+      shared_economic: {
+        ref_time: request.simulationBudget.sharedEconomic.refTime,
+        proof_size: request.simulationBudget.sharedEconomic.proofSize,
+      },
+    },
     { at },
   );
 }
@@ -210,6 +224,7 @@ export async function runDeosActorFinalizedSimulation(
     },
     runtimeApi: ACTORS_SIMULATION_RUNTIME_API,
     runtimeApiVersion: ACTORS_SIMULATION_RUNTIME_API_VERSION,
+    simulationBudget: input.simulationBudget,
     provider: {
       async simulate(request) {
         const inspection = inspectActorContractArtifact(
@@ -228,6 +243,7 @@ export async function runDeosActorFinalizedSimulation(
           mutability: request.mutability,
           runtimeProgram: inspection.runtimeValue as RuntimeSimulationProgram,
           mode: request.mode,
+          simulationBudget: request.simulationBudget,
         });
         const resultScale = encodeActorRuntimeSimulationResult(
           context.metadataBytes,

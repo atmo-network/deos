@@ -10,8 +10,10 @@ available_locales:
   - ru
 sources:
   - resource: ../../docs/README.md
-  - resource: ../../docs/manifesto.en.md
+  - resource: ../../docs/builder-economy.contract.en.md
   - resource: ../../docs/framework-instance.contract.en.md
+  - resource: ../../docs/tmctol.specification.en.md
+  - resource: ../../docs/manifesto.en.md
   - resource: ../../template/pallets/governance/docs/specification.en.md
   - resource: ../../template/pallets/governance/docs/architecture.en.md
   - resource: ../../template/pallets/actors/docs/architecture.en.md
@@ -65,32 +67,37 @@ A tactical treasury invoice declares:
 - A beneficiary;
 - A payout asset;
 - A base amount;
-- The governance-declared BLDR Treasury funding source.
+- The explicit governance-approved BLDR Treasury sovereign account;
+- A bounded canonical CIDv1 for the content-addressed invoice document and evidence.
 
 The `$BLDR` primary track evaluates the invoice through four options:
 
-- `Amplify` — pay `2.0x` the base amount;
-- `Approve` — pay `1.0x`;
-- `Reduce` — pay `0.5x`;
+- `Amplify` — target `2.0x` the base amount, with only the premium above `1.0x` capacity-capped;
+- `Approve` — require and pay `1.0x`;
+- `Reduce` — require and pay `0.5x`;
 - `Nay` — reject with no payout.
 
-Native staking power forms the separate `Pass / Veto` protection track. It protects the constitutional boundary but does not price the work. Approved execution is transactional: the full bounded payout succeeds or the runtime records an explicit failure without a partial payment.
+Native staking power forms the separate `Pass / Veto` protection track. It protects the constitutional boundary but does not price the work. If an above-base target is `2.0x` and enactment-time capacity is `1.5x`, the complete `1.5x` pays atomically. Capacity below `1.0x` fails with no payout. Targets at or below base require their complete amount and never clip further.
+
+BLDR Treasury is a Mutable System Actor treasury. Its own bounded Actor Contract or an earlier invoice may spend from the same sovereign custody between submission and enactment, and proposals create no balance reservation. Execution order may therefore reduce only an above-base premium or cause a below-floor failure requiring a new vote after replenishment. Governance may debit only the approved Builder treasury account and does not mutate the treasury's Actor Contract or gain authority over BLDR Anchor.
 
 ## Economic Wiring
 
-The reference `$BLDR` TMC flow gives labor funding its own capital circuit:
+The `$BLDR` domain is a second-order TMCTOL: its TMC mints `$BLDR` against first-order `$NTVE`, while its TOL component has two independent capital owners. BLDR Anchor holds all protocol-created `$NTVE/$BLDR` LP as a sealed dormant Immutable System identity whose consensus freeze admits inbound LP and blocks every debit or LP-class destruction; BLDR Treasury funds invoices. Technically the former is an immutable Anchor-type bucket. Because that TOL topology has no peer lettered family, its human name remains `BLDR Anchor` rather than acquiring an artificial `Bucket A` qualifier. It is never called Builder Bucket: Bucket Builder (`B`) is the separate first-order spendable lane, while BLDR Anchor signals immutable second-order LP custody.
 
 ```text
 buyer pays $NTVE
   -> TMC mints $BLDR
-  -> about 1/3 to buyer
-  -> about 1/3 to $NTVE/$BLDR protocol-owned liquidity
+  -> about 1/3 to recipient
+  -> about 1/3 to immutable BLDR Anchor liquidity
   -> about 1/3 to BLDR Treasury
 ```
 
-TMC sends two thirds of minted `$BLDR` to the BLDR Splitter. The splitter divides that protocol allocation equally between the BLDR Liquidity Actor and BLDR Treasury, while routing the incoming `$NTVE` collateral to liquidity provisioning. The resulting LP accumulates in immutable BLDR Bucket A.
+TMC sends two thirds of minted `$BLDR` to the BLDR Splitter. The splitter divides that protocol allocation equally between the BLDR Liquidity Actor and BLDR Treasury. All incoming `$NTVE` collateral is directed to the liquidity lane, and every resulting LP token enters BLDR Anchor; unmatched buffer remains liquidity-lane custody rather than counted LP reserves.
 
-A separate L1 Building lane can unwind its own LP into Treasury B, gradually buy `$BLDR` on the market, and burn it. Builder payouts and buyback/burn therefore remain distinct flows: one funds useful work, while the other applies bounded market demand and supply reduction while its Actor Contract remains live.
+The parent first-order Bucket Builder (`B`) lane supplies a second capital path. Bucket B gradually releases LP to Treasury B, which receives both `$NTVE` and foreign reserves and routes both into `$BLDR`. Half of recipient output burns and half enters BLDR Treasury. An XYK route buys existing `$BLDR` and contracts issuance by the burned half; a TMC route creates full issuance, separately funds anchor and direct-treasury lanes, and burns only half of its recipient allocation, so it may remain net expansionary.
+
+The Builder Economy contract defines this dual-reserve 50/50 bridge analytically; the simulator retains only the inherited project-independent TMCTOL mathematics and does not model the Builder composition. The shipped runtime currently realizes the `$BLDR` mint, split, and anchor/treasury path but its optional Treasury B plan still spends only Native and burns all acquired `$BLDR`; runtime convergence and production evidence remain open.
 
 ## A Federated Domain, Not an Isolated Economy
 
@@ -98,7 +105,7 @@ The builder domain has its own token, treasury, governance, liquidity lane, and 
 
 - `$NTVE` is its TMC collateral and liquidity pair;
 - Native economic locks protect its governance domain;
-- L1 capital can support BLDR buyback and burn;
+- L1 capital can support `$BLDR` buyback and burn;
 - `$BLDR` governance cannot directly rewrite TMC launch physics, global Actors controls, staking administration, or asset registration.
 
 This is the Fractal Federation pattern: a tactical domain remains autonomous inside its declared competence while sharing capital, protection, and infrastructure with the parent economy. It behaves like a bounded organ of DEOS rather than a sovereign replacement for it.

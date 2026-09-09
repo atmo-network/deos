@@ -22,6 +22,7 @@ Diff-aware DEOS completion gate for local delivery slices.
 It validates the smallest meaningful scope for the current pass and blocks the next loop until the touched layer is green.
 
 Options:
+  --self-test             Check audit routing without running project validation
   --all-rust               Run architecture audit against the full pallet tree
   --skip-simulator         Do not run simulator validation
   --skip-cargo-check       Do not run cargo check validation
@@ -186,6 +187,7 @@ should_run_markdown_table_audit() {
 
 should_run_architecture_readability_audit() {
     has_changed_path '^docs/.*\.architecture\.en\.md$' || \
+        has_changed_path '^template/pallets/[^/]+/docs/architecture\.en\.md$' || \
         has_changed_path '^AGENTS\.md$' || \
         has_changed_path '^\.agents/skills/alignment/scripts/audit-architecture-readability\.sh$'
 }
@@ -195,8 +197,41 @@ should_run_release_line_audit() {
 }
 
 should_run_economic_claim_audit() {
-    has_changed_path '^\.agents/skills/alignment/economic-claims\.json$' || has_changed_path '^docs/.*\.architecture\.en\.md$'
+    has_changed_path '^\.agents/skills/alignment/economic-claims\.json$' || \
+        has_changed_path '^docs/.*\.architecture\.en\.md$' || \
+        has_changed_path '^template/pallets/[^/]+/docs/architecture\.en\.md$'
 }
+
+run_self_test() (
+    local path expected_readability expected_economic readability economic
+    while IFS='|' read -r path expected_readability expected_economic; do
+        CHANGED_PATHS=("$path")
+        readability=0
+        economic=0
+        if should_run_architecture_readability_audit; then readability=1; fi
+        if should_run_economic_claim_audit; then economic=1; fi
+        if [[ "$readability" != "$expected_readability" || "$economic" != "$expected_economic" ]]; then
+            log_error "Audit routing mismatch for $path: readability=$readability economic=$economic"
+            return 1
+        fi
+    done <<'CASES'
+docs/core.architecture.en.md|1|1
+template/pallets/actors/docs/architecture.en.md|1|1
+template/pallets/router/docs/architecture.en.md|1|1
+AGENTS.md|1|0
+.agents/skills/alignment/scripts/audit-architecture-readability.sh|1|0
+.agents/skills/alignment/economic-claims.json|0|1
+template/pallets/actors/docs/specification.en.md|0|0
+template/pallets/actors/src/execution.rs|0|0
+docs/README.md|0|0
+CASES
+    CHANGED_PATHS=()
+    if should_run_architecture_readability_audit || should_run_economic_claim_audit; then
+        log_error "Empty diff unexpectedly schedules architecture audits"
+        return 1
+    fi
+    log_success "Completion audit routing self-test passed"
+)
 
 should_run_backlog_audit() {
     has_changed_path '^BACKLOG\.md$'
@@ -448,6 +483,7 @@ run_knowledge_sync() {
 
 main() {
     parse_args "$@"
+    run_self_test
     check_prerequisites
     plan
     run_architecture_audit
@@ -469,6 +505,10 @@ main() {
 }
 
 run_entrypoint() {
+    if [[ $# == 1 && "$1" == "--self-test" ]]; then
+        run_self_test
+        return
+    fi
     if [[ "${1:-}" == "--internal" ]]; then
         shift
         main "$@"

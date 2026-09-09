@@ -121,13 +121,13 @@ pub mod actor_ids {
   ///   SS58: `5D7ZRz4hMphgVdq9UYBA9Gtk1q2cBjKTgoDCqpBETQi6Ziq4`
   pub const BLDR_LIQUIDITY_ACTOR_ID: u64 = 11;
 
-  /// BLDR Bucket A (Anchor) — permanent LP accumulator for NTVE-BLDR pair
+  /// BLDR Anchor — permanent LP accumulator for the NTVE-BLDR pair
   /// Created at genesis (`actor_id = 12`), Noop by default
   ///
   /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
   ///   hex:  `0x791ec3fe30f34d005232cdf3bb5abdc0ae14e51fe3caeb62914d35f7c81ae544`
   ///   SS58: `5EoWnoVuB925BHs9UwHUfLkcm5rSbmqzrHgFZRzY5nA4M5B6`
-  pub const BLDR_BUCKET_A_ACTORS_ID: u64 = 12;
+  pub const BLDR_ANCHOR_ACTORS_ID: u64 = 12;
 
   /// BLDR Treasury — receives 50% of minted $BLDR from Splitter
   /// Created at genesis (`actor_id = 13`), Noop by default

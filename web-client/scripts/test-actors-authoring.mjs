@@ -157,8 +157,8 @@ test('authoring controls cover every current task and predicate variant', () => 
   assert.equal(ACTORS_AUTHORING_CONDITION_TYPES.length, 10);
 });
 
-test('one metadata-aligned zero-to-thirty-two-step baseline applies to both actor classes', () => {
-  const steps = Array.from({ length: 33 }, (_, index) =>
+test('one metadata-aligned zero-to-twelve-step baseline applies to both actor classes', () => {
+  const steps = Array.from({ length: 13 }, (_, index) =>
     authoringStep(`step-${index}`),
   );
   for (const actorType of ['User', 'System']) {
@@ -168,7 +168,7 @@ test('one metadata-aligned zero-to-thirty-two-step baseline applies to both acto
     );
     assert.equal(
       validateActorAuthoringContract(
-        contract(steps.slice(0, 32), { actorType }),
+        contract(steps.slice(0, 12), { actorType }),
       ).valid,
       true,
     );
@@ -180,7 +180,7 @@ test('one metadata-aligned zero-to-thirty-two-step baseline applies to both acto
       assert(
         tooLong.issues.some(
           (issue) =>
-            issue.path === 'steps' && /0\.\.32 steps/.test(issue.message),
+            issue.path === 'steps' && /0\.\.12 steps/.test(issue.message),
         ),
       );
     }

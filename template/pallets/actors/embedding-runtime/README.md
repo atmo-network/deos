@@ -12,6 +12,7 @@ The fixture deliberately uses:
 - Default-deny funding authority and deterministic unsupported DEX, liquidity, and staking adapters in the default profile.
 - An opt-in `dex-fixture` profile with one fixed-rate exact-output pair and one explicitly Temporary exact-input fixture, with no imported pool topology.
 - Mutable User and System `ActorRunState` coverage for open/finalized nonce separation, cursor and eligibility ownership, immutable Opening/funding facts, exact outcomes, cooldown, suffix resumption, concurrent Executive ingress, cancellation, pure close, and try-state integrity.
+- Every local Contract length from zero through eight Steps, mixed Opening/tracked-funding bounds, admission rejection above the funding cap, and immutable Opening captures through every nonterminal Step under the independent 8/16/16/4 limits.
 - No DEOS primitives, TMCTOL topology, governance catalog, DEOS Router, TMC, or staking pallet.
 
 Run its focused evidence from `template/`:

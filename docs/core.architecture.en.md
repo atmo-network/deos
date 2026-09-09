@@ -112,7 +112,7 @@ _The intellectual layer atop raw liquidity._
   - `Market Liquidity`: Direct XYK swaps.
   - `Protocol Liquidity`: Direct minting via TMC when that path delivers more output.
   - `Complex Paths`: Multi-hop Native-anchored XYK routes.
-- `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support BLDR and future protocol tokens.
+- `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support `$BLDR` and future protocol tokens.
 - `Security mitigations (not complete MEV defense)`: Every actual XYK leg validates its prepared directional quote against the current reference, then publishes the leg's pre-execution reserve ratio immediately before market execution. Authored exact-input/output bounds remain mandatory. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
 - `Execution`: Uses `Balance-Delta Verification` — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
 
@@ -124,7 +124,7 @@ _The algorithmic issuer._
 - `Multi-Curve Architecture`: Each curve is identified by its `minted_asset` (formerly `native_asset`). The system supports multiple concurrent curves:
   - L1: `minted_asset = Native`, `foreign_asset = Foreign` (e.g., USDC)
   - L2: `minted_asset = Local(BLDR_ASSET_ID)`, `foreign_asset = Native`
-- `MintOutputResolver`: Maps each `minted_asset` to explicit collateral and minted-liquidity output accounts. The reference L1 route sends both outputs to the Liquidity Actor; the BLDR route sends NTVE collateral directly to the BLDR Liquidity Actor and the minted BLDR share to the BLDR Splitter.
+- `MintOutputResolver`: Maps each `minted_asset` to explicit collateral and minted-liquidity output accounts. The reference L1 route sends both outputs to the Liquidity Actor; the `$BLDR` route sends `$NTVE` collateral directly to the BLDR Liquidity Actor and the minted `$BLDR` share to the BLDR Splitter.
 - `Role`: Sets the "Hard Ceiling" on price. If market price > curve price, the Router automatically routes trades through TMC, creating arbitrage that feeds the protocol.
 
 #### System Actors Composition
@@ -241,7 +241,7 @@ Permissionless collators and a stronger randomness contract remain gated on a pr
 
 The interaction of actors creates a conditionally bounded economy:
 
-- `Ceiling`: Enforced by TMC. Multiple curves such as Native and BLDR each define independent ceilings.
+- `Ceiling`: Enforced by TMC. Multiple curves such as Native and `$BLDR` each define independent ceilings.
 - `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. The concrete custody accounts and active-policy lanes belong to the Actors integration map.
 - `Compression`: Burn Actor execution reduces live supply and liquidity-actor LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy liquidity accounting.
 
@@ -252,18 +252,27 @@ The interaction of actors creates a conditionally bounded economy:
 - `Mechanism`: High base fee (e.g., 0.5%) + Protocol Priority Routing.
 - `Outcome`: System value capture is prioritized over LP revenue. The protocol captures the spread to burn its own supply.
 
-### 6.3 Multi-Token Flywheel
+### 6.3 Second-Order `$BLDR` TMCTOL and Capital Loop
 
-The BLDR economy creates a self-reinforcing loop:
+The [Builder Economy Contract](./builder-economy.contract.en.md) owns the normative composition of second-order TMCTOL and Builder governance; this section maps that contract into the current DEOS architecture. TOL is an asset-scoped treasury-owned liquidity topology, not a fixed four-bucket shape. The TOL component of reference first-order Native/foreign TMCTOL uses Bucket Anchor (`A`), Bucket Builder (`B`), Bucket Capital (`C`), and Bucket Dormant (`D`), with paired treasuries for B/C/D. The TOL component of second-order `$BLDR` TMCTOL has no lettered bucket family. Its bucket has reusable Anchor type and the human name BLDR Anchor; BLDR Treasury is a separate multi-asset treasury owner rather than another bucket. Their sovereign accounts hold consensus-frozen LP and spendable invoice custody respectively; the former belongs to a sealed dormant Immutable identity, while the latter belongs to a dormant Mutable treasury identity.
 
+```text
+User acquires $BLDR through Router
+  → TMC branch: about 1/3 recipient + 1/3 immutable anchor lane + 1/3 direct BLDR Treasury
+  → XYK branch: existing $BLDR moves from market reserves to recipient
+
+Parent Bucket B releases LP gradually
+  → Treasury B receives $NTVE + foreign reserves
+  → both assets route into $BLDR
+  → half of recipient $BLDR burns
+  → half enters BLDR Treasury
 ```
-User buys BLDR (via Router TMC)
-  → NTVE collateral → BLDR Liquidity Actor → LP → BLDR Bucket A (floor ↑)
-  → BLDR liquidity share → 50% to Liquidity Actor (more LP), 50% to Treasury (ecosystem fund)
-  → Optional Bucket B LP transfer → Treasury B LP removal → buyback BLDR on XYK → burn (downstream policy target)
-```
 
-BLDR floor support and ceiling pressure can compress over time when LP accumulation remains counted as support and buyback-burn execution remains live.
+All `$NTVE` collateral received by the `$BLDR` TMC is directed to the BLDR Liquidity Actor, and all resulting LP is assigned to BLDR Anchor. The shared first-/second-order anchor invariant is approximately one third of total issuance directed to immutable protocol-owned liquidity. Collateral is deliberately asymmetric: first-order Bucket A receives half under the reference four-bucket allocation, while BLDR Anchor receives all Native collateral.
+
+Route effects remain distinct. An XYK acquisition is issuance-contracting by the burned half. A TMC acquisition creates full curve issuance, sends its protocol allocation through the existing BLDR Splitter, then burns only half of the recipient output; it can remain net issuance-positive while strengthening anchor liquidity and BLDR Treasury.
+
+The shipped runtime currently realizes the `$BLDR` TMC, BLDR Splitter, and anchor/treasury path and an optional Treasury B plan that spends only Native and burns all acquired `$BLDR`. The Builder Economy contract defines the target dual-reserve 50/50 capital bridge analytically; the simulator does not model that Builder composition. Runtime composition, liveness projection, and production evidence remain open until the plan consumes both Treasury B reserve assets and separates recipient burn from recycled treasury funding.
 
 ## 7. Runtime Topology
 
@@ -308,7 +317,7 @@ By separating dedicated economic mechanisms from production-admitted `pallet-deo
 
 1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see DEOS Router architecture).
 2. `Composable Automation`: bounded Actors tasks and runtime adapters compose reconfigurable flows only when the resulting plan fits production admission and preserves custody/atomicity. New actor graphs avoid runtime code changes when existing primitives satisfy that contract; new mechanics require an admitted adapter or core-task review.
-3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
+3. `Multi-Token Economy`: L1 (Native) and L2 (`$BLDR`) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
 4. `Bounded Background Execution`: Actors uses budget-capped `on_idle`, bounded `on_initialize` bookkeeping, and durable carry-over rather than claiming zero congestion under every workload.
 5. `Conditional Automation`: Activated, funded actors can burn, provision liquidity, or route treasury value when adapters, pools, triggers, and safety conditions remain healthy; dormant or unadmitted policy targets do not produce effects.
 6. `Focused Ownership`: Dedicated pallets own minting, routing, staking, assets, and AMM mechanics while Actors owns bounded orchestration, avoiding duplicated manager loops without turning the actor kernel into a universal VM.

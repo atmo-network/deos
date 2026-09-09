@@ -17,7 +17,17 @@ import type { ActorContractHex } from './contract-artifact.ts';
 
 export const ACTORS_SIMULATION_RUNTIME_API =
   'ActorSimulationApi_simulate_current_contract' as const;
-export const ACTORS_SIMULATION_RUNTIME_API_VERSION = 1 as const;
+export const ACTORS_SIMULATION_RUNTIME_API_VERSION = 2 as const;
+
+export type ActorRuntimeSimulationWeight = {
+  refTime: bigint;
+  proofSize: bigint;
+};
+
+export type ActorRuntimeSimulationBudget = {
+  actorControl: ActorRuntimeSimulationWeight;
+  sharedEconomic: ActorRuntimeSimulationWeight;
+};
 
 export type ActorRuntimeStepOutcome =
   | { type: 'Executed' }
@@ -31,7 +41,7 @@ export type ActorRuntimeStepOutcome =
     };
 
 export type ActorDecodedRuntimeSimulationOutcome = {
-  status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
+  status: 'Completed' | 'Continued' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: string | null;
   cycleNonce: bigint;
   startCursor: number;
@@ -64,6 +74,7 @@ const INPUT_NAMES = [
   'expected_mutability',
   'expected_contract',
   'mode',
+  'budget',
 ];
 
 function bytesToHex(bytes: Uint8Array): ActorContractHex {
@@ -94,7 +105,7 @@ function metadataMethod(metadataBytes: Uint8Array) {
     apis[0].version !== ACTORS_SIMULATION_RUNTIME_API_VERSION
   ) {
     throw new Error(
-      'Metadata must expose ActorSimulationApi version 1 exactly once',
+      `Metadata must expose ActorSimulationApi version ${ACTORS_SIMULATION_RUNTIME_API_VERSION} exactly once`,
     );
   }
   const methods = apis[0].methods.filter(
@@ -171,7 +182,11 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
   const outcome = asRecord(value, 'simulation outcome');
   const parsedStatus = asVariant(outcome.status, 'simulation status');
   const status = parsedStatus.type;
-  if (!['Completed', 'Failed', 'Suspended', 'Closed'].includes(status)) {
+  if (
+    !['Completed', 'Continued', 'Failed', 'Suspended', 'Closed'].includes(
+      status,
+    )
+  ) {
     throw new Error(`Unsupported runtime simulation status ${status}`);
   }
   const closeReason =
@@ -184,6 +199,9 @@ function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
   const totals = asRecord(outcome.cumulative_outcomes, 'cumulative_outcomes');
   if (!Array.isArray(outcome.steps)) {
     throw new Error('steps must be an ordered runtime array');
+  }
+  if (outcome.steps.length > 1) {
+    throw new Error('steps must contain at most one runtime record');
   }
   return {
     status: status as ActorDecodedRuntimeSimulationOutcome['status'],

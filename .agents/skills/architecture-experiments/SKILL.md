@@ -28,7 +28,7 @@ It does not own:
 
 Root scripts and pallet harnesses mechanically execute measurements; this Skill is the single policy owner for why, what, and how to measure, interpret, decide, and retain architectural evidence. Routine regression checks may use the same method without creating an Experiment Record; open one when a material regression changes assumptions, needs architectural diagnosis, or introduces a candidate.
 
-Experiment evidence is partitioned under [`tracks`](./tracks/). Each `tracks/<track>/experiments.md` owns its charter and canonical local index, and sibling `EXP-NNNN.md` files own evidence. This co-locates method, track direction, rejected alternatives, and cross-release lineage without diffusing history into project documentation. The canonical record template is [`templates/EXP-NNNN.md`](./templates/EXP-NNNN.md). Copy it to `tracks/<track>/EXP-NNNN.md`; canonical identity is `<track>/EXP-NNNN`, while the Markdown title carries the semantic name. Keep compact measurements, observations, interpretation, and decisions directly in that record by default. When justified raw artifacts would make inline Markdown materially worse, place them in the record's sibling directory `tracks/<track>/EXP-NNNN/`. Track qualification is mandatory because numeric IDs may repeat across tracks.
+Experiment evidence is partitioned under [`tracks`](./tracks/). Each `tracks/<track>/experiments.md` owns its charter and canonical local index, and sibling `EXP-NNNN.md` files own evidence. This co-locates method, track direction, rejected alternatives, and cross-release lineage without diffusing history into project documentation. The canonical record template is [`templates/EXP-NNNN.md`](./templates/EXP-NNNN.md). Copy it to `tracks/<track>/EXP-NNNN.md`; canonical identity is `<track>/EXP-NNNN`, while the Markdown title carries the semantic name. Keep compact measurements, observations, interpretation, and decisions directly in that record by default. When justified raw artifacts would make inline Markdown materially worse, place them in the record's sibling directory `tracks/<track>/EXP-NNNN/`. Numeric IDs are globally unique across tracks; track-qualified paths retain explicit evidence ownership.
 
 Project documentation may cite Experiment IDs as compact provenance, but it describes only accepted project truth and never owns raw measurements, candidate history, or experiment relations. `BACKLOG.md` owns remaining work. Deleting this Skill intentionally deletes its private experimental-memory capability but must not affect builds, tests, CI, release validation, or runtime behavior.
 
@@ -65,7 +65,11 @@ A faster candidate that changes externally observable semantics, deterministic b
 
 ## Record Identity and Layout
 
-Use track-local monotonic IDs `EXP-NNNN`, zero-padded to four digits. The canonical identity is `<track>/EXP-NNNN`; the numeric suffix may repeat across tracks. Within one track IDs never encode a release, are never reused, and remain stable across renames, supersession, or invalidation. Allocate the next ID from the highest ID in that track's `experiments.md`; concurrent branches touching the same track must resolve collisions before merge.
+Use globally sequential IDs `EXP-NNNN`, zero-padded to four digits, across every track. A numeric ID has exactly one live owner and never encodes a track or release; the canonical ownership path remains `<track>/EXP-NNNN`. Ordinary allocation takes one plus the highest current ID or unqualified reserved former ID across all track indexes and records, including index-only Proposed questions. Never restart numbering for a new track or fill gaps through ordinary allocation. Resolve concurrent allocation collisions before merge; the track indexes remain the sole navigation owners, with no duplicate global registry.
+
+Identity seals on the first Accepted, Rejected, Inconclusive, Superseded, or Invalidated decision. Sealed IDs MUST NOT be renumbered, including an Inconclusive record later reopened as Proposed. Proposed, Prepared, Measuring, and Measured identities may be normalized only through an explicit graph migration that improves proof/dependency ordering, atomically rewrites every repository reference, preserves former identity in `Former IDs`, prevents ambiguous reuse of vacated numbers, and retains an inspectable Git baseline. Interpreted records are not eligible for renumbering. An explicit provisional-number compaction may reuse a vacated navigation number only when every former occurrence is qualified as `<track>/EXP-NNNN@<full Git baseline commit>`, the manifest binds that historical identity to its current owner, and all live references resolve to the new canonical record. Unqualified former numbers remain reserved globally across tracks. Sealed identities are never eligible for this compaction. A renumber changes navigation, never evidence identity, semantics, numbers, or historical decisions. No duplicate alias files remain. Cross-track identity moves obey the same restrictions.
+
+Before migration, record exact content hashes and modes of every existing file to be structurally migrated, its status and the Git baseline. During migration, a Skill-private manifest owns this provenance, not another graph or evidence archive. Record the former-to-current mapping and evidence extraction coverage. The validator checks the baseline identities, sealed-ID stability and absence of live former references; only explicit `Former IDs` fields or clearly labelled former-ID historical prose may retain those names. After the migration and manifest are committed and validated, retire the completed working-tree manifest when its exact full Git commit and repository path remain cited in the affected records or owning index, so hashes, mapping and extraction coverage stay retrievable. Git then owns the completed migration provenance; no live manifest or migration-only validator machinery is required for ordinary record maintenance. Preserve primary experimental evidence in its live record regardless of manifest retirement.
 
 ```text
 .agents/skills/architecture-experiments/
@@ -88,15 +92,63 @@ Use track-local monotonic IDs `EXP-NNNN`, zero-padded to four digits. The canoni
       └ EXP-NNNN.md
 ```
 
-Every experiment record is copied from `templates/EXP-NNNN.md`; its track-qualified path is stable identity. A Proposed question MAY exist only as a row in that track's `experiments.md`; create the record before transitioning to Prepared. Do not create empty track or artifact directories, semantic filename aliases, or a global evidence directory keyed only by unqualified numeric ID. Keep compact evidence in the record. CSV and TSV are tabular evidence, not standalone artifacts: convert their rows into Markdown tables inside `EXP-NNNN.md`, then delete the temporary delimited file. Never create or retain an `EXP-NNNN/` directory for CSV, TSV, or another delimited-table encoding. Create the sibling `EXP-NNNN/` artifact directory only for non-tabular raw evidence whose fidelity, machine consumption, or reviewability prevents faithful inline retention; artifact filenames describe their workload or candidate without repeating the parent ID.
+Every experiment record is copied from `templates/EXP-NNNN.md`. A Proposed question MAY exist only as a row in its track index; create the record before Prepared. Do not create empty track or artifact directories, semantic filename aliases, or a global evidence directory keyed only by unqualified numeric ID. Keep compact evidence in its Leaf. CSV and TSV are tabular evidence, not standalone artifacts: convert rows into Markdown tables in the owning Leaf and delete the temporary delimited file. Create a sibling `EXP-NNNN/` directory only for non-tabular raw evidence whose fidelity, machine consumption, or reviewability prevents faithful inline retention; filenames describe the workload or candidate without repeating the parent ID.
 
 Each track index is concise navigation plus its stable charter, not experiment evidence. Each prepared-or-later `EXP-NNNN.md` follows the canonical template and links any ID-prefixed sibling artifact. Rejected, Superseded, Invalidated, and Inconclusive records remain permanent and discoverable after candidate code is deleted.
 
-### Record Normalization
+Each track's `experiments.md` is its sole graph projection and entrypoint, including its conditional portfolio. Do not create separate global maps, measurement archives, or duplicated full tables to conceal a compound record.
+
+## Proof Graph Nodes
+
+Every Prepared-or-later record declares `Record kind` as exactly `Leaf` or `Synthesis`; declare it for Proposed records when their boundary is known. Records are proof graph nodes, not research notebooks.
+
+- `Leaf`: Own exactly one materially distinct falsifiable claim, one physical mechanism/owner, changed variable, evidence domain and acceptance criterion. Multiple workloads are permitted only as bounded witnesses of that same claim. Own primary measurements, preserve their limitations, and terminate when decided.
+- `Synthesis`: Own a broader decision through a finite child-obligation map, child decisions, composition logic and final interpretation/decision. Never introduce a new candidate implementation, raw benchmark sweep, independently measured branch, or chronological debugging transcript. Measurements contains child-decision pointers only; no primary raw benchmark tables anywhere in the record.
+- `Independence test`: Does new work test the same claim under the same changed mechanism, owner, domain and acceptance criterion? If yes, continue the Leaf; otherwise find or allocate the owning Leaf and transfer the question. A stricter witness stays only when all five boundaries are unchanged.
+- `Mandatory fission`: A separately decidable or reusable mechanism, Weight owner, production selector, reachable-state domain, host assumption, parameter domain, evidence class, acceptance criterion, changed variable or artifact-identity question requires its own Leaf. Split when that result could independently be Accepted, Rejected, Inconclusive or Invalidated without deciding the parent. A result reused by multiple downstream decisions normally needs its own identity.
+- `No speculative nodes`: An ordinary correctness bug does not automatically earn an EXP. Allocate only when it exposes a physical choice, invalidates a load-bearing assumption, or creates a reusable independent proof question.
+
+## Proof Obligation Freeze
+
+Before Prepared, enumerate a finite `Proof Obligations` table: Obligation ID, Claim, Smallest falsifier, Evidence class, Owning Experiment, Required/conditional, Downstream consequence, Status. A Leaf has one owning claim with bounded witnesses; a Synthesis has the complete finite child-obligation map and every mandatory row names its experiment owner. Conditional rows name the condition that would make them necessary; they are not silent release gates. Satisfied is an evidence decision with scope, not a synonym for a passing fixture.
+
+Record `Freeze`, `Review triggers`, and `Decomposition review` in that section. Freeze the obligation set at Measuring. Migration may reconstruct the previously implicit set only with explicit pre-fission provenance; it must not pretend the historical freeze occurred earlier. Discovering a materially independent obligation after freeze permits only the smallest evidence needed to classify independence, then find/create the child, add the graph edge, transfer the question and stop investigating it in the parent. Updating a child/status pointer preserves the frozen claim; adding an independent claim does not.
+
+Mandatory decomposition review triggers are more than six independent third-level Measurement proof subsections, a new mandatory obligation after Measuring began, measuring a new Weight owner, investigating a new reachable-state domain beyond its smallest falsifier, introducing a new production selector, or reusing a result in multiple downstream decisions. Declare any such event in `Review triggers`, including events not inferable mechanically. `Decomposition review` records the boundary decision and transfer destination or why bounded witnesses still share exactly one claim. A review cannot waive mandatory fission for an independent claim. Large byte/line counts emit nonfatal diagnostics only; size never decides whether to split.
+
+## Active Record Fission
+
+For an active compound Measuring record, preserve exact evidence before editing, then apply this sequence:
+
+1. Retain the original broad question as Synthesis and freeze its finite obligations with migration provenance.
+2. Partition evidence by independently decidable claim and actual owner, not mechanically by subsection or benchmark name.
+3. Allocate Leaf owners for those questions and move detailed decision evidence into them, without copying full tables into both parent and child.
+4. Preserve every original measurement number, command, source/Wasm/output hash, rejection and evidence limitation. Each Leaf explicitly names the pre-fission parent subsection and baseline; exact extraction coverage stays inspectable.
+5. Replace parent detail with compact provenance and child decisions. Add reciprocal decomposition, obligation ownership, hard dependencies where actually required, and evidence-flow relations.
+6. Normalize eligible IDs only after partitioning, retain former-ID provenance and atomically rewrite repository navigation, then validate all three graph projections.
+7. Continue only in the Leaf owning the current unanswered proof. Reuse extracted evidence without measurement when the measured implementation and exact identity remain unchanged and its evidence class still applies; otherwise mark the affected proof as requiring refresh.
+
+Evidence relocation generates no new runtime artifact, production acceptance, or historical continuity. Do not reopen a frozen architectural decision or regenerate a frozen semantic oracle merely because the graph changes.
+
+## Correction Boundary
+
+Experiments preserve causal decision evidence; Git owns ordinary implementation chronology, tests own regression behavior, and BACKLOG owns unfinished work. Classify invalid setup, test expectation defects, clock mistakes, unsupported host assumptions and ordinary implementation bugs. If no reusable architectural knowledge results, fix code/test, rerun the smallest affected proof and keep only a compact note: `Invalid probe: assumption X failed because Y. No measurement retained. Corrected fixture uses Z.` Preserve any decision-relevant rejection, exact artifact identity and causal limitation during migration; compress routine repair chronology through inspectable Git/test provenance, not silent evidence deletion. A reusable failed host assumption may deserve a Leaf; an ordinary repair transcript does not.
+
+## Record Normalization
 
 [`templates/EXP-NNNN.md`](./templates/EXP-NNNN.md) is the executable normalization source for metadata field order and second-level section order. Every track record must match that shape exactly; record-specific third-level subsections remain permitted. The record's `Primary track` value must be a relative Markdown link whose label is the containing `<track>` and whose target is sibling `experiments.md`.
 
 Run `./.agents/skills/architecture-experiments/scripts/validate-record-normalization.sh` after creating, moving, or restructuring any Experiment Record or changing the template. The validator discovers every `tracks/<track>/EXP-NNNN.md`, derives the canonical shape from the template, and fails on metadata, section, primary-track drift, or any retained CSV/TSV under `tracks/`. It is private Skill-method validation and must not become a dependency of project validation or the completion gate.
+
+Relations follow the template's ordered fields and expose three distinct graphs:
+
+- `Decomposition`: `Parent question` metadata and reciprocal `Decomposes into` relation connect a broad question to child proofs; `Satisfies obligation` identifies the parent's obligation ID. This graph has no self/cyclic decomposition and does not imply prerequisite ordering.
+- `Hard dependencies`: `Depends on` names required accepted input to a downstream decision and remains a DAG. A child need not depend on its parent; a parent may depend on the children's completed proofs.
+- `Evidence flow`: `Uses evidence from`, `Produces input for`, `Confirms` and `Invalidates` express scoped reuse or impact, not prerequisite ordering. `Refines`, `Supersedes` and `Contradicts` preserve decision scope; `Transfers question to` names the next owner. None of these silently creates a hard dependency.
+
+Declare `Reopen trigger` explicitly. Every important claim leads through its owning experiment to exact evidence and source/artifact identity, and every decision exposes downstream consequences. Use None when absent rather than inventing causality.
+
+The validator checks shape/kinds/obligation owners, reciprocal parent-child/obligation relations, hard and decomposition cycles, global numeric uniqueness (including index-only Proposed questions), sealed and former identity rules, prohibited Synthesis primary evidence and Leaf review conditions. It verifies visually separate decomposition, hard-dependency and evidence-flow projections inside the track index. After relation changes use `--write-index`, then ordinary validation; `--self-test` exercises positive and negative methodology fixtures. It remains Skill-private, never a runtime/project build dependency. Index-only Proposed IDs remain valid references without an inferred decision.
 
 ## Experiment Tracks
 
@@ -114,7 +166,7 @@ Each track owns one `tracks/<stable-track-id>/experiments.md` charter/index and 
 
 A track MUST NOT duplicate experiment status, measurements, interpretation, decisions, or open-work state. Those remain in the owning track index, Experiment Records, and `BACKLOG.md` respectively. Every Experiment Record belongs to its containing primary track and MAY link related tracks. The primary track owns the decision question; related tracks receive or provide evidence without becoming co-owners.
 
-Cross-track dependencies must be directional and acyclic. When a proposed experiment would create a cycle, split the question at the evidence boundary or choose the track that owns the changed physical mechanism. Update `experiments.md` when its track boundary, accepted baseline, portfolio, dependency, lifecycle, experiment status, or relation changes. Moving an experiment between tracks changes canonical identity and is allowed only before a record reaches Prepared; otherwise supersede it with a related record in the receiving track.
+Cross-track hard dependencies must be directional and acyclic. Split a cyclic question at its evidence boundary or choose the track owning the changed mechanism. Update the index when track boundary, baseline, portfolio, lifecycle, status or relations change. Cross-track moves change identity and obey the provisional/sealed migration rules; sealed questions transfer through a new related record.
 
 ## Lifecycle
 
@@ -132,6 +184,8 @@ Cross-track dependencies must be directional and acyclic. When a proposed experi
 | Invalidated | Changed assumptions mean the evidence no longer supports its prior current claim | Terminal; create or relate a replacement experiment |
 
 Status describes evidence maturity, not code completion. Never jump from Measured to Accepted without an explicit Interpretation. Never rewrite an old decision to imitate later knowledge; append relations and transition it to Superseded or Invalidated with rationale.
+
+Accepted may be scoped to physical architecture: state `Decision scope: physical architecture only` and distinguish Architecture Freeze from later production/release Geometry Freeze. One materially distinct hypothesis has one experiment owner. A scoped acceptance neither proves Weight soundness nor meets a throughput target. Frozen architecture may reopen only under its declared evidence-backed invariant/impossibility trigger; a cost miss, stale artifact or unreachable fixture transfers to the relevant successor. Corrections preserving frozen invariants belong to that successor, and micro-optimizations require a measured production owner plus a dedicated falsifiable question.
 
 ## When to Open an Experiment
 
@@ -156,7 +210,7 @@ Before opening, search the index by affected domain, mechanism, question, candid
 
 ### 1. Lock the Decision Question
 
-State one decision, the owning implementation phase, governing specification sections, and semantic invariants candidates may not change. Separate physical variables from semantic constants.
+State one decision, record kind, owning implementation phase, governing specification sections, finite proof obligations and semantic invariants. Separate physical variables from semantic constants. A Synthesis declares its child decisions instead of preparing benchmark candidates; measurement protocol steps apply to the owning Leaves.
 
 Declare materiality before measurement. Use a release target, maximum RefTime/ProofSize envelope, lifecycle dispatchability, throughput or latency bound, eliminated read/write/scaling dependency, state-hold reduction, or justified minimum percentage. A tiny numeric win without architectural significance is not material by default.
 
@@ -219,7 +273,7 @@ A host timing, count ceiling, diagnostic run, or `Weight::MAX` test does not est
 
 ### 6. Preserve Evidence
 
-Keep every normalized or raw tabular dataset directly in the Markdown record as a compact table. CSV, TSV, and equivalent delimited-table files are temporary interchange only: integrate their complete decision-relevant rows into `EXP-NNNN.md` and delete them before the experiment checkpoint. Size or machine consumption does not justify a separate tabular artifact; split or summarize the inline table without discarding decision-relevant evidence. Retain a separate raw log, plot, binary, trace, or other non-tabular artifact only when fidelity or reviewability genuinely requires another file. Store such artifacts under the sibling track-qualified `tracks/<track>/EXP-NNNN/` directory and link specific files from the record; never use a global `evidence/EXP-NNNN/` path because numeric IDs are track-local. Retain full raw output only when small, uniquely valuable, or required to review/reproduce the decision. Large output may remain external or ephemeral only when the record preserves exact commands, hashes, parameters, environment, and sufficient normalized measurements.
+Keep every normalized or raw tabular dataset directly in the Markdown record as a compact table. CSV, TSV, and equivalent delimited-table files are temporary interchange only: integrate their complete decision-relevant rows into `EXP-NNNN.md` and delete them before the experiment checkpoint. Size or machine consumption does not justify a separate tabular artifact; split or summarize the inline table without discarding decision-relevant evidence. Retain a separate raw log, plot, binary, trace, or other non-tabular artifact only when fidelity or reviewability genuinely requires another file. Store such artifacts under the sibling track-qualified `tracks/<track>/EXP-NNNN/` directory and link specific files from the record; never use a global `evidence/EXP-NNNN/` path because evidence stays with its owning track and record. Retain full raw output only when small, uniquely valuable, or required to review/reproduce the decision. Large output may remain external or ephemeral only when the record preserves exact commands, hashes, parameters, environment, and sufficient normalized measurements.
 
 Do not claim reproducibility when an essential artifact or condition was discarded. Never use one ambiguous `artifact_hash`; identify source tree, benchmark Wasm, production Wasm, generated Weight, and raw-output digest separately.
 
@@ -301,6 +355,10 @@ Domain Architecture may close only when every significant physical decision is t
 Stop the experiment loop when any applies:
 
 - The acceptance target is met.
+- The named proof obligation is satisfied: stop measuring it.
+- A new independent question is discovered: transfer it and stop the parent investigation.
+- The next useful work belongs to another owner/domain: stop this experiment.
+- A child result is sufficient for synthesis: do not seek more branch coverage for completeness.
 - No candidate has a plausible decision-relevant advantage.
 - Remaining delta is below declared materiality.
 - The bottleneck moved to another architecture domain.
@@ -308,7 +366,7 @@ Stop the experiment loop when any applies:
 - Evidence is insufficient; mark Inconclusive and state the exact missing evidence.
 - The task contract or user says stop.
 
-Do not optimize indefinitely because another microbenchmark improvement is imaginable. Performance never outranks correctness, deterministic semantics, atomicity, FIFO, causal speed, ownership, rollback, runtime safety, or production Weight soundness.
+“There might be another corner case” is insufficient. A new corner case must name an uncovered owner, domain or acceptance claim. Proof complexity grows by adding earned graph nodes, not by extending one notebook indefinitely. Performance never outranks correctness, deterministic semantics, atomicity, FIFO, causal speed, ownership, rollback, runtime safety, or production Weight soundness.
 
 ## Track Registry
 
@@ -320,7 +378,7 @@ Track indexes are the canonical navigation surfaces for experiment status and li
 | Adapters | Runtime adapter boundaries, lowering, and effect-resource evidence | [tracks/adapters/experiments.md](./tracks/adapters/experiments.md) |
 | Router | Route search, quote, proof, and execution topology | [tracks/router/experiments.md](./tracks/router/experiments.md) |
 
-Add a track only after its boundary, invariants, portfolio, dependencies, and entry/exit conditions are concrete. Create `tracks/<track>/experiments.md` first; do not reserve empty directories. Track-local indexes allocate IDs, own statuses and relations, and preserve rejected or invalidated records.
+Add a track only after its boundary, invariants, portfolio, dependencies, and entry/exit conditions are concrete. Create `tracks/<track>/experiments.md` first; do not reserve empty directories. Track-local indexes register globally allocated IDs, own statuses and relations, and preserve rejected or invalidated records.
 
 ## Handoff
 

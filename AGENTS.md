@@ -42,14 +42,17 @@
 - `Delivery History`: Record meaningful completed outcomes and impact in `CHANGELOG.md`, not in backlog or durable protocol prose.
 - `Changelog Shape`: Format delivery entries as `- \`Domain\`: Description`, using slash-separated domain qualifiers when needed; keep at most 8 single-line entries per release and at most 512 characters per entry; exclude package-marker chores, intermediate implementation diaries, and duplicated architecture explanations.
 - `Spec Ownership`: Specifications own intended subsystem contracts, rationale, invariants, and public semantics.
+- `Contract Closure`: Follow specification → implementation → tests → evidence-selected correction of specification and implementation → architectural description of the verified implementation. Classify discrepancies as contract, implementation, or test defects; never ratify accidental behavior by rewriting the specification. A release freeze requires these surfaces to agree, with affected evidence refreshed after corrections.
 - `Package Architecture Ownership`: Package-owned architecture docs describe the shipped implementation of the independently reusable crate: storage topology, bounded algorithms, modules, generic interfaces, package evidence, and code anchors.
 - `Integration Documentation Ownership`: Root `docs/*.integration.en.md` documents concrete DEOS reference composition across runtime bindings, adapters, cross-pallet flows, System actor topology, production weights, client realization, and operational watchpoints.
 - `Code Ownership`: Code and tests own executable behavior; documentation claims must remain subordinate to verified implementation truth.
-- `Skill Ownership`: Repo-local skills own specialized workflows and audits; do not duplicate their internal procedures here.
+- `Skill Ownership`: Repo-local skills own agent workflows and audits; project build, runtime, tests, benchmarks, CI, and release tooling must work without installed skills or files under `.agents/skills`. Skills may inspect and invoke project-owned tools, never supply a required project dependency.
+- `Experiment Causality`: Give each materially distinct hypothesis one experiment owner, each decision explicit downstream relations, each measurement exact evidence/source identity, and each release gate explicit evidence owners. Frozen architectural facts reopen only through their declared evidenced invariant/impossibility trigger; separate architecture selection from production measurement and release acceptance. The architecture-experiments skill owns the record method.
 - `README Ownership`: Root and subtree READMEs own human orientation, setup, navigation, and current workspace purpose.
 - `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `web-client/docs/architecture.en.md` owns browser realization.
 - `Actors Control-Plane Ownership`: `docs/actors-control-plane.contract.en.md` owns off-chain Actor Contract artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized Actor history boundaries.
 - `Framework Boundary Ownership`: `docs/framework-instance.contract.en.md` owns the reusable mechanism versus downstream policy contract.
+- `Builder Economy Ownership`: `docs/builder-economy.contract.en.md` owns the reference composition of second-order TMCTOL, `$BLDR` governance, invoices, BLDR Anchor, BLDR Treasury, and the parent-capital bridge; TMCTOL and Governance specifications retain their underlying mathematics and governance semantics.
 
 ## 3. Repository Topology
 
@@ -80,7 +83,9 @@
 - `Actor Casing`: In prose, title-case established role names such as `Burn Actor`, `Liquidity Actor`, and `System Actor`; keep ordinary descriptions lowercase and code identifiers idiomatic.
 - `Legacy Names`: Keep manager names only for historical orientation or explicit compatibility aliases at public boundaries.
 - `TMC`: The unidirectional issuance engine implementing the configured minting curve.
-- `TOL`: The protocol-owned liquidity accumulator and bucketed reserve topology of the TMCTOL standard.
+- `TOL`: The asset-scoped topology through which a treasury owns protocol liquidity and related strategic capital; anchor, bucket, and treasury counts are configuration, with the TOL component of reference first-order Native/foreign TMCTOL using A/B/C/D plus paired B/C/D treasuries and the TOL component of second-order `$BLDR` TMCTOL using BLDR Anchor plus BLDR Treasury.
+- `Bucket Types`: The reference first-order aliases are Bucket Anchor (`A`), Bucket Builder (`B`), Bucket Capital (`C`), and Bucket Dormant (`D`). Anchor is the reusable immutable bucket type; the second-order `$BLDR` TOL component uses the short human name `BLDR Anchor` because it has no sibling lettered family. Implementation identifiers belong to their owning code surface and never to the economic vocabulary.
+- `BLDR Anchor`: The sole immutable Anchor-type bucket owning protocol-created `$NTVE/$BLDR` LP; never qualify its human name with a bucket letter and never call it Builder Bucket. Bucket Builder (`B`) is the distinct first-order spendable/buyback lane, while BLDR Anchor communicates the second-order immutable role without the `BB` ambiguity.
 - `DEOS Router`: The fee-burning execution gateway selecting the candidate with maximum recipient output across XYK, TMC, and bounded Native-anchored routes.
 - `DEOS Oracle`: The bounded current typed observation owner; runtime implementation remains `pallet-oracle`.
 - `DEOS Staking`: The reference staking subsystem; runtime implementation remains `pallet-staking`.
@@ -116,7 +121,7 @@
 - `Unified Primitives`: Keep shared asset taxonomy and ecosystem constants in `template/primitives`; avoid duplicated magic numbers.
 - `AssetKind`: Preserve bitmask-based O(1) classification and dedicated staked-local/staked-foreign namespaces.
 - `Arithmetic`: Use `Perbill`/`Permill` for ratios and `U256` intermediates where curve arithmetic can overflow native widths.
-- `Logical-First Naming`: Name stable abstractions by role before representation; a time-ordered wakeup index need not promise a particular storage structure.
+- `Logical-First Naming`: Name stable abstractions by role before representation; a time-ordered wakeup index need not promise a particular storage structure. Project identifiers and code comments describe domain mechanisms, not Skill names, experiment IDs, candidate labels, or implementation-session history; keep experimental provenance in its research owner, pointing to project code rather than making code depend on it.
 - `Cadence`: Keep block-duration assumptions explicit, benchmarked, and configuration-driven rather than fixing DEOS to one block speed.
 - `Protected Complexity`: Preserve complexity earned by real constraints and invariants; remove accidental complexity and speculative indirection.
 - `No Premature Optimization`: Prefer contract correctness and honest product flows over speculative loading, bundle, storage, or scheduler indirection.
@@ -133,10 +138,13 @@
 - `Compression Terminology`: Every compression claim identifies its analysis axis and metric; do not conflate inversion, relative parity, absolute-gap compression, and arbitrage overtake.
 - `Economic Claim Honesty`: Never state market immunity or unconditional guarantees beyond shipped runtime behavior and falsifiable evidence.
 - `TOL Accounting`: Keep reserve scope, bucket state, supply basis, sellable-pressure assumptions, and governance conditions explicit in floor claims.
-- `Bucket Policy`: Treat bucket topology and percentages as TMCTOL/reference-instance policy rather than mandatory DEOS kernel law.
+- `Bucket Policy`: Treat anchor, bucket, and treasury topology, order, and percentages as TMCTOL/reference-instance policy rather than mandatory DEOS kernel law; TOL order names collateral dependency, not execution hierarchy.
+- `Anchor Strong Immutability`: Reference Bucket A and BLDR Anchor are sealed dormant Immutable System Actors with no Contract, hot state, scheduler work, funding state, or fee dependency. Their LP-namespace balances admit inbound LP but expose zero reducible balance to ordinary, admin-forced, and runtime-internal transfer or burn paths; the LP namespace cannot enter asset destruction while this consensus freezer exists. Only an explicit runtime upgrade or fork may revise this guarantee.
+- `Layered TMCTOL Classification`: First- and second-order classify complete TMCTOL economies because issuance begins in TMC; TOL names only their liquidity and strategic-capital component. The first-order Native/foreign TMCTOL and second-order `$BLDR` TMCTOL references share only the anchor-directed issuance invariant of approximately one third of total issuance; collateral allocation is topology-specific, with half entering first-order Bucket A and all `$NTVE` collateral directed to BLDR Anchor.
 - `Burn Liveness`: Burn effects depend on funded, configured, schedulable execution; do not describe fee capture as automatic supply reduction before the Burn Actor completes it.
 - `Liquidity Liveness`: Liquidity effects depend on healthy pools, configured execution plans, bounded slippage, and valid reserve accounting.
 - `Simulator Authority`: Use the simulator for economic math and hypotheses, not as a shadow runtime for storage, weights, Actors, governance, XCM, or client parity.
+- `Simulator Minimalism`: Keep simulator models and scenarios readable, elegant, and economics-centered; test formulas, invariants, and explicit hypotheses rather than defensive implementation machinery, and retain lifecycle detail only when an economic question requires it.
 - `Deterministic Simulation`: Use fixed cases or explicit seeded PRNGs in correctness suites and keep wall-clock measurement in benchmark tooling.
 
 ## 7. Runtime Subsystem Contracts
@@ -146,7 +154,7 @@
 - `Token Bootstrap`: Asset-registration and curve-creation hooks must remain deterministic and idempotent.
 - `Sovereign Liquidity`: Foreign assets enter local `pallet-assets` through XCM reserve-transfer assumptions; DEOS does not delegate its liquidity accounting to foreign chains.
 - `Liquid Staking`: Keep one staking pallet, `stXXX` receipts, and native `stNTVE`; do not add a parallel nomination-token tier without evidence.
-- `Native Security`: Native collator backing uses explicit locked `NTVE/stNTVE` LP custody rather than liquid receipt ownership.
+- `Native Security`: Native collator backing uses explicit locked `$NTVE/stNTVE` LP custody rather than liquid receipt ownership.
 - `Actors Staking Portability`: Keep `Stake` and `Unstake` tasks generic; runtime adapters decide native, non-native, or local representation behavior.
 
 ## 7A. Governance and Reward Contracts
@@ -155,6 +163,7 @@
 - `Governance Shape`: Prefer `GovernanceDomain + CadenceMode + ProposalPayloadKind`; add richer proposal classes only after measured pressure.
 - `Urgent Policy`: Fast-track eligibility defaults deny and must be opted in per domain/payload combination.
 - `Strategic Governance Ingress`: A protocol-domain `L1RootAction` may enter only through the existing signed proposal surface gated by runtime-defined nonzero primary-track power, retaining ordinary fee/cap/rollback semantics; this grants no direct Root dispatch, gives `$VETO` no agenda-setting authority, and leaves Root-equivalent enactment inside the existing bounded payload executor. `template/pallets/governance/docs/specification.en.md` owns the full contract.
+- `Builder Invoice Settlement`: The Governance specification owns `BaseFloorCapped` settlement semantics: an above-base scalar target may clip only to enactment-time capacity at or above the complete base amount, while below-floor capacity produces typed execution failure and zero payout; targets at or below base require their complete amount. The Builder Economy contract selects that policy and binds each invoice to a bounded canonical IPFS CID plus one governance-approved Mutable System Actor treasury account, leaving its Actor Contract and lifecycle unchanged. Builder governance gains domain-local debit authority over that declared custody, not arbitrary Actor or Root authority.
 - `L2 Parameters`: Treat delegated parameter changes as explicit bounded domain-owned surfaces, not permission to call arbitrary admin setters.
 - `Safety Bias`: Protection governance may fail closed; `$VETO` is negative constitutional power rather than a second positive-governance path.
 - `Governance Reward Memory`: Keep windows, expiry buckets, uniqueness, retention, and proposal maturity bounded; avoid full-account or full-proposal scans.
@@ -175,6 +184,7 @@
 - `Validation Layers`: Mathematical truth lives in the simulator, behavioral truth in pallets/tests, systemic truth in runtime integration tests/XCM, client truth in `web-client`, project/release composition in root scripts and workflows, and agent-method validation inside its owning Skill.
 - `Validation Ownership`: Each validation and test stays with the surface whose truth it decides: package/domain checks with that package or project domain, client checks in `web-client`, CI checks in workflows/root scripts, development profiles in root scripts, and Skill-method checks inside the Skill. The project MUST expose one project-owned comprehensive validation entrypoint that may compose all project surfaces but never Skill internals; if it needs a check currently inside a Skill, move that check to the project owner rather than introducing the dependency.
 - `Validation Scope`: Run the smallest meaningful changed-scope check first and escalate only when the diff crosses boundaries.
+- `Tool Self-Validation`: Keep a repository tool's own regression checks in its explicit self-test mode rather than adding a separate test tool; reuse that mode from the owning validation flow and isolate fixture mutations from project state.
 - `Stateful Tests`: Use realistic stateful mocks for AMM, TMC, and cross-component mechanism verification.
 - `Benchmark Metrics`: Measure both RefTime and ProofSize with explicit bounded components and worst-case setup.
 - `Weight Bridge`: Generate pallet weight templates and bind runtime-specific implementations under `template/runtime/src/weights`.
@@ -195,6 +205,7 @@
 ## 9. Documentation Contract
 
 - `Spec Purity`: Specifications define intended source-of-truth contracts only; implementation status, migration notes, and rollout caveats belong in architecture docs.
+- `TMCTOL Specification Boundary`: `docs/tmctol.specification.en.md` is the project-independent mathematical entry to the standard; keep concrete asset tickers, named project tokens, Actor topology, invoice semantics, and instance product flows in the Builder Economy, framework-instance, or integration owners.
 - `Delivery Sequence`: For non-trivial subsystems, refine specification, implement and validate code, then update package architecture and any affected DEOS integration document from shipped truth.
 - `Paired Docs`: Non-trivial reusable pallets should have a specification and a separate package implementation architecture map; add a root integration document only when concrete DEOS composition crosses the package boundary.
 - `Embedding Docs`: Reusable host-runtime obligations live at `template/pallets/<name>/docs/embedding.md`; do not create uppercase package-root `EMBEDDING.md` aliases or redirect shims.
@@ -241,7 +252,7 @@
 - `Wiki Role`: `/wiki` is an isolated strict OKF v0.2 bundle and concise, provenance-aware learning lens over canonical root and package-owned project truth, not a release-note mirror or docs dump; its root `index.md` declares the bundle while unrelated repository Markdown remains outside strict OKF scope.
 - `Wiki Owner Naming`: Name each page after the semantic object it owns, not after its directory or implementation package. Before naming, identify whether the owner is a domain, concept, mechanism, concrete subsystem, or product surface; state what readers expect there; test whether the title survives an implementation replacement; and split subsystem from mechanism only when both have enough independent content. The `overview/` directory marks an entry role, not a mandatory `DEOS X` title pattern.
 - `Wiki Locales`: Human pages use explicit locale suffixes and mirrored page IDs/topology; shared metadata represents localized fields; Russian prose prefers natural Russian terminology and minimizes English borrowings except canonical identifiers, code symbols, and terms whose translation would reduce precision.
-- `Wiki Navigation`: New pages need provenance, related links, locale mirrors, and graph/index reachability; merge weak leaflets into stronger owner pages.
+- `Wiki Navigation`: Articles explain established facts and current capability boundaries, never backlog tasks, implementation plans, or unverified completion. Link to Wiki peers or concrete non-document resources, never to source documentation in the repository. Keep source-document provenance in non-rendered structured metadata, not article links or source-path panels. New pages need provenance, related links, locale mirrors, and graph/index reachability; merge weak leaflets into stronger owner pages.
 - `Wiki Trust`: Treat repo-local wiki Markdown as reviewed content and enforce the trust boundary with the wiki validation skill.
 - `Wiki Growth`: Large wiki expansion requires consolidation; provenance, graph reachability, and explicit page status must drive merge/remove work rather than decorative freshness dates or subjective scores.
 

@@ -44,9 +44,9 @@ pub enum GuaranteeStatus {
   Deserialize,
 )]
 pub enum AnchorDomain {
-  /// Native TMCTOL anchor bucket (`actor_id = 3`).
+  /// Native TMCTOL Bucket A anchor (`actor_id = 3`).
   Tol,
-  /// BLDR TMCTOL anchor bucket (`actor_id = 12`).
+  /// BLDR Anchor (`actor_id = 12`).
   Bldr,
 }
 
@@ -96,16 +96,16 @@ pub enum TmctolConformanceStatus {
   Violated,
 }
 
-/// Bounded read projection for a deterministic custody-only Bucket A anchor.
+/// Bounded read projection for a sealed Immutable System Actor Anchor.
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct AnchorBucketState<AccountId> {
+pub struct AnchorState<AccountId> {
   pub domain: AnchorDomain,
   pub actor_id: u64,
   pub status: GuaranteeStatus,
   pub sovereign_account: AccountId,
-  pub is_custody_only: bool,
+  pub is_immutable_system_actor: bool,
   pub actor_identity_exists: bool,
-  pub scheduler_state_exists: bool,
+  pub active_state_exists: bool,
 }
 
 /// Bounded read projection for the current anchor pool behind a domain.
@@ -179,8 +179,8 @@ pub struct ReportedFloorInputs<Balance> {
 /// Complete bounded TMCTOL guarantee-state projection for the reference runtime.
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct TmctolGuaranteeState<AccountId, Balance> {
-  pub tol_anchor: AnchorBucketState<AccountId>,
-  pub bldr_anchor: AnchorBucketState<AccountId>,
+  pub tol_anchor: AnchorState<AccountId>,
+  pub bldr_anchor: AnchorState<AccountId>,
   pub tol_pool: PoolProjection<Balance>,
   pub bldr_pool: PoolProjection<Balance>,
   pub native_floor_inputs: ReportedFloorInputs<Balance>,

@@ -241,33 +241,27 @@ pub enum SimulationError {
   TypeMismatch,
   MutabilityMismatch,
   InvalidContract,
+  InvalidBudget,
   ContractMismatch,
   ModeCycleStateMismatch,
   GlobalCircuitBreaker,
   Paused,
   NotReady,
+  ResourceDeferred,
   FeeCollectionFailed,
 }
 
 #[derive(
-  polkadot_sdk::frame_support::CloneNoBound,
-  polkadot_sdk::frame_support::DebugNoBound,
-  polkadot_sdk::frame_support::PartialEqNoBound,
-  polkadot_sdk::frame_support::EqNoBound,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  TypeInfo,
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-#[scale_info(skip_type_params(MaxContractSteps))]
-pub struct SimulationResult<MaxContractSteps: Get<u32>> {
+pub struct SimulationResult {
   pub status: AttemptDisposition,
   pub cycle_nonce: u64,
   pub start_cursor: u32,
   pub run_cursor: Option<u32>,
   pub unsuccessful_attempts_at_cursor: Option<u32>,
   pub cumulative_outcomes: OutcomeTotals,
-  pub steps: BoundedVec<SimulationStepRecord, MaxContractSteps>,
+  pub steps: BoundedVec<SimulationStepRecord, ConstU32<1>>,
 }
 
 /// Internal execution-phase output of the canonical actor classifier.
@@ -916,6 +910,7 @@ pub(crate) struct ActiveActorView<AccountId, BlockNumber, Trigger, Steps> {
   pub window: Option<ScheduleWindow<BlockNumber>>,
   pub steps: Steps,
   pub completion: CompletionPolicy,
+  pub trigger_runtime_state: TriggerRuntimeState,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub unsuccessful_attempt_streak: u32,

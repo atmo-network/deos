@@ -31,7 +31,7 @@ related:
 
 DEOS staking is a multi-asset share-vault system. Each registered staking asset has one deterministic pool account and share/receipt accounting so backing can rise without writing rewards to every holder.
 
-The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The current `TrustedSet` mode uses permissioned collators and prevents new LP-backed nomination obligations. `LpBackedSelection` uses locked `NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
+The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The current `TrustedSet` mode uses permissioned collators and prevents new LP-backed nomination obligations. `LpBackedSelection` uses locked `$NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
 
 ## Share-Vault Model
 
@@ -75,8 +75,8 @@ This is a vault deposit and receipt mint, not an ordinary AMM swap. It increases
 
 ```text
 $NTVE + stNTVE
-  -> add liquidity to NTVE/stNTVE
-  -> receive NTVE/stNTVE LP
+  -> add liquidity to $NTVE/stNTVE
+  -> receive $NTVE/stNTVE LP
   -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
 ```
 

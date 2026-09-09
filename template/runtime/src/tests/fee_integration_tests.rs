@@ -1,25 +1,32 @@
 use super::common::{
-  ALICE, BOB, INITIAL_BALANCE, actor_fee_sink_account, add_liquidity, create_pool, new_test_ext,
-  set_consensus_timestamp,
+  ALICE, INITIAL_BALANCE, actor_fee_sink_account, new_test_ext, set_consensus_timestamp,
 };
+#[cfg(not(feature = "runtime-benchmarks"))]
+use super::common::{BOB, add_liquidity, create_pool};
 use crate::{
-  Actors, Assets, Balances, Runtime, RuntimeOrigin, Staking,
-  configs::{
-    AssetKind, RuntimeFeeCollector,
-    actor_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemActors},
-  },
+  Actors, Balances, RuntimeOrigin, Staking,
+  configs::{AssetKind, RuntimeFeeCollector, actor_config::TmctolFeeCollector},
 };
-use pallet_deos_actors::{AssetOps, FeeCollector, TriggerRuntimeState, WakeupKey};
+#[cfg(not(feature = "runtime-benchmarks"))]
+use crate::{
+  Assets, Runtime,
+  configs::actor_config::{TmctolAssetOps, TmctolGenesisSystemActors},
+};
+#[cfg(not(feature = "runtime-benchmarks"))]
+use pallet_deos_actors::AssetOps;
+use pallet_deos_actors::{FeeCollector, TriggerRuntimeState, WakeupKey};
+#[cfg(not(feature = "runtime-benchmarks"))]
+use polkadot_sdk::frame_support::traits::fungibles::Inspect;
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
     Hooks, OnUnbalanced,
     fungible::Balanced,
-    fungibles::Inspect,
     tokens::{Fortitude, Precision, Preservation},
   },
   weights::Weight,
 };
+#[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 
 fn run_at_cadence_tick(key: WakeupKey<crate::BlockNumber>) {
@@ -90,6 +97,7 @@ fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn source_less_runtime_fee_credit_is_processed_by_fee_sink_cadence() {
   new_test_ext().execute_with(|| {
     let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
@@ -235,6 +243,7 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
   new_test_ext().execute_with(|| {
     let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
@@ -261,6 +270,7 @@ fn fee_sink_threshold_admits_exactly_one_ed_per_permissioned_leg() {
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn fee_sink_actor_splits_trusted_set_native_flow_to_staking_and_lp_ingress() {
   new_test_ext().execute_with(|| {
     let native_asset_id = 0;

@@ -347,7 +347,7 @@ impl<T: Config> Pallet<T> {
       let queue = maybe.get_or_insert_default();
       if let Some(last) = queue.last() {
         ensure!(
-          transition.revision == last.revision.saturating_add(1)
+          last.revision.checked_add(1) == Some(transition.revision)
             && transition.previous == Some(last.current),
           Error::<T>::CrossingTransitionInvariant
         );

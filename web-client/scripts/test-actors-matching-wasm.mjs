@@ -30,6 +30,10 @@ const runtime = {
   specVersion: 1,
   transactionVersion: 1,
 };
+const simulationBudget = {
+  actorControl: { refTime: 1_000_000_000_000n, proofSize: 10_000_000n },
+  sharedEconomic: { refTime: 1_000_000_000_000n, proofSize: 10_000_000n },
+};
 const step = {
   precondition: [
     [
@@ -93,7 +97,8 @@ const base = {
     stateSource: 'FinalizedBlock',
   },
   runtimeApi: 'ActorSimulationApi_simulate_current_contract',
-  runtimeApiVersion: 1,
+  runtimeApiVersion: 2,
+  simulationBudget,
 };
 
 const suspendedRuntimeValue = {
@@ -113,10 +118,6 @@ const suspendedRuntimeValue = {
       failed_steps: 0,
     },
     steps: [
-      {
-        step_index: 0,
-        outcome: { type: 'Executed', value: undefined },
-      },
       {
         step_index: 1,
         outcome: { type: 'FundingUnavailable', value: undefined },
@@ -140,7 +141,6 @@ const suspendedOutcome = {
     failedSteps: 0,
   },
   steps: [
-    { stepIndex: 0, outcome: { type: 'Executed' } },
     {
       stepIndex: 1,
       outcome: { type: 'FundingUnavailable' },
@@ -162,6 +162,31 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       resultScale,
     },
   );
+  const continuedScale = encodeActorRuntimeSimulationResult(metadataBytes, {
+    success: true,
+    value: {
+      ...suspendedRuntimeValue.value,
+      status: { type: 'Continued', value: undefined },
+      run_cursor: 2,
+      unsuccessful_attempts_at_cursor: undefined,
+      steps: [
+        {
+          step_index: 1,
+          outcome: { type: 'Executed', value: undefined },
+        },
+      ],
+    },
+  });
+  const continued = decodeActorRuntimeSimulationResult(
+    metadataBytes,
+    continuedScale,
+  );
+  assert.equal(continued.success, true);
+  if (continued.success) {
+    assert.equal(continued.outcome.status, 'Continued');
+    assert.equal(continued.outcome.runCursor, 2);
+    assert.equal(continued.outcome.steps.length, 1);
+  }
   const stoppedScale = encodeActorRuntimeSimulationResult(metadataBytes, {
     success: true,
     value: {
@@ -324,6 +349,7 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
     artifact,
     actorId: 14n,
     mode: 'CurrentRun',
+    simulationBudget,
     finalizedBlock: { hash: at, number: 42 },
   });
 
@@ -342,7 +368,17 @@ test('finalized transport pins state and invokes the typed runtime API at one bl
     type: 'CurrentRun',
     value: undefined,
   });
-  assert.deepEqual(observedArguments[5], { at });
+  assert.deepEqual(observedArguments[5], {
+    actor_control: {
+      ref_time: simulationBudget.actorControl.refTime,
+      proof_size: simulationBudget.actorControl.proofSize,
+    },
+    shared_economic: {
+      ref_time: simulationBudget.sharedEconomic.refTime,
+      proof_size: simulationBudget.sharedEconomic.proofSize,
+    },
+  });
+  assert.deepEqual(observedArguments[6], { at });
 });
 
 test('matching-Wasm gate binds runtime code, metadata, state, API, and Actor Contract identity', async () => {
@@ -371,28 +407,39 @@ test('matching-Wasm gate binds runtime code, metadata, state, API, and Actor Con
   assert.equal(observedRequest.actorId, 14n);
   assert.equal(observedRequest.mode, 'CurrentRun');
   assert.equal(observedRequest.contractScale, artifact.contractScale);
+  assert.deepEqual(observedRequest.simulationBudget, simulationBudget);
   assert.equal(result.outcome.runCursor, 1);
 });
 
-test('provider cannot change any requested runtime or state dependency', async () => {
-  await assert.rejects(
-    runActorMatchingWasmSimulation({
-      ...base,
-      provider: {
-        async simulate(request) {
-          return {
-            engine: 'RuntimeWasm',
-            pin: {
-              ...request.pin,
-              runtimeCodeHash: `0x${'44'.repeat(32)}`,
-            },
-            outcome: suspendedOutcome,
-          };
+test('provider cannot change any requested runtime, state, or synthetic-budget dependency', async () => {
+  for (const changedPin of [
+    { runtimeCodeHash: `0x${'44'.repeat(32)}` },
+    {
+      simulationBudget: {
+        ...simulationBudget,
+        actorControl: {
+          ...simulationBudget.actorControl,
+          refTime: simulationBudget.actorControl.refTime - 1n,
         },
       },
-    }),
-    /does not match the requested runtime\/state pin/,
-  );
+    },
+  ]) {
+    await assert.rejects(
+      runActorMatchingWasmSimulation({
+        ...base,
+        provider: {
+          async simulate(request) {
+            return {
+              engine: 'RuntimeWasm',
+              pin: { ...request.pin, ...changedPin },
+              outcome: suspendedOutcome,
+            };
+          },
+        },
+      }),
+      /does not match the requested runtime\/state pin/,
+    );
+  }
 });
 
 test('provider summary must match canonical runtime SCALE bytes', async () => {
@@ -452,5 +499,43 @@ test('local projections and malformed Actor run outcomes fail closed', async () 
       },
     }),
     /require an Actor run cursor/,
+  );
+  await assert.rejects(
+    runActorMatchingWasmSimulation({
+      ...base,
+      provider: {
+        async simulate(request) {
+          return {
+            engine: 'RuntimeWasm',
+            pin: request.pin,
+            outcome: {
+              ...suspendedOutcome,
+              steps: [
+                ...suspendedOutcome.steps,
+                { stepIndex: 0, outcome: { type: 'Executed' } },
+              ],
+            },
+          };
+        },
+      },
+    }),
+    /at most one Step record/,
+  );
+  await assert.rejects(
+    runActorMatchingWasmSimulation({
+      ...base,
+      simulationBudget: {
+        ...simulationBudget,
+        actorControl: { refTime: -1n, proofSize: 0n },
+      },
+      provider: {
+        async simulate() {
+          throw new Error(
+            'invalid synthetic budget must fail before provider execution',
+          );
+        },
+      },
+    }),
+    /unsigned 64-bit Weight components/,
   );
 });

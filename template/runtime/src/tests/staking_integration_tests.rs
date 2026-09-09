@@ -1857,6 +1857,7 @@ fn ntve_stntve_pool_direct_balanced_donation_increases_lp_value_without_minting_
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn trusted_mode_rejects_new_collator_lp_nomination_without_custody_mutation() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
@@ -2358,6 +2359,7 @@ fn trusted_security_mode_session_boundary_settles_retained_reward_obligations() 
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn trusted_session_boundary_finalizes_open_state_and_removes_unactivated_planning() {
   use polkadot_sdk::pallet_session::SessionManager;
 
@@ -2478,6 +2480,7 @@ fn failed_session_retention_cancels_the_plan_and_recovers_the_oldest_due_epoch()
 }
 
 #[test]
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn trusted_security_mode_ignores_candidates_and_reports_capabilities() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
