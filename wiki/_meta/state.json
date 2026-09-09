@@ -382,7 +382,6 @@
         "en": [
           "../docs/README.md",
           "../README.md",
-          "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
           "../template/README.md",
@@ -391,7 +390,6 @@
         "ru": [
           "../docs/README.md",
           "../README.md",
-          "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
           "../template/README.md",
@@ -694,13 +692,15 @@
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
-          "../web-client/docs/architecture.en.md"
+          "../web-client/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md"
         ],
         "ru": [
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
-          "../web-client/docs/architecture.en.md"
+          "../web-client/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md"
         ]
       }
     },

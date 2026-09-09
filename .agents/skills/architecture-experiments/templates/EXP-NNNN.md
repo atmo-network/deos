@@ -3,6 +3,9 @@
 | Field | Value |
 | --- | --- |
 | Status | Proposed / Prepared / Measuring / Measured / Interpreted / Accepted / Rejected / Inconclusive / Superseded / Invalidated |
+| Record kind | Leaf / Synthesis |
+| Former IDs | None or track-qualified former provisional IDs; qualify with @full-Git-baseline when explicit compaction reuses a number |
+| Parent question | None or relative links to owning Synthesis records |
 | Architecture release / experiment campaign | Measured X.Y.Z baseline / campaign X.Y.Z |
 | Date | YYYY-MM-DD or Not recorded |
 | Affected domain | Domain |
@@ -14,7 +17,7 @@
 
 ## Decision Question
 
-State the single implementation choice this evidence can decide.
+State the single implementation choice this evidence can decide. Allocate the globally unique `EXP-NNNN` under the architecture-experiments Skill’s Record Identity and Layout rule, checking every track; the containing track owns the record.
 
 ## Governing Specification
 
@@ -70,7 +73,21 @@ State the single implementation choice this evidence can decide.
 | Benchmark command/config | Exact command and parameters |
 | Raw evidence | Inline tables below; repository path/digest only for justified non-tabular artifacts, or Not retained with reason |
 
+## Proof Obligations
+
+- `Freeze`: Not frozen until Measuring; record the source/date or explicit migration reconstruction at freeze.
+- `Review triggers`: None, or new mandatory obligation / new Weight owner / new reachable domain / new production selector / multiple consumers / more than six proof subsections.
+- `Decomposition review`: None, or the boundary decision with transfers and exact same-claim justification.
+
+| Obligation ID | Claim | Smallest falsifier | Evidence class | Owning Experiment | Required/conditional | Downstream consequence | Status |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| O1 | One falsifiable claim | Smallest deciding witness | Exact class | Self for Leaf, child experiment link for Synthesis | Required, or Conditional: named activation condition | Decision consuming this result | Open / Satisfied with scope / Rejected / Requires refresh / Conditional |
+
+A Leaf owns one claim; bounded workload witnesses must share its mechanism, changed variable, evidence domain and acceptance criterion. A Synthesis enumerates every finite child obligation. Freeze before measurements; independent later findings transfer to their own nodes.
+
 ## Measurements
+
+Leaf only: retain primary evidence below. Synthesis: replace this table with compact child-decision links; no primary benchmark tables, candidate implementation, branch sweep or debugging transcript anywhere in the record. Extracted evidence explicitly names the pre-fission parent subsection, Git baseline and exact artifact identity; moving it does not remeasure it.
 
 | Candidate | Workload | RefTime | ProofSize | Reads | Writes | Other decision metrics |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -131,6 +148,8 @@ target → measured gap → binding dimension → dominant contributor
 
 ## Relations
 
+- `Decomposes into`: Child experiment links, or None for a Leaf.
+- `Satisfies obligation`: Parent link and its obligation ID, or None.
 - `Replaces`: None.
 - `Supersedes`: None.
 - `Refines`: None.
@@ -139,3 +158,7 @@ target → measured gap → binding dimension → dominant contributor
 - `Baseline of`: None.
 - `Confirms`: None.
 - `Invalidates`: None.
+- `Uses evidence from`: Exact historical experiment/evidence links; distinguish borrowed observations from required accepted inputs.
+- `Transfers question to`: Experiment links and the specific transferred question, or None.
+- `Produces input for`: Downstream experiment links and deliverable, or None.
+- `Reopen trigger`: Exact failed assumption/invariant and required evidence; cost alone does not reopen a frozen physical baseline.

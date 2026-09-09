@@ -356,7 +356,7 @@ Semantic owners:
 
 Composite Actor values and runtime API views are read-only and MUST NOT become write models.
 
-Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, funding, run state, detector membership, ticket, wakeup, or Active-state hold.
+Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, funding, run state, detector membership, ticket, wakeup, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity, which can never activate or close through Actor control.
 
 ---
 
@@ -503,6 +503,8 @@ Opening consumes the current latch and re-arms the Trigger (§5.2):
 | `AtTime` | Never re-arm; `consumed == true`. |
 | `Cadenced` | Install the first canonical cadence deadline strictly after the current authoritative tick; no catch-up. |
 
+These rules also apply when semantic Contract replacement preserves a latch acquired by the previous Trigger. Opening under `AtTime` consumes that one-shot source without installing another deadline.
+
 A Running or Suspended Actor may therefore acquire one new latch for the next Cycle while its current Cycle continues (§5.1).
 
 ### 4.6 Causal cohort
@@ -648,6 +650,8 @@ Opening MUST execute in this order:
 If the Actor cannot pay the Pipeline Machine fee, or its active-installed run-state hold authority is inconsistent, Opening MUST NOT partially occur. Insufficient Pipeline payment invokes minimal apoptosis with `CycleAdmissionInsufficient` (§9.4); inconsistent hold authority fails closed as an Actor invariant. The prior Trigger fee remains final (§7.3).
 
 If Pipeline fee collection fails despite valid capacity, the entire Opening attempt rolls back, the latch remains consumable, and the live FIFO head is preserved (§7.4, §8.3).
+
+If Trigger rearm requires a current authoritative observation (§4.5) and that observation is unavailable or uninitialized, Opening MUST atomically refuse. The latch, placement, cycle nonce, and prior Trigger payment remain unchanged; no Pipeline fee, Run, or Task effect commits. This refusal grants no bypass, retry Continuation, or observation-loss close authority. Independently applicable terminal checks, including insufficient Pipeline capacity, retain their existing precedence and do not require successful rearm (§9.2, §9.4).
 
 ### 5.3 Opening and funding snapshots
 
@@ -1016,7 +1020,7 @@ Rules:
 - Elapsed time does not change it;
 - No recurring collection exists;
 - Active identity/head/body/detector/funding state is held by actual retained geometry;
-- Zero/one-Step Contracts MUST NOT reserve a 32-Step body footprint;
+- Zero/one-Step Contracts MUST NOT reserve a maximum-size body footprint;
 - Active installation reserves one type-derived maximum admitted run-state hold before autonomous Trigger service becomes possible;
 - The maximum is derived from bounded runtime types and MUST NOT use a hand-maintained byte constant;
 - Opening, Q1 progress, retry, suspension, Cycle boundary, and cancellation MUST NOT mutate or release the run-state hold;
@@ -1238,6 +1242,8 @@ After bounded stale-head cleanup, the valid live FIFO head is authoritative:
 
 A maximum valid Step may be the only Actor Step in a block. This is paid bounded service, not structural starvation. Pipeline- or Action-fee collector failure rolls back the current transition, preserves the live head, and stops the pass; it is not a Task failure (§7.4, §7.5).
 
+Required Opening observation unavailability likewise preserves the live head and stops the pass (§5.2), even when Weight remains. Later tickets cannot bypass that refusal.
+
 ### 8.4 Detector workers, cohorts, and faults
 
 Detector geometry is source-specific:
@@ -1273,11 +1279,14 @@ Given:
 - Recurring conforming Actor Control and Shared Economic capacity;
 - Finite stale churn;
 - Eventual placement capacity;
+- Eventual availability of required authoritative observations and successful fee collection when valid payment capacity exists;
 - No structural invariant fault;
 
 all live tickets receive service in FIFO order.
 
 The protocol promises no fixed block latency. Increasing runnable population MAY increase inter-Step service gaps while preserving order and eventual service.
+
+Without the required host observation or fee-collection prerequisite, a live head MAY prevent later service despite spare Weight. Only restored prerequisites or already-authorized lifecycle transitions can resolve that obstruction; liveness creates no additional close or scheduling authority.
 
 Starvation telemetry MUST NOT change priority, order, or execution authority.
 
@@ -1298,7 +1307,7 @@ Actor-scoped authorization:
 
 User Mutable MAY update Contract, pause/resume, cancel a run, deactivate, reactivate, and explicitly close.
 
-Dormant creation requires `Mutable`. Immutable creation MUST install an Active Contract because no later activation authority exists.
+Public Dormant creation requires `Mutable`. Public Immutable creation MUST install an Active Contract because no later activation authority exists. A host genesis configuration MAY declare an Immutable Dormant System identity as a permanently sealed no-Contract role; activation and owner close MUST reject it as Immutable.
 
 User Immutable:
 
@@ -1928,12 +1937,12 @@ A deployed change MUST NOT make previously reattachable custody unreachable with
 
 Required relations:
 
-1. `0 < MaxContractSteps <= 255`; production reference is 32.
+1. `0 < MaxContractSteps <= 255`; each host runtime selects its bounded value.
 2. `0 < MaxOwnerSlots <= 255`; reference is 255.
 3. `MaxRetryAttempts >= 2`; reference is 10.
 4. `MaxContractSteps * MaxRetryAttempts` fits outcome counters.
 5. Opening snapshot/result bounds cover every admitted Contract.
-6. `MaxCrossingMembersPerFeed` covers at least 10,000 User memberships plus every separately bounded host-owned membership reserved for the feed.
+6. `MaxCrossingMembersPerFeed` covers the configured User membership allowance plus every separately bounded host-owned membership reserved for the feed; the reference split is 9,000 User and 1,000 System positions within 10,000 total.
 7. Every queue, wakeup, detector, cohort, sweep, and worker bound is nonzero and owns one complete worst-case unit.
 8. One maximum current-Step control/effect transition fits the guaranteed base pass (§7.6, §8.3).
 9. Maximum admitted create, activate, update, deactivate, cancel, and close paths remain dispatchable under their owning call limits.
@@ -1952,12 +1961,12 @@ TargetBlockTime = 6 seconds
 CadenceTick = 500 milliseconds
 MaxActiveActors = 10_000
 MaxOwnerSlots = 255
-MaxContractSteps = 32
+MaxContractSteps = 12
 MaxRetryAttempts = 10
 MaxConsecutiveFailures = 10
 MaxFundingTrackedAssets = 40
-MaxOpeningSnapshotEntries = 64
-MaxOpeningPredicateResults = 128
+MaxOpeningSnapshotEntries = 24
+MaxOpeningPredicateResults = 48
 MaxPreconditionClauses = 4
 MaxPredicatesPerClause = 4
 MaxPredicatesPerStep = 4

@@ -55,6 +55,7 @@ The protected outcome is deterministic bounded protocol behavior under malformed
 - Registered Oracle publishers are trusted only for their admitted feed identities; publication does not grant broader authority and local reserve fallback is not an independent market oracle.
 - Slippage, output bounds, and reference deviation limit protocol fills but do not guarantee fair price, MEV resistance, deep liquidity, execution liveness, or profitable economic outcomes.
 - Bounded retry and catch-up guarantee a finite service path only while blocks continue and required markets, adapters, budgets, and dependencies eventually become available.
+- Current production admission permits four ObservationCrossing candidates per block. It does not satisfy or imply the 10,000-User/100-block assurance target, and System schedule or broad ObservationChange measurements cannot substitute for User reactive fairness evidence.
 - Canonical browser views cover bounded current chain truth. Archive, search, and unbounded history require an explicitly materialized provider.
 - Dependency review proves the recorded graph and reachability classification, not the absence of unknown upstream vulnerabilities.
 - DEOS `0.x` is fresh-genesis source. No production storage lineage, `Live` preset, or downstream network-launch assurance exists before `1.0`.

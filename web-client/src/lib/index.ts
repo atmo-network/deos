@@ -23,6 +23,7 @@ export {
 } from './adapters/blockchain';
 export {
   runDeosActorFinalizedSimulation,
+  type ActorFinalizedSimulationBudget,
   type ActorFinalizedSimulationInput,
   type ActorFinalizedSimulationMode,
 } from './adapters/blockchain/actor-simulation';

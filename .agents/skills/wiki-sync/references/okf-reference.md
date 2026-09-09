@@ -18,10 +18,10 @@ lock:
     revision_date: "2026-07-24T16:45:43Z"
     blob_sha1: a516d50128f5aa1f5746d1464661a39f7143e875
     source_sha256: 5a3311d270bebb16d558010e75064f5b75323f284992641732b1c8097511f948
-    source_trailing_newlines: 1
+    source_trailing_newlines: 0
   reference:
     embedding: deos-reference-v2-trim-final-newlines
-    body_sha256: c1c693e9beaa86e390cfc038ce40cf77f1b05014e2cc0c32c1378d0f5795b466
+    body_sha256: 02c7651ef5726b4a1b1e29877948592793a63e839fcea146df2bfc1b0e9a70d3
   adoption:
     bundle: wiki/index.md
     okf_version: "0.2"

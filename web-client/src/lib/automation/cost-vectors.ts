@@ -302,8 +302,8 @@ export function parseActorCostVectors(value: unknown): ActorCostVectors {
     .map((entry) => entry.contractStepCount)
     .filter((count): count is number => count !== null)
     .sort((left, right) => left - right);
-  if (geometry.join(',') !== '0,1,4,8,32') {
-    throw new Error('Actor cost vectors must cover Manual 0/1/4/8/32 geometry');
+  if (geometry.join(',') !== '0,1,4,8,12') {
+    throw new Error('Actor cost vectors must cover Manual 0/1/4/8/12 geometry');
   }
   const families = new Set(
     vectors

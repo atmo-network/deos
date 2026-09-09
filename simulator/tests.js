@@ -141,7 +141,11 @@ const calculateRelativeSpread = (ceiling, floor) => {
  */
 const calculateArithmeticSpread = (ceiling, floor) => ceiling - floor;
 
-const calculateStressFloor = (reserveNative, reserveForeign, sellablePressure) => {
+const calculateStressFloor = (
+  reserveNative,
+  reserveForeign,
+  sellablePressure,
+) => {
   if (reserveNative <= 0n || reserveForeign <= 0n) return 0n;
   if (sellablePressure < 0n) {
     throw new Error("Sellable pressure must be non-negative");
@@ -192,6 +196,7 @@ const TEST_SECTIONS = [
   [11, 4], // Economic Security & Attack Resistance
   [12, 8], // Adaptive System Behaviors
   [13, 5], // Reporting & Conformance Metrics
+  [14, 3], // Custody & Floor Scenarios
 ];
 
 let testCount = 0;
@@ -643,8 +648,7 @@ runTest("Scaling Rules - Property Fuzz", () => {
   for (let i = 0; i < cases; i++) {
     const price_initial =
       BigInt(randomInt(1_000_000) + 1) * (PRECISION / 1_000_000n);
-    const slope =
-      BigInt(randomInt(1_000_000) + 1) * (PRECISION / 1_000_000n);
+    const slope = BigInt(randomInt(1_000_000) + 1) * (PRECISION / 1_000_000n);
     const system = create_system({ tmc: { price_initial, slope } });
     const tmc = system.tmc;
     // Random supply point
@@ -771,8 +775,10 @@ runTest("XYK Fee Tracking - Native to Foreign", () => {
 
 runTest("Smart Router Path Selection", () => {
   const system = create_system({
-    price_initial: PRECISION,
-    slope: 100_000n,
+    tmc: {
+      price_initial: PRECISION,
+      slope: 100_000n,
+    },
   });
   const router = system.router;
   const minter = system.tmc;
@@ -816,11 +822,13 @@ runTest("Edge Cases", () => {
 
 runTest("Full Integration Flow", () => {
   const system = create_system({
-    price_initial: PRECISION,
-    slope: PRECISION,
-    shares: {
-      user_ppb: 333_333_333n,
-      tol_ppb: 666_666_667n,
+    tmc: {
+      price_initial: PRECISION,
+      slope: PRECISION,
+      mint_shares: {
+        user_ppb: 333_333_333n,
+        tol_ppb: 666_666_667n,
+      },
     },
   });
   const minter = system.tmc;
@@ -833,19 +841,18 @@ runTest("Full Integration Flow", () => {
   assert(burn_result.supply_before > 0n, "Burn successful");
 });
 
-runTest("Overflow Protection Testing", () => {
-  const max_uint256 = (1n << 256n) - 1n;
-  const half_max = max_uint256 / 2n;
-  try {
-    const system = create_system({
-      price_initial: half_max,
+runTest("Large BigInt Inputs Remain Deterministic", () => {
+  const half_uint256 = ((1n << 256n) - 1n) / 2n;
+  const system = create_system({
+    tmc: {
+      price_initial: half_uint256,
       slope: PRECISION / 1_000n,
-    });
-    const result = system.tmc.mint_native(1_000n * PRECISION);
-    assert(result.total_minted > 0n, "Large price_initial handled");
-  } catch (e) {
-    assert(true, "Overflow protected");
-  }
+    },
+  });
+  const first = system.tmc.calculate_mint(1_000n * PRECISION);
+  const second = system.tmc.calculate_mint(1_000n * PRECISION);
+  assert(first === second, "Large BigInt calculation is deterministic");
+  assert(first === 0n, "Sub-token output rounds down explicitly");
 });
 
 runTest("Safe Operating Ranges", () => {
@@ -887,11 +894,13 @@ runTest("Formula Batch Execution Smoke", () => {
   let total_minted = 0n;
   for (let i = 0; i < iterations; i++) {
     const system = create_system({
-      price_initial,
-      slope,
-      shares: {
-        user_ppb: 1_000_000_000n,
-        tol_ppb: 0n,
+      tmc: {
+        price_initial,
+        slope,
+        mint_shares: {
+          user_ppb: 1_000_000_000n,
+          tol_ppb: 0n,
+        },
       },
     });
     system.tmc.supply = current_supply;
@@ -973,33 +982,35 @@ runTest("Mass Conservation - System-Wide Token Accounting", () => {
   const total_supply = system.tmc.supply;
   const alice_balance = alice.get_balance().native;
   const bob_balance = bob.get_balance().native;
-  const tol_balance = system.tol.get_balance();
-  const tol_native =
-    tol_balance.bucket_a.contributed_native +
-    tol_balance.bucket_b.contributed_native +
-    tol_balance.bucket_c.contributed_native +
-    tol_balance.bucket_d.contributed_native;
   const xyk_native = system.xyk.reserve_native;
-  // Mass conservation: current supply equals sum of all token balances
-  // Burned tokens are already excluded from supply, so no need to add them back
-  const total_accounted = alice_balance + bob_balance + tol_native + xyk_native;
-  assertApprox(
-    total_supply,
-    total_accounted,
-    total_accounted / 1000n, // 0.1% tolerance for rounding
+  const tol_buffer_native = system.tol.buffer_native;
+  const fee_buffer_native = system.fee_manager.buffer_native;
+  // Historical contribution fields describe cost basis and must not be counted
+  // in addition to the same native currently held by the XYK pool.
+  const total_accounted =
+    alice_balance +
+    bob_balance +
+    xyk_native +
+    tol_buffer_native +
+    fee_buffer_native;
+  assert(
+    total_supply === total_accounted,
     `Mass conservation violated: supply=${total_supply}, accounted=${total_accounted}`,
   );
   // Additional verification: no negative balances
   assert(alice_balance >= 0n, "Alice balance cannot be negative");
   assert(bob_balance >= 0n, "Bob balance cannot be negative");
-  assert(tol_native >= 0n, "TOL balance cannot be negative");
+  assert(tol_buffer_native >= 0n, "TOL buffer cannot be negative");
   assert(xyk_native >= 0n, "XYK reserves cannot be negative");
   // Verify supply is positive after operations
   assert(total_supply > 0n, "Total supply must be positive after mints");
   // Verify all participants have accumulated tokens
   assert(alice_balance > 0n, "Alice should have received tokens");
   assert(bob_balance > 0n, "Bob should have received tokens");
-  assert(tol_native > 0n, "TOL should have accumulated tokens");
+  assert(
+    tol_buffer_native > 0n || xyk_native > 0n,
+    "TOL should have accumulated native custody",
+  );
   assert(xyk_native > 0n, "XYK should have TOL reserves");
 });
 
@@ -1202,8 +1213,10 @@ runTest("Distribution Remainder Handling", () => {
 
 runTest("System Invariants After Heavy Use", () => {
   const system = create_system({
-    price_initial: PRECISION / 100n,
-    slope: 10_000n,
+    tmc: {
+      price_initial: PRECISION / 100n,
+      slope: 10_000n,
+    },
   });
   for (let i = 0; i < 50; i++) {
     system.tmc.mint_native((100n + BigInt(i)) * PRECISION);
@@ -1320,8 +1333,10 @@ runTest("Multi-User Concurrent Simulation", () => {
   const random = createDeterministicRandom(0xde05_2001);
   const randomInt = (maxExclusive) => Math.floor(random() * maxExclusive);
   const system = create_system({
-    price_initial: PRECISION / 100n,
-    slope: 1_000n,
+    tmc: {
+      price_initial: PRECISION / 100n,
+      slope: 1_000n,
+    },
   });
   let total_minted = 0n;
   let total_burned = 0n;
@@ -1387,14 +1402,10 @@ runTest("Extreme Load Stress Test", () => {
       case 1: // Buy operation
         const buy_amount = BigInt(randomInt(500) + 5) * PRECISION;
         try {
-          const swap_result = system.router.swap_foreign_to_native(
-            buy_amount,
-            0n,
-          );
+          const supply_before = system.tmc.supply;
+          system.router.swap_foreign_to_native(buy_amount, 0n);
           total_swapped += buy_amount;
-          if (swap_result.route === "TMC" && swap_result.tol) {
-            total_minted += swap_result.tol.total_minted;
-          }
+          total_minted += system.tmc.supply - supply_before;
         } catch (e) {}
         break;
       case 2: // Sell operation
@@ -1443,8 +1454,10 @@ runTest("Extreme Load Stress Test", () => {
 runTest("Bootstrap Gravity Well Detection", () => {
   // Test the critical TOL threshold where system becomes stable
   const system = create_system({
-    price_initial: PRECISION / 1_000n,
-    slope: 1_000n,
+    tmc: {
+      price_initial: PRECISION / 1_000n,
+      slope: 1_000n,
+    },
   });
   let tol_market_share = 0n;
   let stability_achieved = false;
@@ -1475,8 +1488,10 @@ runTest("Bootstrap Gravity Well Detection", () => {
 runTest("Supply Elasticity Inversion Point", () => {
   // Test that after critical supply, increasing supply raises minimum price
   const system = create_system({
-    price_initial: PRECISION / 1_000n,
-    slope: 500n,
+    tmc: {
+      price_initial: PRECISION / 1_000n,
+      slope: 500n,
+    },
   });
   const initial_supply = system.tmc.supply;
   let pre_inversion_floor = 0n;
@@ -1522,11 +1537,17 @@ runTest("Vesting Cliff Math Trap Detection", () => {
   system.tmc.burn_native(burn_amount);
   const ceiling = system.tmc.get_price();
   const floor = calculateFloorPrice(system);
-  const preBurnGap = calculateArithmeticSpread(pre_burn_ceiling, pre_burn_floor);
+  const preBurnGap = calculateArithmeticSpread(
+    pre_burn_ceiling,
+    pre_burn_floor,
+  );
   const convergenceGap = calculateArithmeticSpread(ceiling, floor);
   assert(ceiling > floor, "Ceiling should exceed floor");
   assert(convergenceGap > 0n, "Convergence gap exists");
-  assert(convergenceGap < preBurnGap, "Burn should tighten the vesting cliff gap");
+  assert(
+    convergenceGap < preBurnGap,
+    "Burn should tighten the vesting cliff gap",
+  );
 });
 
 runTest("Mint-Swap Feedback Loop Analysis", () => {
@@ -2125,32 +2146,61 @@ runTest("Router Intelligence - XYK Route Selection", () => {
 runTest("Mode-Named Reward Routing - Unified Fee Collection", () => {
   const amount = 100n * PRECISION;
   const collected = collect_protocol_fee(amount);
-  assert(collected.fee_sink === amount, "Fee Sink should receive 100% of protocol fees");
+  assert(
+    collected.fee_sink === amount,
+    "Fee Sink should receive 100% of protocol fees",
+  );
 });
 
 runTest("TrustedSet Reward Routing - Pool Halves", () => {
   const feeSinkAmount = 100n * PRECISION;
   const split = distribute_fee_sink_trusted_set(feeSinkAmount);
-  assert(split.staking_pool === 50n * PRECISION, "TrustedSet staking pool should receive half of Fee Sink flow");
-  assert(split.liquidity_pool === 50n * PRECISION, "TrustedSet liquidity pool should receive half of Fee Sink flow");
-  assert(split.staking_pool + split.liquidity_pool === feeSinkAmount, "TrustedSet distribution must conserve Fee Sink amount");
+  assert(
+    split.staking_pool === 50n * PRECISION,
+    "TrustedSet staking pool should receive half of Fee Sink flow",
+  );
+  assert(
+    split.liquidity_pool === 50n * PRECISION,
+    "TrustedSet liquidity pool should receive half of Fee Sink flow",
+  );
+  assert(
+    split.staking_pool + split.liquidity_pool === feeSinkAmount,
+    "TrustedSet distribution must conserve Fee Sink amount",
+  );
 });
 
 runTest("Permissionless Target Reward Routing - Equal Thirds", () => {
   const feeSinkAmount = 60n * PRECISION;
   const split = distribute_fee_sink_permissionless_target(feeSinkAmount);
-  assert(split.security_rewards === 20n * PRECISION, "Permissionless target security rewards should receive one third");
-  assert(split.staking_pool === 20n * PRECISION, "Permissionless target staking pool should receive one third");
-  assert(split.liquidity_pool === 20n * PRECISION, "Permissionless target liquidity pool should receive one third");
-  assert(split.fee_sink_remainder === 0n, "Divisible permissionless target flow should leave no remainder");
+  assert(
+    split.security_rewards === 20n * PRECISION,
+    "Permissionless target security rewards should receive one third",
+  );
+  assert(
+    split.staking_pool === 20n * PRECISION,
+    "Permissionless target staking pool should receive one third",
+  );
+  assert(
+    split.liquidity_pool === 20n * PRECISION,
+    "Permissionless target liquidity pool should receive one third",
+  );
+  assert(
+    split.fee_sink_remainder === 0n,
+    "Divisible permissionless target flow should leave no remainder",
+  );
 });
 
 runTest("Mode-Named Reward Routing - Remainder Conservation", () => {
   const collected = collect_protocol_fee(7n);
   assert(collected.fee_sink === 7n, "Collection must conserve dust amounts");
   const trusted = distribute_fee_sink_trusted_set(collected.fee_sink);
-  assert(trusted.staking_pool + trusted.liquidity_pool === collected.fee_sink, "TrustedSet dust split must conserve Fee Sink amount");
-  const permissionless = distribute_fee_sink_permissionless_target(collected.fee_sink);
+  assert(
+    trusted.staking_pool + trusted.liquidity_pool === collected.fee_sink,
+    "TrustedSet dust split must conserve Fee Sink amount",
+  );
+  const permissionless = distribute_fee_sink_permissionless_target(
+    collected.fee_sink,
+  );
   assert(
     permissionless.security_rewards +
       permissionless.staking_pool +
@@ -2159,7 +2209,10 @@ runTest("Mode-Named Reward Routing - Remainder Conservation", () => {
       collected.fee_sink,
     "Permissionless target dust split plus retained Fee Sink remainder must conserve the collected amount",
   );
-  assert(permissionless.fee_sink_remainder === 1n, "Indivisible thirds should retain their remainder in Fee Sink");
+  assert(
+    permissionless.fee_sink_remainder === 1n,
+    "Indivisible thirds should retain their remainder in Fee Sink",
+  );
 });
 
 runTest("Economic Incentive Alignment", () => {
@@ -2226,9 +2279,22 @@ runTest("Reported Floor Metric Scenario Ratios", () => {
     referenceCeiling,
     sellableSupply: 666_666n * PRECISION,
   });
-  assertApprox(userExit.ratioPpb, 250_000_000n, 1n, "User exit should report ~25% floor ratio");
-  assertApprox(systemExit.ratioPpb, 111_111_111n, 1n, "System exit should report ~11.11% floor ratio");
-  assert(userExit.sellablePressure === 333_333n * PRECISION, "Default λ should use full sellable supply");
+  assertApprox(
+    userExit.ratioPpb,
+    250_000_000n,
+    1n,
+    "User exit should report ~25% floor ratio",
+  );
+  assertApprox(
+    systemExit.ratioPpb,
+    111_111_111n,
+    1n,
+    "System exit should report ~11.11% floor ratio",
+  );
+  assert(
+    userExit.sellablePressure === 333_333n * PRECISION,
+    "Default λ should use full sellable supply",
+  );
 });
 
 runTest("Ledger Conservation With Burns", () => {
@@ -2260,11 +2326,23 @@ runTest("Burn Liveness Threshold Behavior", () => {
   });
   system.tmc.mint_native(1_000n * PRECISION);
   system.fee_manager.receive_fee_foreign(5n * PRECISION);
-  assert(system.fee_manager.buffer_foreign === 5n * PRECISION, "Sub-threshold foreign fees should remain buffered");
-  assert(system.fee_manager.total_native_burned === 0n, "Sub-threshold foreign fees should not burn native");
+  assert(
+    system.fee_manager.buffer_foreign === 5n * PRECISION,
+    "Sub-threshold foreign fees should remain buffered",
+  );
+  assert(
+    system.fee_manager.total_native_burned === 0n,
+    "Sub-threshold foreign fees should not burn native",
+  );
   system.fee_manager.receive_fee_foreign(10n * PRECISION);
-  assert(system.fee_manager.buffer_foreign === 0n, "Threshold-crossing foreign fees should be consumed");
-  assert(system.fee_manager.total_native_burned > 0n, "Threshold-crossing foreign fees should burn native when liquidity exists");
+  assert(
+    system.fee_manager.buffer_foreign === 0n,
+    "Threshold-crossing foreign fees should be consumed",
+  );
+  assert(
+    system.fee_manager.total_native_burned > 0n,
+    "Threshold-crossing foreign fees should burn native when liquidity exists",
+  );
 });
 
 runTest("Zap Bucket Accounting Conservation", () => {
@@ -2277,12 +2355,30 @@ runTest("Zap Bucket Accounting Conservation", () => {
     result.tol.bucket_d,
   ];
   const lpTotal = buckets.reduce((sum, bucket) => sum + bucket.lp_tokens, 0n);
-  const nativeTotal = buckets.reduce((sum, bucket) => sum + bucket.contributed_native, 0n);
-  const foreignTotal = buckets.reduce((sum, bucket) => sum + bucket.contributed_foreign, 0n);
-  assert(lpTotal === result.tol.total_lp_minted, "Bucket LP accounting should conserve total LP minted");
-  assert(nativeTotal === result.tol.total_native_used, "Bucket native accounting should conserve total native used");
-  assert(foreignTotal === result.tol.total_foreign_used, "Bucket foreign accounting should conserve total foreign used");
-  assert(result.tol.bucket_a.lp_tokens > 0n, "Bucket_A should be classifiable as anchor-support LP after initial mint");
+  const nativeTotal = buckets.reduce(
+    (sum, bucket) => sum + bucket.contributed_native,
+    0n,
+  );
+  const foreignTotal = buckets.reduce(
+    (sum, bucket) => sum + bucket.contributed_foreign,
+    0n,
+  );
+  assert(
+    lpTotal === result.tol.total_lp_minted,
+    "Bucket LP accounting should conserve total LP minted",
+  );
+  assert(
+    nativeTotal === result.tol.total_native_used,
+    "Bucket native accounting should conserve total native used",
+  );
+  assert(
+    foreignTotal === result.tol.total_foreign_used,
+    "Bucket foreign accounting should conserve total foreign used",
+  );
+  assert(
+    result.tol.bucket_a.lp_tokens > 0n,
+    "Bucket_A should receive its configured LP share after initial mint",
+  );
 });
 
 runTest("Stress Floor Monotonicity", () => {
@@ -2298,7 +2394,10 @@ runTest("Stress Floor Monotonicity", () => {
     reserveForeign,
     300n * PRECISION,
   );
-  assert(smallSell > largeSell, "Stress floor should decrease as sellable pressure increases");
+  assert(
+    smallSell > largeSell,
+    "Stress floor should decrease as sellable pressure increases",
+  );
 });
 
 // FINAL STATISTICS

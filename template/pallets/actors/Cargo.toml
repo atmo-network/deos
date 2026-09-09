@@ -12,7 +12,7 @@ keywords = ["substrate", "frame", "automation", "actors"]
 categories = ["cryptography::cryptocurrencies"]
 edition.workspace = true
 publish = false
-include = ["Cargo.toml", "README.md", "docs/**/*.md", "src/**/*.rs", "examples/**/*.rs"]
+include = ["Cargo.toml", "README.md", "docs/**/*.md", "src/**/*.rs", "src/tests/fixtures/*.tsv", "tests/fixtures/*.json", "examples/**/*.rs"]
 
 [lib]
 name = "pallet_deos_actors"
@@ -47,6 +47,7 @@ polkadot-sdk = { workspace = true, features = [
   "sp-core",
   "sp-io",
   "sp-runtime",
+  "sp-trie",
 ] }
 
 [features]

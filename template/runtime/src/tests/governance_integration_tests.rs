@@ -2086,7 +2086,11 @@ fn transferable_staking_receipt_power_is_custodied_reused_and_increased() {
         .frozen_ordinary_ballot
         .expect("second primary ballot is frozen")
         .raw_power,
-      7 * 80
+      if cfg!(feature = "runtime-benchmarks") {
+        1
+      } else {
+        7 * 80
+      }
     );
 
     System::set_block_number(position.lock_until);

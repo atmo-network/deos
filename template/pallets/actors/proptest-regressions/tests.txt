@@ -4,4 +4,6 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc b75878323467f6484601fcbc14334befb1e1b2ac285e031ced1ad3857643853d # shrinks to operations = [Activate, Suspend, Deactivate]
+cc f1606ed2dc2acfab8ba7e2c45ac51b96e430648bcff0603ecdb39f7e1b62aa64 # shrinks to corruption = 0
+cc cec77c2e2c7b28a0a6227814cabff859bea014cbca5daa134844ad95cdfbd8c7 # shrinks to creates = 1, closes = 0
+cc 68229b0922b63a921eec14025e36e8d803cc3c27730964461ac99cc24eced587 # shrinks to actor_count = 2

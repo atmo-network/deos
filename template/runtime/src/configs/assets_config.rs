@@ -41,6 +41,32 @@ impl polkadot_sdk::frame_support::traits::EnsureOriginWithArg<RuntimeOrigin, Ass
   }
 }
 
+/// Consensus-level LP custody lock for the two immutable TMCTOL Anchor accounts.
+///
+/// Incoming LP remains admissible, while every debit path observes zero reducible LP balance.
+/// Declaring the LP namespace frozen also prevents destruction of an LP asset class.
+pub struct AnchorLpFreezer;
+
+impl pallet_assets::FrozenBalance<AssetId, AccountId, Balance> for AnchorLpFreezer {
+  fn frozen_balance(asset: AssetId, who: &AccountId) -> Option<Balance> {
+    let is_lp = (asset & primitives::assets::MASK_TYPE) == primitives::assets::TYPE_LP;
+    let is_anchor = [
+      primitives::ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+      primitives::ecosystem::actor_ids::BLDR_ANCHOR_ACTORS_ID,
+    ]
+    .into_iter()
+    .map(pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system)
+    .any(|anchor| anchor == *who);
+    (is_lp && is_anchor).then_some(Balance::MAX)
+  }
+
+  fn died(_: AssetId, _: &AccountId) {}
+
+  fn contains_freezes(asset: AssetId) -> bool {
+    (asset & primitives::assets::MASK_TYPE) == primitives::assets::TYPE_LP
+  }
+}
+
 /// Converter to distinguish between native and asset tokens
 pub struct NativeOrAssetIdConverter;
 
@@ -140,7 +166,7 @@ impl pallet_assets::Config for Runtime {
   type Extra = ();
   type ReserveData = ();
   type ForceOrigin = AssetsForceOrigin;
-  type Freezer = ();
+  type Freezer = AnchorLpFreezer;
   type Holder = ();
   type MetadataDepositBase = MetadataDepositBase;
   type MetadataDepositPerByte = MetadataDepositPerByte;

@@ -261,7 +261,7 @@ test('runtime-generated cost vectors bind metadata, Weight, geometry, and Trigge
     .sort((left, right) => left.contractStepCount - right.contractStepCount);
   assert.deepEqual(
     manual.map((vector) => vector.contractStepCount),
-    [0, 1, 4, 8, 32],
+    [0, 1, 4, 8, 12],
   );
   assert.equal(manual[0].quote.maximumNextActionFee.maximumEffectFee, 0n);
   assert.equal(manual[1].quote.stateHold.components.contractBody, 0n);
@@ -336,10 +336,10 @@ test('generated cost vector parser fails closed on drift and malformed ownership
 
   const missingGeometry = structuredClone(costVectorArtifact);
   missingGeometry.vectors = missingGeometry.vectors.filter(
-    (vector) => vector.name !== 'user-manual-32',
+    (vector) => vector.name !== 'user-manual-12',
   );
   assert.throws(
     () => parseActorCostVectors(missingGeometry),
-    /0\/1\/4\/8\/32 geometry/,
+    /0\/1\/4\/8\/12 geometry/,
   );
 });

@@ -24,6 +24,7 @@ import type {
   ObservationInspection,
 } from '$lib/observation/types';
 
+import { readActorControlProjection } from './actor-control';
 import type { DeosChainSnapshot } from './deos';
 import type { RuntimeAssetKind } from './runtime-assets';
 
@@ -208,32 +209,35 @@ export class BlockchainObservationReader {
       throw new Error('Selected Actors id must be a non-negative safe integer');
     }
     const runtimeActorId = BigInt(actorId);
-    const [identity, hot] = await Promise.all([
-      snapshot.typedApi.query.Actors.ActorIdentities.getValue(runtimeActorId, {
-        at: snapshot.at,
-      }),
-      snapshot.typedApi.query.Actors.ActorHot.getValue(runtimeActorId, {
-        at: snapshot.at,
-      }),
-    ]);
+    const control = await readActorControlProjection(
+      snapshot.typedApi,
+      snapshot.at,
+      runtimeActorId,
+    );
+    if (control.status !== 'Active') {
+      return projectObservationActorDeliveryInspection({
+        actorId: runtimeActorId,
+        hot: null,
+      });
+    }
     return projectObservationActorDeliveryInspection({
       actorId: runtimeActorId,
-      hot:
-        hot == null || identity == null
-          ? null
-          : {
-              actorClass: identity.actor_class.type,
-              pendingSignal: hot.pending_signal,
-              queueTicket: hot.queue_ticket ?? null,
-              wakeup:
-                hot.wakeup_pointer == null
-                  ? null
-                  : {
-                      key: hot.wakeup_pointer.block,
-                      pageId: hot.wakeup_pointer.page_id,
-                      slot: hot.wakeup_pointer.slot,
-                    },
-            },
+      hot: {
+        actorClass: control.cell.identity.actor_class.type,
+        pendingSignal: control.cell.hot.pending_signal,
+        queueTicket:
+          control.location.type === 'Ready'
+            ? control.location.value.ticket
+            : null,
+        wakeup:
+          control.location.type === 'Waiting'
+            ? {
+                key: control.location.value.key,
+                pageId: control.location.value.page,
+                slot: control.location.value.slot,
+              }
+            : null,
+      },
     });
   }
 

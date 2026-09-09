@@ -108,10 +108,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
     );
   }
 
-  function localizedSources(value: Record<string, string[]>) {
-    return value[currentLocale] ?? value[wikiState.default_locale] ?? [];
-  }
-
   function repoWikiPath(path: string) {
     return `wiki/${path}`;
   }
@@ -289,9 +285,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   const selectedPageState = $derived(
     selectedPageId ? (wikiState.pages[selectedPageId] ?? null) : null,
   );
-  const selectedPageSources = $derived(
-    selectedPageState ? localizedSources(selectedPageState.sources) : [],
-  );
   const relatedItems: RelatedWikiItem[] = $derived.by(() => {
     if (!selectedPageId) {
       return [];
@@ -368,7 +361,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           provenance: 'Происхождение сведений',
           status: 'Статус',
           generatedAt: 'Собрано',
-          sources: 'Источники',
           aliasMatch: 'Псевдоним',
           clearSearch: 'Очистить',
           copyPath: 'Скопировать путь',
@@ -401,7 +393,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
           provenance: 'Compiled provenance',
           status: 'Status',
           generatedAt: 'Generated',
-          sources: 'Sources',
           aliasMatch: 'Alias',
           clearSearch: 'Clear',
           copyPath: 'Copy path',
@@ -728,27 +719,6 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
                     <div class="mt-1 font-medium">{wikiState.generated_at}</div>
                   </div>
                 </div>
-                {#if selectedPageSources.length > 0}
-                  <div class="grid gap-1">
-                    <div
-                      class="text-[10px] uppercase tracking-[0.08em] text-(--mono-muted)"
-                    >
-                      {widgetText.sources}
-                    </div>
-                    <div class="grid gap-1">
-                      {#each selectedPageSources as sourcePath}
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          class="rounded-lg bg-white px-3 py-2 text-left text-[10px] text-(--mono-muted) hover:border-(--mono-purple)"
-                          onclick={() => copyPath(sourcePath)}
-                        >
-                          {sourcePath}
-                        </Button>
-                      {/each}
-                    </div>
-                  </div>
-                {/if}
               </div>
             {/if}
             {#if loadingPage}

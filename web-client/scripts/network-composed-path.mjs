@@ -13,6 +13,9 @@ import { cryptoWaitReady } from '@polkadot/util-crypto';
 import { Enum as PapiEnum } from 'polkadot-api';
 import { createWsClient } from 'polkadot-api/ws';
 
+import { readActorControlProjection } from '../src/lib/adapters/blockchain/actor-control.ts';
+import { deriveSystemActorSovereignAccount } from '../src/lib/adapters/blockchain/runtime-accounts.ts';
+
 const endpoint = process.env.DEOS_WS_ENDPOINT ?? 'ws://127.0.0.1:9988';
 const foreignLiteral = process.env.DEOS_COMPOSED_FOREIGN_ID ?? '4026531841';
 const amountLiteral =
@@ -136,8 +139,7 @@ function eventsOf(records, pallet, variant) {
 async function finalizedState(client, api, feed) {
   const block = await client.getFinalizedBlock();
   const [
-    identity,
-    actorHot,
+    control,
     aliceForeign,
     burnNative,
     aliceNative,
@@ -145,10 +147,7 @@ async function finalizedState(client, api, feed) {
     observation,
     issuance,
   ] = await Promise.all([
-    api.query.Actors.ActorIdentities.getValue(burnActorId, {
-      at: block.hash,
-    }),
-    api.query.Actors.ActorHot.getValue(burnActorId, { at: block.hash }),
+    readActorControlProjection(api, block.hash, burnActorId),
     api.view.Assets.balance_of(alice.address, foreignId, { at: block.hash }),
     api.query.System.Account.getValue(burnActorAccount, { at: block.hash }),
     api.query.System.Account.getValue(alice.address, { at: block.hash }),
@@ -158,14 +157,15 @@ async function finalizedState(client, api, feed) {
     api.query.Oracle.Observations.getValue(feed, { at: block.hash }),
     api.query.Balances.TotalIssuance.getValue({ at: block.hash }),
   ]);
-  if (!identity || !actorHot)
+  if (control.status !== 'Active')
     throw new Error(`Burn Actor ${burnActorId} is not active`);
   if (!reserves.success)
     throw new Error('foreign/Native pool reserves are unavailable');
   return {
     block,
-    identity,
-    actorHot,
+    identity: control.cell.identity,
+    actorHot: control.cell.hot,
+    actorLocation: control.location,
     aliceForeign: aliceForeign ?? 0n,
     burnNative: burnNative.data.free,
     aliceNative: aliceNative.data.free,
@@ -192,8 +192,7 @@ async function waitForActorCycle(client, api, feed, initialNonce, firstBlock) {
       if (
         state.identity.cycle_nonce > initialNonce &&
         !state.actorHot.pending_signal &&
-        state.actorHot.queue_ticket == null &&
-        state.actorHot.wakeup_pointer == null
+        state.actorLocation.type === 'Unsignaled'
       ) {
         return { records, state };
       }
@@ -212,15 +211,20 @@ let burnActorAccount;
 try {
   const api = client.getTypedApi(deos);
   const discoveryBlock = await client.getFinalizedBlock();
-  const [identity, feeds, nativeMinimum] = await Promise.all([
-    api.query.Actors.ActorIdentities.getValue(burnActorId, {
-      at: discoveryBlock.hash,
-    }),
+  const [control, feeds, nativeMinimum] = await Promise.all([
+    readActorControlProjection(api, discoveryBlock.hash, burnActorId),
     api.query.Oracle.FeedIds.getValue({ at: discoveryBlock.hash }),
     api.constants.Balances.ExistentialDeposit({ at: discoveryBlock.hash }),
   ]);
-  if (!identity) throw new Error(`Burn Actor ${burnActorId} is not registered`);
-  burnActorAccount = identity.sovereign_account;
+  if (
+    control.status !== 'Active' ||
+    control.cell.identity.actor_class.type !== 'System'
+  ) {
+    throw new Error(`Burn Actor ${burnActorId} is not an active System Actor`);
+  }
+  burnActorAccount = deriveSystemActorSovereignAccount(
+    control.cell.identity.actor_class.value.sovereign_id,
+  );
   const feed = feeds.find(matchesFeed);
   if (!feed)
     throw new Error('Native-to-foreign pre-execution Oracle feed is absent');
@@ -230,8 +234,12 @@ try {
     throw new Error(`Alice Native balance ${before.aliceNative} is too low`);
   if (before.reserves[0] === 0n || before.reserves[1] === 0n)
     throw new Error('Native/foreign pool reserves must be non-zero');
-  if (before.actorHot.pending_signal || before.actorHot.queue_ticket != null)
+  if (
+    before.actorHot.pending_signal ||
+    before.actorLocation.type !== 'Unsignaled'
+  ) {
     throw new Error('Burn Actor must be idle before composed-path execution');
+  }
   if (before.burnNative !== nativeMinimum)
     throw new Error(
       `Burn Actor must start with exactly one native ED anchor: expected ${nativeMinimum}, found ${before.burnNative}`,

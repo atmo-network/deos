@@ -50,7 +50,7 @@ export const KNOWN_SYSTEM_ACTORS: readonly KnownSystemActor[] = [
   { actorId: 9, label: 'Treasury D', role: 'Dormant treasury' },
   { actorId: 10, label: 'BLDR Splitter', role: 'BLDR distribution' },
   { actorId: 11, label: 'BLDR Liquidity Actor', role: 'NTVE/BLDR LP composer' },
-  { actorId: 12, label: 'BLDR Bucket A', role: 'BLDR anchor LP' },
+  { actorId: 12, label: 'BLDR Anchor', role: 'Immutable NTVE/BLDR LP custody' },
   { actorId: 13, label: 'BLDR Treasury', role: 'BLDR treasury' },
 ];
 
@@ -65,11 +65,13 @@ function concatBytes(...parts: Uint8Array[]): Uint8Array {
   return result;
 }
 
-export function deriveSystemActorSovereignAccount(actorId: number): string {
+export function deriveSystemActorSovereignAccount(
+  sovereignId: number | bigint,
+): string {
   const seed = concatBytes(
     Binary.fromText(ACTORS_PALLET_ID),
     Binary.fromText(SYSTEM_ACTORS_LABEL),
-    u64.enc(BigInt(actorId)),
+    u64.enc(BigInt(sovereignId)),
   );
   return fromBufferToBase58(SS58_FORMAT)(Blake2256(seed));
 }

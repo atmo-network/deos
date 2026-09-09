@@ -1,5 +1,5 @@
 use pallet_deos_actors::{
-  ActorType, FeeChargeKind, FeeEnvelopeInput, compose_attempt_fee_envelope,
+  ActorType, FeeAssetClass, FeeChargeKind, FeeEnvelopeInput, compose_attempt_fee_envelope,
   fee_native_protected_minimum, settle_attempt_fee_step,
 };
 use polkadot_sdk::frame_support::{BoundedVec, traits::ConstU32};
@@ -14,8 +14,8 @@ fn hex(bytes: &[u8]) -> String {
   bytes.iter().map(|byte| format!("{byte:02x}")).collect() // deos-bypass: bounded-iter -- fixed SHA-256 digest
 }
 
-/// Hash a committed runtime evidence file into a hex identity. The metadata and
-/// Actors weights files are the final release candidate's artifacts; a missing file
+/// Hash a caller-supplied runtime evidence file into a hex identity. The metadata and
+/// Actors weights files identify the embedding runtime's artifacts; a missing file
 /// fails closed so the fee-envelope binding cannot silently unbind.
 fn file_identity(path: &Path) -> String {
   let bytes = fs::read(path).unwrap_or_else(|error| {
@@ -209,7 +209,11 @@ fn floor_case(
     min_user_balance: min_user_balance.to_string(),
     protected_minimum: fee_native_protected_minimum(
       actor_type,
-      is_fee_native,
+      if is_fee_native {
+        FeeAssetClass::FeeNative
+      } else {
+        FeeAssetClass::Other
+      },
       asset_minimum,
       min_user_balance,
     )
@@ -217,12 +221,12 @@ fn floor_case(
   }
 }
 
-fn manifest() -> FeeEnvelopeVectors {
+fn manifest(metadata: &Path, weights: &Path) -> FeeEnvelopeVectors {
   FeeEnvelopeVectors {
     format: "deos.actor.fee-envelope-vectors",
     format_version: 2,
-    metadata_sha256: file_identity(Path::new("../web-client/.papi/metadata/deos.scale")),
-    weight_sha256: file_identity(Path::new("runtime/src/weights/pallet_deos_actors.rs")),
+    metadata_sha256: file_identity(metadata),
+    weight_sha256: file_identity(weights),
     vectors: vec![
       vector(ActorType::User, 0),
       vector(ActorType::User, 1),
@@ -265,9 +269,16 @@ fn manifest() -> FeeEnvelopeVectors {
 }
 
 fn main() {
-  let rendered = serde_json::to_string(&manifest()).expect("vectors serialize") + "\n";
   let args = env::args().skip(1).collect::<Vec<_>>();
-  match args.as_slice() {
+  if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h") {
+    println!("{USAGE}");
+    return;
+  }
+  let (metadata, weights, output) = parse_args(&args).unwrap_or_else(|error| panic!("{error}"));
+  let rendered = serde_json::to_string(&manifest(Path::new(metadata), Path::new(weights)))
+    .expect("vectors serialize")
+    + "\n";
+  match output {
     [] => print!("{rendered}"),
     [path] => {
       fs::write(Path::new(path), rendered).expect("fee-envelope vector artifact is writable");
@@ -276,10 +287,68 @@ fn main() {
       let actual = fs::read_to_string(Path::new(path)).expect("vector artifact is readable");
       assert_eq!(actual, rendered, "fee-envelope vector artifact is stale");
     }
-    _ => {
-      panic!(
-        "usage: cargo run -p pallet-deos-actors --example fee_envelope_vectors -- [PATH | --check PATH]"
-      )
+    _ => unreachable!("output arguments were validated before reading artifacts"),
+  }
+}
+
+const USAGE: &str = "usage: cargo run -p pallet-deos-actors --example fee_envelope_vectors -- --metadata METADATA_PATH --weights PRODUCTION_WEIGHTS_PATH [OUTPUT_PATH | --check OUTPUT_PATH]\nBoth evidence inputs are required. Omit OUTPUT_PATH to print JSON; --check compares exact bytes. Relative paths resolve from the current working directory.";
+
+fn parse_args(args: &[String]) -> Result<(&str, &str, &[String]), &'static str> {
+  let [metadata_flag, metadata, weights_flag, weights, output @ ..] = args else {
+    return Err(USAGE);
+  };
+  if metadata_flag != "--metadata"
+    || weights_flag != "--weights"
+    || metadata.is_empty()
+    || weights.is_empty()
+  {
+    return Err(USAGE);
+  }
+  match output {
+    [] => {}
+    [path] if !path.is_empty() && !path.starts_with('-') => {}
+    [flag, path] if flag == "--check" && !path.is_empty() => {}
+    _ => return Err(USAGE),
+  }
+  Ok((metadata, weights, output))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn evidence_paths_are_explicit_and_output_modes_are_bounded() {
+    let inputs = [
+      "--metadata",
+      "host/metadata.scale",
+      "--weights",
+      "host/weights.rs",
+    ];
+    for output in [
+      &[][..],
+      &["vectors.json"][..],
+      &["--check", "vectors.json"][..],
+    ] {
+      let args = inputs
+        .iter()
+        .chain(output)
+        .map(|arg| (*arg).to_owned())
+        .collect::<Vec<_>>();
+      let (metadata, weights, actual_output) = parse_args(&args).expect("explicit paths accepted");
+      assert_eq!(metadata, "host/metadata.scale");
+      assert_eq!(weights, "host/weights.rs");
+      assert_eq!(actual_output, output);
+    }
+    for invalid in [
+      vec![],
+      vec!["--check", "vectors.json"],
+      vec!["--metadata", "file"],
+      vec!["--metadata", "file", "--weights", "weights", "--check"],
+      vec!["--metadata", "", "--weights", "weights"],
+    ] {
+      let args = invalid.into_iter().map(str::to_owned).collect::<Vec<_>>();
+      assert!(parse_args(&args).is_err());
     }
   }
 }

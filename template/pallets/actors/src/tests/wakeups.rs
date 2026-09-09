@@ -11,12 +11,15 @@ fn paged_wakeup_primitives_encode_exact_pointer_and_bounded_page_ownership() {
   assert_eq!(pointer.page_id, 7);
   assert_eq!(pointer.slot, 3);
 
-  let entries =
-    BoundedVec::<Option<WakeupEntry>, <Test as crate::Config>::WakeupPageSize>::try_from(vec![
-      Some(WakeupEntry { actor_id: 9 }),
-      None,
-    ])
-    .expect("wakeup page entries fit");
+  let reference = crate::ActorWakeupReference {
+    actor_id: 9,
+    admission_identity: [1; 32],
+  };
+  let entries = crate::ActorWaitingChunkOf::<Test>::try_from(vec![
+    Some(crate::ActorWaitingEntry::Reference(reference.clone())),
+    None,
+  ])
+  .expect("wakeup page entries fit");
   let page = WakeupPage {
     entries,
     live_entries: 1,
@@ -24,12 +27,15 @@ fn paged_wakeup_primitives_encode_exact_pointer_and_bounded_page_ownership() {
     previous_page: Some(6),
     next_page: Some(8),
   };
-  assert_eq!(page.entries[0], Some(WakeupEntry { actor_id: 9 }));
+  assert_eq!(
+    page.entries[0],
+    Some(crate::ActorWaitingEntry::Reference(reference))
+  );
   assert_eq!(page.entries[1], None);
   assert_eq!(page.live_entries, 1);
   assert_eq!((page.previous_page, page.next_page), (Some(6), Some(8)));
 
-  let bucket = WakeupBucketState {
+  let bucket = crate::WakeupBucketState {
     head_page: 6,
     tail_page: 8,
     next_page_id: 9,
@@ -52,8 +58,7 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     let first = Actors::actor_hot(actor_id)
       .expect("hot state")
       .wakeup_pointer
@@ -87,10 +92,17 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
+    let (_, mut consumed) = Actors::actor_control_cell(actor_id).expect("Waiting authority");
     assert_eq!(
       Actors::wakeup_substrate_invalidate(actor_id),
       Some(replacement)
     );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    consumed.hot.pending_signal = false;
+    consumed.hot.wakeup_pointer = None;
+    consumed.eligible_at = None;
+    crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, consumed);
+    crate::ActorControlLocators::<Test>::insert(actor_id, crate::ActorControlLocation::Unsignaled);
     assert!(
       Actors::actor_hot(actor_id)
         .expect("hot state")
@@ -109,10 +121,8 @@ fn wakeup_replacement_rolls_back_when_existing_cursor_is_corrupt() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
-      maybe_bucket.as_mut().expect("bucket").cursor_index = Some(1);
-    });
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    crate::ActorWaitingCursorIndices::<Test>::insert(WakeupKey::Block(10), 1);
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     assert_eq!(
@@ -131,51 +141,41 @@ fn wakeup_pointer_corruption_matrix_fails_closed_and_is_detected() {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
       let other = create_system_with(BOB, manual_schedule(), None, inert_contract_steps());
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+      assert!(schedule_latched_service_wakeup(actor_id, 10));
       match corruption {
-        0 => ActorHot::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("active actor")
+        0 => mutate_primary_control_cell(actor_id, |cell| {
+          cell
+            .hot
             .wakeup_pointer
             .as_mut()
             .expect("wakeup pointer")
             .block = WakeupKey::Block(11);
         }),
-        1 => ActorHot::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("active actor")
+        1 => mutate_primary_control_cell(actor_id, |cell| {
+          cell
+            .hot
             .wakeup_pointer
             .as_mut()
             .expect("wakeup pointer")
             .page_id = 1;
         }),
-        2 => ActorHot::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("active actor")
+        2 => mutate_primary_control_cell(actor_id, |cell| {
+          cell
+            .hot
             .wakeup_pointer
             .as_mut()
             .expect("wakeup pointer")
             .slot = 7;
         }),
-        3 => WakeupPages::<Test>::mutate((WakeupKey::Block(10), 0), |maybe| {
-          maybe.as_mut().expect("wakeup page").entries[0] =
-            Some(crate::WakeupEntry { actor_id: other });
-        }),
-        4 => WakeupPages::<Test>::remove((WakeupKey::Block(10), 0)),
-        5 => WakeupBuckets::<Test>::remove(WakeupKey::Block(10)),
-        6 => WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe| {
-          maybe.as_mut().expect("wakeup bucket").cursor_index = None;
-        }),
-        7 => WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe| {
-          maybe.as_mut().expect("wakeup bucket").live_entries = 0;
-        }),
+        3 => mutate_primary_control_cell(actor_id, |cell| cell.actor_id = other),
+        4 => crate::ActorWaitingFrameChunks::<Test>::remove((WakeupKey::Block(10), 0)),
+        5 => crate::ActorWaitingTails::<Test>::remove(WakeupKey::Block(10)),
+        6 => crate::ActorWaitingCursorIndices::<Test>::remove(WakeupKey::Block(10)),
+        7 => crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(10), 0),
         _ => unreachable!(),
       }
       let events_before = System::events();
-      let identity_before = Actors::actor_identities(actor_id).expect("identity");
+      let identity_before = Actors::actor_identity(actor_id);
       let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
       assert_eq!(
@@ -185,7 +185,7 @@ fn wakeup_pointer_corruption_matrix_fails_closed_and_is_detected() {
       );
       assert_eq!(Actors::wakeup_substrate_invalidate(actor_id), None);
       assert_eq!(System::events(), events_before);
-      assert_eq!(Actors::actor_identities(actor_id), Some(identity_before));
+      assert_eq!(Actors::actor_identity(actor_id), identity_before);
       assert_eq!(
         polkadot_sdk::sp_io::storage::root(StateVersion::V1),
         root_before,
@@ -200,13 +200,43 @@ fn wakeup_pointer_corruption_matrix_fails_closed_and_is_detected() {
   }
 }
 
+#[cfg(all(feature = "try-runtime", not(feature = "runtime-benchmarks")))]
+#[test]
+fn try_state_reads_frame_wakeup_authority_without_scalar_hot() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
+    let Some(crate::ActorControlLocation::Waiting { key, page, slot }) =
+      crate::ActorControlLocators::<Test>::get(actor_id)
+    else {
+      panic!("Cadenced actor owns one Waiting frame cell");
+    };
+    crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |maybe_chunk| {
+      let cell = maybe_chunk
+        .as_mut()
+        .and_then(|page| page.entries.get_mut(slot as usize))
+        .and_then(Option::as_mut)
+        .and_then(crate::ActorWaitingEntry::primary_mut)
+        .expect("Waiting frame cell exists");
+      cell
+        .hot
+        .trigger_wakeup_pointer
+        .as_mut()
+        .expect("Cadenced pointer exists")
+        .slot = u32::from(slot).saturating_add(1);
+    });
+
+    assert!(crate::Pallet::<Test>::do_try_state().is_err());
+  });
+}
+
 #[test]
 fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupPages::<Test>::remove((WakeupKey::Block(10), 0));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    crate::ActorWaitingFrameChunks::<Test>::remove((WakeupKey::Block(10), 0));
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
       Actors::try_wakeup_substrate_schedule_inner(actor_id, 20),
@@ -218,15 +248,9 @@ fn wakeup_replacement_rolls_back_when_existing_page_or_slot_is_missing() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("hot")
-        .wakeup_pointer
-        .as_mut()
-        .expect("pointer")
-        .slot = 7;
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    mutate_primary_control_cell(actor_id, |cell| {
+      cell.hot.wakeup_pointer.as_mut().expect("pointer").slot = 7;
     });
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
@@ -242,10 +266,8 @@ fn wakeup_replacement_rolls_back_on_live_count_underflow() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
-      maybe_bucket.as_mut().expect("bucket").live_entries = 0;
-    });
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(10), 0);
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     assert_eq!(
@@ -267,7 +289,7 @@ fn wakeup_cursor_capacity_overflow_fails_closed_and_preserves_existing_path() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     let pointer = Actors::actor_hot(actor_id)
       .expect("hot state")
       .wakeup_pointer
@@ -322,14 +344,14 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    // Seed a bucket whose next_page_id is at the u64 ceiling; appending a new page
-    // cannot advance the monotonic page index and must fail closed as
+    // Seed a Waiting bucket whose tail position is at the u64 ceiling; appending
+    // cannot advance the monotonic position and must fail closed as
     // WakeupIndexExhausted (mapped to the SchedulerIndexExhausted public error).
     let block = 10u64;
-    assert!(Actors::wakeup_substrate_schedule(actor_id, block));
-    // Fill the tail page to force the page-append branch, then set the next page id
-    // at the u64 ceiling so the monotonic index cannot advance.
-    let page_size = <<Test as crate::Config>::WakeupPageSize as Get<u32>>::get();
+    assert!(schedule_latched_service_wakeup(actor_id, block));
+    // Fill the tail page, then set the next Waiting position at the u64 ceiling
+    // so the monotonic address cannot advance.
+    let page_size = 32u32;
     for _ in 0..page_size.saturating_sub(1) {
       let extra = create_system_with(
         BOB,
@@ -337,17 +359,14 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
         None,
         transfer_contract_steps(CHARLIE, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(extra, block));
+      assert!(schedule_latched_service_wakeup(extra, block));
     }
-    crate::WakeupBuckets::<Test>::mutate(WakeupKey::Block(block), |bucket| {
-      let bucket = bucket.as_mut().expect("bucket exists");
-      bucket.next_page_id = u64::MAX;
-    });
+    crate::ActorWaitingTails::<Test>::insert(WakeupKey::Block(block), u64::MAX);
     let pointer_before = Actors::actor_hot(actor_id)
       .expect("hot")
       .wakeup_pointer
       .expect("existing pointer");
-    // A different actor scheduling into the full bucket with the page index at the
+    // A different actor scheduling into the full bucket with the tail position at the
     // u64 ceiling cannot advance the monotonic index and fails closed.
     let new_actor = create_system_with(
       BOB,
@@ -356,7 +375,7 @@ fn wakeup_page_index_overflow_fails_closed_as_namespace_exhaustion() {
       transfer_contract_steps(CHARLIE, 1),
     );
     assert!(matches!(
-      crate::Pallet::<Test>::try_wakeup_substrate_schedule_inner(new_actor, block),
+      try_schedule_latched_service_wakeup(new_actor, block),
       Err(crate::EnqueueOutcome::WakeupIndexExhausted)
     ));
     // The existing pointer is never cleared before the replacement path fits.
@@ -378,21 +397,12 @@ fn wakeup_bucket_corruption_fails_closed_as_corrupted_topology() {
       transfer_contract_steps(BOB, 1),
     );
     let block = 10u64;
-    assert!(Actors::wakeup_substrate_schedule(actor_id, block));
+    assert!(schedule_latched_service_wakeup(actor_id, block));
     // Corrupt the TARGET bucket for a different actor: a bucket exists at block + 1 but
     // its cursor_index is missing, so the schedule path must fail closed as corrupted
     // topology instead of retrying as queue-full.
     let target = block + 1;
-    crate::WakeupBuckets::<Test>::insert(
-      WakeupKey::Block(target),
-      crate::WakeupBucketState {
-        head_page: 0,
-        tail_page: 0,
-        next_page_id: 1,
-        live_entries: 1,
-        cursor_index: None,
-      },
-    );
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(target), 1);
     let pointer_before = Actors::actor_hot(actor_id)
       .expect("hot")
       .wakeup_pointer
@@ -404,7 +414,7 @@ fn wakeup_bucket_corruption_fails_closed_as_corrupted_topology() {
       transfer_contract_steps(CHARLIE, 1),
     );
     assert!(matches!(
-      crate::Pallet::<Test>::try_wakeup_substrate_schedule_inner(new_actor, target),
+      try_schedule_latched_service_wakeup(new_actor, target),
       Err(crate::EnqueueOutcome::CorruptedTopology)
     ));
     assert_eq!(
@@ -429,7 +439,10 @@ fn saturated_enqueue_falls_back_to_exact_next_block_wakeup_not_silent_loss() {
     // Placement must not silently lose readiness: the fallback is an exact
     // next-block wakeup, so the actor owns a wakeup path even though the FIFO
     // rejected the ticket (spec 8.1.4).
-    assert_ok!(Actors::enqueue(actor_id));
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
     let hot = Actors::actor_hot(actor_id).expect("hot");
     assert!(
       hot.queue_ticket.is_none(),
@@ -457,22 +470,14 @@ fn saturated_enqueue_fails_closed_when_wakeup_fallback_also_fails() {
     // Saturate the FIFO so enqueue falls back to the next-block wakeup, then
     // corrupt the target wakeup bucket so that fallback placement also fails.
     seed_saturated_tombstone_queue();
-    crate::WakeupBuckets::<Test>::insert(
-      WakeupKey::Block(2),
-      crate::WakeupBucketState {
-        head_page: 0,
-        tail_page: 0,
-        next_page_id: 1,
-        live_entries: 0,
-        cursor_index: None,
-      },
-    );
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(2), 1);
     // The placement must fail closed: the caller learns the actor owns no path
     // instead of believing enqueue succeeded while readiness was lost.
-    assert!(matches!(
-      Actors::enqueue(actor_id),
-      Err(crate::EnqueueOutcome::CorruptedTopology)
-    ));
+    // The public placement boundary maps CorruptedTopology to SchedulerIndexExhausted.
+    assert_noop!(
+      Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
+      Error::<Test>::SchedulerIndexExhausted
+    );
     let hot = Actors::actor_hot(actor_id).expect("hot");
     assert!(hot.queue_ticket.is_none());
     assert!(hot.wakeup_pointer.is_none(), "no phantom wakeup on failure");
@@ -493,16 +498,7 @@ fn manual_trigger_fails_closed_when_wakeup_fallback_cannot_preserve_readiness() 
     // Saturate the FIFO so any ticket placement falls back to the next-block
     // wakeup, then corrupt that target bucket so the fallback also fails.
     seed_saturated_tombstone_queue();
-    crate::WakeupBuckets::<Test>::insert(
-      WakeupKey::Block(2),
-      crate::WakeupBucketState {
-        head_page: 0,
-        tail_page: 0,
-        next_page_id: 1,
-        live_entries: 0,
-        cursor_index: None,
-      },
-    );
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(2), 1);
     // The extrinsic must fail closed (namespace/corruption is not retryable
     // queue-full), leaving the actor with its pre-trigger state: no ticket and
     // no wakeup, and the pending-signal mutation rolled back.
@@ -547,14 +543,12 @@ fn paged_wakeup_substrate_invalidation_rolls_back_on_cursor_mismatch() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     let pointer = Actors::actor_hot(actor_id)
       .expect("hot state")
       .wakeup_pointer
       .expect("wakeup pointer");
-    crate::pallet::WakeupBuckets::<Test>::mutate(WakeupKey::Block(10), |maybe_bucket| {
-      maybe_bucket.as_mut().expect("wakeup bucket").cursor_index = None;
-    });
+    crate::ActorWaitingCursorIndices::<Test>::remove(WakeupKey::Block(10));
 
     assert_eq!(Actors::wakeup_substrate_invalidate(actor_id), None);
     assert_eq!(
@@ -579,7 +573,7 @@ fn paged_wakeup_substrate_invalidation_rolls_back_on_cursor_mismatch() {
 fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let page_size: u32 = <Test as crate::Config>::WakeupPageSize::get();
+    let page_size = 32u32;
     let count = page_size.saturating_mul(2).saturating_add(1);
     let mut actors = Vec::new();
     for _ in 0..count {
@@ -589,7 +583,7 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
         None,
         transfer_contract_steps(BOB, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+      assert!(schedule_latched_service_wakeup(actor_id, 10));
       actors.push(actor_id);
     }
 
@@ -617,8 +611,21 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
     );
 
     let page_size = page_size as usize;
+    let invalidate_service = |actor_id| {
+      let (_, mut consumed) = Actors::actor_control_cell(actor_id).expect("Waiting authority");
+      assert!(Actors::wakeup_substrate_invalidate(actor_id).is_some());
+      assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+      consumed.hot.pending_signal = false;
+      consumed.hot.wakeup_pointer = None;
+      consumed.eligible_at = None;
+      crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, consumed);
+      crate::ActorControlLocators::<Test>::insert(
+        actor_id,
+        crate::ActorControlLocation::Unsignaled,
+      );
+    };
     for actor_id in &actors[page_size..page_size * 2] {
-      assert!(Actors::wakeup_substrate_invalidate(*actor_id).is_some());
+      invalidate_service(*actor_id);
     }
     let bucket = Actors::wakeup_buckets(10).expect("bucket after middle unlink");
     assert_eq!(bucket.live_entries, count.saturating_sub(page_size as u32));
@@ -636,8 +643,10 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
-    for actor_id in actors {
-      let _ = Actors::wakeup_substrate_invalidate(actor_id);
+    for (index, actor_id) in actors.into_iter().enumerate() {
+      if !(page_size..page_size * 2).contains(&index) {
+        invalidate_service(actor_id);
+      }
     }
     assert!(Actors::wakeup_buckets(10).is_none());
     assert!(Actors::wakeup_pages((10, 0)).is_none());
@@ -649,7 +658,7 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
 fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let page_size: u32 = <Test as crate::Config>::WakeupPageSize::get();
+    let page_size = 32u32;
     let count = page_size.saturating_mul(2).saturating_add(1);
     let mut actors = Vec::new();
     for _ in 0..count {
@@ -659,13 +668,17 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
         None,
         transfer_contract_steps(BOB, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+      assert!(schedule_latched_service_wakeup(actor_id, 10));
       actors.push(actor_id);
     }
 
     let first_limit = page_size / 2;
-    let (first, first_stats) = Actors::wakeup_substrate_drain_block(10, first_limit);
-    assert_eq!(first.as_slice(), &actors[..first_limit as usize]);
+    let (first, first_stats) =
+      Actors::wakeup_substrate_drain_key(WakeupKey::Block(10), first_limit);
+    assert_eq!(
+      first.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+      actors[..first_limit as usize]
+    );
     assert_eq!(first_stats.entries_scanned, first_limit);
     assert_eq!(first_stats.ready_entries, first_limit);
     assert_eq!(first_stats.pages_touched, 1);
@@ -674,9 +687,13 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
     assert_eq!(head.scan_slot, first_limit);
     assert_eq!(head.live_entries, page_size - first_limit);
 
-    let (second, second_stats) = Actors::wakeup_substrate_drain_block(10, page_size);
+    let (second, second_stats) =
+      Actors::wakeup_substrate_drain_key(WakeupKey::Block(10), page_size);
     let second_end = first_limit.saturating_add(page_size) as usize;
-    assert_eq!(second.as_slice(), &actors[first_limit as usize..second_end]);
+    assert_eq!(
+      second.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+      actors[first_limit as usize..second_end]
+    );
     assert_eq!(second_stats.entries_scanned, page_size);
     assert_eq!(second_stats.ready_entries, page_size);
     assert_eq!(second_stats.pages_touched, 2);
@@ -687,11 +704,30 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
     assert_eq!(head.previous_page, None);
     assert_eq!(head.scan_slot, first_limit);
 
-    let (final_ready, final_stats) = Actors::wakeup_substrate_drain_block(10, u32::MAX);
-    assert_eq!(final_ready.as_slice(), &actors[second_end..]);
+    let (final_ready, final_stats) =
+      Actors::wakeup_substrate_drain_key(WakeupKey::Block(10), u32::MAX);
+    assert_eq!(
+      final_ready.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+      actors[second_end..]
+    );
     assert_eq!(final_stats.ready_entries, count - first_limit - page_size);
     assert_eq!(final_stats.pages_touched, 2);
     assert_eq!(final_stats.pages_deleted, 2);
+    for (actor_id, state, admission, loaded_step) in
+      first.into_iter().chain(second).chain(final_ready)
+    {
+      let loaded_step = loaded_step.expect("nonempty service Step");
+      let cell = crate::ActorControlCellOf::<Test> {
+        actor_id,
+        identity: Actors::control_identity_from_scalar(state.identity).expect("canonical identity"),
+        hot: Actors::control_hot_from_scalar(state.hot),
+        admission,
+        cursor: loaded_step.cursor,
+        resources: loaded_step.resources,
+        eligible_at: Some(10),
+      };
+      assert_ok!(Actors::control_append_ready(cell));
+    }
     assert!(Actors::wakeup_buckets(10).is_none());
     assert!(Actors::wakeup_pages((10, 1)).is_none());
     assert!(Actors::wakeup_pages((10, 2)).is_none());
@@ -709,10 +745,11 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
 }
 
 #[test]
-fn paged_wakeup_drain_discards_stale_only_bucket() {
+fn paged_wakeup_drain_discards_explicit_orphan_references() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut actors = Vec::new();
+    let mut stale_cells = Vec::new();
     for _ in 0..3 {
       let actor_id = create_system_with(
         ALICE,
@@ -720,10 +757,25 @@ fn paged_wakeup_drain_discards_stale_only_bucket() {
         None,
         transfer_contract_steps(BOB, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-      ActorHot::<Test>::mutate(actor_id, |maybe_hot| {
-        maybe_hot.as_mut().expect("hot state").wakeup_pointer = None;
+      assert!(schedule_latched_service_wakeup(actor_id, 10));
+      let (location, mut cell) = Actors::actor_control_cell(actor_id).expect("scheduled primary");
+      // Deliberate orphan corruption: real lifecycle removal deletes the entry as well.
+      let crate::ActorControlLocation::Waiting { key, page, slot } = location else {
+        panic!("scheduled primary occupies Waiting");
+      };
+      crate::ActorWaitingFrameChunks::<Test>::mutate((key, page), |stored| {
+        stored.as_mut().expect("Waiting page").entries[slot as usize] = Some(
+          crate::ActorWaitingEntry::Reference(crate::ActorWakeupReference {
+            actor_id,
+            admission_identity: cell.admission.admission_identity,
+          }),
+        );
       });
+      crate::ActorControlLocators::<Test>::remove(actor_id);
+      cell.hot.pending_signal = false;
+      cell.hot.wakeup_pointer = None;
+      cell.eligible_at = None;
+      stale_cells.push((actor_id, cell));
       actors.push(actor_id);
     }
 
@@ -736,12 +788,18 @@ fn paged_wakeup_drain_discards_stale_only_bucket() {
     assert_eq!(stats.pages_deleted, 1);
     assert!(Actors::wakeup_buckets(10).is_none());
     assert!(Actors::wakeup_pages((10, 0)).is_none());
-    assert!(actors.iter().all(|actor_id| {
-      Actors::actor_hot(*actor_id)
-        .expect("hot state")
-        .wakeup_pointer
-        .is_none()
-    }));
+    assert!(
+      actors
+        .iter()
+        .all(|actor_id| Actors::actor_hot(*actor_id).is_none())
+    );
+    for (actor_id, cell) in stale_cells {
+      crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
+      crate::ActorControlLocators::<Test>::insert(
+        actor_id,
+        crate::ActorControlLocation::Unsignaled,
+      );
+    }
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -763,8 +821,8 @@ fn cursor_wakeup_drain_recovers_sparse_overdue_blocks_without_scanning_gaps() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(due, 10));
-    assert!(Actors::wakeup_substrate_schedule(future, 1_000_000));
+    assert!(schedule_latched_service_wakeup(due, 10));
+    assert!(schedule_latched_service_wakeup(future, 1_000_000));
 
     let mut halted = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
@@ -811,12 +869,14 @@ fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
         None,
         transfer_contract_steps(BOB, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+      assert!(schedule_latched_service_wakeup(actor_id, 10));
       actors.push(actor_id);
     }
     let limit =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(false));
+        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(
+          crate::scheduler::WakeupBucketDisposition::Retain,
+        ));
     let mut one_slot = WeightMeter::with_limit(limit);
     let first = Actors::drain_overdue_wakeups_cursor(10, &mut one_slot);
     assert_eq!(first.entries_scanned, 1);
@@ -854,10 +914,12 @@ fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     let required =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(true));
+        .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(
+          crate::scheduler::WakeupBucketDisposition::Remove,
+        ));
 
     let mut reftime_short = WeightMeter::with_limit(Weight::from_parts(
       required.ref_time().saturating_sub(1),
@@ -891,7 +953,9 @@ fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
 fn on_idle_wakeup_worker_respects_remaining_weight_in_each_dimension() {
   let required =
     <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
-      .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(true));
+      .saturating_add(Actors::block_wakeup_cursor_drain_unit_weight_upper(
+        crate::scheduler::WakeupBucketDisposition::Remove,
+      ));
   assert_on_idle_wakeup_insufficiency_preserves_state(Weight::from_parts(
     required.ref_time().saturating_sub(1),
     u64::MAX,
@@ -938,8 +1002,9 @@ fn wakeup_materialization_closes_when_queue_ticket_is_exhausted() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    crate::ActorReadyHead::<Test>::put(u64::MAX);
+    crate::ActorReadyTail::<Test>::put(u64::MAX);
     System::reset_events();
     let mut meter = WeightMeter::with_limit(Weight::MAX);
 
@@ -965,9 +1030,9 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
-    QueueTail::<Test>::put(1);
-    QueueOccupancy::<Test>::put(0);
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    ActorReadyTail::<Test>::put(1);
+    ActorReadyOccupancy::<Test>::put(0);
     let events_before = System::events().len();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
@@ -1019,7 +1084,7 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
       Actors::clear_wakeup_worker_fault(RuntimeOrigin::signed(ALICE)),
       DispatchError::BadOrigin
     );
-    QueueTail::<Test>::put(0);
+    ActorReadyTail::<Test>::put(0);
     assert_ok!(Actors::clear_wakeup_worker_fault(RuntimeOrigin::root()));
     let actor_events: Vec<_> = System::events()
       .into_iter()
@@ -1097,6 +1162,86 @@ fn wakeup_fault_recording_admits_both_weight_dimensions_and_is_idempotent() {
 }
 
 #[test]
+fn waiting_removal_repairs_upward_and_reclaims_heap_tail_page() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let size: u32 = <Test as crate::Config>::WakeupPageSize::get();
+    assert_eq!(
+      size, 32,
+      "fixture straddles the reference heap-page boundary"
+    );
+    let count = size * 2 + 1;
+    let mut actors = Vec::new();
+    let mut blocks = Vec::new();
+    for index in 0..count {
+      let mut branch = index;
+      while branch > 2 {
+        branch = (branch - 1) / 2;
+      }
+      let block = if index == 0 {
+        10_000
+      } else if branch == 1 {
+        100_000
+      } else {
+        1_000_000
+      } + u64::from(index);
+      let actor_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_contract_steps(BOB, 1),
+      );
+      assert!(schedule_latched_service_wakeup(actor_id, block));
+      assert_eq!(
+        crate::ActorWaitingCursorIndices::<Test>::get(WakeupKey::Block(block)),
+        Some(index)
+      );
+      actors.push(actor_id);
+      blocks.push(block);
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+
+    // The final key belongs to the low left subtree. Replacing a deep right-subtree key
+    // forces four upward swaps across a page boundary, then deletes the one-entry tail page.
+    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actors[62]));
+    assert!(!Actors::active_actor_exists(actors[62]));
+    assert_eq!(Actors::wakeup_cursor_len(), 64);
+    assert!(Actors::wakeup_cursor_pages(2).is_none());
+    assert!(!crate::ActorWaitingCursorIndices::<Test>::contains_key(
+      WakeupKey::Block(blocks[62])
+    ));
+    assert_eq!(
+      crate::ActorWaitingCursorIndices::<Test>::get(WakeupKey::Block(blocks[64])),
+      Some(2)
+    );
+    for (from, to) in [(2, 6), (6, 14), (14, 30), (30, 62)] {
+      assert_eq!(
+        crate::ActorWaitingCursorIndices::<Test>::get(WakeupKey::Block(blocks[from])),
+        Some(to)
+      );
+    }
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+
+    // Removing the current last key needs no repair; it truncates the retained page.
+    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actors[63]));
+    assert!(!Actors::active_actor_exists(actors[63]));
+    assert_eq!(Actors::wakeup_cursor_len(), 63);
+    assert_eq!(
+      Actors::wakeup_cursor_pages(1).map(|page| page.len()),
+      Some(31)
+    );
+    assert!(!crate::ActorWaitingCursorIndices::<Test>::contains_key(
+      WakeupKey::Block(blocks[63])
+    ));
+    assert_eq!(Actors::wakeup_cursor_peek(), Some(blocks[0]));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
 fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1114,7 +1259,7 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
         None,
         transfer_contract_steps(BOB, 1),
       );
-      assert!(Actors::wakeup_substrate_schedule(actor_id, block));
+      assert!(schedule_latched_service_wakeup(actor_id, block));
       assert!(Actors::wakeup_cursor_insert(block));
       actors.push(actor_id);
     }
@@ -1132,14 +1277,26 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
     assert!(Actors::wakeup_cursor_insert(blocks[0]));
     assert_eq!(Actors::wakeup_cursor_len(), count);
 
+    let mut consumed = Vec::new();
+    for actor_id in actors {
+      let (location, cell) = Actors::actor_control_cell(actor_id).expect("live Waiting owner");
+      let crate::ActorControlLocation::Waiting { key, page, .. } = location else {
+        panic!("service primary is Waiting");
+      };
+      // Model the atomic boundary after each sole entry is consumed, before heap repair.
+      crate::ActorWaitingFrameChunks::<Test>::remove((key, page));
+      crate::ActorWaitingHeads::<Test>::remove(key);
+      crate::ActorWaitingTails::<Test>::remove(key);
+      crate::ActorWaitingOccupancies::<Test>::remove(key);
+      crate::ActorControlLocators::<Test>::remove(actor_id);
+      consumed.push(cell);
+    }
     let removed = blocks[(count / 2) as usize];
     assert!(Actors::wakeup_cursor_remove(removed));
     assert!(!Actors::wakeup_cursor_remove(removed));
     assert_eq!(Actors::wakeup_cursor_len(), count.saturating_sub(1));
     assert_eq!(
-      Actors::wakeup_buckets(removed)
-        .expect("removed cursor bucket")
-        .cursor_index,
+      crate::ActorWaitingCursorIndices::<Test>::get(WakeupKey::Block(removed)),
       None
     );
     let expected: Vec<_> = blocks
@@ -1156,14 +1313,18 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
     assert!(Actors::wakeup_cursor_pages(0).is_none());
     assert!(Actors::wakeup_cursor_pages(1).is_none());
     assert!(blocks.iter().all(|block| {
-      Actors::wakeup_buckets(*block)
-        .expect("wakeup bucket")
-        .cursor_index
-        .is_none()
+      !crate::ActorWaitingCursorIndices::<Test>::contains_key(WakeupKey::Block(*block))
     }));
 
-    for actor_id in actors {
-      let _ = Actors::wakeup_substrate_invalidate(actor_id);
+    for mut cell in consumed {
+      cell.hot.pending_signal = false;
+      cell.hot.wakeup_pointer = None;
+      cell.eligible_at = None;
+      crate::ActorControlLocators::<Test>::insert(
+        cell.actor_id,
+        crate::ActorControlLocation::Unsignaled,
+      );
+      crate::ActorUnsignaledControlCells::<Test>::insert(cell.actor_id, cell);
     }
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -1174,7 +1335,8 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
 fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    crate::ActorReadyHead::<Test>::put(u64::MAX);
+    crate::ActorReadyTail::<Test>::put(u64::MAX);
     prefund_active_user_creation(ALICE, &transfer_contract_steps(BOB, 1));
     assert_ok!(Actors::create_user_actor(
       RuntimeOrigin::signed(ALICE),
@@ -1199,7 +1361,8 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
       None,
     ));
     let actor_id = Actors::next_actor_id() - 1;
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    crate::ActorReadyHead::<Test>::put(u64::MAX);
+    crate::ActorReadyTail::<Test>::put(u64::MAX);
     prefund_user_sovereign(ALICE, 0, &transfer_contract_steps(BOB, 1));
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::activate_actor(
@@ -1224,18 +1387,21 @@ fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
     );
     fund_native(actor_id, 100);
     frame_system::Pallet::<Test>::set_block_number(2);
-    crate::NextQueueTicket::<Test>::put(u64::MAX);
+    crate::ActorReadyHead::<Test>::put(u64::MAX);
+    crate::ActorReadyTail::<Test>::put(u64::MAX);
     let bob_before = native_balance(&BOB);
     System::reset_events();
 
     run_idle(Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before);
-    assert!(Actors::actor_identities(actor_id).is_none());
+    assert!(Actors::actor_identity(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
     assert!(Actors::actor_funding(actor_id).is_none());
     assert_eq!(Actors::combined_queue_occupancy(), 0);
-    assert!(!WakeupBuckets::<Test>::contains_key(WakeupKey::Block(2)));
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Block(2)
+    ));
     assert!(has_actor_event(|event| matches!(
       event,
       Event::ActorClosed {
@@ -1257,16 +1423,11 @@ fn trigger_rearm_index_exhaustion_closes_before_the_due_attempt() {
       transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 100);
-    let page_size = <Test as crate::Config>::WakeupPageSize::get();
+    let page_size = 32u32;
     for _ in 0..page_size {
       create_system_with(ALICE, timer_schedule(2), None, inert_contract_steps());
     }
-    WakeupBuckets::<Test>::mutate(WakeupKey::Tick(3), |maybe| {
-      maybe
-        .as_mut()
-        .expect("saturated future bucket")
-        .next_page_id = u64::MAX;
-    });
+    crate::ActorWaitingTails::<Test>::insert(WakeupKey::Tick(3), u64::MAX);
     frame_system::Pallet::<Test>::set_block_number(2);
     let bob_before = native_balance(&BOB);
     System::reset_events();
@@ -1274,7 +1435,7 @@ fn trigger_rearm_index_exhaustion_closes_before_the_due_attempt() {
     run_idle(Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before);
-    assert!(Actors::actor_identities(actor_id).is_none());
+    assert!(Actors::actor_identity(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
     assert_eq!(Actors::combined_queue_occupancy(), 0);
     assert!(has_actor_event(|event| matches!(
@@ -1334,7 +1495,7 @@ fn wakeup_drain_respects_max_wakeups_per_block() {
       ids.push(id);
     }
     for actor_id in ids {
-      assert!(Actors::wakeup_substrate_schedule(actor_id, 1));
+      assert!(schedule_latched_service_wakeup(actor_id, 1));
     }
     run_idle(Weight::MAX);
     let remaining = Actors::wakeup_buckets(1)
@@ -1349,11 +1510,13 @@ fn wakeup_worker_stops_at_its_own_weight_envelope_without_lending() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 1));
+    assert!(schedule_latched_service_wakeup(actor_id, 1));
     // The shared on_idle meter has far more than the wakeup worker's dedicated envelope; the
     // worker must stop at its own ceiling and leave the surplus for actor service (spec 8.4.5).
     let cursor_probe = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future();
-    let worker_unit = Actors::block_wakeup_cursor_drain_unit_weight_upper(true);
+    let worker_unit = Actors::block_wakeup_cursor_drain_unit_weight_upper(
+      crate::scheduler::WakeupBucketDisposition::Remove,
+    );
     let worker_envelope = cursor_probe.saturating_add(worker_unit);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(
       worker_envelope.saturating_sub(Weight::from_parts(1, 0)),
@@ -1380,7 +1543,7 @@ fn wakeup_drain_preserves_bucket_when_proof_budget_cannot_admit_it() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 1));
+    assert!(schedule_latched_service_wakeup(actor_id, 1));
     run_idle(Weight::from_parts(u64::MAX, 300));
     assert_eq!(
       Actors::wakeup_buckets(1)
@@ -1398,7 +1561,7 @@ fn wakeup_drain_stops_at_the_sparse_future_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(10_000);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 1_000_000));
+    assert!(schedule_latched_service_wakeup(actor_id, 1_000_000));
     run_idle(Weight::MAX);
     assert_eq!(Actors::wakeup_cursor_peek(), Some(1_000_000));
     assert_eq!(scheduled_wakeup_block(actor_id), Some(1_000_000));
@@ -1508,7 +1671,9 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
     ));
     let rescheduled_block = scheduled_wakeup_block(actor_id).expect("replacement wakeup");
     assert_ne!(rescheduled_block, initial_block);
-    assert!(WakeupBuckets::<Test>::get(WakeupKey::Tick(initial_block)).is_none());
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Tick(initial_block)
+    ));
     assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
   });
 }
@@ -1519,9 +1684,7 @@ fn cadence_update_rolls_back_exactly_when_existing_wakeup_cursor_is_corrupt() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let initial_block = scheduled_wakeup_block(actor_id).expect("initial wakeup");
-    WakeupBuckets::<Test>::mutate(WakeupKey::Tick(initial_block), |maybe_bucket| {
-      maybe_bucket.as_mut().expect("bucket").cursor_index = None;
-    });
+    crate::ActorWaitingCursorIndices::<Test>::remove(WakeupKey::Tick(initial_block));
     frame_system::Pallet::<Test>::set_block_number(2);
     let events_before = System::events();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
@@ -1607,19 +1770,17 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
       assert_ok!(crate::Pallet::<Test>::do_try_state());
       // Drift the window and terminal membership together to a shorter terminal, leaving the
       // existing wakeup beyond it: the earlier-due service-point contract must fail try_state.
-      ActorHot::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("hot").terminal_at = Some(50);
-      });
       let mut contract = Actors::load_actor_contract(actor_id).expect("contract");
       contract.window = Some(ScheduleWindow { start: 1, end: 49 });
       assert_ok!(Actors::store_actor_contract(actor_id, contract));
+      mutate_primary_control_cell(actor_id, |cell| cell.hot.terminal_at = Some(50));
       assert_eq!(
         crate::Pallet::<Test>::do_try_state().map_err(|error| format!("{error:?}")),
-        Err("Other(\"ActorHot Pipeline wakeup pointer exceeds its terminal membership\")".into())
+        Err(
+          "Other(\"ActorControl Pipeline wakeup pointer exceeds its terminal membership\")".into()
+        )
       );
-      ActorHot::<Test>::mutate(actor_id, |maybe| {
-        maybe.as_mut().expect("hot").terminal_at = Some(102);
-      });
+      mutate_primary_control_cell(actor_id, |cell| cell.hot.terminal_at = Some(102));
       let mut contract = Actors::load_actor_contract(actor_id).expect("contract");
       contract.window = Some(ScheduleWindow { start: 1, end: 101 });
       assert_ok!(Actors::store_actor_contract(actor_id, contract));
@@ -1629,26 +1790,27 @@ fn temporal_membership_try_state_rejects_wakeup_pointer_beyond_terminal() {
 }
 
 #[test]
-fn temporal_membership_try_state_accepts_lazy_wakeup_tombstones() {
+fn temporal_membership_try_state_accepts_exact_close_cleanup() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
     let scheduled_block = scheduled_wakeup_block(actor_id).expect("timer wakeup scheduled");
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    // Lazy terminal cleanup leaves a stale physical wakeup entry behind; the entry carries no
-    // membership authority and must not fail try_state (spec 5.1 stale-entry semantics).
-    assert!(WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
-      scheduled_block
-    )));
-    assert!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick) > 0);
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Tick(scheduled_block)
+    ));
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
+    assert_eq!(
+      crate::ActorWaitingFrameChunks::<Test>::iter_keys().count(),
+      0
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-    // The bounded drain converges the tombstone at its due tick.
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     run_idle(Weight::MAX);
-    assert!(!WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
-      scheduled_block
-    )));
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Tick(scheduled_block)
+    ));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1687,7 +1849,7 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
 }
 
 #[test]
-fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
+fn close_before_future_wakeup_removes_exact_waiting_membership() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
@@ -1696,10 +1858,11 @@ fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(scheduled_wakeup_block(actor_id).is_none());
-    assert!(WakeupBuckets::<Test>::contains_key(WakeupKey::Tick(
-      scheduled_block
-    )));
-    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Tick(scheduled_block)
+    ));
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
+    assert_eq!(crate::ActorWaitingFrameChunks::<Test>::iter().count(), 0);
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
@@ -1711,8 +1874,98 @@ fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
   });
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn repeated_timer_close_churn_converges_lazy_wakeup_tombstones() {
+fn temporal_service_preserves_exact_primary_wakeup_address() {
+  for schedule in [timer_schedule(1), at_time_schedule(1)] {
+    let recurrent = matches!(schedule.trigger, Trigger::Cadenced { .. });
+    for steps in [inert_contract_steps(), BoundedVec::default()] {
+      new_test_ext().execute_with(|| {
+        frame_system::Pallet::<Test>::set_block_number(1);
+        let tombstone = create_system_with(ALICE, schedule.clone(), None, inert_contract_steps());
+        assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), tombstone));
+        let actor_id = create_system_with(BOB, schedule.clone(), None, steps);
+        let pointer = Actors::actor_hot(actor_id)
+          .and_then(|hot| hot.trigger_wakeup_pointer)
+          .expect("temporal physical wakeup pointer exists");
+        let Some(crate::ActorControlLocation::Waiting { page, slot, .. }) =
+          crate::ActorControlLocators::<Test>::get(actor_id)
+        else {
+          panic!("temporal frame Waiting address exists");
+        };
+        assert_eq!(
+          (pointer.page_id, pointer.slot),
+          (page, u32::from(slot)),
+          "the temporal pointer must identify its single Waiting primary",
+        );
+
+        frame_system::Pallet::<Test>::set_block_number(2);
+        run_idle(Weight::MAX);
+
+        assert!(has_actor_event(|event| matches!(
+          event,
+          Event::CycleSummary { actor_id: id, .. } if *id == actor_id
+        )));
+        assert!(crate::WakeupWorkerFaultState::<Test>::get().is_none());
+        assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+        frame_system::Pallet::<Test>::set_block_number(3);
+        run_idle(Weight::MAX);
+        let summaries = System::events()
+          .iter()
+          .filter(|record| {
+            matches!(
+              record.event,
+              RuntimeEvent::Actors(Event::CycleSummary { actor_id: id, .. }) if id == actor_id
+            )
+          })
+          .count();
+        assert_eq!(summaries, if recurrent { 2 } else { 1 });
+        assert!(crate::WakeupWorkerFaultState::<Test>::get().is_none());
+        assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+        #[cfg(feature = "try-runtime")]
+        assert_ok!(crate::Pallet::<Test>::do_try_state());
+      });
+    }
+  }
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn canonical_close_removes_future_tick_and_releases_state_hold() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      timer_schedule(20),
+      None,
+      inert_contract_steps(),
+    );
+    let scheduled_tick = scheduled_wakeup_block(actor_id).expect("Tick wakeup is scheduled");
+    assert!(Actors::actor_state_hold(actor_id).is_some());
+
+    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
+
+    assert!(crate::ActorControlLocators::<Test>::get(actor_id).is_none());
+    assert!(Actors::active_actor_view(actor_id).is_none());
+    assert!(Actors::actor_state_hold(actor_id).is_none());
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
+      WakeupKey::Tick(scheduled_tick)
+    ));
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
+    assert_eq!(crate::ActorWaitingFrameChunks::<Test>::iter().count(), 0);
+    frame_system::Pallet::<Test>::set_block_number(scheduled_tick);
+    run_idle(Weight::MAX);
+    assert!(Actors::wakeup_buckets(scheduled_tick).is_none());
+    assert_eq!(Actors::queue_head(), Actors::queue_tail());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn repeated_timer_close_churn_leaves_no_wakeup_tombstones() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let total = <<Test as crate::Config>::MaxWakeupsPerBlock as Get<u32>>::get() + 2;
@@ -1729,7 +1982,8 @@ fn repeated_timer_close_churn_converges_lazy_wakeup_tombstones() {
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
       assert!(scheduled_wakeup_block(actor_id).is_none());
     }
-    assert!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick) > 0);
+    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
+    assert_eq!(crate::ActorWaitingFrameChunks::<Test>::iter().count(), 0);
     frame_system::Pallet::<Test>::reset_events();
     for offset in 0..10 {
       frame_system::Pallet::<Test>::set_block_number(
@@ -1805,33 +2059,12 @@ fn terminal_window_wakeup_survives_queue_saturation_and_continuation() {
     let existing_ticket = Actors::actor_hot(actor_id)
       .and_then(|hot| hot.queue_ticket)
       .expect("Continuation retains its live queue ticket");
-    let page_size: u32 = <Test as crate::Config>::QueuePageSize::get();
-    let capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
-    for page_id in 0..capacity.div_ceil(page_size) {
-      let first = page_id.saturating_mul(page_size);
-      let len = page_size.min(capacity.saturating_sub(first));
-      let entries = (0..len)
-        .map(|offset| {
-          let ticket = u64::from(first.saturating_add(offset));
-          queue_entry(
-            ticket,
-            if ticket == existing_ticket {
-              actor_id
-            } else {
-              30_000_000u64.saturating_add(ticket)
-            },
-          )
-        })
-        .collect::<Vec<_>>();
-      QueuePages::<Test>::insert(
-        u64::from(page_id),
-        BoundedVec::try_from(entries).expect("saturated queue page fits"),
-      );
-    }
-    QueueHead::<Test>::put(0);
-    QueueTail::<Test>::put(u64::from(capacity));
-    QueueOccupancy::<Test>::put(capacity);
-    crate::NextQueueTicket::<Test>::put(u64::from(capacity));
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("Continuation primary");
+    seed_saturated_tombstone_queue();
+    crate::ActorReadyFrameChunks::<Test>::mutate(existing_ticket / 32, |page| {
+      page.as_mut().expect("saturated Ready page")[(existing_ticket % 32) as usize] = Some(cell);
+    });
+    crate::ActorReadyOccupancy::<Test>::put(1);
     frame_system::Pallet::<Test>::set_block_number(102);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
@@ -1892,16 +2125,7 @@ fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
     let due = 2u64;
     frame_system::Pallet::<Test>::set_block_number(due);
     let next_retry = due.saturating_add(2);
-    crate::WakeupBuckets::<Test>::insert(
-      WakeupKey::Block(next_retry),
-      crate::WakeupBucketState {
-        head_page: 0,
-        tail_page: 0,
-        next_page_id: 1,
-        live_entries: 0,
-        cursor_index: None,
-      },
-    );
+    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(next_retry), 1);
     let actor_before = Actors::active_actor_view(actor_id).expect("queued continuation");
     let continuation_before = Actors::actor_run_state(actor_id)
       .expect("continuation before corrupt retry placement")
@@ -1976,6 +2200,47 @@ fn cancelled_continuation_exactly_invalidates_its_wakeup_before_reprime() {
 }
 
 #[test]
+fn saturated_enqueue_defers_latched_actor_and_preserves_failed_placement() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
+    seed_saturated_tombstone_queue();
+    assert!(
+      Actors::load_current_step_service_state(actor_id).is_some(),
+      "canonical latched source"
+    );
+    assert_eq!(
+      Actors::try_paged_enqueue(actor_id),
+      Err(crate::EnqueueOutcome::CapacityUnavailable)
+    );
+    let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    Actors::test_fail_wakeup_placement_with_capacity();
+    assert_eq!(
+      Actors::enqueue(actor_id),
+      Err(crate::EnqueueOutcome::WakeupCapacityExhausted)
+    );
+    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+    assert_ok!(Actors::enqueue(actor_id));
+    let hot = Actors::actor_hot(actor_id).expect("deferred actor");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_none());
+    assert_eq!(
+      hot.wakeup_pointer.expect("exact fallback").block,
+      WakeupKey::Block(2)
+    );
+    assert!(matches!(
+      Actors::actor_control_cell(actor_id)
+        .expect("sole primary")
+        .0,
+      crate::ActorControlLocation::Waiting { .. }
+    ));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(Actors::do_try_state());
+  });
+}
+
+#[test]
 fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
   new_test_ext().execute_with(|| {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
@@ -2002,25 +2267,107 @@ fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
 fn pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(100), None, inert_contract_steps());
+    let step = inert_contract_steps()[0].clone();
+    let steps = BoundedVec::try_from(vec![step.clone(), step]).expect("two Steps fit");
+    let actor_id = create_system_with(ALICE, timer_schedule(100), None, steps);
+    let first_tick = Actors::actor_hot(actor_id)
+      .and_then(|hot| hot.trigger_wakeup_pointer)
+      .expect("initial Cadenced pointer")
+      .tick;
+    frame_system::Pallet::<Test>::set_block_number(first_tick);
+    Actors::on_idle(first_tick, Weight::MAX);
+    let run = Actors::actor_run_state(actor_id).expect("first Step leaves a Running suffix");
+    assert_eq!(run.cursor, 1);
+    let service_at = run.eligible_at;
+    let (location, _) = Actors::actor_control_cell(actor_id).expect("Running primary");
+    if matches!(location, crate::ActorControlLocation::Ready { .. }) {
+      let cell =
+        Actors::remove_primary_control_cell_inner(actor_id).expect("consume Ready placement");
+      assert_ok!(Actors::control_append_waiting(
+        cell,
+        WakeupKey::Block(service_at),
+        crate::scheduler::ActorWaitingAuthority::Service,
+      ));
+    }
     let trigger_pointer = Actors::actor_hot(actor_id)
       .and_then(|hot| hot.trigger_wakeup_pointer)
-      .expect("Cadenced trigger pointer exists");
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+      .expect("Running cadence is rearmed");
     let hot = Actors::actor_hot(actor_id).expect("Actor owns both temporal memberships");
+    assert_eq!(hot.cycle_state, CycleState::Running);
+    assert!(!hot.pending_signal);
     assert!(hot.wakeup_pointer.is_some());
     assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
+    assert!(matches!(
+      crate::ActorWaitingFrameChunks::<Test>::get((
+        WakeupKey::Tick(trigger_pointer.tick),
+        trigger_pointer.page_id
+      ))
+      .expect("independent Trigger page")
+      .entries[trigger_pointer.slot as usize],
+      Some(crate::ActorWaitingEntry::Reference(_))
+    ));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
-    let (ready, stats) = Actors::wakeup_substrate_drain_block(10, 1);
-    assert_eq!(ready.as_slice(), &[actor_id]);
+    let (mut ready, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Block(service_at), 1);
+    assert_eq!(
+      ready.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+      vec![actor_id]
+    );
     assert_eq!(stats.ready_entries, 1);
+    let (id, state, admission, loaded_step) = ready.pop().expect("consumed service authority");
+    let loaded_step = loaded_step.expect("Running Step");
+    let cell = crate::ActorControlCellOf::<Test> {
+      actor_id: id,
+      identity: Actors::control_identity_from_scalar(state.identity).expect("canonical identity"),
+      hot: Actors::control_hot_from_scalar(state.hot),
+      admission,
+      cursor: loaded_step.cursor,
+      resources: loaded_step.resources,
+      eligible_at: Some(service_at),
+    };
+    assert_ok!(Actors::control_append_ready(cell));
     let hot = Actors::actor_hot(actor_id).expect("Actor remains active");
     assert!(hot.wakeup_pointer.is_none());
     assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
     #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
+    {
+      assert_ok!(crate::Pallet::<Test>::do_try_state());
+    }
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn canonical_waiting_publication_shares_and_releases_the_temporal_cursor_atomically() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
+    let key = WakeupKey::Tick(21);
+    let waiting_index = crate::ActorWaitingCursorIndices::<Test>::get(key)
+      .expect("canonical temporal primary owns the shared key");
+    assert!(matches!(
+      crate::ActorControlLocators::<Test>::get(actor_id),
+      Some(crate::ActorControlLocation::Waiting { key: stored, .. }) if stored == key
+    ));
+    assert_eq!(crate::ActorWaitingOccupancies::<Test>::get(key), 1);
+    assert_eq!(
+      crate::ActorWaitingCursorIndices::<Test>::get(key),
+      Some(waiting_index)
+    );
+    assert_eq!(Actors::wakeup_cursor_peek_key(WakeupClock::Tick), Some(key));
+
+    frame_system::Pallet::<Test>::set_block_number(21);
+    run_idle(Weight::MAX);
+    assert_eq!(crate::ActorWaitingOccupancies::<Test>::get(key), 0);
+    assert!(!crate::ActorWaitingCursorIndices::<Test>::contains_key(key));
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(key));
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(41));
+    assert_eq!(
+      crate::ActorControlLocators::<Test>::get(actor_id),
+      Some(crate::ActorControlLocation::Unsignaled),
+      "completed cadence retains one stable primary while the next trigger is lightweight"
+    );
   });
 }
 
@@ -2043,7 +2390,7 @@ fn wakeup_ownership_fails_closed_for_corrupt_actor_partitions() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(Actors::wakeup_substrate_schedule(actor_id, 10));
+    assert!(schedule_latched_service_wakeup(actor_id, 10));
     let pointer = Actors::actor_hot(actor_id)
       .and_then(|hot| hot.wakeup_pointer)
       .expect("scheduled actor owns a wakeup pointer");
@@ -2079,8 +2426,14 @@ fn mixed_wakeup_bucket_rolls_back_valid_neighbors_around_corruption() {
         .map(|_| create_system_with(ALICE, manual_schedule(), None, inert_contract_steps()))
         .collect::<Vec<_>>();
       for actor_id in &actors {
-        assert!(Actors::wakeup_substrate_schedule(*actor_id, 10));
+        assert!(schedule_latched_service_wakeup(*actor_id, 10));
       }
+      let primaries = actors
+        .iter()
+        .map(|actor_id| {
+          Actors::actor_control_cell(*actor_id).expect("canonical primary before corruption")
+        })
+        .collect::<Vec<_>>();
       ActorFunding::<Test>::remove(actors[corrupt_index]);
       let pointers = actors
         .iter()
@@ -2108,7 +2461,21 @@ fn mixed_wakeup_bucket_rolls_back_valid_neighbors_around_corruption() {
           Actors::actor_hot(*actor_id).and_then(|hot| hot.wakeup_pointer),
           Some(pointers[index])
         );
-        assert_eq!(Actors::actor_identities(*actor_id).unwrap().cycle_nonce, 0);
+        assert_eq!(
+          Actors::actor_control_cell(*actor_id),
+          Some(primaries[index].clone())
+        );
+        assert_eq!(primaries[index].1.identity.cycle_nonce, 0);
+        if index == corrupt_index {
+          assert!(Actors::actor_identity(*actor_id).is_none());
+        } else {
+          assert_eq!(
+            Actors::actor_identity(*actor_id)
+              .expect("healthy identity")
+              .cycle_nonce,
+            0
+          );
+        }
       }
       #[cfg(feature = "try-runtime")]
       assert!(crate::Pallet::<Test>::do_try_state().is_err());

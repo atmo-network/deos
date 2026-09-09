@@ -71,7 +71,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorContract + Actors.ActorRunState + System.Account + ActorEligibilityApi',
+    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + Actors.ActorFunding + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {

@@ -1027,17 +1027,28 @@ mod tests {
   }
 
   #[test]
-  fn independent_runtime_metadata_exposes_split_actor_storage() {
+  fn independent_runtime_metadata_exposes_canonical_actor_storage() {
     let encoded = Runtime::metadata().encode();
     for expected in [
       b"Actors".as_slice(),
-      b"ActorHot".as_slice(),
+      b"ActorIdentities".as_slice(),
+      b"ActorControlLocators".as_slice(),
+      b"ActorUnsignaledControlCells".as_slice(),
       b"ActorContract".as_slice(),
       b"ActorFunding".as_slice(),
       b"ActorRunHead".as_slice(),
       b"ActorRunPayload".as_slice(),
-      b"QueuePages".as_slice(),
-      b"WakeupPages".as_slice(),
+      b"ActorReadyFrameChunks".as_slice(),
+      b"ActorReadyHead".as_slice(),
+      b"ActorReadyTail".as_slice(),
+      b"ActorReadyOccupancy".as_slice(),
+      b"ActorWaitingFrameChunks".as_slice(),
+      b"ActorWaitingHeads".as_slice(),
+      b"ActorWaitingTails".as_slice(),
+      b"ActorWaitingOccupancies".as_slice(),
+      b"ActorWaitingCursorIndices".as_slice(),
+      b"WakeupCursorPages".as_slice(),
+      b"WakeupCursorLen".as_slice(),
       b"Precondition".as_slice(),
       b"precondition".as_slice(),
       b"All".as_slice(),
@@ -1105,7 +1116,7 @@ mod tests {
       assert_eq!(Actors::actor_identity_count(), 0);
       assert_eq!(Actors::active_actor_count(), 0);
       assert_eq!(
-        pallet_deos_actors::ActorHot::<Runtime>::iter_keys().count(),
+        pallet_deos_actors::ActorControlLocators::<Runtime>::iter_keys().count(),
         0
       );
     });
@@ -1121,10 +1132,11 @@ mod tests {
         None,
       ));
       let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get().saturating_sub(1);
-      let identity = Actors::actor_identities(actor_id).expect("identity exists");
+      let identity = Actors::actor_identity(actor_id).expect("identity exists");
       assert!(Actors::active_actor_state(actor_id).is_none());
       assert_eq!(Actors::active_actor_count(), 0);
-      assert!(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).is_none());
+      assert!(Actors::actor_hot(actor_id).is_none());
+      assert!(!pallet_deos_actors::ActorControlLocators::<Runtime>::contains_key(actor_id));
       // Spec 7.1: the existing dormant sovereign must cover the activation
       // prefunding requirement before the Active Actor Contract commits.
       let activate_plan = contract_steps(pallet_deos_actors::Task::Transfer {
@@ -1157,7 +1169,7 @@ mod tests {
       let expected = user_prefunding_requirement(&activate_plan).saturating_add(1_000);
       assert_eq!(Balances::free_balance(identity.sovereign_account), expected);
       assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
-      assert!(Actors::actor_identities(actor_id).is_none());
+      assert!(Actors::actor_identity(actor_id).is_none());
       assert_eq!(Actors::actor_identity_count(), 0);
       assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
       assert_eq!(Balances::free_balance(identity.sovereign_account), expected);
@@ -1415,6 +1427,138 @@ mod tests {
   }
 
   #[test]
+  fn admitted_geometry_follows_local_bounds_through_every_step() {
+    use pallet_deos_actors::{AmountResolution, ObservationTiming, Predicate, TimedPredicate};
+    let max_steps = <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get();
+    let max_funding = <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get();
+    for step_count in 0..=max_steps {
+      let amount_positions = 2 * step_count;
+      let funding_boundary = amount_positions.min(max_funding);
+      let mut funding_counts = alloc::vec![0, funding_boundary];
+      if amount_positions > max_funding {
+        funding_counts.push(max_funding + 1);
+      }
+      funding_counts.dedup();
+      for funding_count in funding_counts {
+        new_test_ext().execute_with(|| {
+          System::set_block_number(1);
+          let amount = |position| {
+            if position < funding_count {
+              AmountResolution::PercentageOfLastFunding(Perbill::one())
+            } else {
+              AmountResolution::PercentageAtOpening(Perbill::one())
+            }
+          };
+          let steps = (0..step_count)
+            .map(|index| pallet_deos_actors::Step {
+              precondition: Some(pallet_deos_actors::Precondition {
+                clauses: alloc::vec![
+                  alloc::vec![
+                    TimedPredicate {
+                      timing: ObservationTiming::Opening,
+                      predicate: Predicate::BlockNumberBelow { threshold: 0 }
+                    },
+                    TimedPredicate {
+                      timing: ObservationTiming::Opening,
+                      predicate: Predicate::BlockNumberAbove { threshold: 0 }
+                    },
+                  ]
+                  .try_into()
+                  .expect("two predicates fit")
+                ]
+                .try_into()
+                .expect("one clause fits"),
+              }),
+              task: pallet_deos_actors::Task::AddLiquidity {
+                asset_a: 10 + index * 2,
+                asset_b: 11 + index * 2,
+                amount_a: amount(index * 2),
+                amount_b: amount(index * 2 + 1),
+                min_lp_out: 1,
+              },
+              on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
+            })
+            .collect();
+          let contract = active_contract(pallet_deos_actors::Trigger::manual(), 0, steps);
+          if funding_count > max_funding {
+            assert_noop!(
+              Actors::create_system_actor(
+                RuntimeOrigin::root(),
+                ALICE,
+                pallet_deos_actors::Mutability::Mutable,
+                Some(contract)
+              ),
+              pallet_deos_actors::Error::<Runtime>::TooManyContractSteps
+            );
+            return;
+          }
+          assert_ok!(Actors::create_system_actor(
+            RuntimeOrigin::root(),
+            ALICE,
+            pallet_deos_actors::Mutability::Mutable,
+            Some(contract)
+          ));
+          let actor_id = pallet_deos_actors::NextActorId::<Runtime>::get() - 1;
+          assert_eq!(
+            pallet_deos_actors::ActorFunding::<Runtime>::get(actor_id)
+              .expect("admitted funding state")
+              .funding_tracked_assets
+              .len(),
+            funding_count as usize
+          );
+          assert_ok!(Actors::manual_trigger(
+            RuntimeOrigin::signed(ALICE),
+            actor_id
+          ));
+          let mut opening = None;
+          for block in 1..=step_count.max(1) {
+            System::set_block_number(block.into());
+            service_actor_idle(block.into());
+            if block < step_count {
+              let run =
+                Actors::actor_run_state(actor_id).expect("nonterminal Step retains its Run");
+              assert_eq!(run.cursor, block);
+              assert_eq!(
+                run.opening_snapshot.len(),
+                (amount_positions - funding_count) as usize
+              );
+              assert!(run.opening_snapshot.values().all(|value| *value == 0));
+              assert_eq!(
+                run.opening_predicate_results.len(),
+                (2 * step_count) as usize
+              );
+              assert_eq!(run.opening_predicate_cursor, 2 * block);
+              assert!(
+                run.funding_snapshot.is_empty(),
+                "Opening cannot invent certified ingress"
+              );
+              let captured = (run.opening_snapshot, run.opening_predicate_results);
+              if let Some(expected) = &opening {
+                assert_eq!(
+                  &captured, expected,
+                  "later Steps never recapture Opening facts"
+                );
+              } else {
+                opening = Some(captured);
+              }
+            } else {
+              assert!(Actors::actor_run_state(actor_id).is_none());
+              assert_eq!(
+                Actors::actor_identity(actor_id)
+                  .expect("persistent Actor survives")
+                  .cycle_nonce,
+                1
+              );
+            }
+            #[cfg(feature = "try-runtime")]
+            assert_ok!(Actors::try_state(block.into()));
+          }
+        });
+      }
+    }
+  }
+
+  #[test]
   fn direct_runtime_ingress_is_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
@@ -1457,7 +1601,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let mut actor_ids = alloc::vec::Vec::new();
-      for _ in 0..9 {
+      for _ in 0..33 {
         assert_ok!(Actors::create_system_actor(
           RuntimeOrigin::root(),
           ALICE,
@@ -1477,12 +1621,19 @@ mod tests {
         actor_ids.push(actor_id);
       }
       assert_eq!(
-        pallet_deos_actors::WakeupPages::<Runtime>::iter().count(),
+        pallet_deos_actors::ActorWaitingFrameChunks::<Runtime>::iter().count(),
         2
       );
-      for block in 20..=30 {
+      for block in 20..=60 {
         System::set_block_number(block);
         service_actor_idle(block);
+        if actor_ids
+          .iter(/* deos-bypass: bounded-iter — thirty-three-element embedding fixture. */)
+          .all(|actor_id| {
+          Actors::active_actor_state(*actor_id).is_some_and(|state| state.identity.cycle_nonce >= 1)
+        }) {
+          break;
+        }
       }
       for actor_id in &actor_ids {
         assert_eq!(
@@ -1493,16 +1644,19 @@ mod tests {
           1
         );
       }
-      assert_eq!(pallet_deos_actors::QueuePages::<Runtime>::iter().count(), 0);
+      assert_eq!(
+        pallet_deos_actors::ActorReadyFrameChunks::<Runtime>::iter().count(),
+        0
+      );
       for actor_id in &actor_ids {
         assert!(
-          pallet_deos_actors::ActorHot::<Runtime>::get(*actor_id)
+          Actors::actor_hot(*actor_id)
             .expect("hot state remains")
             .trigger_wakeup_pointer
             .is_some()
         );
       }
-      assert!(pallet_deos_actors::WakeupPages::<Runtime>::iter().count() >= 2);
+      assert!(pallet_deos_actors::ActorWaitingFrameChunks::<Runtime>::iter().count() >= 2);
     });
   }
 
@@ -1532,7 +1686,7 @@ mod tests {
         pallet_deos_actors::Mutability::Mutable,
         None,
       ));
-      let identity = Actors::actor_identities(fresh_id).expect("fresh system identity reattaches");
+      let identity = Actors::actor_identity(fresh_id).expect("fresh system identity reattaches");
       assert_eq!(identity.sovereign_account, sovereign);
       assert_eq!(Balances::free_balance(sovereign), 777);
     });
@@ -1775,8 +1929,7 @@ mod tests {
       ));
       service_actor_idle(1);
       let before = Actors::active_actor_state(actor_id).expect("actor suspends");
-      let before_hot =
-        pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state exists");
+      let before_hot = Actors::actor_hot(actor_id).expect("hot state exists");
       assert_eq!(
         before.hot.cycle_state,
         pallet_deos_actors::CycleState::Suspended
@@ -1802,8 +1955,7 @@ mod tests {
         Ok(Ok(_))
       ));
       let after = Actors::active_actor_state(actor_id).expect("actor remains suspended");
-      let after_hot =
-        pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
+      let after_hot = Actors::actor_hot(actor_id).expect("hot state remains");
       assert!(after.hot.pending_signal);
       assert_eq!(
         after
@@ -1824,27 +1976,35 @@ mod tests {
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 1, repeated_call)),
         Ok(Ok(_))
       ));
-      let repeated_hot =
-        pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
+      let repeated_hot = Actors::actor_hot(actor_id).expect("hot state remains");
       assert_eq!(repeated_hot.queue_ticket, after_hot.queue_ticket);
       assert_eq!(repeated_hot.wakeup_pointer, after_hot.wakeup_pointer);
       System::set_block_number(2);
       assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id,));
       assert!(Actors::actor_run_state(actor_id).is_none());
       assert!(Actors::pending_signal(actor_id));
-      let reprime_hot =
-        pallet_deos_actors::ActorHot::<Runtime>::get(actor_id).expect("hot state remains");
-      assert_eq!(reprime_hot.wakeup_pointer, before_hot.wakeup_pointer);
+      let reprime_hot = Actors::actor_hot(actor_id).expect("hot state remains");
+      assert!(reprime_hot.wakeup_pointer.is_none());
+      assert!(reprime_hot.queue_ticket.is_some());
+      assert_eq!(
+        Actors::active_actor_state(actor_id)
+          .expect("cancellation preserves the deferred Pipeline")
+          .identity
+          .cycle_nonce,
+        1
+      );
+      #[cfg(feature = "try-runtime")]
+      assert!(Actors::try_state(2).is_ok());
 
       System::set_block_number(3);
       service_actor_idle(3);
       assert!(Actors::actor_run_state(actor_id).is_none());
       assert_eq!(
         Actors::active_actor_state(actor_id)
-          .expect("latched run completes after cancelled cycle remains uncommitted")
+          .expect("latched run completes after the cancelled Cycle commits its nonce")
           .identity
           .cycle_nonce,
-        1
+        2
       );
     });
   }
@@ -1986,12 +2146,9 @@ mod tests {
   #[test]
   fn independent_runtime_binds_nonzero_run_weights() {
     let suspend = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_suspend();
-    let retry =
-      <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_retry(
-      );
     let cancel = <pallet_deos_actors::weights::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::run_cancel();
-    assert!(suspend.ref_time() > retry.ref_time());
-    assert!(cancel.proof_size() > retry.proof_size());
+    assert!(suspend.ref_time() > 0 && suspend.proof_size() > 0);
+    assert!(cancel.ref_time() > 0 && cancel.proof_size() > 0);
   }
 
   #[cfg(all(feature = "dex-fixture", feature = "try-runtime"))]

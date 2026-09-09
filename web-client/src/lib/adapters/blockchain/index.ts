@@ -32,6 +32,7 @@ import type {
 import type { SystemConfig, SystemSnapshot } from '$lib/system/types';
 import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
+import { readActorControlProjection } from './actor-control';
 import { readActorEligibility } from './actor-eligibility';
 import { readActorMaterializationProjection } from './actor-materialization';
 import { readActorResourceProjection } from './actor-resource';
@@ -126,12 +127,6 @@ function automationContinuationSnapshot(
     unsuccessfulAttemptsAtCursor: value.unsuccessful_attempts_at_cursor,
     lastAttemptBlock: value.last_attempt_block,
   };
-}
-
-function automationQueueTicket(hot: unknown): bigint | null {
-  const actor = triggerRecord(hot);
-  const ticket = actor?.queue_ticket;
-  return typeof ticket === 'bigint' ? ticket : null;
 }
 
 function automationFundingAccumulated(
@@ -466,41 +461,60 @@ export class BlockchainAdapter implements Adapter {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const [identity, hot, contractHead, runHead, funding] =
-            await Promise.all([
-              snapshot.typedApi.query.Actors.ActorIdentities.getValue(
-                BigInt(actor.actorId),
-                { at: snapshot.at },
-              ),
-              snapshot.typedApi.query.Actors.ActorHot.getValue(
-                BigInt(actor.actorId),
-                {
-                  at: snapshot.at,
-                },
-              ),
-              snapshot.typedApi.query.Actors.ActorContractHead.getValue(
-                BigInt(actor.actorId),
-                { at: snapshot.at },
-              ),
-              snapshot.typedApi.query.Actors.ActorRunHead.getValue(
-                BigInt(actor.actorId),
-                { at: snapshot.at },
-              ),
-              snapshot.typedApi.query.Actors.ActorFunding.getValue(
-                BigInt(actor.actorId),
-                { at: snapshot.at },
-              ),
-            ]);
+          const runtimeActorId = BigInt(actor.actorId);
+          const [control, contractHead, runHead, funding] = await Promise.all([
+            readActorControlProjection(
+              snapshot.typedApi,
+              snapshot.at,
+              runtimeActorId,
+            ),
+            snapshot.typedApi.query.Actors.ActorContractHead.getValue(
+              runtimeActorId,
+              { at: snapshot.at },
+            ),
+            snapshot.typedApi.query.Actors.ActorRunHead.getValue(
+              runtimeActorId,
+              { at: snapshot.at },
+            ),
+            snapshot.typedApi.query.Actors.ActorFunding.getValue(
+              runtimeActorId,
+              { at: snapshot.at },
+            ),
+          ]);
+          const identity =
+            control.status === 'Active'
+              ? control.cell.identity
+              : control.status === 'Dormant'
+                ? control.identity
+                : null;
+          const hot = control.status === 'Active' ? control.cell.hot : null;
           const eligibility = await readActorEligibility(
             snapshot.typedApi,
             snapshot.at,
             actor.actorId,
           );
-          const exists =
-            identity != null && hot != null && contractHead != null;
+          if (
+            control.status === 'Active' &&
+            (contractHead == null || funding == null)
+          ) {
+            throw new Error('Active Actor is missing canonical cold state');
+          }
+          if (
+            control.status !== 'Active' &&
+            (contractHead != null || runHead != null || funding != null)
+          ) {
+            throw new Error('Inactive Actor retains orphan active state');
+          }
+          const exists = control.status === 'Active';
           const sovereignAccount =
-            identity?.sovereign_account ??
-            deriveSystemActorSovereignAccount(actor.actorId);
+            control.status === 'Dormant'
+              ? control.identity.sovereign_account
+              : control.status === 'Active' &&
+                  control.cell.identity.actor_class.type === 'System'
+                ? deriveSystemActorSovereignAccount(
+                    control.cell.identity.actor_class.value.sovereign_id,
+                  )
+                : deriveSystemActorSovereignAccount(actor.actorId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
             { at: snapshot.at },
@@ -524,7 +538,10 @@ export class BlockchainAdapter implements Adapter {
             completionPolicy: contractHead?.header.completion.type ?? null,
             triggerLabel: automationTriggerLabel(contractHead?.header.trigger),
             nativeBalance: account?.data?.free ?? 0n,
-            queueTicket: automationQueueTicket(hot),
+            queueTicket:
+              control.status === 'Active' && control.location.type === 'Ready'
+                ? control.location.value.ticket
+                : null,
             fundingAccumulated: automationFundingAccumulated(funding),
             fundingSourcePolicy: automationFundingSourcePolicy(
               contractHead?.header.funding,

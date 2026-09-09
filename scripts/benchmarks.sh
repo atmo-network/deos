@@ -8,6 +8,7 @@ BENCHMARK_TARGET_DIR="$TEMPLATE_DIR/target/benchmarks"
 PRODUCTION_RUNTIME_WASM="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
 STEPS=50
 REPEAT=20
+MIN_DURATION=""
 HEAP_PAGES=4096
 CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
@@ -28,6 +29,9 @@ ACTION=""
 TARGET_PALLET=""
 EXTRINSIC_PATTERN="*"
 OUTPUT_OVERRIDE=""
+JSON_OUTPUT=""
+COMPONENT_LOW=""
+COMPONENT_HIGH=""
 SKIP_BUILD=0
 
 usage() {
@@ -39,13 +43,19 @@ Run benchmarks and generate weight files for the current DEOS reference runtime 
 Options:
   --steps N       Number of steps per benchmark (default: $STEPS)
   --repeat N      Number of repetitions per benchmark (default: $REPEAT)
+  --min-duration N
+                  Minimum seconds per benchmark (bencher default: 10; 0 uses --repeat)
   --all           Benchmark all custom pallets
   --list          List available pallets
   --check         Verify benchmark compilation and generated storage names (no execution)
-  --extra         Include Actors circular-chain diagnostic benchmarks excluded from production weights
+  --extra         Include diagnostic benchmarks excluded from production weights
   --extrinsic NAME
                   Benchmark one extrinsic (requires one PALLET_NAME)
   --output FILE   Write generated weights to FILE (requires --extrinsic)
+  --json-file FILE
+                  Save raw component samples (requires one exact --extrinsic)
+  --low VALUES    Comma-separated component minima (requires --high and --output)
+  --high VALUES   Comma-separated component maxima (requires --low and --output)
   --skip-build    Reuse an already-built benchmark runtime
   -h, --help      Show this help message
 
@@ -57,7 +67,7 @@ Examples:
   $(basename "$0") --all                      # Benchmark all pallets
   $(basename "$0") pallet_deos_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
-  $(basename "$0") --extra pallet_deos_actors         # Include Actors circular-chain diagnostics
+  $(basename "$0") --extra pallet_deos_actors         # Include Actors diagnostics
   $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_deos_actors
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
@@ -81,6 +91,14 @@ parse_args() {
                 ;;
             --repeat)
                 REPEAT="$2"
+                shift 2
+                ;;
+            --min-duration)
+                if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+                    log_error "--min-duration requires unsigned whole seconds"
+                    exit 2
+                fi
+                MIN_DURATION="$2"
                 shift 2
                 ;;
             --all)
@@ -107,9 +125,29 @@ parse_args() {
                 OUTPUT_OVERRIDE="$2"
                 shift 2
                 ;;
+            --json-file)
+                if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+                    log_error "--json-file requires a file path"
+                    exit 2
+                fi
+                JSON_OUTPUT="$2"
+                shift 2
+                ;;
             --skip-build)
                 SKIP_BUILD=1
                 shift
+                ;;
+            --low|--high)
+                if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+                    log_error "$1 requires comma-separated unsigned component values"
+                    exit 2
+                fi
+                if [[ "$1" == "--low" ]]; then
+                    COMPONENT_LOW="$2"
+                else
+                    COMPONENT_HIGH="$2"
+                fi
+                shift 2
                 ;;
             -h|--help)
                 usage
@@ -131,6 +169,16 @@ parse_args() {
     fi
     if [[ -n "$OUTPUT_OVERRIDE" && "$EXTRINSIC_PATTERN" == "*" ]]; then
         log_error "--output requires --extrinsic"
+        exit 2
+    fi
+    if [[ -n "$JSON_OUTPUT" && ( "$EXTRINSIC_PATTERN" == "*" || -n "$ACTION" ) ]]; then
+        log_error "--json-file requires one exact --extrinsic and PALLET_NAME"
+        exit 2
+    fi
+    if [[ -n "$COMPONENT_LOW$COMPONENT_HIGH" \
+        && ( -z "$COMPONENT_LOW" || -z "$COMPONENT_HIGH" || -z "$OUTPUT_OVERRIDE" \
+            || "$EXTRINSIC_PATTERN" == "*" || -n "$ACTION" ) ]]; then
+        log_error "Component bounds require --low, --high, --output and one exact --extrinsic"
         exit 2
     fi
 }
@@ -377,6 +425,16 @@ verify_weight_file_contract() {
         "crossing_page_unit"
         "crossing_actor_unit"
         "predicate_set_evaluation"
+        "predicate_asset_evaluation"
+        "predicate_observation_heavy_evaluation"
+        "opening_predicate_traversal"
+        "opening_predicate_capture"
+        "opening_max_encoded_balance_capture"
+        "opening_observation_heavy_capture"
+        "opening_snapshot_traversal"
+        "opening_snapshot_capture"
+        "opening_target_snapshot_capture"
+        "opening_share_mixed_capture"
         "observation_fanout_blocked_page"
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do
@@ -410,11 +468,44 @@ run_pallet_benchmark() {
 
     if [[ "$pallet_name" == "pallet_deos_actors" ]]; then
         local diagnostic_benchmarks=(
+            "scheduler_inner_zero_step_user_complete"
+            "scheduler_inner_zero_step_user_max_head"
+            "scheduler_inner_zero_step_user_cadenced"
+            "scheduler_inner_zero_step_user_cadenced_close"
+            "scheduler_inner_zero_step_user_at_time"
+            "scheduler_inner_zero_step_user_at_time_close"
+            "scheduler_wakeup_zero_step_user_expiry"
+            "scheduler_paged_zero_step_user_insolvency"
+            "scheduler_paged_zero_step_user_crossing_insolvency"
+            "scheduler_paged_user_crossing_insolvency_max_contract"
+            "scheduler_paged_user_crossing_insolvency_max_contract_window"
+            "pipeline_admission_apoptosis_crossing"
+            "scheduler_inner_zero_step_user_crossing_armed"
+            "scheduler_inner_zero_step_user_crossing_armed_pages"
+            "scheduler_inner_zero_step_user_crossing_armed_new_page"
+            "scheduler_inner_zero_step_user_crossing_armed_pages_close"
+            "scheduler_inner_zero_step_user_crossing_armed_new_page_close"
+            "scheduler_inner_zero_step_user_crossing_cursor"
+            "scheduler_inner_zero_step_user_crossing_cursor_close"
+            "scheduler_inner_zero_step_user_crossing_waiting"
+            "scheduler_inner_zero_step_user_crossing_close"
+            "scheduler_inner_zero_step_user_crossing_page"
+            "scheduler_inner_zero_step_user_crossing_page_close"
+            "scheduler_inner_zero_step_user_crossing_page_full"
+            "scheduler_inner_zero_step_user_crossing_page_full_close"
+            "scheduler_inner_zero_step_user_observation"
+            "scheduler_inner_zero_step_user_observation_close"
+            "scheduler_inner_zero_step_user_observation_page_close"
+            "scheduler_inner_zero_step_user_observation_unlink"
+            "scheduler_inner_zero_step_user_observation_feed_close"
+            "pipeline_zero_step_opening_collection"
+            "pipeline_large_head_opening_collection"
             "process_remove_liquidity_indexed"
             "scheduler_on_idle_healthy_empty"
             "scheduler_cooldown_ineligible_idle"
             "scheduler_wakeup_sparse_gap_recovery"
             "close_actor_system_pure"
+            "close_actor_opening_partition"
             "close_actor_crossing_page"
             "close_actor_crossing_tail"
             "close_actor_crossing_cursor_repair"
@@ -424,6 +515,8 @@ run_pallet_benchmark() {
             "update_contract_observation_change"
             "precondition_all_max"
             "precondition_observation"
+            "scheduler_wakeup_cursor_remove_upward_depth"
+            "scheduler_wakeup_cursor_remove_upward_pages"
             "benchmark_monolithic_create"
             "benchmark_chunked_create"
             "benchmark_monolithic_close"
@@ -462,6 +555,14 @@ run_pallet_benchmark() {
     log_info "Benchmarking: $pallet_name (steps=$STEPS, repeat=$REPEAT)"
 
     if [[ "$BENCHER_MODE" != "omni" ]]; then
+        if [[ -n "$COMPONENT_LOW$COMPONENT_HIGH" ]]; then
+            log_error "Component bounds require frame-omni-bencher; compile-only fallback cannot select samples"
+            return 1
+        fi
+        if [[ -n "$JSON_OUTPUT" ]]; then
+            log_error "--json-file requires frame-omni-bencher; compile-only fallback cannot produce samples"
+            return 1
+        fi
         log_warning "Running benchmark tests (dry run without weight generation)"
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
             log_warning "--extra requires frame-omni-bencher for actual extra-benchmark execution; cargo fallback remains compile-only"
@@ -479,6 +580,15 @@ run_pallet_benchmark() {
     runtime_wasm="$(resolve_runtime_wasm_path)" || return 1
     output_dir="$(dirname "$output_file")"
     require_directory "$output_dir" "Weight output directory"
+    if [[ -n "$JSON_OUTPUT" ]]; then
+        require_commands realpath
+        require_directory "$(dirname "$JSON_OUTPUT")" "Raw benchmark output directory"
+        if [[ "$(realpath -m -- "$JSON_OUTPUT")" == "$(realpath -m -- "$output_file")" \
+            || "$JSON_OUTPUT" -ef "$output_file" ]]; then
+            log_error "Raw samples and generated weights require separate output files"
+            return 1
+        fi
+    fi
     staged_output="$(mktemp "$output_dir/.${pallet_name}.weights.XXXXXX")"
     local bencher_args=(
         --runtime "$runtime_wasm"
@@ -490,6 +600,16 @@ run_pallet_benchmark() {
         --heap-pages "$HEAP_PAGES"
         --output "$staged_output"
     )
+
+    if [[ -n "$JSON_OUTPUT" ]]; then
+        bencher_args+=(--json-file "$JSON_OUTPUT")
+    fi
+    if [[ -n "$COMPONENT_LOW" ]]; then
+        bencher_args+=(--low "$COMPONENT_LOW" --high "$COMPONENT_HIGH")
+    fi
+    if [[ -n "$MIN_DURATION" ]]; then
+        bencher_args+=(--min-duration "$MIN_DURATION")
+    fi
 
     if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
         bencher_args+=(--extra)
@@ -508,6 +628,11 @@ run_pallet_benchmark() {
     fi
     if [[ ! -s "$staged_output" ]]; then
         log_error "Weight file not generated for $pallet_name"
+        rm -f "$staged_output"
+        return 1
+    fi
+    if [[ -n "$JSON_OUTPUT" && ! -s "$JSON_OUTPUT" ]]; then
+        log_error "Raw benchmark samples not generated for $pallet_name"
         rm -f "$staged_output"
         return 1
     fi

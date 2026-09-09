@@ -75,6 +75,18 @@ Minimal checklist:
 - Bind `MaxOpeningSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
 - Validate adapter failure atomicity and Mutable User/System run suspension with runtime-local tests when adapters perform multi-step mutations.
 
+## Fee-envelope evidence example
+
+The package-owned example generates deterministic fee-envelope vectors bound to an embedding runtime's metadata and production Actors weights. It requires explicit artifact paths and does not require a DEOS repository layout:
+
+```sh
+cargo run -p pallet-deos-actors --example fee_envelope_vectors -- \
+  --metadata /path/to/metadata.scale --weights /path/to/actors_weights.rs \
+  --check /path/to/fee-envelope-vectors.json
+```
+
+Replace `--check PATH` with `PATH` to write the artifact, or omit it to print JSON. `--help` describes the interface without loading artifacts. Missing inputs fail closed; supplied files are hashed exactly, not validated as runtime metadata or benchmark output by this utility.
+
 ## Non-goals of the current slice
 
 The current kernel does not yet include:

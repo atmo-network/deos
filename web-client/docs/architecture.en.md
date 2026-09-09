@@ -74,7 +74,9 @@ The browser realization axis is separate:
 
 A session-built chart or retained UI panel must not masquerade as archive truth. A future archive/search/dashboard surface must declare its materialized provider boundary explicitly. `ReadModelValue.fetchedAt` is only a browser observation timestamp for cache/session freshness; canonical chain time or finality must come from bounded chain facts such as `asOfBlock` / `asOfHash` when those facts matter.
 
-The automation widget reads known System actors from `Actors.ActorIdentities`, `Actors.ActorHot`, compact `Actors.ActorContractHead`, sparse `Actors.ActorRunHead`, and `Actors.ActorFunding` at one finalized block. It does not reconstruct physical Contract tails or Run payloads. Authoring permits `0..=MaxContractSteps`; deleting the final Step exposes an explicit Opening-only state rather than fabricating an Action. Current cursor and unsuccessful-attempt count at that cursor are canonical-chain truth; no cycle-global attempt ordinal exists. Historical attempt timelines remain materialized. The automation authoring, analysis, and local simulation contracts derive `MaxContractSteps` and `MaxRetryAttempts` from the generated Actors ABI manifest; RetryLater remains Mutable-only and does not fabricate adapter retryability.
+The automation widget resolves each known System Actor through one bounded `ActorControlLocators` lookup and exactly one matching Unsignaled, Ready-chunk, or Waiting-page control cell at one finalized block, then reads compact `ActorContractHead`, sparse `ActorRunHead`, and `ActorFunding`. A missing locator plus dormant identity is Dormant, a missing locator and identity is NotRegistered, and split or mismatched authority fails as corruption rather than absence. It does not reconstruct physical Contract tails or Run payloads.
+
+Authoring permits `0..=MaxContractSteps`; deleting the final Step exposes an explicit Opening-only state rather than fabricating an Action. Current cursor and unsuccessful-attempt count at that cursor are canonical-chain truth; no cycle-global attempt ordinal exists. Historical attempt timelines remain materialized. The automation authoring, analysis, and local simulation contracts derive `MaxContractSteps` and `MaxRetryAttempts` from the generated Actors ABI manifest; RetryLater remains Mutable-only and does not fabricate adapter retryability.
 
 Actors exposes no permanent cache epoch or generic revalidation progress surface. Weight-, adapter-, or envelope-affecting upgrades use their concrete migration contract and finite semantic Weight-class proof rather than client-visible per-actor cache repair state.
 
@@ -86,7 +88,7 @@ The widget also consumes the read-only `ActorEligibilityApi::actor_eligibility` 
 
 `automation/cost.ts` owns the independent browser contract for `ActorCostApi` and `ActionFeeCharged`: Creation, family-specific Trigger, Pipeline Machine/cleanup, maximum next Action, actual Action receipt, and state hold retain named fields and identities without an activation total or remaining machine budget. `adapters/blockchain/actor-cost.ts` pins the typed API call to the caller's finalized block; unknown variants, malformed identities, inconsistent Pipeline/hold totals, and transport failure remain explicit unavailability.
 
-`automation/cost-vectors.ts` validates runtime-generated `actors-cost-vectors.json` against exact metadata and Actors Weight hashes. The retained fixture matrix covers Manual `0/1/4/8/32` geometry, all six one-Step Trigger families, dormant User absence, explicit System exemption, Pipeline/hold totals, current Action locality, and cold-tail state-hold growth. No visible cost panel is shipped yet.
+`automation/cost-vectors.ts` validates runtime-generated `actors-cost-vectors.json` against exact metadata and Actors Weight hashes. The retained fixture matrix covers Manual `0/1/4/8/12` geometry, all six one-Step Trigger families, dormant User absence, explicit System exemption, Pipeline/hold totals, current Action locality, and cold-tail state-hold growth. No visible cost panel is shipped yet.
 
 The automation domain validates metadata-bound Actor Contract artifacts. It discovers `ActorContract`, `ActorType`, and `Mutability` from exact runtime metadata, requires SCALE decode/re-encode equality, derives deterministic `contractId`, produces lossless JSON-safe projections, and classifies cross-genesis or cross-metadata diffs as incompatible until explicit rebinding.
 
@@ -158,9 +160,9 @@ Matching-Wasm response validation accepts the runtime's bounded `Completed`, `Ab
 
 Actors call composition discovers the pallet and outer `RuntimeCall` from the artifact metadata, then exposes exact SCALE bytes, hash, `contractId`, runtime identity, and required origin. User calls remain direct owner-signed actions. Root-required System calls report `UnsupportedActorRootCall`: current strategic `L1RootAction` decodes only the dedicated runtime-upgrade payload, so call-byte composition does not imply governance admission.
 
-The matching-Wasm trust gate hashes supplied runtime code and binds it to artifact metadata, runtime versions, finalized block/state identity, runtime API identity, actor id, mode, and `contractId`. Its metadata-discovered codec requires exact `ActorSimulationApi` version/signature, canonical SCALE round trips, typed success including `Closed(CloseReason)`, bounded ordered step evidence including `Stopped`, cursor-local unsuccessful-attempt projection, and equality between provider summary and runtime bytes.
+The matching-Wasm trust gate hashes supplied runtime code and binds it to artifact metadata, runtime versions, finalized block/state identity, `ActorSimulationApi` v2 identity, explicit synthetic Actor Control/Shared Economic budget, actor id, mode, and `contractId`. Its metadata-discovered codec requires the exact six-input signature, canonical SCALE round trips, typed success including `Continued` and `Closed(CloseReason)`, at most one ordered Step record including `Stopped`, cursor-local unsuccessful-attempt projection, and equality between provider summary and runtime bytes.
 
-The DEOS simulation adapter selects the current finalized hash or accepts an explicitly identified finalized fixture block, reads its header state root, V16 metadata, runtime version, genesis identity, and `:code`, and calls the typed simulation API at that same hash without submission. Local Omni Node evidence covers exact-plan rejection, successful fresh execution, and a stored Continuation attempt. The remote node remains a trusted provider: pin equality prevents drift but does not independently verify Wasm execution or state correctness.
+The DEOS simulation adapter selects the current finalized hash or accepts an explicitly identified finalized fixture block, reads its header state root, V16 metadata, runtime version, genesis identity, and `:code`, and calls the typed simulation API at that same hash without submission. The caller supplies explicit synthetic Actor Control and Shared Economic Weight components; the request/response pin preserves them and never presents them as production capacity. Local Omni Node evidence covers exact-plan rejection, successful fresh execution, and a stored Continuation attempt. The remote node remains a trusted provider: pin equality prevents drift but does not independently verify Wasm execution or state correctness.
 
 ## 4. Domain Ownership
 
@@ -267,7 +269,7 @@ The widget consumes generated metadata:
 - `_meta/state.json` for explicit status and provenance;
 - `_meta/locales.json` for locale/page discovery.
 
-The wiki reader should keep page content primary and show related context/provenance as supporting information.
+The wiki reader keeps established facts and Wiki-to-Wiki navigation primary. Source-document provenance remains non-rendered metadata for validation, not a source-path panel or article navigation into repository documentation. Concrete non-document resources may remain linked.
 
 ## 10. Validation
 

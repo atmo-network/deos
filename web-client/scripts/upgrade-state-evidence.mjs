@@ -12,6 +12,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { Enum as PapiEnum } from 'polkadot-api';
 import { createWsClient } from 'polkadot-api/ws';
 
+import { readActorControlProjection } from '../src/lib/adapters/blockchain/actor-control.ts';
+import { deriveSystemActorSovereignAccount } from '../src/lib/adapters/blockchain/runtime-accounts.ts';
+
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`Usage: upgrade-state-evidence.mjs
 
@@ -77,21 +80,26 @@ function feedMatches(feed) {
 
 async function chainSnapshot(client, api) {
   const block = await client.getFinalizedBlock();
-  const [version, codeHex, feeds, actorIdentity] = await Promise.all([
+  const [version, codeHex, feeds, actorControl] = await Promise.all([
     api.apis.Core.version({ at: block.hash }),
     client._request('state_getStorage', [codeStorageKey, block.hash]),
     api.query.Oracle.FeedIds.getValue({ at: block.hash }),
-    api.query.Actors.ActorIdentities.getValue(burnActorId, {
-      at: block.hash,
-    }),
+    readActorControlProjection(api, block.hash, burnActorId),
   ]);
   if (typeof codeHex !== 'string')
     throw new Error('finalized runtime code is unavailable');
-  if (!actorIdentity) throw new Error('Burn Actor identity is unavailable');
+  if (
+    actorControl.status !== 'Active' ||
+    actorControl.cell.identity.actor_class.type !== 'System'
+  ) {
+    throw new Error('Burn Actor active System identity is unavailable');
+  }
   const feed = feeds.find(feedMatches);
   if (!feed)
     throw new Error('Native-to-foreign pre-execution Oracle feed is absent');
-  const burnAccount = actorIdentity.sovereign_account;
+  const burnAccount = deriveSystemActorSovereignAccount(
+    actorControl.cell.identity.actor_class.value.sovereign_id,
+  );
   const [
     burnNative,
     burnForeign,
@@ -100,7 +108,6 @@ async function chainSnapshot(client, api) {
     reserves,
     lpPairs,
     observation,
-    actorHot,
     actorContractHead,
     actorFunding,
   ] = await Promise.all([
@@ -113,7 +120,6 @@ async function chainSnapshot(client, api) {
     api.view.AssetConversion.get_reserves(native, foreign, { at: block.hash }),
     api.query.DeosRouter.LpPairByTokenId.getValue({ at: block.hash }),
     api.query.Oracle.Observations.getValue(feed, { at: block.hash }),
-    api.query.Actors.ActorHot.getValue(burnActorId, { at: block.hash }),
     api.query.Actors.ActorContractHead.getValue(burnActorId, {
       at: block.hash,
     }),
@@ -124,7 +130,7 @@ async function chainSnapshot(client, api) {
   if (!pool || !reserves.success)
     throw new Error('Native/foreign pool state is unavailable');
   if (!observation) throw new Error('Oracle observation is unavailable');
-  if (!actorHot || !actorContractHead || !actorFunding)
+  if (!actorContractHead || !actorFunding)
     throw new Error('Burn Actor state is incomplete');
 
   return jsonValue({
@@ -154,8 +160,9 @@ async function chainSnapshot(client, api) {
       router_lp_pairs: lpPairs,
       oracle_feed: feed,
       oracle_observation: observation,
-      actor_identity: actorIdentity,
-      actor_hot: actorHot,
+      actor_identity: actorControl.cell.identity,
+      actor_control_location: actorControl.location,
+      actor_control_cell: actorControl.cell,
       actor_contract_head: actorContractHead,
       actor_funding: actorFunding,
     },

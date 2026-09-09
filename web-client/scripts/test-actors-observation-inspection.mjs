@@ -535,7 +535,8 @@ test('typed provider reads the bounded registry and selected exact storage keys'
   assert.match(source, /Oracle\.FeedIds\.getValue/);
   assert.match(source, /Oracle\.Feeds\.getValue\(key/);
   assert.match(source, /Oracle\.Observations\.getValue\(key/);
-  assert.match(source, /Actors\.ActorHot\.getValue/);
+  assert.match(source, /readActorControlProjection/);
+  assert.doesNotMatch(source, /Actors\.ActorHot\.getValue/);
   assert.match(source, /projectObservationActorDeliveryInspection/);
   assert.match(source, /Actors\.DirtyObservationFeeds\.getValue/);
   assert.match(source, /Actors\.DirtyObservationListState\.getValue/);

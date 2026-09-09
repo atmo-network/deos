@@ -47,6 +47,6 @@ No experiment is allocated. Add the first record only when a decision-relevant h
 
 ## Maintenance
 
-- Allocate `EXP-0001` when the first real Adapters experiment is opened; IDs are monotonic within this track.
+- Allocate IDs from the single sequence across all tracks under [Record Identity and Layout](../../SKILL.md#record-identity-and-layout); retain this track as the ownership path and never restart numbering here.
 - Create `EXP-NNNN.md` before Proposed becomes Prepared, and update this index with every lifecycle or relation change.
 - Keep measurements, interpretation, decisions, and artifacts in the record rather than this index.

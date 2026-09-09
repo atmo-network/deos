@@ -2,190 +2,185 @@
 
 ## Evidence Boundary
 
-This generated ledger compares the production Weight implementations in Git tag `v0.7.22` with the candidate worktree. RefTime formulas exclude database Weight; reads and writes are therefore recorded independently. ProofSize is the generated conservative estimate. A parameterized formula records its generated slope rather than collapsing it to an unstated component value.
+This generated ledger compares the production Weight implementations in Git tag `v0.7.24` with the candidate worktree. RefTime formulas exclude database Weight; reads and writes are therefore recorded independently. ProofSize is the generated conservative estimate. A parameterized formula records its generated slope rather than collapsing it to an unstated component value.
 
-Candidate release: `0.7.23`. The locally validated production runtime was generated with `./scripts/03-build-runtime.sh`; compact Wasm SHA-256 is `4b04e98b598cb0e72516e12382b742858ba720631f769b60be433d7e1acd989a`. The accepted benchmark owners use `frame-omni-bencher 0.22.0` / CLI `58.0.0`, `50` steps, `20` repeats, compiled Wasm execution, RocksDB, 1,024 MiB cache, host `fedora`, and CPU `AMD Ryzen 7 4800H with Radeon Graphics`; each generated method records date, reads, writes, measured ProofSize, and conservative ProofSize in its authoritative source. The benchmark-runtime Wasm and production Wasm are distinct evidence identities. Exact candidate commit/tree identity remains unavailable until the validated worktree is committed through the authorized release gate.
+Candidate release: `0.7.25`. The locally validated production runtime was generated with `./scripts/03-build-runtime.sh`; compact Wasm SHA-256 is `25b9695fd9e900f17ae1f3fb0b815ac1403830264d9c31f7cee54e29f434b700`. The accepted benchmark owners use `frame-omni-bencher 0.22.0` / CLI `58.0.0`, `50` steps, `20` repeats, compiled Wasm execution, RocksDB, 1,024 MiB cache, host `fedora`, and CPU `AMD Ryzen 7 4800H with Radeon Graphics`; each generated method records date, reads, writes, measured ProofSize, and conservative ProofSize in its authoritative source. The benchmark-runtime Wasm and production Wasm are distinct evidence identities. Exact candidate commit/tree identity remains unavailable until the validated worktree is committed through the authorized release gate.
 
 Interpretation codes classify changed paths only: `I` identity guard; `C` correctness; `P` bounded service topology; `M` merged canonical work; `O` measured optimization.
 
 ## Changed Production Paths
 
-| Pallet | Weight method | RefTime: v0.7.22 → 0.7.23 candidate | Base delta | ProofSize: v0.7.22 → 0.7.23 candidate | Reads: v0.7.22 → 0.7.23 candidate | Writes: v0.7.22 → 0.7.23 candidate | Code |
+| Pallet | Weight method | RefTime: v0.7.24 → 0.7.25 candidate | Base delta | ProofSize: v0.7.24 → 0.7.25 candidate | Reads: v0.7.24 → 0.7.25 candidate | Writes: v0.7.24 → 0.7.25 candidate | Code |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Actors | `create_user_actor` | `193,393,000 → 535,342,000` | +176.82% | `12,200 → 81,886` | `25 → 65` | `19 → 60` | C |
-| Actors | `create_user_actor_at_slot` | `145,691,000 → 537,716,000` | +269.08% | `12,200 → 81,886` | `16 → 65` | `10 → 60` | C |
-| Actors | `create_system_actor` | `103,087,000 → 595,895,000` | +478.05% | `12,200 → 81,886` | `16 → 63` | `11 → 58` | C |
-| Actors | `create_system_actor_at_sovereign_id` | `91,563,000 → 561,113,000` | +512.82% | `12,200 → 81,886` | `14 → 61` | `9 → 56` | C |
-| Actors | `create_user_actor_crossing_new_page` | `— → 562,790,000` | new | `— → 53,350` | `— → 33` | `— → 28` | C |
-| Actors | `create_dormant_system_actor` | `67,817,000 → 73,334,000` | +8.14% | `12,200 → 5,736` | `12 → 13` | `7 → 7` | C |
-| Actors | `activate_actor` | `124,249,000 → 561,114,000` | +351.60% | `12,200 → 81,886` | `19 → 57` | `14 → 52` | C |
-| Actors | `deactivate_actor` | `103,018,000 → 594,010,000` | +476.61% | `12,200 → 81,886` | `9 → 57` | `6 → 55` | C |
-| Actors | `pause_actor` | `62,020,000 → 75,290,000` | +21.40% | `12,200 → 5,736` | `7 → 7` | `2 → 2` | C |
-| Actors | `resume_actor` | `61,112,000 → 71,658,000` | +17.26% | `12,200 → 5,736` | `7 → 7` | `2 → 2` | C |
-| Actors | `manual_trigger` | `84,719,000 → 162,733,000` | +92.09% | `12,200 → 9,635` | `12 → 14` | `5 → 7` | C |
-| Actors | `address_event_trigger_occurrence` | `— → 178,307,000` | new | `— → 8,367` | `— → 14` | `— → 7` | C |
-| Actors | `pipeline_admission_apoptosis` | `— → 147,996,000` | new | `— → 5,736` | `— → 15` | `— → 15` | C |
-| Actors | `close_actor` | `210,365,000 → 742,564,000` | +252.99% | `12,200 → 81,886` | `24 → 64` | `23 → 64` | C |
-| Actors | `update_contract` | `274,480,000 → 1,055,528,000` | +284.56% | `12,200 → 81,886` | `25 → 67` | `22 → 63` | C |
-| Actors | `set_global_circuit_breaker` | `7,124,000 → 7,194,000` | +0.98% | `0 → 0` | `0 → 0` | `1 → 1` | C |
-| Actors | `record_crossing_worker_fault` | `— → 11,454,000` | new | `— → 1,529` | `— → 1` | `— → 1` | C |
-| Actors | `record_observation_fanout_worker_fault` | `— → 22,000,000` | new | `— → 4,106` | `— → 3` | `— → 1` | C |
-| Actors | `record_wakeup_worker_fault` | `— → 10,337,000` | new | `— → 1,503` | `— → 1` | `— → 1` | C |
-| Actors | `clear_crossing_worker_fault` | `— → 14,388,000` | new | `— → 1,529` | `— → 1` | `— → 1` | C |
-| Actors | `clear_observation_fanout_worker_fault` | `— → 14,178,000` | new | `— → 1,629` | `— → 1` | `— → 1` | C |
-| Actors | `clear_wakeup_worker_fault` | `— → 12,781,000` | new | `— → 1,503` | `— → 1` | `— → 1` | C |
-| Actors | `set_active_actor_limit` | `9,289,000 → 10,127,000` | +9.02% | `1,489 → 1,489` | `2 → 2` | `0 → 0` | C |
-| Actors | `permissionless_sweep` | `44,350,000 → 50,776,000` | +14.49% | `12,200 → 5,736` | `7 → 7` | `0 → 0` | C |
-| Actors | `permissionless_sweep_many` | `23,891,147 + 66,286,454·n → 24,823,652 + 141,011,511·n` | +3.90% | `1,489 + 11,210·n → 1,489 + 4,746·n` | `3 + 11·n → 3 + 14·n` | `2 + 7·n → 2 + 14·n` | C |
-| Actors | `fee_collection` | `43,791,000 → 44,070,000` | +0.64% | `3,593 → 3,593` | `1 → 1` | `1 → 1` | O |
-| Actors | `task_transfer` | `232,854,000 → 350,609,000` | +50.57% | `12,200 → 18,280` | `18 → 21` | `8 → 8` | C |
-| Actors | `task_burn` | `19,067,000 → 19,277,000` | +1.10% | `3,593 → 3,593` | `1 → 1` | `1 → 1` | C |
-| Actors | `task_mint` | `197,794,000 → 298,576,000` | +50.95% | `12,200 → 18,280` | `16 → 18` | `6 → 6` | C |
-| Actors | `predicate_set_evaluation` | `7,612,000 + 6,444,212·c → 7,612,000 + 6,549,402·c` | 0.00% | `3,675 + 674·c → 3,675 + 674·c` | `1 + 1·c → 1 + 1·c` | `0 → 0` | C |
-| Actors | `task_stop_cycle` | `4,260,000 → 4,261,000` | +0.02% | `0 → 0` | `0 → 0` | `0 → 0` | C |
-| Actors | `task_split_transfer` | `80,834,694 + 154,149,994·l → 159,307,195 + 200,071,385·l` | +97.08% | `8,040 + 11,210·l → 18,280 + 4,746·l` | `10 + 7·l → 11 + 9·l` | `4 + 3·l → 4 + 3·l` | C |
-| Actors | `xcm_asset_deposit` | `218,117,000 → 335,314,000` | +53.73% | `12,200 → 18,280` | `19 → 21` | `8 → 8` | C |
-| Actors | `task_add_liquidity` | `271,337,000 → 273,224,000` | +0.70% | `34,255 → 34,255` | `16 → 16` | `15 → 15` | C |
-| Actors | `task_donate_liquidity` | `164,618,000 → 165,317,000` | +0.42% | `14,035 → 14,035` | `9 → 9` | `8 → 8` | C |
-| Actors | `task_remove_liquidity` | `155,050,000 → 158,472,000` | +2.21% | `8,817 → 8,817` | `8 → 8` | `6 → 6` | C |
-| Actors | `task_stake` | `85,906,000 → 87,722,000` | +2.11% | `8,817 → 8,817` | `7 → 7` | `7 → 7` | C |
-| Actors | `task_unstake` | `101,691,000 → 102,389,000` | +0.69% | `8,817 → 8,817` | `7 → 7` | `7 → 7` | C |
-| Actors | `task_dex_exact_in` | `509,640,000 → 577,736,000` | +13.36% | `19,253 → 19,253` | `40 → 41` | `17 → 17` | O |
-| Actors | `task_dex_exact_out` | `502,865,000 → 563,419,000` | +12.04% | `19,253 → 19,253` | `39 → 40` | `17 → 17` | O |
-| Actors | `scheduler_on_initialize_cutoff` | `— → 10,895,000` | new | `— → 1,560` | `— → 2` | `— → 2` | C |
-| Actors | `scheduler_on_idle_base` | `14,737,000 → 17,042,000` | +15.64% | `1,543 → 1,560` | `6 → 7` | `1 → 2` | C |
-| Actors | `materialization_coordinator_base` | `— → 26,889,000` | new | `— → 5,982` | `— → 10` | `— → 1` | C |
-| Actors | `contract_geometry_create` | `— → 30,032,003 + 5,254,905·c` | new | `— → 4,494 + 2,475·c` | `— → 3 + 1·c` | `— → 2 + 1·c` | C |
-| Actors | `contract_geometry_close` | `— → 28,059,784 + 7,044,916·c` | new | `— → 4,558 + 2,669·c` | `— → 2 + 1·c` | `— → 3 + 1·c` | C |
-| Actors | `contract_geometry_reconstruct` | `— → 23,780,966 + 5,510,951·c` | new | `— → 4,557 + 2,670·c` | `— → 2 + 1·c` | `— → 0` | C |
-| Actors | `current_step_load_head` | `— → 20,952,000` | new | `— → 4,513` | `— → 2` | `— → 0` | C |
-| Actors | `current_step_load_tail` | `— → 26,725,030 + 109,947·s` | new | `— → 4,729 + 14·s` | `— → 3` | `— → 0` | C |
-| Actors | `current_step_plan_opening_head` | `— → 44,280,000` | new | `— → 5,223` | `— → 6` | `— → 0` | C |
-| Actors | `current_step_plan_suspended_head` | `— → 71,868,000` | new | `— → 8,058` | `— → 7` | `— → 0` | C |
-| Actors | `current_step_plan_running_tail` | `— → 77,337,414` | new | `— → 8,238 + 14·s` | `— → 8` | `— → 0` | C |
-| Actors | `opening_snapshot_capture` | `— → 2,119,881 + 9,168,258·e` | new | `— → 4,373 + 2,260·e` | `— → 1 + 2·e` | `— → 0` | C |
-| Actors | `opening_predicate_capture` | `— → 2,893,842 + 7,596,115·p` | new | `— → 4,235 + 2,525·p` | `— → 1 + 2·p` | `— → 0` | C |
-| Actors | `scheduler_actor_state_probe` | `37,715,000 → 69,213,000` | +83.52% | `12,200 → 5,998` | `5 → 7` | `0 → 0` | M |
-| Actors | `cycle_orchestration` | `50,426,000 → 54,686,000` | +8.45% | `12,200 → 5,736` | `5 → 5` | `3 → 3` | C |
-| Actors | `step_orchestration` | `49,961,778 + 174,432·n → 55,114,428 + 53,460·n` | +10.31% | `12,200 → 5,736` | `5 → 5` | `3 → 3` | C |
-| Actors | `scheduler_paged_append_existing_page` | `75,639,000 → 122,783,000` | +62.33% | `7,938 → 14,048` | `10 → 11` | `5 → 5` | C |
-| Actors | `scheduler_paged_append_new_page` | `73,335,000 → 117,265,000` | +59.90% | `10,283 → 16,435` | `11 → 12` | `5 → 5` | C |
-| Actors | `scheduler_wakeup_append_existing_page` | `78,642,000 → 89,119,000` | +13.32% | `6,694 → 7,566` | `8 → 9` | `3 → 3` | C |
-| Actors | `scheduler_wakeup_append_new_page` | `81,995,000 → 104,065,000` | +26.92% | `6,833 → 7,739` | `8 → 9` | `4 → 4` | C |
-| Actors | `scheduler_wakeup_replace_exact` | `99,455,000 → 105,811,000` | +6.39% | `7,492 → 8,001` | `10 → 11` | `7 → 7` | C |
-| Actors | `scheduler_wakeup_invalidate_middle_page` | `90,097,000 → 127,812,000` | +41.86% | `12,495 → 13,538` | `10 → 11` | `5 → 5` | C |
-| Actors | `scheduler_wakeup_drain_partial_page` | `354,451,000 → 460,611,000` | +29.95% | `47,750 → 53,971` | `83 → 99` | `18 → 18` | C |
-| Actors | `scheduler_wakeup_drain_full_page` | `648,137,000 → 838,458,000` | +29.36% | `90,034 → 101,637` | `164 → 196` | `36 → 36` | C |
-| Actors | `scheduler_wakeup_drain_dense_boundary` | `673,421,000 → 884,763,000` | +31.38% | `92,825 → 104,784` | `170 → 203` | `38 → 38` | C |
-| Actors | `scheduler_wakeup_drain_stale_page` | `569,704,000 → 771,689,000` | +35.45% | `89,426 → 101,029` | `164 → 196` | `4 → 4` | C |
-| Actors | `scheduler_wakeup_cursor_insert` | `346,837,000 → 350,120,000` | +0.95% | `42,733 → 42,706` | `25 → 25` | `25 → 25` | C |
-| Actors | `scheduler_wakeup_cursor_pop_min` | `452,230,000 → 455,372,000` | +0.69% | `55,259 → 55,232` | `34 → 34` | `26 → 26` | C |
-| Actors | `scheduler_wakeup_cursor_remove_exact` | `422,267,000 → 439,518,000` | +4.09% | `54,726 → 54,699` | `33 → 33` | `25 → 25` | C |
-| Actors | `scheduler_wakeup_cursor_worker_partial` | `112,517,000 → 129,837,000` | +15.39% | `7,498 → 7,976` | `14 → 16` | `8 → 8` | C |
-| Actors | `at_time_trigger_occurrence` | `— → 213,647,000` | new | `— → 8,552` | `— → 20` | `— → 9` | C |
-| Actors | `cadenced_trigger_occurrence` | `— → 243,471,000` | new | `— → 8,505` | `— → 22` | `— → 11` | C |
-| Actors | `scheduler_wakeup_cursor_worker_remove` | `548,262,000 → 583,324,000` | +6.40% | `56,434 → 56,912` | `48 → 50` | `33 → 33` | C |
-| Actors | `scheduler_wakeup_cursor_worker_future` | `20,184,000 → 25,422,000` | +25.95% | `6,523 → 6,608` | `5 → 6` | `0 → 0` | C |
-| Actors | `scheduler_paged_consume_preserve_page` | `48,540,000 → 58,179,000` | +19.86% | `4,868 → 5,528` | `9 → 10` | `3 → 3` | C |
-| Actors | `scheduler_paged_consume_delete_page` | `50,007,000 → 60,553,000` | +21.09% | `4,846 → 5,428` | `9 → 10` | `5 → 5` | C |
-| Actors | `scheduler_paged_tombstone_drain` | `43,931,000 + 9,481,801·n → 34,433,000 + 4,050,747·n` | -21.62% | `4,049 + 2,492·n → 3,778 + 2,572·n` | `5 + 5·n → 5 + 2·n` | `4 → 4` | C |
-| Actors | `scheduler_paged_mixed_scan` | `47,004,000 + 40,911,571·n → 37,785,000 + 49,051,039·n` | -19.61% | `4,857 + 2,608·n → 5,121 + 2,866·n` | `5 + 5·n → 3 + 4·n` | `3 + 1·n → 3 + 1·n` | C |
-| Actors | `scheduler_inner_zero_step_complete` | `— → 65,302,000` | new | `— → 5,537` | `— → 7` | `— → 3` | C |
-| Actors | `scheduler_paged_execute_opening_max` | `— → 602,530,000` | new | `— → 27,824` | `— → 30` | `— → 15` | C |
-| Actors | `scheduler_inner_opening_close_min` | `— → 166,255,626 + 14,639,590·t` | new | `— → 6,975 + 2,670·t` | `— → 14 + 1·t` | `— → 13 + 1·t` | C |
-| Actors | `scheduler_inner_opening_failed_min` | `— → 90,667,173 + 6,290,776·t` | new | `— → 6,729 + 2,670·t` | `— → 6 + 1·t` | `— → 3` | C |
-| Actors | `scheduler_inner_opening_retry_min` | `— → 144,484,373 + 6,879,240·t` | new | `— → 6,780 + 2,669·t` | `— → 11 + 1·t` | `— → 8` | C |
-| Actors | `scheduler_inner_opening_failed_max` | `— → 134,958,006 + 133,022,701·t` | new | `— → 8,347 + 22,129·t` | `— → 9 + 17·t` | `— → 3` | C |
-| Actors | `scheduler_inner_opening_retry_max` | `— → 175,843,602 + 135,539,780·t` | new | `— → 8,179 + 22,125·t` | `— → 13 + 17·t` | `— → 8` | C |
-| Actors | `scheduler_inner_opening_complete_min` | `— → 90,437,834 + 6,413,765·t` | new | `— → 6,694 + 2,670·t` | `— → 6 + 1·t` | `— → 3` | C |
-| Actors | `scheduler_inner_opening_progress_min` | `— → 160,687,415 + 6,143,902·t` | new | `— → 7,045 + 2,670·t` | `— → 13 + 1·t` | `— → 8` | C |
-| Actors | `scheduler_inner_opening_close_max` | `— → 222,786,976 + 158,797,600·t` | new | `— → 8,593 + 22,129·t` | `— → 17 + 17·t` | `— → 13 + 1·t` | C |
-| Actors | `scheduler_inner_opening_complete_max` | `— → 129,491,462 + 133,519,432·t` | new | `— → 8,312 + 22,129·t` | `— → 9 + 17·t` | `— → 3` | C |
-| Actors | `scheduler_inner_opening_progress_max` | `— → 207,036,514 + 137,351,321·t` | new | `— → 8,640 + 22,090·t` | `— → 15 + 17·t` | `— → 8` | C |
-| Actors | `scheduler_inner_running_complete` | `— → 101,569,308 + 2,184,815·s + 10,818,953·p` | new | `— → 7,016 + 2,718·p + 49·s` | `— → 9 + 2·p` | `— → 4` | C |
-| Actors | `scheduler_inner_running_progress` | `— → 122,324,329 + 1,383,909·s + 9,153,353·p` | new | `— → 6,762 + 2,693·p + 20·s` | `— → 13 + 2·p` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_tail_retry` | `— → 130,930,125 + 1,548,440·s + 9,050,714·p` | new | `— → 6,244 + 2,693·p + 12·s` | `— → 9 + 2·p` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_tail_complete` | `— → 140,693,328 + 1,409,965·s + 10,195,287·p` | new | `— → 7,294 + 2,718·p + 26·s` | `— → 10 + 2·p` | `— → 4` | C |
-| Actors | `scheduler_inner_suspended_tail_progress` | `— → 147,572,410 + 2,290,885·s + 9,300,962·p` | new | `— → 6,764 + 2,693·p + 20·s` | `— → 13 + 2·p` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_head_retry` | `— → 104,441,245 + 629,188·n + 77,615·r + 606,658·f + 8,633,349·p` | new | `— → 5,133 + 21·f + 22·n + 2,693·p + 2·r` | `— → 9 + 2·p` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_head_complete` | `— → 106,659,615 + 563,608·n + 56,231·r + 653,361·f + 8,866,318·p` | new | `— → 6,038 + 21·f + 22·n + 2,716·p + 2·r` | `— → 9 + 2·p` | `— → 4` | C |
-| Actors | `scheduler_inner_suspended_head_progress` | `— → 118,701,874 + 788,283·n + 89,582·r + 711,606·f + 8,289,022·p` | new | `— → 5,721 + 21·f + 22·n + 2,693·p + 2·r` | `— → 12 + 2·p` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_head_opening_retry` | `— → 124,942,472 + 757,648·n + 123,257·r + 603,701·f` | new | `— → 11,197 + 21·f + 22·n + 2·r` | `— → 15` | `— → 6` | C |
-| Actors | `scheduler_inner_suspended_head_opening_complete` | `— → 141,660,101 + 560,255·n + 45,927·r + 527,155·f` | new | `— → 11,985 + 21·f + 22·n + 2·r` | `— → 14` | `— → 4` | C |
-| Actors | `scheduler_inner_suspended_head_opening_progress` | `— → 140,648,325 + 798,378·n + 102,327·r + 840,487·f` | new | `— → 11,578 + 21·f + 22·n + 2·r` | `— → 17` | `— → 6` | C |
-| Actors | `scheduler_paged_execute_cheap` | `116,986,000 + 94,182,240·n → 136,961,000 + 126,316,005·n` | +17.07% | `3,716 + 2,733·n → 4,210 + 3,171·n` | `6 + 5·n → 6 + 7·n` | `4 + 3·n → 4 + 3·n` | C |
-| Actors | `scheduler_paged_execute_cheap_mixed` | `244,449,000 + 120,287,892·n → 368,768,000 + 192,451,310·n` | +50.86% | `4,918 + 2,798·n → 4,772 + 3,361·n` | `6 + 6·n → 5 + 11·n` | `4 + 4·n → 4 + 5·n` | C |
-| Actors | `run_progress` | `— → 106,160,000` | new | `— → 8,567` | `— → 9` | `— → 2` | C |
-| Actors | `run_suspend` | `— → 104,554,000` | new | `— → 8,376` | `— → 8` | `— → 2` | C |
-| Actors | `run_retry` | `— → 53,639,000` | new | `— → 5,589` | `— → 2` | `— → 1` | C |
-| Actors | `run_complete` | `— → 77,246,000` | new | `— → 7,276` | `— → 8` | `— → 4` | C |
-| Actors | `run_cancel` | `— → 301,510,000` | new | `— → 9,635` | `— → 19` | `— → 12` | C |
-| Actors | `run_suffix_admission` | `— → 1,433,649 + 596·n` | new | `— → 0` | `— → 0` | `— → 0` | C |
-| Actors | `observation_change_trigger_occurrence` | `— → 120,199,000` | new | `— → 8,296` | `— → 14` | `— → 8` | C |
-| Actors | `observation_change_ingress` | `33,384,000 → 36,178,000` | +8.37% | `6,128 → 6,184` | `5 → 5` | `4 → 4` | C |
-| Actors | `observation_fanout_base` | `6,146,000 → 6,565,000` | +6.82% | `1,543 → 1,629` | `1 → 2` | `0 → 0` | C |
-| Actors | `observation_fanout_branch_probe` | `— → 13,759,000` | new | `— → 3,587` | `— → 2` | `— → 0` | C |
-| Actors | `observation_fanout_page` | `2,644,513,000 → 4,738,388,000` | +79.18% | `718,430 → 304,734` | `332 → 461` | `72 → 201` | C |
-| Actors | `observation_fanout_wakeup_page` | `— → 5,132,089,000` | new | `— → 304,734` | `— → 457` | `— → 200` | C |
-| Actors | `observation_fanout_coalesced_page` | `— → 2,008,178,000` | new | `— → 304,734` | `— → 389` | `— → 2` | C |
-| Actors | `observation_fanout_terminal` | `— → 239,000,000` | new | `— → 5,736` | `— → 27` | `— → 25` | C |
-| Actors | `observation_fanout_blocked_page` | `— → 121,065,020,000` | new | `— → 304,734` | `— → 591` | `— → 200` | C |
-| Actors | `crossing_worker_base` | `6,146,000 → 7,543,000` | +22.73% | `1,543 → 1,543` | `1 → 2` | `0 → 0` | C |
-| Actors | `crossing_work_probe` | `— → 65,373,000` | new | `— → 11,729` | `— → 12` | `— → 0` | C |
-| Actors | `observation_crossing_trigger_occurrence` | `— → 530,453,000` | new | `— → 164,204` | `— → 90` | `— → 81` | C |
-| Actors | `crossing_search_probe` | `— → 130,256,000` | new | `— → 81,886` | `— → 33` | `— → 0` | C |
-| Actors | `crossing_fire_probe` | `— → 70,052,000` | new | `— → 11,729` | `— → 14` | `— → 0` | C |
-| Actors | `crossing_fire_pair_probe` | `— → 219,095,000` | new | `— → 11,729` | `— → 25` | `— → 0` | C |
-| Actors | `crossing_tail_refill_probe` | `— → 21,162,000` | new | `— → 11,729` | `— → 1` | `— → 0` | C |
-| Actors | `crossing_fire_cohort_preflight` | `— → 43,303,000 + 25,902,326·c` | new | `— → 1,493 + 2,699·c` | `— → 2 + 7·c` | `— → 0` | C |
-| Actors | `crossing_coalesced_cohort_preflight` | `— → 47,283,000 + 25,665,150·c` | new | `— → 1,493 + 2,699·c` | `— → 2 + 7·c` | `— → 0` | C |
-| Actors | `crossing_terminal_cohort_preflight` | `— → 2,884,470 + 25,208,667·c` | new | `— → 1,493 + 2,699·c` | `— → 2 + 7·c` | `— → 0` | C |
-| Actors | `crossing_skip_cohort_preflight` | `— → 39,531,000 + 23,675,640·c` | new | `— → 990 + 2,699·c` | `— → 0 + 7·c` | `— → 0` | C |
-| Actors | `crossing_rearm_cohort_preflight` | `— → 41,836,000 + 23,957,644·c` | new | `— → 990 + 2,699·c` | `— → 0 + 7·c` | `— → 0` | C |
-| Actors | `crossing_rearm_pair_probe` | `— → 96,523,000` | new | `— → 11,729` | `— → 19` | `— → 0` | C |
-| Actors | `crossing_skip_pair_probe` | `— → 92,960,000` | new | `— → 11,729` | `— → 19` | `— → 0` | C |
-| Actors | `crossing_transition_unit` | `31,988,000 → 34,781,000` | +8.73% | `6,060 → 6,636` | `5 → 5` | `2 → 2` | C |
-| Actors | `crossing_leaf_unit` | `425,689,000 → 583,394,000` | +37.05% | `162,782 → 162,782` | `85 → 90` | `77 → 81` | C |
-| Actors | `crossing_page_unit` | `426,457,000 → 580,251,000` | +36.06% | `162,782 → 162,782` | `85 → 90` | `77 → 81` | C |
-| Actors | `crossing_rearm_unit` | `— → 430,229,000` | new | `— → 162,782` | `— → 80` | `— → 74` | C |
-| Actors | `crossing_rearm_pair_unit` | `— → 483,729,000` | new | `— → 162,782` | `— → 86` | `— → 76` | C |
-| Actors | `crossing_coalesced_unit` | `— → 454,674,000` | new | `— → 162,782` | `— → 84` | `— → 74` | C |
-| Actors | `crossing_coalesced_pair_unit` | `— → 546,238,000` | new | `— → 162,782` | `— → 92` | `— → 76` | C |
-| Actors | `crossing_placed_unit` | `— → 574,663,000` | new | `— → 162,782` | `— → 90` | `— → 81` | C |
-| Actors | `crossing_placed_pair_unit` | `— → 611,261,000` | new | `— → 162,782` | `— → 97` | `— → 85` | C |
-| Actors | `crossing_placed_maximum_unit` | `— → 10,442,486,000` | new | `— → 346,462` | `— → 982` | `— → 466` | C |
-| Actors | `crossing_placed_non_tail_emptied_unit` | `— → 4,321,498,000` | new | `— → 327,262` | `— → 563` | `— → 367` | C |
-| Actors | `crossing_placed_non_tail_trimmed_unit` | `— → 4,300,965,000` | new | `— → 327,262` | `— → 563` | `— → 369` | C |
-| Actors | `crossing_skip_unit` | `— → 175,584,000` | new | `— → 81,886` | `— → 41` | `— → 2` | C |
-| Actors | `crossing_skip_pair_unit` | `— → 80,388,000` | new | `— → 11,729` | `— → 12` | `— → 2` | C |
-| Actors | `crossing_actor_unit` | `594,359,000 → 757,091,000` | +27.38% | `162,782 → 162,782` | `91 → 97` | `83 → 91` | C |
-| Actors | `transaction_extension_ingress_base` | `13,479,000 → 13,759,000` | +2.08% | `6,052 → 6,052` | `2 → 2` | `0 → 0` | C |
-| Actors | `transaction_extension_ingress_notify` | `159,939,000 → 303,955,000` | +90.04% | `12,200 → 5,998` | `10 → 13` | `6 → 6` | C |
-| Actors | `funding_snapshot_open` | `13,339,290 + 125,929·a → 13,311,775 + 127,773·a` | -0.21% | `3,751 → 4,531` | `1 → 1` | `1 → 1` | C |
-| Actors | `maximum_context_inherent` | `— → 196,901,501,000` | new | `— → 3,517` | `— → 13` | `— → 23` | C |
-| Actors | `block_resource_finalize` | `— → 8,590,000` | new | `— → 1,560` | `— → 1` | `— → 2` | C |
-| Actors | `block_resource_meter_extension` | `— → 10,826,000` | new | `— → 1,560` | `— → 1` | `— → 1` | C |
-| Actors | `maximum_xcm_version_discovery` | `— → 456,839,000` | new | `— → 248,490` | `— → 102` | `— → 1` | C |
-| Oracle | `register_feed_existing_producer` | `132,142,000 → 146,111,000` | +10.57% | `20,532 → 20,532` | `3 → 3` | `3 → 3` | C |
-| Oracle | `register_feed_new_producer` | `194,720,000 → 215,185,000` | +10.51% | `44,394 → 44,394` | `4 → 4` | `4 → 4` | C |
-| Oracle | `pause_feed` | `15,365,000 → 15,366,000` | +0.01% | `3,551 → 3,551` | `1 → 1` | `1 → 1` | C |
-| Oracle | `resume_feed` | `15,365,000 → 15,435,000` | +0.46% | `3,551 → 3,551` | `1 → 1` | `1 → 1` | C |
-| Oracle | `publish_last_value` | `30,033,000 → 33,733,000` | +12.32% | `3,559 → 3,559` | `5 → 6` | `1 → 1` | C |
-| Oracle | `publish_ema_changed` | `33,385,000 → 37,156,000` | +11.30% | `3,559 → 3,559` | `5 → 6` | `1 → 1` | C |
-| Oracle | `publish_ema_changed_primary_first` | `— → 46,795,000` | new | `— → 3,559` | `— → 7` | `— → 4` | C |
-| Oracle | `publish_ema_changed_primary_existing` | `— → 46,864,000` | new | `— → 3,559` | `— → 6` | `— → 3` | C |
-| Oracle | `publish_ema_changed_secondary_first` | `— → 49,239,000` | new | `— → 6,060` | `— → 9` | `— → 4` | C |
-| Oracle | `publish_ema_changed_secondary_existing` | `— → 49,099,000` | new | `— → 6,060` | `— → 9` | `— → 4` | C |
-| Oracle | `publish_ema_changed_combined` | `— → 58,667,000` | new | `— → 6,060` | `— → 10` | `— → 7` | C |
-| Oracle | `publish_ema_changed_secondary_capacity` | `— → 45,188,000` | new | `— → 6,060` | `— → 8` | `— → 0` | C |
-| Oracle | `publish_ema_refresh` | `21,931,000 → 22,280,000` | +1.59% | `3,551 → 3,551` | `2 → 2` | `1 → 1` | C |
-| Router | `direct_xyk_exact_input` | `294,176,000 → 389,092,000` | +32.27% | `12,200 → 9,635` | `25 → 31` | `12 → 18` | C |
-| Router | `direct_mint_exact_input` | `315,129,000 → 390,349,000` | +23.87% | `23,410 → 21,862` | `33 → 34` | `14 → 14` | C |
-| Router | `native_anchored_exact_input` | `435,468,000 → 562,930,000` | +29.27% | `19,253 → 19,253` | `36 → 45` | `17 → 27` | C |
-| Router | `direct_xyk_exact_output` | `164,898,000 → 387,486,000` | +134.99% | `6,208 → 9,635` | `10 → 30` | `5 → 18` | C |
-| Router | `native_anchored_exact_output` | `302,348,000 → 556,714,000` | +84.13% | `16,644 → 19,253` | `21 → 44` | `10 → 27` | C |
-| Router | `create_pool` | `— → 144,923,000` | new | `— → 34,255` | `— → 13` | `— → 10` | C |
-| TMC | `mint_with_distribution` | `164,130,000 → 164,758,000` | +0.38% | `12,200 → 6,208` | `11 → 11` | `4 → 4` | C |
+| Actors | `create_user_actor` | `489,874,000 → 563,908,000` | +15.11% | `81,886 → 81,886` | `65 → 63` | `60 → 55` | C |
+| Actors | `create_user_actor_at_slot` | `481,145,000 → 604,277,000` | +25.59% | `81,886 → 81,886` | `65 → 63` | `60 → 55` | C |
+| Actors | `create_system_actor` | `541,837,000 → 594,079,000` | +9.64% | `81,886 → 81,886` | `63 → 61` | `58 → 53` | C |
+| Actors | `create_system_actor_at_sovereign_id` | `528,846,000 → 743,612,000` | +40.61% | `81,886 → 81,886` | `61 → 59` | `56 → 51` | C |
+| Actors | `create_user_actor_crossing_new_page` | `540,999,000 → 755,066,000` | +39.57% | `53,350 → 27,170` | `33 → 31` | `28 → 23` | C |
+| Actors | `create_dormant_system_actor` | `70,751,000 → 139,895,000` | +97.73% | `5,736 → 7,535` | `13 → 17` | `7 → 7` | C |
+| Actors | `activate_actor` | `520,675,000 → 878,618,000` | +68.75% | `81,886 → 81,886` | `57 → 55` | `52 → 47` | C |
+| Actors | `deactivate_actor` | `561,742,000 → 1,255,487,000` | +123.50% | `81,886 → 81,886` | `57 → 58` | `55 → 57` | C |
+| Actors | `pause_actor` | `70,541,000 → 140,663,000` | +99.41% | `5,736 → 5,736` | `7 → 8` | `2 → 1` | C |
+| Actors | `resume_actor` | `69,214,000 → 123,482,000` | +78.41% | `5,736 → 5,736` | `7 → 8` | `2 → 2` | C |
+| Actors | `manual_trigger` | `155,120,000 → 243,890,000` | +57.23% | `9,635 → 15,106` | `14 → 14` | `7 → 7` | C |
+| Actors | `address_event_trigger_occurrence` | `171,114,000 → 292,779,000` | +71.10% | `8,367 → 8,394` | `14 → 14` | `7 → 7` | C |
+| Actors | `pipeline_admission_apoptosis` | `140,872,000 → 387,346,000` | +174.96% | `5,736 → 15,106` | `15 → 19` | `15 → 16` | C |
+| Actors | `close_actor` | `708,551,000 → 973,883,000` | +37.45% | `81,886 → 81,886` | `64 → 66` | `64 → 65` | C |
+| Actors | `update_contract` | `984,638,000 → 1,352,289,000` | +37.34% | `81,886 → 162,782` | `67 → 101` | `63 → 94` | C |
+| Actors | `set_global_circuit_breaker` | `6,845,000 → 7,683,000` | +12.24% | `0 → 0` | `0 → 0` | `1 → 1` | C |
+| Actors | `record_crossing_worker_fault` | `11,105,000 → 11,874,000` | +6.92% | `1,529 → 1,529` | `1 → 1` | `1 → 1` | C |
+| Actors | `record_observation_fanout_worker_fault` | `20,464,000 → 34,851,000` | +70.30% | `4,106 → 4,106` | `3 → 3` | `1 → 1` | C |
+| Actors | `record_wakeup_worker_fault` | `10,057,000 → 9,917,000` | -1.39% | `1,503 → 1,503` | `1 → 1` | `1 → 1` | C |
+| Actors | `clear_crossing_worker_fault` | `13,759,000 → 14,597,000` | +6.09% | `1,529 → 1,529` | `1 → 1` | `1 → 1` | C |
+| Actors | `clear_observation_fanout_worker_fault` | `13,968,000 → 15,155,000` | +8.50% | `1,629 → 1,629` | `1 → 1` | `1 → 1` | C |
+| Actors | `clear_wakeup_worker_fault` | `12,501,000 → 12,851,000` | +2.80% | `1,503 → 1,503` | `1 → 1` | `1 → 1` | C |
+| Actors | `set_active_actor_limit` | `9,918,000 → 11,454,000` | +15.49% | `1,489 → 1,489` | `2 → 2` | `0 → 0` | C |
+| Actors | `permissionless_sweep` | `48,610,000 → 89,608,000` | +84.34% | `5,736 → 5,736` | `7 → 8` | `0 → 0` | C |
+| Actors | `permissionless_sweep_many` | `26,061,500 + 140,666,863·n → 86,378,643 + 173,665,591·n` | +231.44% | `1,489 + 4,746·n → 1,489 + 4,746·n` | `3 + 14·n → 3 + 15·n` | `2 + 14·n → 2 + 13·n` | C |
+| Actors | `fee_collection` | `43,512,000 → 50,007,000` | +14.93% | `3,593 → 6,196` | `1 → 2` | `1 → 2` | O |
+| Actors | `action_invocation_receipt` | `— → 4,680,000` | new | `— → 0` | `— → 0` | `— → 0` | C |
+| Actors | `task_transfer` | `338,037,000 → 468,433,000` | +38.57% | `18,280 → 29,222` | `21 → 25` | `8 → 12` | C |
+| Actors | `task_burn` | `18,997,000 → 20,045,000` | +5.52% | `3,593 → 3,593` | `1 → 1` | `1 → 1` | C |
+| Actors | `task_mint` | `292,011,000 → 343,415,000` | +17.60% | `18,280 → 29,222` | `18 → 22` | `6 → 10` | C |
+| Actors | `predicate_set_evaluation` | `7,264,000 + 6,569,170·c → 6,906,425 + 11,187,530·c` | -4.92% | `3,675 + 674·c → 3,839 + 1,740·c` | `1 + 1·c → 0 + 2·c` | `0 → 0` | C |
+| Actors | `task_stop_cycle` | `4,260,000 → 6,705,000` | +57.39% | `0 → 0` | `0 → 0` | `0 → 0` | C |
+| Actors | `task_split_transfer` | `157,986,014 + 196,105,670·l → 163,392,331 + 310,098,141·l` | +3.42% | `18,280 + 4,746·l → 29,222 + 4,746·l` | `11 + 9·l → 14 + 10·l` | `4 + 3·l → 7 + 4·l` | C |
+| Actors | `xcm_asset_deposit` | `326,303,000 → 458,445,000` | +40.50% | `18,280 → 29,222` | `21 → 25` | `8 → 12` | C |
+| Actors | `task_add_liquidity` | `281,953,000 → 316,317,000` | +12.19% | `34,255 → 34,255` | `16 → 16` | `15 → 15` | C |
+| Actors | `task_donate_liquidity` | `164,968,000 → 181,242,000` | +9.86% | `14,035 → 14,035` | `9 → 9` | `8 → 8` | C |
+| Actors | `task_remove_liquidity` | `152,675,000 → 164,758,000` | +7.91% | `8,817 → 8,817` | `8 → 8` | `6 → 6` | C |
+| Actors | `task_stake` | `85,976,000 → 91,005,000` | +5.85% | `8,817 → 8,817` | `7 → 7` | `7 → 7` | C |
+| Actors | `task_unstake` | `101,900,000 → 112,935,000` | +10.83% | `8,817 → 8,817` | `7 → 7` | `7 → 7` | C |
+| Actors | `task_dex_exact_in` | `536,949,000 → 718,678,000` | +33.84% | `19,253 → 19,253` | `41 → 41` | `17 → 17` | O |
+| Actors | `task_dex_exact_out` | `530,243,000 → 714,697,000` | +34.79% | `19,253 → 19,253` | `40 → 40` | `17 → 17` | O |
+| Actors | `scheduler_on_initialize_cutoff` | `10,616,000 → 12,292,000` | +15.79% | `1,560 → 1,560` | `2 → 2` | `2 → 2` | C |
+| Actors | `scheduler_on_idle_base` | `16,832,000 → 19,626,000` | +16.60% | `1,560 → 1,560` | `7 → 7` | `2 → 2` | C |
+| Actors | `materialization_coordinator_base` | `26,680,000 → 25,842,000` | -3.14% | `5,982 → 5,982` | `10 → 10` | `1 → 1` | C |
+| Actors | `contract_geometry_create` | `29,462,359 + 5,346,654·c → 35,052,172 + 6,036,087·c` | +18.97% | `4,494 + 2,475·c → 4,499 + 2,475·c` | `3 + 1·c → 4 + 1·c` | `2 + 1·c → 1 + 1·c` | C |
+| Actors | `contract_geometry_close` | `27,029,761 + 6,953,989·c → 34,244,305 + 8,784,131·c` | +26.69% | `4,557 + 2,670·c → 4,740 + 2,669·c` | `2 + 1·c → 3 + 1·c` | `3 + 1·c → 2 + 1·c` | C |
+| Actors | `contract_geometry_reconstruct` | `23,313,535 + 5,451,102·c → 31,311,645 + 6,659,243·c` | +34.31% | `4,557 + 2,669·c → 4,740 + 2,669·c` | `2 + 1·c → 3 + 1·c` | `0 → 0` | C |
+| Actors | `current_step_load_head` | `20,254,000 → 30,451,000` | +50.35% | `4,513 → 4,731` | `2 → 3` | `0 → 0` | C |
+| Actors | `current_step_load_tail` | `25,950,252 + 79,315·s → 39,333,653` | +51.57% | `4,729 + 14·s → 4,913 + 14·s` | `3 → 4` | `0 → 0` | C |
+| Actors | `current_step_plan_opening_head` | `43,442,000 → 81,297,000` | +87.14% | `5,223 → 4,968` | `6 → 5` | `0 → 0` | C |
+| Actors | `current_step_plan_suspended_head` | `71,030,000 → 123,132,000` | +73.35% | `8,058 → 5,707` | `7 → 6` | `0 → 0` | C |
+| Actors | `current_step_plan_running_tail` | `76,192,916 + 131,564·s → 117,787,560 + 1,082,421·s` | +54.59% | `8,238 + 14·s → 5,796 + 73·s` | `8 → 7` | `0 → 0` | C |
+| Actors | `opening_snapshot_traversal` | `— → 1,397,000` | new | `— → 0` | `— → 0` | `— → 0` | C |
+| Actors | `opening_snapshot_capture` | `2,403,773 + 9,035,928·e → 6,280,406 + 10,546,366·e` | +161.27% | `4,373 + 2,260·e → 1,366 + 2,836·e` | `1 + 2·e → 0 + 2·e` | `0 → 0` | C |
+| Actors | `opening_target_snapshot_capture` | `— → 11,715,105 + 8,545,944·e` | new | `— → 1,377 + 2,834·e` | `— → 0 + 2·e` | `— → 0` | C |
+| Actors | `opening_share_mixed_capture` | `— → 6,913,373 + 10,801,886·e` | new | `— → 1,308 + 2,838·e` | `— → 0 + 2·e` | `— → 0` | C |
+| Actors | `opening_predicate_traversal` | `— → 1,466,000` | new | `— → 0` | `— → 0` | `— → 0` | C |
+| Actors | `opening_predicate_capture` | `3,046,526 + 7,474,282·p → 5,665,087 + 9,642,493·p` | +85.95% | `4,235 + 2,524·p → 4,184 + 2,673·p` | `1 + 2·p → 0 + 2·p` | `0 → 0` | C |
+| Actors | `predicate_asset_evaluation` | `— → 8,967,155 + 8,774,724·p` | new | `— → 1,344 + 2,838·p` | `— → 0 + 2·p` | `— → 0` | C |
+| Actors | `predicate_observation_heavy_evaluation` | `— → 20,339,756 + 10,257,124·o` | new | `— → 4,364 + 2,673·o` | `— → 2 + 2·o` | `— → 0` | C |
+| Actors | `opening_max_encoded_balance_capture` | `— → 8,117,762 + 8,776,187·p` | new | `— → 1,358 + 2,836·p` | `— → 0 + 2·p` | `— → 0` | C |
+| Actors | `opening_observation_heavy_capture` | `— → 12,070,595 + 10,272,731·o` | new | `— → 4,329 + 2,667·o` | `— → 2 + 2·o` | `— → 0` | C |
+| Actors | `scheduler_actor_state_probe` | `68,586,000 → 114,890,000` | +67.51% | `5,998 → 15,106` | `7 → 7` | `0 → 0` | M |
+| Actors | `scheduler_paged_append_existing_page` | `118,313,000 → 124,040,000` | +4.84% | `14,048 → 13,660` | `11 → 5` | `5 → 4` | C |
+| Actors | `scheduler_paged_append_new_page` | `111,538,000 → 109,653,000` | -1.69% | `16,435 → 16,446` | `12 → 6` | `5 → 4` | C |
+| Actors | `scheduler_wakeup_append_existing_page` | `93,309,000 → 162,035,000` | +73.65% | `7,566 → 14,366` | `9 → 7` | `3 → 5` | C |
+| Actors | `scheduler_wakeup_append_new_page` | `98,688,000 → 138,637,000` | +40.48% | `7,739 → 17,169` | `9 → 8` | `4 → 6` | C |
+| Actors | `scheduler_wakeup_replace_exact` | `105,043,000 → 202,054,000` | +92.35% | `8,001 → 7,820` | `11 → 17` | `7 → 13` | C |
+| Actors | `scheduler_wakeup_invalidate_middle_page` | `132,631,000 → 201,705,000` | +52.08% | `13,538 → 21,681` | `11 → 11` | `5 → 5` | C |
+| Actors | `scheduler_wakeup_drain_partial_page` | `453,347,000 → 2,162,182,000` | +376.94% | `53,971 → 56,539` | `99 → 70` | `18 → 19` | C |
+| Actors | `scheduler_wakeup_drain_full_page` | `833,220,000 → 3,699,832,000` | +344.04% | `101,637 → 99,272` | `196 → 135` | `36 → 39` | C |
+| Actors | `scheduler_wakeup_drain_dense_boundary` | `882,669,000 → 3,698,296,000` | +318.99% | `104,784 → 102,394` | `203 → 140` | `38 → 41` | C |
+| Actors | `scheduler_wakeup_drain_stale_page` | `771,200,000 → 1,357,457,000` | +76.02% | `101,029 → 82,600` | `196 → 39` | `4 → 7` | C |
+| Actors | `scheduler_wakeup_cursor_insert` | `345,650,000 → 442,243,000` | +27.95% | `42,706 → 41,816` | `25 → 39` | `25 → 25` | C |
+| Actors | `scheduler_wakeup_cursor_pop_min` | `450,902,000 → 571,450,000` | +26.73% | `55,232 → 54,358` | `34 → 49` | `26 → 26` | C |
+| Actors | `scheduler_wakeup_cursor_remove_exact` | `420,102,000 → 539,812,000` | +28.50% | `54,699 → 53,887` | `33 → 47` | `25 → 25` | C |
+| Actors | `scheduler_wakeup_cursor_worker_partial` | `127,323,000 → 235,997,000` | +85.35% | `7,976 → 7,959` | `16 → 21` | `8 → 13` | C |
+| Actors | `at_time_trigger_occurrence` | `214,136,000 → 349,561,000` | +63.24% | `8,552 → 8,451` | `20 → 20` | `9 → 9` | C |
+| Actors | `cadenced_trigger_occurrence` | `241,445,000 → 536,041,000` | +122.01% | `8,505 → 8,450` | `22 → 27` | `11 → 16` | C |
+| Actors | `scheduler_wakeup_cursor_worker_remove` | `575,780,000 → 806,400,000` | +40.05% | `56,912 → 55,857` | `50 → 65` | `33 → 35` | C |
+| Actors | `scheduler_wakeup_cursor_worker_future` | `25,283,000 → 24,305,000` | -3.87% | `6,608 → 6,566` | `6 → 6` | `0 → 0` | C |
+| Actors | `scheduler_paged_consume_preserve_page` | `57,620,000 → 72,287,000` | +25.45% | `5,528 → 5,118` | `10 → 5` | `3 → 4` | C |
+| Actors | `scheduler_paged_consume_delete_page` | `59,086,000 → 67,258,000` | +13.83% | `5,428 → 4,809` | `10 → 5` | `5 → 4` | C |
+| Actors | `scheduler_paged_tombstone_drain` | `33,874,000 + 3,778,028·n → 35,340,000 + 323,374·n` | +4.33% | `3,778 + 2,572·n → 3,032 + 79·n` | `5 + 2·n → 4` | `4 → 2` | C |
+| Actors | `scheduler_paged_mixed_scan` | `37,156,000 + 47,657,638·n → 35,550,000 + 80,648,201·n` | -4.32% | `5,121 + 2,866·n → 4,675 + 1,505·n` | `3 + 4·n → 2 + 2·n` | `3 + 1·n → 2 + 1·n` | C |
+| Actors | `scheduler_inner_zero_step_complete` | `60,973,000 → 58,109,000` | -4.70% | `5,537 → 4,388` | `7 → 2` | `3 → 3` | C |
+| Actors | `scheduler_paged_zero_step_user_crossing_unavailable` | `— → 161,755,000` | new | `— → 6,127` | `— → 12` | `— → 0` | C |
+| Actors | `scheduler_paged_execute_opening_max` | `549,800,000 → 593,660,000` | +7.98% | `27,824 → 14,158` | `30 → 24` | `15 → 13` | C |
+| Actors | `scheduler_inner_opening_failed_min` | `89,459,955 + 6,187,462·t → 109,517,654 + 25,013,024·t` | +22.42% | `6,729 + 2,670·t → 5,237 + 3,000·t` | `6 + 1·t → 6 + 1·t` | `3 → 5` | C |
+| Actors | `scheduler_inner_opening_retry_min` | `135,268,177 + 6,539,368·t → 195,144,203 + 29,296,426·t` | +44.26% | `6,780 + 2,669·t → 5,946 + 2,950·t` | `11 + 1·t → 15 + 1·t` | `8 → 11` | C |
+| Actors | `scheduler_inner_opening_failed_max` | `129,307,530 + 129,086,543·t → 165,770,741 + 94,996,343·t` | +28.20% | `8,347 + 22,129·t → 12,845 + 10,106·t` | `9 + 17·t → 12 + 8·t` | `3 → 5` | C |
+| Actors | `scheduler_inner_opening_retry_max` | `174,001,916 + 131,385,472·t → 228,451,910 + 47,226,607·t` | +31.29% | `8,179 + 22,125·t → 8,291 + 5,515·t` | `13 + 17·t → 18 + 5·t` | `8 → 11` | C |
+| Actors | `scheduler_inner_opening_complete_min` | `89,448,696 + 6,148,376·t → 68,359,831 + 11,019,188·t` | -23.58% | `6,694 + 2,670·t → 4,398` | `6 + 1·t → 2` | `3 → 3` | C |
+| Actors | `scheduler_inner_opening_user_complete_header_max` | `— → 175,025,000` | new | `— → 7,990` | `— → 9` | `— → 5` | C |
+| Actors | `scheduler_inner_opening_user_complete_header_max_tail` | `— → 221,092,770 + 17,027,764·t` | new | `— → 10,677 + 2,834·t` | `— → 11 + 1·t` | `— → 8` | C |
+| Actors | `scheduler_inner_opening_progress_min` | `151,658,315 + 6,196,436·t → 185,578,808 + 14,888,868·t` | +22.37% | `7,045 + 2,670·t → 6,363 + 2,957·t` | `13 + 1·t → 11 + 1·t` | `8 → 7` | C |
+| Actors | `scheduler_inner_opening_complete_max` | `126,799,350 + 127,843,620·t → 153,228,555 + 90,160,651·t` | +20.84% | `8,312 + 22,129·t → 9,978 + 10,416·t` | `9 + 17·t → 11 + 8·t` | `3 → 3` | C |
+| Actors | `scheduler_inner_opening_progress_max` | `202,040,691 + 132,879,336·t → 313,030,635 + 15,870,597·t` | +54.93% | `8,640 + 22,090·t → 49,359 + 3,202·t` | `15 + 17·t → 44 + 1·t` | `8 → 7` | C |
+| Actors | `scheduler_inner_running_complete` | `95,782,916 + 2,552,077·s + 11,013,042·p → 133,921,853 + 2,058,487·s + 20,721,195·p` | +39.82% | `7,016 + 2,718·p + 49·s → 10,952 + 2,914·p + 11·s` | `9 + 2·p → 11 + 2·p` | `4 → 4` | C |
+| Actors | `scheduler_inner_running_progress` | `112,950,315 + 1,651,829·s + 8,886,496·p → 284,303,244 + 6,766,806·p` | +151.71% | `6,762 + 2,693·p + 20·s → 12,546 + 2,220·p` | `13 + 2·p → 18 + 2·p` | `6 → 5` | C |
+| Actors | `scheduler_inner_suspended_tail_retry` | `127,671,072 + 1,427,388·s + 8,247,122·p → 224,662,450 + 3,771,914·s + 15,334,382·p` | +75.97% | `6,244 + 2,693·p + 12·s → 6,937 + 2,210·p + 101·s` | `9 + 2·p → 15 + 2·p` | `6 → 9` | C |
+| Actors | `scheduler_inner_suspended_tail_complete` | `135,401,769 + 1,926,065·s + 9,564,179·p → 213,795,680 + 15,584,645·p` | +57.90% | `7,294 + 2,718·p + 26·s → 8,925 + 2,207·p + 204·s` | `10 + 2·p → 8 + 2·p` | `4 → 8` | C |
+| Actors | `scheduler_inner_suspended_tail_progress` | `145,948,500 + 2,112,826·s + 9,053,092·p → 244,666,435 + 853,649·s + 21,015,964·p` | +67.64% | `6,764 + 2,693·p + 20·s → 9,954 + 2,192·p + 491·s` | `13 + 2·p → 14 + 2·p` | `6 → 9` | C |
+| Actors | `scheduler_inner_suspended_head_retry` | `101,216,218 + 624,373·n + 77,816·r + 605,547·f + 7,436,390·p → 233,830,626 + 244,723·n + 9,611,569·p` | +131.02% | `5,133 + 21·f + 22·n + 2,693·p + 2·r → 6,848 + 2,793·p` | `9 + 2·p → 14 + 2·p` | `6 → 9` | C |
+| Actors | `scheduler_inner_suspended_head_complete` | `109,542,628 + 544,051·n + 34,686·r + 520,243·f + 8,244,070·p → 145,300,991 + 1,898,621·p` | +32.64% | `6,038 + 21·f + 22·n + 2,716·p + 2·r → 6,004 + 2,701·p` | `9 + 2·p → 6 + 2·p` | `4 → 4` | C |
+| Actors | `scheduler_inner_suspended_head_progress` | `111,036,829 + 803,981·n + 91,680·r + 827,461·f + 7,824,145·p → 224,981,329 + 39,366·n + 11,797,163·p` | +102.62% | `5,721 + 21·f + 22·n + 2,693·p + 2·r → 7,784 + 2,793·p` | `12 + 2·p → 12 + 2·p` | `6 → 5` | C |
+| Actors | `scheduler_inner_suspended_head_opening_retry` | `122,805,125 + 662,864·n + 77,292·r + 715,051·f → 273,071,818 + 6,709,813·p` | +122.36% | `11,197 + 21·f + 22·n + 2·r → 6,832 + 2,786·p` | `15 → 14 + 2·p` | `6 → 9` | C |
+| Actors | `scheduler_inner_suspended_head_opening_complete` | `128,627,138 + 574,669·n + 64,436·r + 599,401·f → 128,652,913 + 4,574,010·p` | +0.02% | `11,985 + 21·f + 22·n + 2·r → 6,017 + 2,694·p` | `14 → 6 + 2·p` | `4 → 4` | C |
+| Actors | `scheduler_inner_suspended_head_opening_progress` | `135,507,223 + 806,693·n + 104,938·r + 820,306·f → 236,649,836 + 11,253,145·p` | +74.64% | `11,578 + 21·f + 22·n + 2·r → 7,919 + 2,736·p` | `17 → 12 + 2·p` | `6 → 5` | C |
+| Actors | `scheduler_paged_execute_cheap` | `139,405,000 + 122,349,209·n → 199,820,000 + 251,803,938·n` | +43.34% | `4,210 + 3,171·n → 3,993 + 3,009·n` | `6 + 7·n → 5 + 5·n` | `4 + 3·n → 3 + 3·n` | C |
+| Actors | `scheduler_paged_execute_cheap_mixed` | `357,034,000 + 190,370,288·n → 601,203,000 + 358,077,352·n` | +68.39% | `4,772 + 3,361·n → 6,958 + 3,206·n` | `5 + 11·n → 7 + 8·n` | `4 + 5·n → 4 + 4·n` | C |
+| Actors | `run_progress` | `104,904,000 → 279,510,000` | +166.44% | `8,567 → 6,456` | `9 → 14` | `2 → 9` | C |
+| Actors | `run_suspend` | `103,646,000 → 286,075,000` | +176.01% | `8,376 → 5,871` | `8 → 13` | `2 → 9` | C |
+| Actors | `run_complete` | `75,429,000 → 201,984,000` | +167.78% | `7,276 → 6,237` | `8 → 8` | `4 → 6` | C |
+| Actors | `run_cancel` | `288,868,000 → 486,871,000` | +68.54% | `9,635 → 43,539` | `19 → 22` | `12 → 10` | C |
+| Actors | `observation_change_trigger_occurrence` | `116,846,000 → 191,298,000` | +63.72% | `8,296 → 8,299` | `14 → 13` | `8 → 8` | C |
+| Actors | `observation_change_ingress` | `34,852,000 → 43,232,000` | +24.04% | `6,184 → 6,184` | `5 → 5` | `4 → 4` | C |
+| Actors | `observation_fanout_base` | `6,285,000 → 6,775,000` | +7.80% | `1,629 → 1,629` | `2 → 2` | `0 → 0` | C |
+| Actors | `observation_fanout_branch_probe` | `13,340,000 → 14,247,000` | +6.80% | `3,587 → 3,587` | `2 → 2` | `0 → 0` | C |
+| Actors | `observation_fanout_page` | `4,651,713,000 → 7,859,158,000` | +68.95% | `304,734 → 304,734` | `461 → 461` | `201 → 265` | C |
+| Actors | `observation_fanout_wakeup_page` | `5,061,897,000 → 10,472,871,000` | +106.90% | `304,734 → 304,734` | `457 → 462` | `200 → 267` | C |
+| Actors | `observation_fanout_coalesced_page` | `1,961,593,000 → 4,301,175,000` | +119.27% | `304,734 → 304,734` | `389 → 327` | `2 → 2` | C |
+| Actors | `observation_fanout_terminal` | `228,035,000 → 385,810,000` | +69.19% | `5,736 → 15,173` | `27 → 35` | `25 → 30` | C |
+| Actors | `observation_fanout_blocked_page` | `116,219,631,000 → 136,174,555,000` | +17.17% | `304,734 → 304,734` | `591 → 467` | `200 → 267` | C |
+| Actors | `crossing_worker_base` | `7,543,000 → 6,984,000` | -7.41% | `1,543 → 1,543` | `2 → 2` | `0 → 0` | C |
+| Actors | `crossing_work_probe` | `62,090,000 → 80,668,000` | +29.92% | `11,729 → 15,106` | `12 → 11` | `0 → 0` | C |
+| Actors | `observation_crossing_trigger_occurrence` | `508,662,000 → 713,371,000` | +40.24% | `164,204 → 164,188` | `90 → 90` | `81 → 81` | C |
+| Actors | `crossing_search_probe` | `125,926,000 → 134,168,000` | +6.55% | `81,886 → 81,886` | `33 → 33` | `0 → 0` | C |
+| Actors | `crossing_fire_probe` | `66,770,000 → 89,119,000` | +33.47% | `11,729 → 11,729` | `14 → 13` | `0 → 0` | C |
+| Actors | `crossing_fire_pair_probe` | `216,651,000 → 350,888,000` | +61.96% | `11,729 → 15,106` | `25 → 26` | `0 → 0` | C |
+| Actors | `crossing_tail_refill_probe` | `20,114,000 → 20,324,000` | +1.04% | `11,729 → 11,729` | `1 → 1` | `0 → 0` | C |
+| Actors | `crossing_fire_cohort_preflight` | `41,975,000 + 23,857,544·c → 44,350,000 + 26,177,365·c` | +5.66% | `1,493 + 2,699·c → 1,493 + 2,861·c` | `2 + 7·c → 2 + 6·c` | `0 → 0` | C |
+| Actors | `crossing_coalesced_cohort_preflight` | `44,280,000 + 24,157,448·c → 49,029,000 + 38,580,241·c` | +10.72% | `1,493 + 2,699·c → 9,858 + 2,699·c` | `2 + 7·c → 3 + 5·c` | `0 → 0` | C |
+| Actors | `crossing_terminal_cohort_preflight` | `43,721,000 + 23,827,571·c → 21,381,679 + 25,141,280·c` | -51.10% | `1,493 + 2,699·c → 1,493 + 2,861·c` | `2 + 7·c → 2 + 6·c` | `0 → 0` | C |
+| Actors | `crossing_skip_cohort_preflight` | `40,718,000 + 22,509,580·c → 31,379,277 + 23,988,770·c` | -22.94% | `990 + 2,699·c → 990 + 2,861·c` | `0 + 7·c → 0 + 6·c` | `0 → 0` | C |
+| Actors | `crossing_rearm_cohort_preflight` | `40,928,000 + 22,797,266·c → 55,735,000 + 36,930,066·c` | +36.18% | `990 + 2,699·c → 9,858 + 2,699·c` | `0 + 7·c → 1 + 5·c` | `0 → 0` | C |
+| Actors | `crossing_rearm_pair_probe` | `93,449,000 → 101,690,000` | +8.82% | `11,729 → 15,106` | `19 → 16` | `0 → 0` | C |
+| Actors | `crossing_skip_pair_probe` | `89,188,000 → 89,119,000` | -0.08% | `11,729 → 11,729` | `19 → 17` | `0 → 0` | C |
+| Actors | `crossing_transition_unit` | `33,105,000 → 46,306,000` | +39.88% | `6,636 → 6,636` | `5 → 5` | `2 → 2` | C |
+| Actors | `crossing_leaf_unit` | `553,082,000 → 741,098,000` | +33.99% | `162,782 → 162,782` | `90 → 90` | `81 → 81` | C |
+| Actors | `crossing_page_unit` | `553,710,000 → 713,021,000` | +28.77% | `162,782 → 162,782` | `90 → 90` | `81 → 81` | C |
+| Actors | `crossing_rearm_unit` | `420,591,000 → 537,717,000` | +27.85% | `162,782 → 162,782` | `80 → 83` | `74 → 74` | C |
+| Actors | `crossing_rearm_pair_unit` | `472,623,000 → 667,764,000` | +41.29% | `162,782 → 162,782` | `86 → 91` | `76 → 75` | C |
+| Actors | `crossing_coalesced_unit` | `439,728,000 → 575,362,000` | +30.84% | `162,782 → 162,782` | `84 → 85` | `74 → 74` | C |
+| Actors | `crossing_coalesced_pair_unit` | `521,862,000 → 748,851,000` | +43.50% | `162,782 → 162,782` | `92 → 93` | `76 → 75` | C |
+| Actors | `crossing_placed_unit` | `555,946,000 → 718,679,000` | +29.27% | `162,782 → 162,782` | `90 → 90` | `81 → 81` | C |
+| Actors | `crossing_placed_pair_unit` | `586,537,000 → 794,527,000` | +35.46% | `162,782 → 162,782` | `97 → 98` | `85 → 86` | C |
+| Actors | `crossing_placed_maximum_unit` | `9,904,350,000 → 20,066,635,000` | +102.60% | `346,462 → 608,478` | `982 → 1,111` | `466 → 595` | C |
+| Actors | `crossing_placed_non_tail_emptied_unit` | `4,094,371,000 → 9,507,020,000` | +132.20% | `327,262 → 327,262` | `563 → 627` | `367 → 431` | C |
+| Actors | `crossing_placed_non_tail_trimmed_unit` | `4,067,622,000 → 9,394,853,000` | +130.97% | `327,262 → 327,262` | `563 → 627` | `369 → 433` | C |
+| Actors | `crossing_skip_unit` | `168,390,000 → 235,090,000` | +39.61% | `81,886 → 81,886` | `41 → 47` | `2 → 2` | C |
+| Actors | `crossing_skip_pair_unit` | `77,665,000 → 195,559,000` | +151.80% | `11,729 → 11,729` | `12 → 24` | `2 → 2` | C |
+| Actors | `crossing_actor_unit` | `730,831,000 → 877,570,000` | +20.08% | `162,782 → 162,782` | `97 → 97` | `91 → 90` | C |
+| Actors | `transaction_extension_ingress_base` | `13,410,000 → 14,667,000` | +9.37% | `6,052 → 6,052` | `2 → 2` | `0 → 0` | C |
+| Actors | `transaction_extension_ingress_notify` | `290,055,000 → 473,182,000` | +63.14% | `5,998 → 20,625` | `13 → 13` | `6 → 2` | C |
+| Actors | `funding_snapshot_open` | `13,240,086 + 122,803·a → 15,152,818 + 358,026·a` | +14.45% | `4,531 → 4,531` | `1 → 1` | `1 → 1` | C |
+| Actors | `maximum_context_inherent` | `191,559,950,000 → 204,517,874,000` | +6.76% | `3,517 → 3,517` | `13 → 13` | `23 → 23` | C |
+| Actors | `block_resource_finalize` | `8,590,000 → 9,010,000` | +4.89% | `1,560 → 1,560` | `1 → 1` | `2 → 2` | C |
+| Actors | `block_resource_meter_extension` | `10,616,000 → 11,035,000` | +3.95% | `1,560 → 1,560` | `1 → 1` | `1 → 1` | C |
+| Actors | `maximum_xcm_version_discovery` | `446,572,000 → 465,709,000` | +4.29% | `248,490 → 248,490` | `102 → 102` | `1 → 1` | C |
+| Router | `direct_xyk_exact_input` | `389,092,000 → 495,601,000` | +27.37% | `9,635 → 15,106` | `31 → 31` | `18 → 18` | C |
+| Router | `direct_mint_exact_input` | `390,349,000 → 561,603,000` | +43.87% | `21,862 → 21,862` | `34 → 38` | `14 → 14` | C |
+| Router | `native_anchored_exact_input` | `562,930,000 → 646,251,000` | +14.80% | `19,253 → 19,253` | `45 → 45` | `27 → 27` | C |
+| Router | `direct_xyk_exact_output` | `387,486,000 → 481,842,000` | +24.35% | `9,635 → 15,106` | `30 → 30` | `18 → 18` | C |
+| Router | `native_anchored_exact_output` | `556,714,000 → 656,309,000` | +17.89% | `19,253 → 19,253` | `44 → 44` | `27 → 27` | C |
+| Router | `create_pool` | `144,923,000 → 151,628,000` | +4.63% | `34,255 → 34,255` | `13 → 13` | `10 → 10` | C |
+| Router | `update_router_fee` | `8,591,000 → 8,661,000` | +0.81% | `1,489 → 1,489` | `1 → 1` | `1 → 1` | C |
+| TMC | `create_curve` | `26,680,000 → 26,610,000` | -0.26% | `6,360 → 6,360` | `3 → 3` | `1 → 1` | C |
+| TMC | `mint_with_distribution` | `164,758,000 → 254,994,000` | +54.77% | `6,208 → 7,535` | `11 → 15` | `4 → 4` | C |
 
 ## Interpretation
 
@@ -193,11 +188,12 @@ Every listed dimension requires review against the owning implementation and ben
 
 ## Retired Weight Owners
 
-- Actors `continuation_suspend`
-- Actors `continuation_retry`
-- Actors `continuation_complete`
-- Actors `continuation_cancel`
-- Actors `continuation_suffix_admission`
+- Actors `cycle_orchestration`
+- Actors `step_orchestration`
+- Actors `scheduler_inner_opening_close_min`
+- Actors `scheduler_inner_opening_close_max`
+- Actors `run_retry`
+- Actors `run_suffix_admission`
 
 Any retired owner requires implementation review before release acceptance; absence from the candidate alone does not prove safe replacement.
 
@@ -207,5 +203,5 @@ Any retired owner requires implementation review before release acceptance; abse
 - Verify freshness: `./.agents/skills/release-assurance/scripts/weight-delta-ledger.sh --check`
 - Reproduce production weights through `./scripts/benchmarks.sh` and the owning Architecture Experiments Skill; focused outputs do not replace complete generated pallet files.
 
-Candidate weight source identity: `e3615c4896619eabba068ba980988810f7c2ec6ebaa893f3539a9919a1bfa3c9`.
+Candidate weight source identity: `a55b874f82a52fe176f49d1d86c2531031f98dd09c4e895123140ab5f532939d`.
 

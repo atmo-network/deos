@@ -64,7 +64,7 @@ This glossary is a lookup surface, not a second explanation layer. Each term sta
 
 ### TOL
 
-`Treasury-Owned Liquidity`. Protocol-controlled liquidity segmented into bucket domains.
+`Treasury-Owned Liquidity`. The asset-scoped topology through which a treasury owns protocol liquidity and related strategic capital. Anchors, bucket families, and independent treasury owners are configuration.
 
 ### Actors
 
@@ -185,6 +185,10 @@ The protection token used for the strategic constitutional surface on the curren
 ### `$BLDR`
 
 The flagship tactical governance and builder-coordination token on the current line. See [$BLDR Builder Economy](../concepts/builder-economy.en.md).
+
+### `BLDR Anchor`
+
+The sole immutable System Actor owner of protocol-created `$NTVE/$BLDR` LP. The second-order `$BLDR` topology has no A/B/C/D bucket family, so the owner carries no bucket-letter qualifier.
 
 ### `stXXX`
 

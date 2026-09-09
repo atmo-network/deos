@@ -149,7 +149,7 @@ fn prefund_user_sovereign(owner: &AccountId, steps: &RuntimeSteps) {
 }
 
 fn create_user_vector(
-  name: &'static str,
+  name: &str,
   owner_byte: u8,
   trigger: RuntimeTrigger,
   steps: RuntimeSteps,
@@ -295,10 +295,16 @@ fn manifest() -> Value {
         transfer_steps(8, &destination),
       ),
       create_user_vector(
-        "user-manual-32",
+        &format!(
+          "user-manual-{}",
+          <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
+        ),
         5,
         Trigger::Manual,
-        transfer_steps(32, &destination),
+        transfer_steps(
+          <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get() as usize,
+          &destination,
+        ),
       ),
       create_user_vector(
         "user-address-event-1",
