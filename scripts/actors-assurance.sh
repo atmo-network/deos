@@ -103,11 +103,13 @@ The preparation gate authors real ordered inherents, finalizes actor-only and
 continuous-valid-user-demand blocks, then independently replays the exact production Wasm.
 The W1 campaign preserves the reference preset's 15 System Actor identities (three
 active and twelve dormant), fills remaining identity capacity with 9,985 mixed
-Manual/Cadenced workload Actors, and proof-replays 100 linked finalized blocks
-against the 10,000-Cycle target. The continuous-user campaign additionally fills
-each User base turn with valid signed remarks and proves the next call is inadmissible.
-The W2 schedule campaign separately measures Manual-only and Cadenced-only
-actor-demand cohorts against the same target and exact production binding.
+Manual/Cadenced workload Actors, and proof-replays 100 linked finalized blocks,
+reporting committed Cycles against the retained historical 10,000-Cycle/100-block
+reference horizon; shortfall inside that horizon is reported, not gated. The
+continuous-user campaign additionally fills each User base turn with valid signed
+remarks and proves the next call is inadmissible. The W2 schedule campaign
+separately measures Manual-only and Cadenced-only actor-demand cohorts against the
+same reference horizon and exact production binding.
 The W3 campaign runs equal 0/2/4 Opening-predicate by 1/2/3-Step Manual-only
 cells to completion and reports Opening, middle, and final Steps separately.
 The W4 campaign preserves all 15 reference identities, fills the remaining slots

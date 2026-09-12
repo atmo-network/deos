@@ -4,6 +4,16 @@
 >
 > Each release keeps at most 8 outcome records of at most 512 characters.
 
+## 0.7.26: Evidence-Driven Actor Efficiency
+
+- `Actors / Crossing Efficiency`: Retained the placed pair-owner fallback as the Crossing admission path: the steady cycle moves `12 → 16` at unchanged cycle ProofSize, and the declared 48-member funded User witness completes at block `12` instead of `14` (Trigger-to-completion mean `9.46 → 8.67`, p95 `14 → 12`) with charged Actor Control `−13.0%` RefTime / `−10.1%` ProofSize, unchanged effect totals, and the deeper queue span `22 → 29` as the stated cost.
+- `Actors / Production Binding`: Added the generated `crossing_selection_probe` owner (`1,467,000` ps / `0` ProofSize) for the Crossing admission-selection segment and reissued the Actors production Weight with the runtime Wasm and regenerated metadata and consumers; every other generated owner stays byte-identical under the Benchmark Reassessment Protocol retention.
+- `Actors / Resource Anatomy`: Classified all 161 production `WeightInfo` owners into eight cost classes and measured the rank-1 temporal drain at `70.56%` of the matched Actor Control with a `3_006_047_446_000` ps admission-refusal tax and `2_365` deferred materializations; the `91.93%` per-Step composition and the `335_663_374 / 3_111` per-dead-cell tombstone envelope are recorded anatomy.
+- `Actors / Redesign Campaign`: Closed the frozen six-candidate single-redesign set as a research result — two candidates rejected by their own smallest falsifiers and the rest consumed by recorded bounds or gated behind an explicit trade declaration — adopting no production Weight, execution path or artifact identity change.
+- `Actors / Final Comparison`: Confirmed the converged tree resource-identical to the sealed candidate checkpoint across ten declared end-to-end runs spanning drain, attribution, prefix, cohort, churn, lifecycle/retry, donation, schedules and production replay, reproducing every recorded count, per-block value, proof total and state effect with zero cross-workload regression.
+- `Documentation / Public Truth`: Reconciled the Actors integration document, package architecture and bilingual Wiki to the measured form, separated the previously released and retained Crossing cohorts by role, and kept the deferred causal-introspection design out of shipped-capability claims.
+- `Actors / Admission Safety`: Restricted placed pair fallback to tail-page authority. Under limited Weight, non-tail batches retain scalar progress instead of recording an invariant fault that halts Crossing service; regressions cover independent RefTime/ProofSize limits, exact scalar state-root equivalence and subsequent service without a fault clear.
+
 ## 0.7.25: Canonical Actor Control Geometry
 
 - `Wiki / Truth Boundary`: Removed planned causal-introspection content and release task lists from bilingual articles, retained current capabilities and limitations, and removed the reader's source-document panel. Source provenance stays in non-rendered metadata; Wiki navigation and concrete resource links remain available.

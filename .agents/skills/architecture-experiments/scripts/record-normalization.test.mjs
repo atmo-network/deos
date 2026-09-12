@@ -80,6 +80,11 @@ export function selfTest(realSkillDir) {
     rejects('unfrozen measuring', () => change(childFile, 'Frozen at Measuring on fixture source.', 'Not frozen.'), /must be frozen/);
     rejects('multiple leaf claims', () => change(childFile, '| O1 | A bounded proof', '| O2 | Another claim | One witness | Native | Self | Required | Consumer | Open |\n| O1 | A bounded proof'), /one proof claim/);
     rejects('broken body anchor', () => change(childFile, '## Measurements\n\nBounded fixture evidence.', `## Measurements\n\n[Parent](./${parentId}.md#missing-proof).`), /broken body anchor/);
+    rejects('invalid benchmark disposition status', () => change(childFile, '## Statistical / Variance Notes\n\nBounded fixture evidence.', '## Statistical / Variance Notes\n\n### Benchmark Evidence Disposition\n\n- `Benchmark Evidence Status`: Fast\n- `Reassessment Trigger`: None\n- `Compared Observation IDs`: None\n- `Noise / Stability Evidence`: None\n- `Current Authority`: None.'), /Benchmark Evidence Disposition status/);
+    rejects('incomplete benchmark disposition', () => change(childFile, '## Statistical / Variance Notes\n\nBounded fixture evidence.', '## Statistical / Variance Notes\n\n### Benchmark Evidence Disposition\n\n- `Benchmark Evidence Status`: Qualified.'), /Benchmark Evidence Disposition fields/);
+    reset();
+    change(childFile, '## Statistical / Variance Notes\n\nBounded fixture evidence.', '## Statistical / Variance Notes\n\n### Benchmark Evidence Disposition\n\n- `Benchmark Evidence Status`: Qualified.\n- `Reassessment Trigger`: A/B/A drift.\n- `Compared Observation IDs`: run A, run B.\n- `Noise / Stability Evidence`: raw minima stable, fits unstable.\n- `Current Authority`: retention only.');
+    assert.deepEqual(validate(skill, options).errors, []); count++;
     reset();
     change(parentFile, '## Measurements\n\nBounded fixture evidence.', '## Measurements\n\n| Phase | Child claim |\n| --- | --- |\n| Admission | Independent RefTime and ProofSize refusal |');
     assert.deepEqual(validate(skill, options).errors, []); count++;

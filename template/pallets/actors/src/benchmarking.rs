@@ -14288,6 +14288,45 @@ mod benches {
     }
   }
 
+  /// Measures the fixed, storage-free admission-selection arithmetic executed after
+  /// classification: plan-weight lookup, fault-reserve comparison, the retained pair-fallback
+  /// preference, the scalar fallback, the component checks and the final reservation check.
+  /// The fixture pins the worst-case path: a classified multi-candidate placed batch whose
+  /// aggregate and pair reservations miss while the scalar single fits.
+  #[benchmark]
+  fn crossing_selection_probe() {
+    let plan = CrossingWorkPlan::FireCohortPlacedBatch;
+    let admitted_candidates = T::MaxCrossingActorsPerBlock::get().max(3);
+    let pair_weight = Pallet::<T>::crossing_plan_weight_for_admission(plan, 2)
+      .expect("the placed batch owns a generated pair admission weight");
+    let single_plan = Pallet::<T>::crossing_single_candidate_plan(plan)
+      .expect("the placed batch owns a scalar single fallback");
+    let single_weight = Pallet::<T>::crossing_plan_weight_for_admission(single_plan, 1)
+      .expect("the scalar single owns a generated admission weight");
+    let fault_weight = T::WeightInfo::record_crossing_worker_fault();
+    assert!(
+      pair_weight.ref_time() > single_weight.ref_time(),
+      "the worst-case selection fixture requires the pair reservation to miss before the single fits"
+    );
+    let meter =
+      polkadot_sdk::sp_weights::WeightMeter::with_limit(single_weight.saturating_add(fault_weight));
+    let counters = crate::crossing::CrossingWorkCounters::default();
+    #[block]
+    {
+      let selection =
+        Pallet::<T>::select_crossing_admission(plan, admitted_candidates, false, &counters, &meter);
+      assert!(matches!(
+        selection,
+        crate::crossing::CrossingAdmissionSelection::Admitted {
+          plan: CrossingWorkPlan::FireCohortPlaced,
+          admitted_candidates: 1,
+          ..
+        }
+      ));
+      core::hint::black_box(selection);
+    }
+  }
+
   #[benchmark]
   fn crossing_tail_refill_probe() {
     let (feed, first) = prepare_crossing_work::<T>(2);

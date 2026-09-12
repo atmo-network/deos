@@ -69,12 +69,24 @@ const W8_DUE_ACTORS: u32 = 100;
 const W9_DUE_ACTORS: u32 = 100;
 const CONTROL_ATTRIBUTION_ACTORS: u32 = 100;
 const CONTROL_ATTRIBUTION_BLOCKS: u32 = 9;
+const P53_COHORT_MEMBERS: u32 = 48;
+const P53_COHORT_BLOCK_LIMIT: u32 = 64;
+const P53_PUBLICATION_BLOCK: u32 = 2;
+const P53_FEED_REGISTRY: u32 = 8_200;
+const P53_RELEASE_SAMPLE: u128 = 1_000_000_000_000;
+const P53_CROSSING_SAMPLE: u128 = 100_000_000_000_000;
+const P53_CROSSING_THRESHOLD: u128 = 1_500_000_000_000;
+const P53_CROSSING_REARM: u128 = 800_000_000_000;
+/// SHA-256 of the production Wasm accepted for the retained release tree, rebuilt by
+/// `scripts/03-build-runtime.sh`. Every exact-Wasm regression profile binds this identity and
+/// fails closed when the caller selects different bytes; update it together with the accepted
+/// production binding.
+const ACCEPTED_PRODUCTION_WASM_SHA256: [u8; 32] = [
+  0x91, 0xc2, 0x3b, 0x2f, 0x77, 0xb5, 0x72, 0x65, 0xe8, 0xe3, 0x2e, 0xc8, 0x64, 0x56, 0x10, 0xa3,
+  0x2b, 0x7d, 0x47, 0x63, 0xb0, 0xce, 0xd3, 0x1a, 0xb5, 0x6e, 0xf6, 0x4e, 0x8c, 0x0f, 0x5a, 0x2d,
+];
 const REFERENCE_ACTIVE_SYSTEM_ACTORS: u32 = 3;
 const REFERENCE_SYSTEM_ACTOR_IDENTITIES: u32 = 15;
-const EXP_0095_PRODUCTION_WASM_SHA256: [u8; 32] = [
-  0x25, 0xb9, 0x69, 0x5f, 0xd9, 0xe9, 0x00, 0xf1, 0x7a, 0xe1, 0xf3, 0xfb, 0x0b, 0x81, 0x5a, 0xc1,
-  0x40, 0x38, 0x30, 0x26, 0x4d, 0x9c, 0x31, 0xf7, 0xce, 0xe5, 0x4e, 0x29, 0xf4, 0x34, 0xb7, 0x00,
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UserDemand {
@@ -217,6 +229,7 @@ struct FullExecutiveBlockMetrics {
   paused_actors: Vec<ActorId>,
   resumed_actors: Vec<ActorId>,
   trigger_occurrences: Vec<(ActorId, TriggerFamily)>,
+  actor_faults: u32,
   user_calls: u32,
   next_user_weight: Option<Weight>,
   prepass_steps: u32,
@@ -1538,8 +1551,13 @@ fn authored_metrics(
   let mut paused_actors = Vec::new();
   let mut resumed_actors = Vec::new();
   let mut trigger_occurrences = Vec::new();
+  let mut actor_faults = 0u32;
   for record in System::events() {
     let (actor_id, step_index, successful, observed_task) = match record.event {
+      RuntimeEvent::Actors(Event::ActorFaultRecorded { .. }) => {
+        actor_faults = actor_faults.saturating_add(1);
+        continue;
+      }
       RuntimeEvent::Actors(Event::ActorPaused { actor_id })
         if workload_profiles.contains_key(&actor_id) =>
       {
@@ -1709,6 +1727,7 @@ fn authored_metrics(
     paused_actors,
     resumed_actors,
     trigger_occurrences,
+    actor_faults,
     user_calls,
     next_user_weight,
     prepass_steps,
@@ -4122,8 +4141,8 @@ fn full_executive_funded_action_collection_replays_exact_production_wasm() {
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "funded User Action witness must remain bound to EXP-0095"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "funded User Action witness must remain bound to the accepted production Wasm"
   );
   run_funded_action_collection_witness(&wasm, true);
 }
@@ -5755,7 +5774,7 @@ fn full_executive_schedule_ledger_counts_processed_units_and_refusals() {
   if large {
     assert_eq!(
       polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-      EXP_0095_PRODUCTION_WASM_SHA256,
+      ACCEPTED_PRODUCTION_WASM_SHA256,
       "native large ledger must retain the current production genesis code"
     );
   }
@@ -6586,6 +6605,7 @@ fn reference_full_block_fixture_replays_through_executive() {
       paused_actors: Vec::new(),
       resumed_actors: Vec::new(),
       trigger_occurrences: Vec::new(),
+      actor_faults: 0,
       user_calls: 0,
       next_user_weight: None,
       prepass_steps: 0,
@@ -6952,6 +6972,484 @@ fn full_executive_control_frontier_separates_capacity_from_service_eligibility()
   }
 }
 
+/// P5.3 retained end-to-end witness (BACKLOG P5.3): one bounded funded User ObservationCrossing
+/// cohort through the complete Executive block path — source publication, materialization, Ready
+/// eligibility, one committed Transfer Step and a completed Cycle — with per-Actor lifecycle blocks
+/// and per-block resource accounting. The geometry reuses the 48-member equal-threshold feed of the
+/// retained Crossing regression witnesses; neither the member count nor the observation window is a
+/// new target. Each side of the comparison binds its own production Wasm/Weight identity.
+struct PreparedP53Cohort {
+  actors: PreparedActorFixture,
+  feed: primitives::OracleFeedId,
+}
+
+#[derive(Clone, Copy)]
+struct P53CohortRow {
+  actor_id: ActorId,
+  ticket: u64,
+  materialized: u32,
+  eligible: u32,
+  step: u32,
+  completed: u32,
+}
+
+fn prepare_p53_cohort_fixture(wasm: &[u8]) -> PreparedP53Cohort {
+  let steps = actors_integration_tests::transfer_contract_steps(
+    super::common::BOB,
+    primitives::AssetKind::Native,
+    crate::EXISTENTIAL_DEPOSIT,
+  );
+  let (next_control_maximum, next_effect_maximum) =
+    actors_integration_tests::one_step_fifo_attempt_maxima(&steps);
+  let mut ext = TestExternalities::new_with_code_and_state(
+    wasm,
+    reference_genesis_storage(wasm),
+    crate::VERSION.state_version(),
+  );
+  let signer = sr25519::Pair::from_seed(&[67u8; 32]);
+  let (actor_ids, actor_profiles, feed) = ext.execute_with(|| {
+    System::set_block_number(1);
+    let initial_active = pallet_deos_actors::ActiveActorCount::<Runtime>::get();
+    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
+    assert!(
+      initial_active.saturating_add(P53_COHORT_MEMBERS) <= maximum,
+      "the P5.3 cohort must fit the reference active bound"
+    );
+    let signer_account = crate::AccountId::from(signer.public());
+    assert_ok!(Balances::force_set_balance(
+      RuntimeOrigin::root(),
+      MultiAddress::Id(signer_account.clone()),
+      u128::MAX / 4,
+    ));
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      primitives::AssetKind::Native,
+      primitives::AssetKind::Local(P53_FEED_REGISTRY),
+    );
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      signer_account.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(signer_account),
+      feed,
+      P53_RELEASE_SAMPLE,
+    ));
+    let mut actor_ids = Vec::with_capacity(P53_COHORT_MEMBERS as usize);
+    let mut actor_profiles = BTreeMap::new();
+    for index in 0..P53_COHORT_MEMBERS {
+      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
+      assert_ok!(Balances::force_set_balance(
+        RuntimeOrigin::root(),
+        MultiAddress::Id(owner.clone()),
+        u128::MAX / 4,
+      ));
+      let actor_id = actors_integration_tests::create_user(
+        owner,
+        actors_integration_tests::observation_crossing_schedule(
+          feed,
+          CrossingDirection::Rising,
+          P53_CROSSING_THRESHOLD,
+          P53_CROSSING_REARM,
+        ),
+        None,
+        steps.clone(),
+      );
+      actors_integration_tests::fund_native(
+        actor_id,
+        1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT),
+      );
+      actor_ids.push(actor_id);
+      actor_profiles.insert(
+        actor_id,
+        WorkloadActorProfile {
+          step_count: 1,
+          opening_predicates_per_step: 0,
+          task: Some(WorkloadTask::Transfer),
+        },
+      );
+    }
+    assert_eq!(
+      Actors::crossing_feed_membership_count(feed),
+      P53_COHORT_MEMBERS,
+      "the P5.3 cohort is one equal-threshold feed membership"
+    );
+    assert_eq!(
+      pallet_deos_actors::ActiveActorCount::<Runtime>::get(),
+      initial_active.saturating_add(P53_COHORT_MEMBERS)
+    );
+    (actor_ids, actor_profiles, feed)
+  });
+  ext
+    .commit_all()
+    .expect("prepared P5.3 cohort commits before block authoring");
+  let storage = ext.execute_with(current_top_storage);
+  PreparedP53Cohort {
+    actors: PreparedActorFixture {
+      storage,
+      actor_ids,
+      actor_profiles,
+      signer,
+      next_control_maximum,
+      next_effect_maximum,
+    },
+    feed,
+  }
+}
+
+/// Reads the canonical Ready ticket and its eligibility block for every cohort member after one
+/// authored block; the first observed value per member is the retained lifecycle evidence.
+fn p53_cohort_ready_observation(
+  wasm: &[u8],
+  storage: &Storage,
+  actor_ids: &[ActorId],
+) -> Vec<(ActorId, Option<u64>, Option<u32>)> {
+  let mut ext = TestExternalities::new_with_code_and_state(
+    wasm,
+    storage.clone(),
+    crate::VERSION.state_version(),
+  );
+  ext.execute_with(|| {
+    actor_ids
+      .iter()
+      .filter_map(|actor_id| {
+        let (location, cell) = Actors::actor_control_cell(*actor_id)?;
+        let ticket = match location {
+          pallet_deos_actors::ActorControlLocation::Ready { ticket } => Some(ticket),
+          _ => None,
+        };
+        Some((*actor_id, ticket, cell.eligible_at))
+      })
+      .collect()
+  })
+}
+
+fn p53_latency_summary(label: &str, values: &[u32]) -> serde_json::Value {
+  let mut sorted = values.to_vec();
+  sorted.sort_unstable();
+  let count = sorted.len();
+  assert!(
+    count > 0,
+    "a P5.3 latency summary needs at least one sample"
+  );
+  let mean = sorted.iter().map(|value| u64::from(*value)).sum::<u64>() as f64 / count as f64;
+  let median = sorted[count / 2];
+  let p95_rank = (count as f64 * 0.95).ceil() as usize;
+  let p95 = sorted[p95_rank.saturating_sub(1).min(count - 1)];
+  serde_json::json!({
+    "metric": label, "samples": count, "meanBlocks": format!("{mean:.2}"),
+    "medianBlocks": median, "p95Blocks": p95,
+    "minBlocks": sorted[0], "maxBlocks": sorted[count - 1],
+  })
+}
+
+fn run_p53_funded_crossing_cohort_campaign(wasm: &[u8], replay_wasm: bool) {
+  let fixture = prepare_p53_cohort_fixture(wasm);
+  let actor_ids = fixture.actors.actor_ids.clone();
+  let mut pre_state = fixture.actors.storage.clone();
+  let mut parent = parent_header_for(pre_state.clone(), wasm, 1);
+  let mut signer_nonce = 0;
+  let mut materialized_at = BTreeMap::<ActorId, u32>::new();
+  let mut ticket_at = BTreeMap::<ActorId, u64>::new();
+  let mut eligible_at = BTreeMap::<ActorId, u32>::new();
+  let mut step_at = BTreeMap::<ActorId, u32>::new();
+  let mut completed_at = BTreeMap::<ActorId, u32>::new();
+  let mut faults = 0u64;
+  let mut materialized_blocks = Vec::new();
+  let mut step_blocks = Vec::new();
+  let mut effect_blocks = Vec::new();
+  let mut completed_blocks = Vec::new();
+  let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
+  let effect_limit = BlockResourceBudgetValue::get()
+    .limits()
+    .actor_base_turn()
+    .saturating_add(BlockResourceBudgetValue::get().limits().shared_economic());
+  let mut control_used = Vec::new();
+  let mut effect_used = Vec::new();
+  let mut user_dispatch = Vec::new();
+  let mut queue_span = Vec::new();
+  let mut control_unused = Vec::new();
+
+  for block_number in 2..=(P53_COHORT_BLOCK_LIMIT + 1) {
+    let calls = if block_number == P53_PUBLICATION_BLOCK {
+      vec![RuntimeCall::Oracle(pallet_oracle::Call::publish {
+        feed: fixture.feed,
+        sample: P53_CROSSING_SAMPLE,
+      })]
+    } else {
+      Vec::new()
+    };
+    let authored = author_complete_block_after_with_calls(
+      pre_state,
+      wasm,
+      &parent,
+      block_number,
+      UserDemand::ActorOnly,
+      &fixture.actors.signer,
+      signer_nonce,
+      &fixture.actors.actor_profiles,
+      &calls,
+    );
+    signer_nonce = signer_nonce.saturating_add(authored.metrics.user_calls);
+    faults = faults.saturating_add(u64::from(authored.metrics.actor_faults));
+    assert_eq!(
+      authored.metrics.non_successful_steps, 0,
+      "the P5.3 cohort commits every attempted Step: block {block_number}"
+    );
+    assert!(
+      authored.metrics.failed_cycle_actors.is_empty(),
+      "the P5.3 cohort has no failed Cycle: block {block_number}"
+    );
+    let mut block_materialized = 0u32;
+    for (actor_id, family) in &authored.metrics.trigger_occurrences {
+      if *family != TriggerFamily::ObservationCrossing || !actor_ids.contains(actor_id) {
+        continue;
+      }
+      block_materialized = block_materialized.saturating_add(1);
+      assert!(
+        materialized_at.insert(*actor_id, block_number).is_none(),
+        "the P5.3 cohort materializes exactly once: actor {actor_id} at block {block_number}"
+      );
+    }
+    for (actor_id, _) in &authored.metrics.progressed_steps {
+      assert!(
+        step_at.insert(*actor_id, block_number).is_none(),
+        "the one-Step Contract commits exactly once: actor {actor_id}"
+      );
+    }
+    for actor_id in &authored.metrics.completed_cycle_actors {
+      assert!(
+        completed_at.insert(*actor_id, block_number).is_none(),
+        "the one-Step Contract completes exactly once: actor {actor_id}"
+      );
+    }
+    for (actor_id, ticket, eligible) in
+      p53_cohort_ready_observation(wasm, &authored.post_state, &actor_ids)
+    {
+      if let Some(ticket) = ticket {
+        if let Some(previous) = ticket_at.insert(actor_id, ticket) {
+          assert_eq!(previous, ticket, "a Ready ticket identity is stable");
+        }
+      }
+      if let Some(eligible) = eligible {
+        eligible_at.entry(actor_id).or_insert(eligible);
+      }
+    }
+    materialized_blocks.push(block_materialized);
+    step_blocks.push(authored.metrics.actor_steps);
+    effect_blocks.push(authored.metrics.transfer_steps);
+    completed_blocks.push(authored.metrics.completed_cycles);
+    control_used.push(authored.metrics.actor_control);
+    effect_used.push(authored.metrics.actor_effect);
+    user_dispatch.push(authored.metrics.user_dispatch);
+    queue_span.push(
+      authored
+        .metrics
+        .queue_tail
+        .saturating_sub(authored.metrics.queue_head),
+    );
+    control_unused.push(control_limit.saturating_sub(authored.metrics.actor_control));
+    println!(
+      "P53_COHORT_BLOCK_V1 {}",
+      serde_json::json!({
+        "block": block_number,
+        "materialized": block_materialized,
+        "steps": authored.metrics.actor_steps,
+        "effects": authored.metrics.transfer_steps,
+        "completed": authored.metrics.completed_cycles,
+        "controlRefTime": authored.metrics.actor_control.ref_time(),
+        "controlProofSize": authored.metrics.actor_control.proof_size(),
+        "effectRefTime": authored.metrics.actor_effect.ref_time(),
+        "effectProofSize": authored.metrics.actor_effect.proof_size(),
+        "prepassControlProofSize": authored.metrics.prepass_actor_control.proof_size(),
+        "prepassEffectProofSize": authored.metrics.prepass_actor_effect.proof_size(),
+        "userDispatchProofSize": authored.metrics.user_dispatch.proof_size(),
+        "controlUnusedRefTime": control_limit
+          .saturating_sub(authored.metrics.actor_control)
+          .ref_time(),
+        "controlUnusedProofSize": control_limit
+          .saturating_sub(authored.metrics.actor_control)
+          .proof_size(),
+        "effectUnusedProofSize": effect_limit
+          .saturating_sub(authored.metrics.actor_effect)
+          .proof_size(),
+        "queueHead": authored.metrics.queue_head,
+        "queueTail": authored.metrics.queue_tail,
+        "faults": authored.metrics.actor_faults,
+      })
+    );
+    if replay_wasm {
+      replay_complete_block_in_wasm(
+        &authored,
+        wasm,
+        &format!("P5.3-funded-crossing-cohort-{block_number}"),
+      );
+    }
+    parent = authored.block.header.clone();
+    pre_state = authored.post_state;
+  }
+
+  assert_eq!(
+    faults, 0,
+    "the P5.3 cohort executes without Actor worker faults"
+  );
+  assert_eq!(
+    materialized_at.len(),
+    P53_COHORT_MEMBERS as usize,
+    "every cohort member materializes inside the observation window"
+  );
+  assert_eq!(step_at.len(), P53_COHORT_MEMBERS as usize);
+  assert_eq!(completed_at.len(), P53_COHORT_MEMBERS as usize);
+  assert_eq!(materialized_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
+  assert_eq!(step_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
+  assert_eq!(effect_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
+  assert_eq!(completed_blocks.iter().sum::<u32>(), P53_COHORT_MEMBERS);
+
+  let mut rows = Vec::with_capacity(actor_ids.len());
+  for actor_id in &actor_ids {
+    rows.push(P53CohortRow {
+      actor_id: *actor_id,
+      ticket: *ticket_at
+        .get(actor_id)
+        .expect("a materialized cohort member holds one Ready ticket"),
+      materialized: *materialized_at
+        .get(actor_id)
+        .expect("a cohort member records its materialization block"),
+      eligible: *eligible_at
+        .get(actor_id)
+        .expect("a Ready cohort member records its eligibility block"),
+      step: *step_at
+        .get(actor_id)
+        .expect("a cohort member commits its Step inside the window"),
+      completed: *completed_at
+        .get(actor_id)
+        .expect("a cohort member completes its Cycle inside the window"),
+    });
+  }
+  for row in &rows {
+    assert!(row.materialized >= P53_PUBLICATION_BLOCK);
+    assert!(
+      row.materialized <= row.eligible,
+      "Ready eligibility cannot precede materialization: actor {} at {} vs {}",
+      row.actor_id,
+      row.materialized,
+      row.eligible
+    );
+    assert!(
+      row.eligible <= row.step,
+      "a committed Step must follow Ready eligibility: actor {} at {} vs {}",
+      row.actor_id,
+      row.eligible,
+      row.step
+    );
+    assert!(
+      row.step <= row.completed,
+      "Cycle completion must follow its committed Step: actor {} at {} vs {}",
+      row.actor_id,
+      row.step,
+      row.completed
+    );
+  }
+  rows.sort_by_key(|row| row.ticket);
+  let mut previous: Option<P53CohortRow> = None;
+  for row in &rows {
+    if let Some(previous) = previous {
+      assert!(
+        row.materialized >= previous.materialized,
+        "FIFO enqueue order must follow ticket order"
+      );
+      assert!(
+        row.eligible >= previous.eligible,
+        "FIFO readiness order must follow ticket order"
+      );
+      assert!(
+        row.step >= previous.step,
+        "FIFO service order must follow ticket order"
+      );
+      assert!(
+        row.completed >= previous.completed,
+        "FIFO completion order must follow ticket order"
+      );
+    }
+    previous = Some(*row);
+  }
+
+  let latency = |pick: fn(&P53CohortRow) -> u32| -> Vec<u32> {
+    rows
+      .iter()
+      .map(|row| pick(row).saturating_sub(P53_PUBLICATION_BLOCK))
+      .collect()
+  };
+  let materialization_latency = latency(|row| row.materialized);
+  let first_step_latency = latency(|row| row.step);
+  let completion_latency = latency(|row| row.completed);
+  let materialization_horizon = *materialization_latency
+    .iter()
+    .max()
+    .expect("the cohort records a materialization horizon");
+  let completion_horizon = *completion_latency
+    .iter()
+    .max()
+    .expect("the cohort records a completion horizon");
+
+  for row in &rows {
+    println!(
+      "P53_COHORT_ACTOR_V1 {}",
+      serde_json::json!({
+        "actorId": row.actor_id, "ticket": row.ticket,
+        "materializedAt": row.materialized, "eligibleAt": row.eligible,
+        "stepAt": row.step, "completedAt": row.completed,
+        "triggerToMaterialization": row.materialized.saturating_sub(P53_PUBLICATION_BLOCK),
+        "triggerToFirstStep": row.step.saturating_sub(P53_PUBLICATION_BLOCK),
+        "triggerToCompletion": row.completed.saturating_sub(P53_PUBLICATION_BLOCK),
+      })
+    );
+  }
+  println!(
+    "P53_COHORT_SUMMARY_V1 {}",
+    serde_json::json!({
+      "members": P53_COHORT_MEMBERS,
+      "publicationBlock": P53_PUBLICATION_BLOCK,
+      "blockLimit": P53_COHORT_BLOCK_LIMIT,
+      "S": step_blocks.iter().sum::<u32>(),
+      "A": effect_blocks.iter().sum::<u32>(),
+      "completedCycles": completed_blocks.iter().sum::<u32>(),
+      "censored": P53_COHORT_MEMBERS as usize - completed_at.len(),
+      "materializedPerBlock": materialized_blocks,
+      "stepsPerBlock": step_blocks,
+      "completedPerBlock": completed_blocks,
+      "materializationHorizon": materialization_horizon,
+      "completionHorizon": completion_horizon,
+      "latency": [
+        p53_latency_summary("triggerToMaterialization", &materialization_latency),
+        p53_latency_summary("triggerToFirstStep", &first_step_latency),
+        p53_latency_summary("triggerToCompletion", &completion_latency),
+      ],
+      "controlRefTimeTotal": control_used.iter().map(|weight| weight.ref_time()).sum::<u64>(),
+      "controlProofSizeTotal": control_used.iter().map(|weight| weight.proof_size()).sum::<u64>(),
+      "effectRefTimeTotal": effect_used.iter().map(|weight| weight.ref_time()).sum::<u64>(),
+      "effectProofSizeTotal": effect_used.iter().map(|weight| weight.proof_size()).sum::<u64>(),
+      "userDispatchProofSizeTotal": user_dispatch.iter().map(|weight| weight.proof_size()).sum::<u64>(),
+      "maxQueueSpan": queue_span.iter().copied().max().unwrap_or(0),
+      "maxControlUnusedProofSize": control_unused
+        .iter()
+        .map(|weight| weight.proof_size())
+        .max()
+        .unwrap_or(0),
+      "faults": faults,
+      "replayWasm": replay_wasm,
+    })
+  );
+}
+
 #[test]
 fn full_executive_w0_w1_fixture_covers_actor_only_and_valid_user_demand() {
   assert_prepared_w0_w1(&[], false);
@@ -6965,8 +7463,8 @@ fn full_executive_w0_w1_replays_exact_production_wasm() {
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 preparation must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 preparation must remain bound to the accepted production Wasm"
   );
   assert_prepared_w0_w1(&wasm, true);
 }
@@ -6979,8 +7477,8 @@ fn full_executive_w1_actor_only_100_block_campaign_replays_exact_production_wasm
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W1 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W1 must remain bound to the accepted production Wasm"
   );
   run_schedule_campaign(
     &wasm,
@@ -6998,8 +7496,8 @@ fn full_executive_w1_continuous_valid_user_100_block_campaign_replays_exact_prod
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0085 signed-demand linkage must use EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0085 signed-demand linkage must use the accepted production Wasm"
   );
   run_schedule_campaign(
     &wasm,
@@ -7017,8 +7515,8 @@ fn full_executive_w2_manual_and_cadenced_only_100_block_campaigns_replay_exact_p
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W2 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W2 must remain bound to the accepted production Wasm"
   );
   for schedule in [WorkloadSchedule::ManualOnly, WorkloadSchedule::CadencedOnly] {
     run_schedule_campaign(&wasm, "W2", UserDemand::ActorOnly, schedule);
@@ -7033,8 +7531,8 @@ fn full_executive_w3_opening_predicate_mixed_length_campaign_replays_exact_produ
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W3 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W3 must remain bound to the accepted production Wasm"
   );
   run_w3_opening_predicate_mixed_length_campaign(&wasm);
 }
@@ -7047,8 +7545,8 @@ fn full_executive_w4_heterogeneous_effect_campaigns_replay_exact_production_wasm
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W4 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W4 must remain bound to the accepted production Wasm"
   );
   for demand in [UserDemand::ActorOnly, UserDemand::ContinuousValid] {
     run_w4_heterogeneous_effect_campaign(&wasm, demand);
@@ -7062,7 +7560,7 @@ fn full_executive_w5_lifecycle_retry_cleanup_fixture_preserves_prefixes() {
       let code = std::fs::read(path).expect("genesis code is readable");
       assert_eq!(
         polkadot_sdk::sp_io::hashing::sha2_256(&code),
-        EXP_0095_PRODUCTION_WASM_SHA256
+        ACCEPTED_PRODUCTION_WASM_SHA256
       );
       code
     })
@@ -7078,8 +7576,8 @@ fn full_executive_w5_lifecycle_retry_cleanup_campaign_replays_exact_production_w
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W5 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W5 must remain bound to the accepted production Wasm"
   );
   run_w5_lifecycle_retry_cleanup_campaign(&wasm, true);
 }
@@ -7097,8 +7595,8 @@ fn full_executive_w6_mixed_arrival_lifecycle_campaign_replays_exact_production_w
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W6 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W6 must remain bound to the accepted production Wasm"
   );
   run_w6_mixed_arrival_lifecycle_campaign(&wasm, true);
 }
@@ -7116,8 +7614,8 @@ fn full_executive_w7_due_only_active_frontier_campaign_replays_exact_production_
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W7 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W7 must remain bound to the accepted production Wasm"
   );
   assert_w7_due_only_active_frontier_campaign(&wasm, true);
 }
@@ -7135,8 +7633,8 @@ fn full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_prod
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W8 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W8 must remain bound to the accepted production Wasm"
   );
   run_w8_tombstone_prefix_chunk_pressure_campaign(&wasm, true);
 }
@@ -7144,6 +7642,25 @@ fn full_executive_w8_tombstone_prefix_chunk_pressure_campaign_replays_exact_prod
 #[test]
 fn full_executive_w9_resource_independence_fixture_preserves_actor_service() {
   run_w9_resource_independence_campaign(&[], false);
+}
+
+#[test]
+fn p53_funded_crossing_cohort_fixture_completes_with_per_actor_lifecycle() {
+  run_p53_funded_crossing_cohort_campaign(&[], false);
+}
+
+#[test]
+#[ignore = "requires exact current production Wasm via DEOS_PRODUCTION_WASM"]
+fn p53_funded_crossing_cohort_replays_exact_production_wasm() {
+  let path = std::env::var_os("DEOS_PRODUCTION_WASM")
+    .expect("DEOS_PRODUCTION_WASM must explicitly select the accepted production artifact");
+  let wasm = std::fs::read(path).expect("selected production Wasm is readable");
+  assert_eq!(
+    polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "the P5.3 cohort witness must replay the retained production binding"
+  );
+  run_p53_funded_crossing_cohort_campaign(&wasm, true);
 }
 
 #[test]
@@ -7159,8 +7676,8 @@ fn full_executive_control_phase_attribution_replays_exact_production_wasm() {
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 Control attribution must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 Control attribution must remain bound to the accepted production Wasm"
   );
   assert_control_phase_attribution_campaign(&wasm, true);
 }
@@ -7173,8 +7690,8 @@ fn full_executive_w9_resource_independence_campaign_replays_exact_production_was
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "EXP-0066 W9 must remain bound to EXP-0095's accepted production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "EXP-0066 W9 must remain bound to the accepted production Wasm"
   );
   run_w9_resource_independence_campaign(&wasm, true);
 }
@@ -7187,8 +7704,8 @@ fn reference_full_block_replays_in_production_wasm_with_verified_storage_proof()
   let wasm = std::fs::read(path).expect("selected production Wasm is readable");
   assert_eq!(
     polkadot_sdk::sp_io::hashing::sha2_256(&wasm),
-    EXP_0095_PRODUCTION_WASM_SHA256,
-    "reference replay must bind the current EXP-0095 production Wasm"
+    ACCEPTED_PRODUCTION_WASM_SHA256,
+    "reference replay must bind the accepted production Wasm"
   );
   let (storage, block, data) = author_reference_first_block(&wasm);
   let evidence = super::wasm_replay::replay_block(storage, &wasm, &block.encode(), &data)

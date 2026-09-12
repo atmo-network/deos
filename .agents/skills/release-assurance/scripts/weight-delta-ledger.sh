@@ -14,14 +14,14 @@ usage() {
     cat <<'EOF'
 Usage: weight-delta-ledger.sh [--check]
 
-Generates or verifies the v0.7.24-to-v0.7.25-candidate production Weight delta ledger.
+Generates or verifies the v0.7.25-to-v0.7.26-candidate production Weight delta ledger.
 
 Options:
   --check           Fail when the committed ledger differs from current weights
   -h, --help        Show this help message
 
 Inputs:
-  Git tag v0.7.22 and all seven candidate custom-pallet production weight files.
+  Git tag v0.7.25 and all seven candidate custom-pallet production weight files.
 
 Outputs:
   .agents/skills/release-assurance/evidence/runtime-weight-delta-ledger.md
@@ -53,7 +53,7 @@ parse_args() {
 
 check_prerequisites() {
     require_commands git node
-    git -C "$PROJECT_ROOT" rev-parse --verify v0.7.22 >/dev/null
+    git -C "$PROJECT_ROOT" rev-parse --verify v0.7.25 >/dev/null
 }
 
 main() {

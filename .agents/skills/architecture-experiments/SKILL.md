@@ -1,13 +1,13 @@
 ---
 name: architecture-experiments
-description: Preserves evidence-driven physical architecture experiments, candidate decisions, rejected alternatives, exact baselines, cross-release lineage, and the next optimization gradient without allowing benchmarks to redefine semantics.
+description: Preserves evidence-driven physical architecture experiments, bounded comparative research against sealed baselines, candidate decisions, explicit tradeoffs, negative results, exact baselines, cross-release lineage, and the next optimization gradient without allowing benchmarks to redefine semantics. Owns the Benchmark Reassessment Protocol — observations stay permanent while their evidence authority is reassessed, reused, qualified, superseded or invalidated.
 ---
 
 # Architecture Experiments
 
 Use this skill when implementation work must choose among physical architectures, measured geometry, resource allocations, lowering strategies, or other benchmark-sensitive mechanisms. It makes optimization cumulative across releases by preserving what was tried, against which baseline, with which artifacts, why a candidate won or lost, when evidence became stale, and what experiment should follow.
 
-Experiments are decision instruments, not output. Open one only when a real implementation choice can materially affect a declared project target. Seek the highest decision-relevant performance among designs that preserve explicit functionality, safety, boundedness, and operability constraints. Do not create candidates or benchmarks to exercise the method, fill a portfolio, or accumulate evidence. Measure the smallest comparison that can select or reject a design, stop when the decision is supported, and delete candidate code that does not win.
+Experiments are decision instruments, not output. Open one only when a real implementation choice can materially affect a declared release objective, resource policy, or bounded comparative decision against a sealed baseline. Seek the highest decision-relevant performance among designs that preserve explicit functionality, safety, boundedness, and operability constraints. Do not create candidates or benchmarks to exercise the method, fill a portfolio, or accumulate evidence. Measure the smallest comparison that can select or reject a design, stop when the decision is supported, and delete candidate code that does not win.
 
 ## Ownership Boundary
 
@@ -17,7 +17,7 @@ This skill owns:
 - Exact baseline and controlled-comparison contracts.
 - Durable track-local Experiment Records, status transitions, relations, and track indexes.
 - First-class experiment tracks that partition stable physical research domains, baselines, gradients, and cross-track evidence flow.
-- Multidimensional interpretation, Pareto classification, architectural decisions, rejected alternatives, invalidation, and next-gradient selection.
+- Multidimensional interpretation, Pareto classification, architectural decisions, outcome classification, rejected alternatives, invalidation, finite stopping, and next-gradient selection.
 - Benchmark design, measurement hygiene, evidence classification, production-Weight handoff, Experimental Closure, and Architecture Provenance judgement.
 
 It does not own:
@@ -105,7 +105,7 @@ Every Prepared-or-later record declares `Record kind` as exactly `Leaf` or `Synt
 - `Leaf`: Own exactly one materially distinct falsifiable claim, one physical mechanism/owner, changed variable, evidence domain and acceptance criterion. Multiple workloads are permitted only as bounded witnesses of that same claim. Own primary measurements, preserve their limitations, and terminate when decided.
 - `Synthesis`: Own a broader decision through a finite child-obligation map, child decisions, composition logic and final interpretation/decision. Never introduce a new candidate implementation, raw benchmark sweep, independently measured branch, or chronological debugging transcript. Measurements contains child-decision pointers only; no primary raw benchmark tables anywhere in the record.
 - `Independence test`: Does new work test the same claim under the same changed mechanism, owner, domain and acceptance criterion? If yes, continue the Leaf; otherwise find or allocate the owning Leaf and transfer the question. A stricter witness stays only when all five boundaries are unchanged.
-- `Mandatory fission`: A separately decidable or reusable mechanism, Weight owner, production selector, reachable-state domain, host assumption, parameter domain, evidence class, acceptance criterion, changed variable or artifact-identity question requires its own Leaf. Split when that result could independently be Accepted, Rejected, Inconclusive or Invalidated without deciding the parent. A result reused by multiple downstream decisions normally needs its own identity.
+- `Mandatory fission`: A separately decidable or reusable claim requires its own Leaf: a distinct mechanism, Weight owner, production selector, reachable-state domain, host assumption, acceptance criterion, changed variable, or artifact-identity question whose result could independently be Accepted, Rejected, Inconclusive or Invalidated without deciding the parent. Additional fixtures, workload instances, parameter values, and stricter evidence classes for the same claim are bounded-witness growth, not automatic fission; they stay in the Leaf while the independence test's five boundaries are unchanged. A result reused by multiple downstream decisions normally needs its own identity.
 - `No speculative nodes`: An ordinary correctness bug does not automatically earn an EXP. Allocate only when it exposes a physical choice, invalidates a load-bearing assumption, or creates a reusable independent proof question.
 
 ## Proof Obligation Freeze
@@ -185,13 +185,15 @@ Cross-track hard dependencies must be directional and acyclic. Split a cyclic qu
 
 Status describes evidence maturity, not code completion. Never jump from Measured to Accepted without an explicit Interpretation. Never rewrite an old decision to imitate later knowledge; append relations and transition it to Superseded or Invalidated with rationale.
 
-Accepted may be scoped to physical architecture: state `Decision scope: physical architecture only` and distinguish Architecture Freeze from later production/release Geometry Freeze. One materially distinct hypothesis has one experiment owner. A scoped acceptance neither proves Weight soundness nor meets a throughput target. Frozen architecture may reopen only under its declared evidence-backed invariant/impossibility trigger; a cost miss, stale artifact or unreachable fixture transfers to the relevant successor. Corrections preserving frozen invariants belong to that successor, and micro-optimizations require a measured production owner plus a dedicated falsifiable question.
+Benchmark evidence authority is a separate, revisable axis. A sealed record's current disposition may become `Qualified`, `Confirmed`, `Superseded` or `Invalidated` without mutating its historical status transition; record it in the record's `Benchmark Evidence Disposition` surface, name the reassessing owner there, and reflect the current disposition in the track index row.
+
+Accepted may be scoped to physical architecture: state `Decision scope: physical architecture only` and distinguish Architecture Freeze from later production/release Geometry Freeze. One materially distinct hypothesis has one experiment owner. A scoped acceptance neither proves Weight soundness nor meets a throughput target. A frozen architecture reopens directly only under its declared evidence-backed invariant/impossibility trigger; a cost miss, stale artifact or unreachable fixture alone transfers to the relevant successor. A bounded comparative candidate may instead compete against the frozen baseline under the bounded comparative research rules below without reopening the decision or disputing its evidence; selecting it records a Superseded transition with preserved historical validity. Corrections preserving frozen invariants belong to that successor, and micro-optimizations require a measured production owner plus a dedicated falsifiable question.
 
 ## When to Open an Experiment
 
 Open one when all are true:
 
-- A conforming physical choice could materially change a release target, resource bound, lifecycle dispatchability, state footprint, correctness simplicity, or scaling dependency.
+- A conforming physical choice could materially change a release objective, resource bound, lifecycle dispatchability, state footprint, correctness simplicity, or scaling dependency, or a sealed-baseline comparison can decide an efficiency improvement, explicit tradeoff, or limitation.
 - At least two candidates or one candidate plus an exact baseline can be controlled comparably.
 - The result can change an implementation decision.
 - The smallest falsifying workload and materiality threshold can be stated.
@@ -204,7 +206,85 @@ Do not open one for:
 - An idea already rejected under still-valid equivalent conditions.
 - Measurement whose result cannot change the implementation.
 
-Before opening, search the index by affected domain, mechanism, question, candidate, and relations. Read every linked Accepted, Rejected, Superseded, or Invalidated predecessor that shares the mechanism. Either refine prior evidence or explain which assumption makes repetition necessary.
+Before opening, search the index by affected domain, mechanism, question, candidate, and relations. Read every linked Accepted, Rejected, Superseded, or Invalidated predecessor that shares the mechanism. Reuse a prior result only while its recorded identity dimensions still apply: workload and outcome semantics, semantic contract, resource policy, host and configuration, artifact identity, and measurement method. When a dimension must change, record either a labelled bridge comparison or the missing witness; never silently inherit inapplicable numbers. Either refine prior evidence or explain which assumption makes repetition necessary.
+
+## Bounded Comparative Research
+
+A sealed baseline remains historically valid and is not a permanently protected implementation. New research may admit a candidate that competes with the sealed baseline, including a frozen physical architecture such as C1, without proving the baseline wrong or reopening its decision. Comparative admission requires:
+
+- One decision the comparison can change: an efficiency improvement, an explicit tradeoff, or an established limitation.
+- The sealed baseline named with its exact record and artifact identity, held fixed as the reference.
+- One smallest comparative claim under a matching workload, semantic contract, resource policy, host/configuration, and measurement method, or an explicitly labelled bridge when one dimension must change.
+- Materiality declared from the decision and measurement method, not a universal percentage and not contingent on closing a numeric release target.
+- A candidate set bounded by the owning campaign before measurement.
+
+Target-closing-only admission is retired. A bounded comparison that decides an improvement, tradeoff, or limitation is admissible without reaching any release threshold, and a comparative candidate never has to invalidate the sealed baseline it competes with. A frozen decision reopens only through its declared invariant/impossibility trigger.
+
+### Outcome Classes
+
+When sealing a decision, name exactly one outcome class and its finite stopping basis:
+
+- `Efficiency improvement`: comparable work and guarantees consume fewer resources or deliver better service under the same resource policy.
+- `Explicit tradeoff`: an approved cost, capacity, latency, complexity, portability, or semantic change buys a stated benefit; it is not an unconditional improvement.
+- `Research result`: a candidate is rejected or a limitation is established (a negative result); preserve it without claiming a performance record.
+
+Cost moved into another resource domain, lifecycle phase, persistent state, or weaker guarantee is a tradeoff to assess, not a hidden efficiency gain.
+
+Finite stopping is part of the decision, not an aspiration. Stop when the declared materiality is met, the named obligation is satisfied, the remaining delta is below materiality, the bottleneck has moved, or the frozen candidate set is exhausted. If every admitted candidate fails, the campaign closes with an explicit no-optimization research result. That disposition ends the campaign: it authorizes neither an endless search for a winner nor an automatic successor inside the same campaign. Admitting a new candidate requires a new explicit scope decision.
+
+## Benchmark Reassessment Protocol
+
+Benchmark numbers are observations produced by an imperfect host and procedure. Protocol semantics, storage topology, committed transitions, counters, ProofSize and database shapes may be exact; RefTime is an empirical observation. Treat these evidence classes differently.
+
+`Observation identity is permanent; evidence authority is revisable.` Record source/tree, benchmark source, runtime/Wasm, generated Weight, command, parameters, toolchain, host facts, raw output and date once; never edit them to improve a later conclusion. Maintain a separate current disposition: `Authoritative`, `Qualified`, `Historical`, `Superseded`, `Invalidated`, `Inconclusive`. Use the record's `Benchmark Evidence Disposition` surface for the current disposition; `Not applicable` is sufficient for records without empirical benchmark evidence.
+
+Reject both errors: that a generated result is authoritative forever, and that the newest measurement is automatically more authoritative. Authority = applicability + exact identity + measurement quality + reproducibility + comparative relevance. Reassess when the same source and command produce materially different RefTime fits, many untouched methods move together, raw storage or proof work stays identical while RefTime moves, a fitted coefficient becomes implausible relative to raw samples, baseline and candidate were measured under materially different host conditions, the benchmark tool, version or configuration changed, new repeated measurements contradict the previous ranking, the measured delta is of the same order as observed host variance, or a supposedly local change causes widespread unrelated drift. A trigger is not proof that the old result was wrong; it means its authority requires review.
+
+### Sealed-Record Reassessment
+
+Sealing an Experiment ID seals its historical decision identity, not the eternal authority of its empirical numbers. A sealed record may later be confirmed, qualified, superseded or invalidated by new evidence without renumbering or rewriting its original decision:
+
+```text
+original decision → new evidence → reassessment owner → current applicability
+```
+
+Record the reassessment in the owner's `Benchmark Evidence Disposition` surface and use the existing relations (`Confirms`, `Refines`, `Supersedes`, `Invalidates`, `Uses evidence from`) when decision scope changes. The track index carries the current disposition; the original status transition remains historical.
+
+### Host-Constrained Comparative Protocol
+
+A dedicated quiet benchmark host is not a release requirement. Prefer matched comparisons inside the host actually available:
+
+```text
+baseline A → candidate B → baseline A'   (or repeated A / B / A / B)
+```
+
+Use the smallest benchmark scope that can decide the candidate; do not repeat a full pallet generation when a focused comparison can establish environmental variance or candidate attribution. If `A ≈ A'` and `B` differs consistently, the comparative signal is stronger. If `A` and `A'` differ by roughly as much as `A` and `B`, the RefTime comparison is Inconclusive. Stop once the decision is robust.
+
+For optimization decisions, a reproducible matched baseline/candidate delta may decide a candidate even when absolute RefTime varies between sessions, provided the execution paths are comparable, the sign of the delta is stable, the delta materially exceeds the observed comparison noise, structural metrics agree, and no protected resource or semantic regression occurs. This never means RefTime does not matter: it remains a production resource dimension.
+
+### Noise Envelope and Dimension Separation
+
+Never use an arbitrary universal percentage. Estimate a local noise envelope from repeated baseline runs, A/B/A drift, unchanged control methods, raw minimum variation, fit variation or whole-pallet unrelated movement. The minimum rule is: the candidate signal must be distinguishable from observed measurement noise. If it is not, the RefTime result is `Inconclusive` — not Accepted and not Rejected.
+
+Keep authority separate per dimension: ProofSize, raw StorageProof bytes, database reads/writes, state bytes, candidate count, committed Steps, completed Cycles, latency blocks and RefTime. Equal ProofSize does not imply equal RefTime; unstable RefTime does not invalidate stable structural evidence.
+
+### Production Weight Authority
+
+Research comparison and production Weight follow different rules. For production Weight:
+
+- `Case A — benchmarked execution owner unchanged`: an existing generated owner may remain authoritative only when the executed branch is benchmarked identically and the same storage reads/writes, bounded input domain, maximum branch geometry, host operations, state mutations and mandatory work hold. Any new selector, preflight or control-flow overhead outside that owner needs an explicit conservative Weight owner. No storage access or absent `meter.consume` is not a zero-RefTime proof: pure control flow still consumes execution time.
+- `Case B — benchmarked execution path changed`: new storage or host work, a larger domain or an exceeded contract requires a new sound owner. Do not retain the old owner because fresh generation is noisy; if the host cannot produce a trustworthy binding, the production binding remains explicitly unresolved instead of hiding behind a stale coefficient.
+- `Case C — fresh full generation environmentally unstable`: a generated complete file may be rejected when its movement is dominated by measurement instability. Rejection means this generation is inadmissible evidence, not that generation is optional. The previous owner remains current only under Case A or another separately proved containment argument.
+
+Freshness is not evidence. Applicability, explicit ownership and soundness are evidence.
+
+### Baseline Reassessment and Ranking
+
+A released measurement stays the historical released value. A later experiment may establish a better estimate of the same implementation under a stronger protocol and record it as a `Reassessed comparison baseline`, keeping both; a candidate comparison may use the reassessed baseline when baseline and candidate share the method and the bridge to the released observation is explicit. Stronger evidence may reverse a candidate ranking: the old decision remains historical and is `Superseded` or `Invalidated` by the new owner. Reopening requires old evidence, new contradicting evidence, an applicability explanation and the smallest decision-relevant reassessment — never suspicion that another run might be faster.
+
+### Anti-Cherry-Picking
+
+Reassessment is not permission to rerun until a preferred number appears. Declare the comparison method before the decision run; retain or summarize every decision-relevant run; record an invalid-run reason before using its replacement; apply the same inclusion rule to baseline and candidate; and stop when the evidence is sufficient or Inconclusive. A noisy or Inconclusive result is a valid research outcome.
 
 ## Experiment Protocol
 
@@ -212,7 +292,7 @@ Before opening, search the index by affected domain, mechanism, question, candid
 
 State one decision, record kind, owning implementation phase, governing specification sections, finite proof obligations and semantic invariants. Separate physical variables from semantic constants. A Synthesis declares its child decisions instead of preparing benchmark candidates; measurement protocol steps apply to the owning Leaves.
 
-Declare materiality before measurement. Use a release target, maximum RefTime/ProofSize envelope, lifecycle dispatchability, throughput or latency bound, eliminated read/write/scaling dependency, state-hold reduction, or justified minimum percentage. A tiny numeric win without architectural significance is not material by default.
+Declare materiality before measurement. Use a release objective, maximum RefTime/ProofSize envelope, lifecycle dispatchability, throughput or latency bound, eliminated read/write/scaling dependency, state-hold reduction, justified minimum percentage, or a comparative decision against a sealed baseline. A tiny numeric win without architectural significance is not material by default.
 
 ### 2. Establish the Exact Baseline
 
@@ -249,7 +329,7 @@ Classify every evidence source:
 
 Production evidence has stronger authority than exploratory evidence. Never let weaker evidence silently override stronger evidence or project a microbenchmark into production truth.
 
-Match statistical method to evidence class. For noisy wall-clock work, declare warmup, repeated-run count and rationale, distribution or relevant percentiles, variance, and predeclared outlier handling; do not hide tails behind an average. Keep setup deterministic and outside the measured region, isolate competing processes, record host/cache conditions, random seed, and contamination. For deterministic/model-generated FRAME Weight, use the required steps/repeats and generated model review rather than irrelevant statistical ceremony.
+Match statistical method to evidence class. For noisy wall-clock work, declare warmup, repeated-run count and rationale, distribution or relevant percentiles, variance, and predeclared outlier handling; do not hide tails behind an average. Keep setup deterministic and outside the measured region, record host/cache conditions and competing processes, isolate only where the method can, and record random seed and contamination. Host, governor and load facts are explanatory context, not binary validity switches; authority and noise decisions follow the Benchmark Reassessment Protocol. For deterministic/model-generated FRAME Weight, use the required steps/repeats and generated model review rather than irrelevant statistical ceremony.
 
 Record relevant dimensions independently: RefTime, ProofSize, database reads/writes, encoded persistent state, lifecycle Weight, create/update/close cost, state hold, throughput, latency, queue pressure, fragmentation, memory, Wasm size, node wall-clock behavior, and TryRuntime cost. Omit irrelevant metrics explicitly rather than fabricating values.
 
@@ -281,11 +361,11 @@ Do not claim reproducibility when an essential artifact or condition was discard
 
 - `Result`: What was measured, including uncertainty and deltas.
 - `Interpretation`: What the evidence implies, which dimension binds, limitations, confounders, and Pareto relation.
-- `Decision`: Which candidate is selected or why none is selected, against declared criteria.
+- `Decision`: Which candidate is selected or why none is selected, against declared criteria; name the single outcome class and the finite stopping condition that applies.
 
 A lower RefTime does not imply acceptance. Classify candidates as Pareto-improving, Pareto-dominated, a tradeoff, or a binding-dimension winner. Do not collapse dimensions into an arbitrary scalar unless the governing resource policy defines and justifies that objective.
 
-Negative outcomes are valid: no material difference, regression, inconclusive, invalid experiment, rejected candidate, or falsified hypothesis. Record each rejected alternative with evidence and reason.
+Negative outcomes are valid: no material difference, regression, inconclusive, invalid experiment, rejected candidate, or falsified hypothesis. Record each rejected alternative with evidence and reason. A rejected candidate, a bounded limitation, or a no-optimization campaign disposition is a research result with the same evidentiary standing as a selected improvement; record it once and stop instead of searching for a substitute winner.
 
 ### 8. Update Baseline and Lineage
 
@@ -297,7 +377,7 @@ Update the primary track's accepted baseline only after an Accepted decision cha
 
 Do not brainstorm from zero. Ask in order:
 
-1. Which target is failing or furthest from its envelope?
+1. Which objective is unmet or furthest from its envelope?
 2. Which resource dimension binds?
 3. Which measured component dominates that dimension?
 4. Which physical architecture owns that component?
@@ -344,6 +424,8 @@ Implementation alternatives are converged enough to enter the main Test phase on
 - Every accepted benchmark-sensitive physical choice has an Experiment Record.
 - Every rejected candidate remains indexed and discoverable.
 - Baseline, artifacts, workloads, measurements, interpretation, decision, and validity are explicit.
+- Every sealed decision names its outcome class and finite stopping basis; an exhausted campaign records the explicit no-optimization disposition as a research result.
+- Every retained production Weight owner is sound for the segment it charges: applicable, explicitly owned, and free of placeholder or stale scope. Freshness of generation is not evidence.
 - No decision exists only in chat, temporary output, commit messages, or developer memory.
 
 ### Architecture Provenance Gate
@@ -354,12 +436,13 @@ Domain Architecture may close only when every significant physical decision is t
 
 Stop the experiment loop when any applies:
 
-- The acceptance target is met.
+- The declared objective or materiality is met.
 - The named proof obligation is satisfied: stop measuring it.
 - A new independent question is discovered: transfer it and stop the parent investigation.
 - The next useful work belongs to another owner/domain: stop this experiment.
 - A child result is sufficient for synthesis: do not seek more branch coverage for completeness.
 - No candidate has a plausible decision-relevant advantage.
+- The frozen candidate set is exhausted: record the no-optimization disposition; a new candidate is a new scope decision, not another iteration.
 - Remaining delta is below declared materiality.
 - The bottleneck moved to another architecture domain.
 - Further progress requires semantic change and therefore Specification reopening.
@@ -387,7 +470,8 @@ Report:
 - Experiment ID, status transition, decision question, and mechanism.
 - Exact baseline and candidate artifact identities.
 - Evidence class, workloads, controlled/changed variables, and validation.
-- Result, Interpretation, and Decision as separate statements.
+- Result, Interpretation, and Decision as separate statements, with the outcome class and finite stopping basis named.
+- Benchmark evidence disposition, reassessment trigger, compared observation identities, and the measured noise envelope or its Inconclusive disposition.
 - Pareto class, binding dimension, rejected alternatives, and validity scope.
 - New baseline or reason none changed.
 - Next gradient or stop condition.

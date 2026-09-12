@@ -10,7 +10,7 @@ This document defines the workloads and evidence required to accept DEOS Actors 
 
 ## 1. Evidence Contract
 
-Every target run MUST record:
+Every acceptance profile run MUST record:
 
 ```text
 exact source tree
@@ -25,7 +25,7 @@ completed, skipped, failed, suspended, closed, and pending counts
 FIFO, detector, wakeup, body, and resource faults
 ```
 
-Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish these targets.
+Setup, genesis construction, prefunding, and deterministic population generation are outside the measured block interval. The measured interval begins with the named trigger operation or first baseline operation. A profile passes only against runtime-bound production Weight and production-Wasm or stronger full-runtime block evidence. Native wall-clock or synthetic microbenchmarks may diagnose a candidate but cannot establish acceptance evidence.
 
 All populations, market state, authored bounds, transaction demand, and seeds MUST be deterministic and retained by the project harness. Weight fairness and deltas are component-wise; no scalar score may combine RefTime and ProofSize. Database reads/writes, persistent bytes, block count, and faults remain separately reported.
 
@@ -46,7 +46,7 @@ A = distinct Actors that committed at least one Step / measured block
 
 Report per-block values and the measured-interval distribution for both axes. Never omit one by inferring it from the other. Under authoritative Q1, one Actor commits at most one Step per block, so `S == A` is a conformance expectation for committed service; any divergence requires an explicit counted cause or is a defect. Both axes remain named independently so future derived fast paths or a separately reopened service contract cannot silently change metric meaning.
 
-The historical target remains:
+The `0.7.25` release line carried a mandatory target:
 
 ```text
 10,000 completed one-Step User Actor Cycles
@@ -54,7 +54,7 @@ The historical target remains:
 = 100 cheap committed Actor Steps/block
 ```
 
-For that exact Q1 one-Step witness, the target also entails 100 distinct Actors progressed/block. It is not a universal promise of 100 distinct Actors/block for multi-Step, mixed, market-heavy, divergent, or differently paced workloads.
+That horizon is retained as a historical reference coordinate for like-for-like comparison; it is not a current release gate. For that exact Q1 one-Step witness, the horizon also implies 100 distinct Actors progressed/block. It is not a universal promise of 100 distinct Actors/block for multi-Step, mixed, market-heavy, divergent, or differently paced workloads.
 
 Candidate comparisons MUST expose the two-axis Pareto frontier. A candidate is Pareto-dominated when another conforming candidate provides at least as much `S` and `A` under the same workload and is strictly better on one. No arbitrary scalar score may collapse `S`, `A`, RefTime, ProofSize, latency, or fairness into one rank.
 
@@ -108,7 +108,28 @@ A service-throughput claim MUST cover enough distinct action classes to distingu
 
 Each class uses its canonical effect owner and reports typed outcomes separately from runtime service. The scheduler MUST NOT rank by Task family, declared Weight, fee, or Actor class to improve packing. Workload-class results are separate evidence points and MUST NOT be averaged into one synthetic Actor.
 
-## 2. Ten-Thousand Actor Targets
+### 1.4 Acceptance Classification
+
+Evidence and requirements in this document belong to one of five classes:
+
+- **Historical target**: a mandatory threshold of a past release line, such as the `0.7.25` horizon of 10,000 completed one-Step User Actor Cycles in 100 eligible production blocks, together with its recorded outcome. Historical targets remain discoverable and comparable but MUST NOT gate a later release.
+- **Workload size and horizon**: the constructed population, deterministic fixture, and measured interval of a profile, such as the `10/100/1,000/10,000` populations or a 100-block interval. A size or horizon defines what was measured; it does not by itself define a pass condition.
+- **Correctness assertion**: a required behavior such as no lost signal, no duplicate Step, strict FIFO, Q1, component-wise fit, no block Weight overrun, no unresolved worker fault, or resource-policy conformance. A correctness failure invalidates the run regardless of any throughput result.
+- **Quantitative regression baseline**: a sealed like-for-like comparison result under a declared workload, semantic contract, resource policy, host/configuration, artifact identities, and measurement method. A protected metric MUST NOT regress beyond the materiality declared before measurement; a baseline value is a comparison coordinate, not a universal threshold.
+- **Current release gate**: the rule a release decision actually applies. Correctness, resource-policy conformance, and declared comparative regression are gates; closure of a historical horizon is not.
+
+Each claim MUST identify its supporting class. Reporting completion against a historical horizon remains REQUIRED for continuity, but the horizon MUST NOT be presented as a current release requirement.
+
+## 2. Ten-Thousand-Actor Reference Profiles
+
+These profiles construct the population and horizon of the historical `0.7.25` target:
+
+```text
+10,000 completed one-Step User Actor Cycles
+/ 100 eligible production blocks
+```
+
+They are retained as reference workloads for like-for-like comparison and so that the recorded `0.7.25` shortfall stays visible. Completion against the historical horizon MUST be reported, and shortfall inside it is a service result rather than a correctness failure. A reference profile run MUST remain admissible and bounded and MUST fail on a lost signal, duplicate Step, FIFO violation, block Weight overrun, unresolved worker fault, resource-policy breach, or accounting inconsistency. It MUST report `S`/`A` per block and each admitted Actor's completion block or explicit unserved/censored disposition across the run and any declared bounded extension horizon. Eventual progress under recurring conforming capacity remains required as in Section 4.3.
 
 ### 2.1 Reactive Transfer
 
@@ -120,13 +141,13 @@ ObservationCrossing
 → completed Cycle
 ```
 
-One accepted changed publication in source block `N` causes the qualifying crossing. Every Actor MUST reach a completed one-Step Cycle within the 100 eligible production blocks `N + 1 ..= N + 100`. The profile fails on a lost signal, duplicate Step, FIFO violation, block Weight overrun, unresolved worker fault, or incomplete Actor. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
+One accepted changed publication in source block `N` causes the qualifying crossing. Report each Actor's first completed one-Step Cycle and aggregate coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. Report `S` and `A` per block even though both count the same committed population in this exact Q1 one-Step profile.
 
 The Transfer destination and amount geometry MUST be identical across the population and executable throughout the run. Setup MUST isolate scheduler/control throughput from avoidable recipient-creation or insufficient-funding failures while retaining the real certified ingress and ledger consequences of the canonical Transfer operation.
 
 ### 2.2 Contended Transfer
 
-Repeat the Reactive Transfer profile while valid ordinary external extrinsics continuously consume the complete User base turn in every measured block. Actors MUST still complete all 10,000 Cycles within blocks `N + 1 ..= N + 100` using their guaranteed Actor base turn.
+Repeat the Reactive Transfer profile while valid ordinary external extrinsics continuously consume the complete User base turn in every measured block. Actors complete under their guaranteed Actor base turn; report the same coverage, horizon, and contention evidence as Section 2.1.
 
 The external workload MUST be deterministic, independently successful, and sufficient in both Weight dimensions to demonstrate base-turn contention without exceeding runtime validity. The report MUST show `S`, `A`, Actor/user consumption, borrowing, service gaps, and component-wise head fragmentation independently.
 
@@ -140,7 +161,7 @@ ObservationCrossing
 → committed typed Step disposition
 ```
 
-One qualifying publication in block `N` causes readiness. Every Actor MUST commit one typed Step disposition within blocks `N + 1 ..= N + 100`. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
+One qualifying publication in block `N` causes readiness. Report each Actor's typed Step disposition and coverage against the historical horizon `N + 1 ..= N + 100` and against any declared bounded extension horizon. The market fixture MUST use deterministic bounded liquidity and authored input protection; it MUST NOT fabricate 10,000 stale shared quotes or promise that every market operation succeeds economically.
 
 Report runtime service separately from economic outcome:
 
@@ -148,7 +169,7 @@ Report runtime service separately from economic outcome:
 - Economic success: The Task returned the successful SwapOut outcome.
 - Economic non-success: Precondition skip, funding outcome, typed Temporary/Permanent failure, suspension, or terminal policy disposition.
 
-The throughput target concerns committed typed dispositions. Economic success rate is a separate measured result and MUST NOT be relabeled as scheduler failure or guaranteed market execution. Report `S`, `A`, action Weight, and Actor-machine Weight independently so market cost cannot be mistaken for scheduler policy or overhead.
+The throughput measurement concerns committed typed dispositions. Economic success rate is a separate measured result and MUST NOT be relabeled as scheduler failure or guaranteed market execution. Report `S`, `A`, action Weight, and Actor-machine Weight independently so market cost cannot be mistaken for scheduler policy or overhead.
 
 ## 3. Baselines and Differential Overhead
 
@@ -156,7 +177,7 @@ The throughput target concerns committed typed dispositions. Economic success ra
 
 Measure the same one-Step Transfer and SwapOut Contracts, populations, balances, Tasks, and block policy through Manual readiness without observation detector work. Under the production `NextBlock` timing baseline, Manual signals remain causal next-block obligations; setup MAY batch deterministic signal extrinsics only when their transaction Weight is reported separately from Actor Control and effect execution.
 
-The baseline isolates detector/materialization work from current-Step control and Task effect work. It does not replace the reactive acceptance targets.
+The baseline isolates detector/materialization work from current-Step control and Task effect work. It does not replace the reactive reference profiles as comparative evidence.
 
 ### 3.2 External Baseline
 
@@ -217,7 +238,7 @@ Additionally report:
 - A zero-Step immutable AtTime one-shot fixture, reporting Creation, Trigger occurrence, delayed Pipeline Machine Opening, Action, completion, and cleanup dimensions independently; Action cost MUST be zero.
 - Wasm size, run-state bytes, canonical lifecycle-state count, public event/error/API variants, Weight-owner count, and mandatory test-matrix count. `ActorFundingWait`, reactivation, and population-scale sleeping-state counts MUST remain zero.
 
-The target fails on any combined Trigger/Pipeline charge, Actor-specific evaluation or fee for redundant latched-period source activity, duplicate deferred Pipeline, failure to re-arm from current authoritative state after latch consumption, refunded prior useful Trigger fee on Pipeline insufficiency, economic close between admitted Steps, future Action-fee prepayment, unpaid invoked Action effect, machine accounting inside Running/Suspended under P0, persistent funding wait, custody mutation during apoptosis, owner destruction of User Immutable, inability to recover by exact-slot recreation, invalid zero-Step authority, unbounded Opening work, or changed System service order.
+The fee-boundary profile fails on any combined Trigger/Pipeline charge, Actor-specific evaluation or fee for redundant latched-period source activity, duplicate deferred Pipeline, failure to re-arm from current authoritative state after latch consumption, refunded prior useful Trigger fee on Pipeline insufficiency, economic close between admitted Steps, future Action-fee prepayment, unpaid invoked Action effect, machine accounting inside Running/Suspended under P0, persistent funding wait, custody mutation during apoptosis, owner destruction of User Immutable, inability to recover by exact-slot recreation, invalid zero-Step authority, unbounded Opening work, or changed System service order.
 
 ## 4. Contract Complexity Matrix
 

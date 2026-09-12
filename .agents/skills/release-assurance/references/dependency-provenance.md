@@ -14,7 +14,7 @@ Every retained material finding states runtime reachability, rationale, and an e
 
 ## 3. Current Release Evidence
 
-The 2026-09-05 review used Cargo Audit `0.22.2`, Cargo Deny `0.20.2`, RustSec database commit `5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5`, Node `22.22.0`, and npm `11.7.0`. It includes the runtime's dev-only Wasm replay dependencies. Cargo metadata resolved with `--locked`, npm's lock graph reproduced with `npm ci --ignore-scripts --dry-run`, Cargo licenses and sources passed, and every npm registry package carried lockfile integrity.
+The 2026-09-11 review used Cargo Audit `0.22.2`, Cargo Deny `0.20.2`, RustSec database commit `b50980aad8b8f14f77e25a97b32dd94bf008b0af`, Node `22.22.0`, and npm `11.7.0`. It includes the runtime's dev-only Wasm replay dependencies. Cargo metadata resolved with `--locked`, npm's lock graph reproduced with `npm ci --ignore-scripts --dry-run`, Cargo licenses and sources passed, and every npm registry package carried lockfile integrity.
 
 The review retained 17 unique material finding identities: 13 RustSec vulnerability/unsoundness IDs and four npm high aggregate package entries. No npm critical finding existed. The active h2 line remains `0.4.16`; the native Wasmtime toolchain and coupled Pulley/Winch/Cranelift family were advanced to Wasmtime `36.0.14` for `RUSTSEC-2026-0269`, without adding an advisory exception. The affected WASI filesystem capability is absent from the resolved DEOS graph; the patch nevertheless removes the affected Wasmtime version. `template/Cargo.lock` owns the exact patched identities.
 

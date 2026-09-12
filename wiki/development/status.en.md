@@ -46,7 +46,7 @@ The client is a reference interface, not the source of protocol truth. Its canon
 
 Browser session history and charts are not an archive. Indexed history, search, and analytics are materialized data, distinct from current canonical chain state.
 
-Current ObservationCrossing admission processes four candidates per block, so 9,000 User memberships require at least 2,250 uncontended detector blocks. The implementation therefore does not satisfy the assurance target of 10,000 User crossings within 100 eligible blocks.
+On the retained production binding the steady three-block ObservationCrossing materialization cycle serves 16 candidates (`2`, `6` and `8`) against the previously released cycle of 12 (`1`, `3` and `8`), at unchanged cycle ProofSize with a measured runtime-bound RefTime premium per additional candidate; the per-block ceiling remains eight. The implementation therefore still does not satisfy the historical performance-assurance profile of 10,000 User crossings within 100 eligible blocks.
 
 The presence of a feature or a validation command does not by itself establish production readiness, network deployment, or validation of the current source tree.
 

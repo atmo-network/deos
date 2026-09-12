@@ -1733,6 +1733,332 @@ fn crossing_plan_components_are_exhaustive_and_branch_exact() {
 }
 
 #[test]
+fn crossing_placed_pair_fallback_prefers_the_pair_over_the_scalar_single() {
+  use crate::CrossingWorkPlan::*;
+
+  let pair = <Test as crate::Config>::WeightInfo::crossing_placed_pair_unit();
+  let fault = <Test as crate::Config>::WeightInfo::record_crossing_worker_fault();
+  let pair_reservation = pair.saturating_add(fault);
+
+  let exact = WeightMeter::with_limit(pair_reservation);
+  assert_eq!(
+    Actors::crossing_placed_pair_fallback(FireCohortPlacedBatch, 8, &exact, fault),
+    Some((2, pair)),
+    "a classified multi-candidate placed batch must reduce to the pair at its exact reservation"
+  );
+  let below = WeightMeter::with_limit(pair_reservation.saturating_sub(Weight::from_parts(1, 1)));
+  assert_eq!(
+    Actors::crossing_placed_pair_fallback(FireCohortPlacedBatch, 8, &below, fault),
+    None,
+    "below the generated pair reservation the fallback must yield to the scalar single"
+  );
+  assert_eq!(
+    Actors::crossing_placed_pair_fallback(FireCohortPlacedBatch, 2, &exact, fault),
+    None,
+    "an already pair-sized admission has no further reduction"
+  );
+  for plan in [
+    FireCohortPlaced,
+    FireCohortCoalescedPair,
+    RearmCohortPair,
+    SkipPostInstallationPair,
+  ] {
+    assert_eq!(
+      Actors::crossing_placed_pair_fallback(plan, 8, &exact, fault),
+      None,
+      "only the classified multi-candidate placed batch owns the pair fallback"
+    );
+  }
+}
+
+#[test]
+fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
+  let base = <Test as crate::Config>::WeightInfo::crossing_worker_base();
+  let probe = <Test as crate::Config>::WeightInfo::crossing_work_probe();
+  let selection = <Test as crate::Config>::WeightInfo::crossing_selection_probe();
+  let fire_pair_probe = <Test as crate::Config>::WeightInfo::crossing_fire_pair_probe();
+  let pair = <Test as crate::Config>::WeightInfo::crossing_placed_pair_unit();
+  let placed = <Test as crate::Config>::WeightInfo::crossing_placed_unit();
+  let fault = <Test as crate::Config>::WeightInfo::record_crossing_worker_fault();
+  let classification = base
+    .saturating_add(probe)
+    .saturating_add(selection)
+    .saturating_add(fire_pair_probe);
+  let single_check = classification.saturating_add(placed).saturating_add(fault);
+
+  let prepare_batch = || {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let schedule = Schedule {
+      trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+      cooldown_blocks: 0,
+    };
+    let steps = contract_steps_with_step(make_step(Task::StopCycle));
+    for owner in [ALICE, BOB, CHARLIE, 4, 5] {
+      create_system_with(owner, schedule.clone(), None, steps.clone());
+    }
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    assert_ok!(Actors::crossing_work_unit());
+    assert_eq!(
+      Actors::classify_crossing_work(),
+      crate::CrossingWorkPlan::FireCohortPlacedBatch,
+      "the fixture must leave a classified multi-candidate placed batch"
+    );
+  };
+
+  // Aggregate band: the full classified batch fits its generated maximum owner.
+  new_test_ext().execute_with(|| {
+    prepare_batch();
+    let occupancy = Actors::queue_occupancy();
+    Actors::test_reset_first_crossing_branch_weight();
+    let maximum = <Test as crate::Config>::WeightInfo::crossing_placed_maximum_unit();
+    let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
+      classification.saturating_add(maximum).saturating_add(fault),
+    );
+    assert_eq!(
+      counters.candidates, 4,
+      "the fixture classification must admit its full four-candidate cohort when the grant fits"
+    );
+    assert_eq!(counters.faults, 0);
+    assert_eq!(Actors::test_first_crossing_branch_weight(), Some(maximum));
+    assert_eq!(consumed, classification.saturating_add(maximum));
+    assert_eq!(Actors::queue_occupancy(), occupancy + 4);
+  });
+
+  // Pair band: the aggregate owner misses and the generated pair owner fits.
+  new_test_ext().execute_with(|| {
+    prepare_batch();
+    let occupancy = Actors::queue_occupancy();
+    Actors::test_reset_first_crossing_branch_weight();
+    let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
+      classification.saturating_add(pair).saturating_add(fault),
+    );
+    assert_eq!(counters.candidates, 2);
+    assert_eq!(counters.faults, 0);
+    assert_eq!(
+      Actors::test_first_crossing_branch_weight(),
+      Some(pair),
+      "the ladder must settle the generated pair owner before the scalar single"
+    );
+    assert_eq!(consumed, classification.saturating_add(pair));
+    assert_eq!(Actors::queue_occupancy(), occupancy + 2);
+  });
+
+  // Single band: the pair owner misses and the scalar single fits.
+  new_test_ext().execute_with(|| {
+    prepare_batch();
+    let occupancy = Actors::queue_occupancy();
+    Actors::test_reset_first_crossing_branch_weight();
+    let (consumed, counters) = Actors::service_crossing_transitions_with_counters(single_check);
+    assert_eq!(counters.candidates, 1);
+    assert_eq!(counters.faults, 0);
+    assert_eq!(
+      Actors::test_first_crossing_branch_weight(),
+      Some(placed),
+      "below the pair reservation the ladder must fall through to the scalar single"
+    );
+    assert_eq!(consumed, classification.saturating_add(placed));
+    assert_eq!(Actors::queue_occupancy(), occupancy + 1);
+  });
+
+  // Refusal band: below the scalar single check the frontier stays unmoved.
+  new_test_ext().execute_with(|| {
+    prepare_batch();
+    let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    let occupancy = Actors::queue_occupancy();
+    Actors::test_reset_first_crossing_branch_weight();
+    let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
+      single_check.saturating_sub(Weight::from_parts(1, 0)),
+    );
+    assert_eq!(counters.candidates, 0);
+    assert_eq!(consumed, classification);
+    assert_eq!(Actors::test_first_crossing_branch_weight(), None);
+    assert_eq!(Actors::queue_occupancy(), occupancy);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root,
+      "refusal below the scalar reservation must leave no mutation"
+    );
+  });
+}
+
+#[test]
+fn crossing_admission_fallback_respects_source_geometry_and_weight_dimensions() {
+  use crate::CrossingWorkPlan::{FireCohortPlaced, FireCohortPlacedBatch};
+  use crate::crossing::{CrossingAdmissionSelection, CrossingWorkCounters};
+
+  let pair = TestWeightInfo::crossing_placed_pair_unit();
+  let single = TestWeightInfo::crossing_placed_unit();
+  let fault = TestWeightInfo::record_crossing_worker_fault();
+  let pair_reservation = pair.saturating_add(fault);
+  let single_reservation = single.saturating_add(fault);
+  for tail_refill in [false, true] {
+    let select = |limit| match Actors::select_crossing_admission(
+      FireCohortPlacedBatch,
+      4,
+      tail_refill,
+      &CrossingWorkCounters::default(),
+      &WeightMeter::with_limit(limit),
+    ) {
+      CrossingAdmissionSelection::Admitted {
+        plan,
+        admitted_candidates,
+        branch_weight,
+      } => Some((plan, admitted_candidates, branch_weight)),
+      CrossingAdmissionSelection::Refused => None,
+    };
+    for limit in [
+      pair_reservation,
+      Weight::from_parts(u64::MAX, pair_reservation.proof_size()),
+      Weight::from_parts(pair_reservation.ref_time(), u64::MAX),
+    ] {
+      assert_eq!(
+        select(limit),
+        Some(if tail_refill {
+          (FireCohortPlaced, 1, single)
+        } else {
+          (FireCohortPlacedBatch, 2, pair)
+        }),
+        "pair admission needs tail geometry even when only one Weight dimension is scarce"
+      );
+    }
+    assert_eq!(
+      select(single_reservation),
+      Some((FireCohortPlaced, 1, single))
+    );
+    for deficit in [Weight::from_parts(1, 0), Weight::from_parts(0, 1)] {
+      assert_eq!(select(single_reservation.saturating_sub(deficit)), None);
+    }
+    let full = if tail_refill {
+      TestWeightInfo::crossing_placed_non_tail_emptied_unit()
+        .max(TestWeightInfo::crossing_placed_non_tail_trimmed_unit())
+    } else {
+      TestWeightInfo::crossing_placed_maximum_unit()
+    };
+    assert_eq!(
+      select(full.saturating_add(fault)),
+      Some((FireCohortPlacedBatch, 4, full))
+    );
+  }
+}
+
+#[test]
+fn crossing_non_tail_limited_grant_preserves_scalar_progress_without_fault() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let page_size: u32 = <Test as crate::Config>::CrossingPageSize::get();
+    let actors = (0..page_size + 4)
+      .map(|index| {
+        create_system_with(
+          100 + u64::from(index),
+          Schedule {
+            trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+            cooldown_blocks: 0,
+          },
+          None,
+          contract_steps_with_step(make_step(Task::StopCycle)),
+        )
+      })
+      .collect::<Vec<_>>();
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    let source = Actors::crossing_membership(actors[0]).expect("source locator");
+    crate::CrossingRangeCursors::<Test>::insert(
+      7,
+      crate::CrossingRangeCursor {
+        revision: 2,
+        traversal: crate::CrossingTraversal::Upward,
+        search_bound: 150,
+        current_threshold: Some(100),
+        page: source.page,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert!(
+      source.page
+        < crate::CrossingLeafStates::<Test>::get(source.key)
+          .expect("source leaf")
+          .tail_page
+    );
+    let pair = TestWeightInfo::crossing_placed_pair_unit();
+    let placed = TestWeightInfo::crossing_placed_unit();
+    let fault = TestWeightInfo::record_crossing_worker_fault();
+    let classification = TestWeightInfo::crossing_worker_base()
+      .saturating_add(TestWeightInfo::crossing_work_probe())
+      .saturating_add(TestWeightInfo::crossing_fire_pair_probe())
+      .saturating_add(TestWeightInfo::crossing_tail_refill_probe())
+      .saturating_add(TestWeightInfo::crossing_selection_probe());
+    let budget = classification.saturating_add(pair).saturating_add(fault);
+    assert!(
+      !WeightMeter::with_limit(budget).can_consume(
+        classification
+          .saturating_add(TestWeightInfo::crossing_placed_non_tail_trimmed_unit())
+          .saturating_add(fault)
+      ),
+      "the grant must fit the pair but not the non-tail batch"
+    );
+    // Keep FRAME's transaction-depth bookkeeping out of the reference root.
+    polkadot_sdk::sp_io::storage::start_transaction();
+    assert_ok!(Actors::crossing_work_unit());
+    let scalar_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    polkadot_sdk::sp_io::storage::rollback_transaction();
+    Actors::test_reset_first_crossing_branch_weight();
+    let (consumed, counters) = Actors::service_crossing_transitions_with_counters(budget);
+    assert_eq!(
+      counters.faults, 0,
+      "limited Weight is not an invariant fault"
+    );
+    assert!(!crate::CrossingWorkerFaultState::<Test>::exists());
+    assert_eq!(counters.candidates, 1);
+    assert_eq!(counters.activations, 1);
+    assert_eq!(Actors::test_first_crossing_branch_weight(), Some(placed));
+    assert!(consumed.all_lte(budget));
+    assert_eq!(Actors::queue_occupancy(), 1);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      scalar_root,
+      "fallback must preserve exact scalar membership, FIFO and cursor effects"
+    );
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let (_, resumed) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
+    assert!(
+      resumed.candidates > 0,
+      "later service must resume without a fault clear"
+    );
+    assert_eq!(resumed.faults, 0);
+    assert!(!crate::CrossingWorkerFaultState::<Test>::exists());
+    assert!(Actors::queue_occupancy() > 1);
+  });
+}
+
+#[test]
 fn crossing_pair_downgrades_to_one_at_each_resumed_component_boundary() {
   let maximums: [u32; 4] = [
     <Test as crate::Config>::MaxCrossingTransitionsPerBlock::get(),
@@ -1774,6 +2100,7 @@ fn crossing_pair_downgrades_to_one_at_probe_weight_boundary() {
     prepare_crossing_pair_after_sparse_open();
     let budget = <Test as crate::Config>::WeightInfo::crossing_worker_base()
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_work_probe())
+      .saturating_add(<Test as crate::Config>::WeightInfo::crossing_selection_probe())
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_fire_probe())
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_placed_unit())
       .saturating_add(<Test as crate::Config>::WeightInfo::record_crossing_worker_fault());
@@ -1800,6 +2127,7 @@ fn crossing_pair_downgrades_to_one_at_branch_weight_boundary() {
     prepare_crossing_pair_after_sparse_open();
     let budget = <Test as crate::Config>::WeightInfo::crossing_worker_base()
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_work_probe())
+      .saturating_add(<Test as crate::Config>::WeightInfo::crossing_selection_probe())
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_fire_pair_probe())
       .saturating_add(<Test as crate::Config>::WeightInfo::crossing_placed_unit())
       .saturating_add(<Test as crate::Config>::WeightInfo::record_crossing_worker_fault());
@@ -3704,6 +4032,7 @@ fn crossing_work_plan_is_read_only_and_classifies_search_before_execution() {
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let base = <TestWeightInfo as crate::WeightInfo>::crossing_worker_base();
     let probe = <TestWeightInfo as crate::WeightInfo>::crossing_work_probe();
+    let selection = <TestWeightInfo as crate::WeightInfo>::crossing_selection_probe();
     let short = Weight::from_parts(
       base
         .ref_time()
@@ -3730,7 +4059,7 @@ fn crossing_work_plan_is_read_only_and_classifies_search_before_execution() {
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_transition_unit());
     assert_eq!(
       Actors::service_crossing_transitions(cheap_branch),
-      base.saturating_add(probe)
+      base.saturating_add(probe).saturating_add(selection)
     );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
@@ -3779,7 +4108,8 @@ fn crossing_seek_miss_uses_only_probe_and_transition_branch_weight() {
       crate::CrossingWorkPlan::SeekMiss
     );
     let probe_expected = <TestWeightInfo as crate::WeightInfo>::crossing_worker_base()
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_work_probe());
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_work_probe())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_selection_probe());
     let consumed_expected = probe_expected
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_transition_unit());
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);

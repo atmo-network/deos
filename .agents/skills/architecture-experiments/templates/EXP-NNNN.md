@@ -17,7 +17,7 @@
 
 ## Decision Question
 
-State the single implementation choice this evidence can decide. Allocate the globally unique `EXP-NNNN` under the architecture-experiments Skill’s Record Identity and Layout rule, checking every track; the containing track owns the record.
+State the single implementation choice or bounded comparative decision this evidence can decide. Allocate the globally unique `EXP-NNNN` under the architecture-experiments Skill’s Record Identity and Layout rule, checking every track; the containing track owns the record.
 
 ## Governing Specification
 
@@ -30,7 +30,7 @@ State the single implementation choice this evidence can decide. Allocate the gl
 - `Current architecture`: Exact physical behavior at the baseline.
 - `Reason`: Measured gap or decision pressure.
 - `Hypothesis`: Falsifiable candidate claim.
-- `Materiality`: Minimum decision-relevant change or release envelope.
+- `Materiality`: Declared decision-relevant change, envelope, or comparative threshold; closing a numeric release target is not required.
 
 ## Baseline and Candidates
 
@@ -103,6 +103,14 @@ Leaf only: retain primary evidence below. Synthesis: replace this table with com
 
 Report warmup, distribution, variance, tails, outliers, contamination, and sample adequacy where applicable. For deterministic generated Weight, record model/repeat review instead.
 
+### Benchmark Evidence Disposition
+
+- `Benchmark Evidence Status`: Authoritative / Qualified / Historical / Superseded / Invalidated / Inconclusive / Not applicable (no empirical benchmark evidence).
+- `Reassessment Trigger`: None, or the exact trigger and its evidence.
+- `Compared Observation IDs`: None, or the compared run/observation identities.
+- `Noise / Stability Evidence`: None, or the measured envelope and the independently stable dimensions.
+- `Current Authority`: What these numbers still decide, for which comparisons, and any reassessing record; "Not applicable" for deterministic records.
+
 ## Result
 
 Measurement only. Report observations, uncertainty, and negative results without selecting a candidate.
@@ -113,7 +121,7 @@ Explain binding dimension, dominant contributor, Pareto relation, confounders, a
 
 ## Decision
 
-State Accepted, Rejected, Inconclusive, Superseded, or Invalidated; identify the selected/new baseline or explain why none changed. Never merge this section with Result.
+State Accepted, Rejected, Inconclusive, Superseded, or Invalidated; identify the selected/new baseline or explain why none changed. Name the single outcome class (efficiency improvement, explicit tradeoff, or research result) and the finite stopping basis. Never merge this section with Result.
 
 ## Rejected Alternatives and Tradeoffs
 
@@ -138,7 +146,7 @@ target → measured gap → binding dimension → dominant contributor
 
 - `Eliminated hypotheses`: None yet.
 - `Remaining hypotheses`: Candidate list.
-- `Stop condition`: Exact target/materiality boundary.
+- `Stop condition`: Exact objective, materiality, or finite campaign boundary.
 
 ## Architecture Impact
 
@@ -161,4 +169,4 @@ target → measured gap → binding dimension → dominant contributor
 - `Uses evidence from`: Exact historical experiment/evidence links; distinguish borrowed observations from required accepted inputs.
 - `Transfers question to`: Experiment links and the specific transferred question, or None.
 - `Produces input for`: Downstream experiment links and deliverable, or None.
-- `Reopen trigger`: Exact failed assumption/invariant and required evidence; cost alone does not reopen a frozen physical baseline.
+- `Reopen trigger`: Exact failed assumption/invariant and required evidence; cost alone does not reopen a frozen physical baseline, which a bounded comparative candidate competes with instead.

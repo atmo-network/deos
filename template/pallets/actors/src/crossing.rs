@@ -193,6 +193,15 @@ pub(crate) struct CrossingWorkCounters {
   pub faults: u32,
 }
 
+pub(crate) enum CrossingAdmissionSelection {
+  Admitted {
+    plan: CrossingWorkPlan,
+    admitted_candidates: u32,
+    branch_weight: Weight,
+  },
+  Refused,
+}
+
 impl<T: Config> Pallet<T> {
   #[cfg(feature = "try-runtime")]
   pub(crate) fn do_try_state_crossing() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
@@ -2742,6 +2751,29 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  /// Bounded placed-batch fallback: the generated two-candidate placed pair has the same
+  /// ProofSize as the scalar single and a bounded positive RefTime premium. A classified
+  /// multi-candidate tail-page placed batch that does not fit its grant is first reduced to the
+  /// scalar-equivalent pair (the cursor candidate followed by the tail-page candidate that
+  /// sequential single-member movement serves next) through the existing atomic placed-batch
+  /// path, and only then to one candidate. Returns the admitted pair and its generated owner
+  /// when the pair fits; `None` leaves the scalar single as the terminal fallback.
+  pub(crate) fn crossing_placed_pair_fallback(
+    plan: CrossingWorkPlan,
+    admitted_candidates: u32,
+    meter: &polkadot_sdk::sp_weights::WeightMeter,
+    fault_weight: Weight,
+  ) -> Option<(u32, Weight)> {
+    if plan != CrossingWorkPlan::FireCohortPlacedBatch || admitted_candidates <= 2 {
+      return None;
+    }
+    let pair_candidates = 2u32;
+    let pair_weight = Self::crossing_plan_weight_for_admission(plan, pair_candidates)?;
+    meter
+      .can_consume(pair_weight.saturating_add(fault_weight))
+      .then_some((pair_candidates, pair_weight))
+  }
+
   pub(crate) fn crossing_plan_components(plan: CrossingWorkPlan) -> (u32, u32, u32, u32) {
     match plan {
       CrossingWorkPlan::Empty | CrossingWorkPlan::StructuralFault => (0, 0, 0, 0),
@@ -3015,6 +3047,79 @@ impl<T: Config> Pallet<T> {
     (components.3 == admitted_candidates).then(|| Self::crossing_plan_weight(plan))
   }
 
+  /// Explicit, generated owner for the fixed, storage-free admission-selection arithmetic that
+  /// follows classification. The service loop consumes `crossing_selection_probe` exactly once
+  /// per unit before calling [`Pallet::select_crossing_admission`]; the owner's benchmarked
+  /// worst case is a classified multi-candidate placed batch whose aggregate and pair
+  /// reservations miss while the scalar single fits, so plan-weight lookup, the retained
+  /// pair-fallback preference, the scalar fallback, the component checks and the final
+  /// reservation check are all inside the measured scope.
+  pub(crate) fn select_crossing_admission(
+    plan: CrossingWorkPlan,
+    admitted_candidates: u32,
+    tail_refill: bool,
+    counters: &CrossingWorkCounters,
+    meter: &polkadot_sdk::sp_weights::WeightMeter,
+  ) -> CrossingAdmissionSelection {
+    use crate::weights::WeightInfo as _;
+
+    let admitted_branch_weight = if tail_refill {
+      let emptied = T::WeightInfo::crossing_placed_non_tail_emptied_unit();
+      let trimmed = T::WeightInfo::crossing_placed_non_tail_trimmed_unit();
+      Weight::from_parts(
+        emptied.ref_time().max(trimmed.ref_time()),
+        emptied.proof_size().max(trimmed.proof_size()),
+      )
+    } else {
+      let Some(weight) = Self::crossing_plan_weight_for_admission(plan, admitted_candidates) else {
+        return CrossingAdmissionSelection::Refused;
+      };
+      weight
+    };
+    let fault_weight = T::WeightInfo::record_crossing_worker_fault();
+    let (plan, admitted_candidates, branch_weight) =
+      if meter.can_consume(admitted_branch_weight.saturating_add(fault_weight)) {
+        (plan, admitted_candidates, admitted_branch_weight)
+      } else if !tail_refill
+        && let Some((pair_candidates, pair_weight)) =
+          Self::crossing_placed_pair_fallback(plan, admitted_candidates, meter, fault_weight)
+      {
+        (plan, pair_candidates, pair_weight)
+      } else if let Some(single_plan) = Self::crossing_single_candidate_plan(plan) {
+        let Some(single_weight) = Self::crossing_plan_weight_for_admission(single_plan, 1) else {
+          return CrossingAdmissionSelection::Refused;
+        };
+        if !meter.can_consume(single_weight.saturating_add(fault_weight)) {
+          return CrossingAdmissionSelection::Refused;
+        }
+        (single_plan, 1, single_weight)
+      } else {
+        return CrossingAdmissionSelection::Refused;
+      };
+    let Some((transitions, leaves, pages, candidates)) =
+      Self::crossing_plan_components_for_admission(plan, admitted_candidates)
+    else {
+      return CrossingAdmissionSelection::Refused;
+    };
+    if counters.transitions.saturating_add(transitions) > T::MaxCrossingTransitionsPerBlock::get()
+      || counters.leaves.saturating_add(leaves) > T::MaxCrossingLeavesPerBlock::get()
+      || counters.pages.saturating_add(pages) > T::MaxCrossingPagesPerBlock::get()
+      || counters.candidates.saturating_add(candidates) > T::MaxCrossingActorsPerBlock::get()
+    {
+      return CrossingAdmissionSelection::Refused;
+    }
+    if plan == CrossingWorkPlan::Empty
+      || !meter.can_consume(branch_weight.saturating_add(fault_weight))
+    {
+      return CrossingAdmissionSelection::Refused;
+    }
+    CrossingAdmissionSelection::Admitted {
+      plan,
+      admitted_candidates,
+      branch_weight,
+    }
+  }
+
   fn do_crossing_placed_pair_unit() -> Result<CrossingWorkOutcome, DispatchError> {
     let original_feed = CrossingPendingFeedListState::<T>::get()
       .cursor
@@ -3193,56 +3298,22 @@ impl<T: Config> Pallet<T> {
       if tail_refill {
         meter.consume(T::WeightInfo::crossing_tail_refill_probe());
       }
-      let admitted_branch_weight = if tail_refill {
-        let emptied = T::WeightInfo::crossing_placed_non_tail_emptied_unit();
-        let trimmed = T::WeightInfo::crossing_placed_non_tail_trimmed_unit();
-        Weight::from_parts(
-          emptied.ref_time().max(trimmed.ref_time()),
-          emptied.proof_size().max(trimmed.proof_size()),
-        )
-      } else {
-        let Some(weight) = Self::crossing_plan_weight_for_admission(plan, admitted_candidates)
-        else {
-          break;
-        };
-        weight
-      };
-      let fault_weight = T::WeightInfo::record_crossing_worker_fault();
-      let branch_weight = if meter.can_consume(admitted_branch_weight.saturating_add(fault_weight))
-      {
-        admitted_branch_weight
-      } else if let Some(single_plan) = Self::crossing_single_candidate_plan(plan) {
-        plan = single_plan;
-        admitted_candidates = 1;
-        let Some(single_weight) =
-          Self::crossing_plan_weight_for_admission(plan, admitted_candidates)
-        else {
-          break;
-        };
-        if !meter.can_consume(single_weight.saturating_add(fault_weight)) {
-          break;
-        }
-        single_weight
-      } else {
+      let selection_probe = T::WeightInfo::crossing_selection_probe();
+      if !meter.can_consume(selection_probe) {
         break;
-      };
-      let Some((transitions, leaves, pages, candidates)) =
-        Self::crossing_plan_components_for_admission(plan, admitted_candidates)
+      }
+      meter.consume(selection_probe);
+      let CrossingAdmissionSelection::Admitted {
+        plan: selected_plan,
+        admitted_candidates: selected_candidates,
+        branch_weight,
+      } =
+        Self::select_crossing_admission(plan, admitted_candidates, tail_refill, &counters, &meter)
       else {
         break;
       };
-      if counters.transitions.saturating_add(transitions) > T::MaxCrossingTransitionsPerBlock::get()
-        || counters.leaves.saturating_add(leaves) > T::MaxCrossingLeavesPerBlock::get()
-        || counters.pages.saturating_add(pages) > T::MaxCrossingPagesPerBlock::get()
-        || counters.candidates.saturating_add(candidates) > T::MaxCrossingActorsPerBlock::get()
-      {
-        break;
-      }
-      if plan == CrossingWorkPlan::Empty
-        || !meter.can_consume(branch_weight.saturating_add(fault_weight))
-      {
-        break;
-      }
+      plan = selected_plan;
+      admitted_candidates = selected_candidates;
       let list = CrossingPendingFeedListState::<T>::get();
       let fault_feed = list.cursor.or(list.head);
       let fault_cursor = fault_feed.and_then(CrossingRangeCursors::<T>::get);
