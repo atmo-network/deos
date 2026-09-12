@@ -189,6 +189,7 @@
 - `Benchmark Metrics`: Measure both RefTime and ProofSize with explicit bounded components and worst-case setup.
 - `Weight Bridge`: Generate pallet weight templates and bind runtime-specific implementations under `template/runtime/src/weights`.
 - `Production Weights`: Runtime configs must use real `WeightInfo`; do not ship `()` placeholders.
+- `Production Binding Guard`: Exact-Wasm regression profiles bind the accepted production Wasm identity of the current tree, never a previously released artifact; reissuing the production Wasm rebinds its downstream identity pins in the same change.
 - `Idle Safety`: Preserve block-weight headroom for `on_idle` work and account for hook pressure in scheduling changes.
 - `Operational Reserve`: The reference runtime intentionally carries no dedicated Operational weight reserve while no concrete critical Operational extrinsic consumes it; introducing such a call requires a measured reserve and an explicit dispatch/`on_idle` rebalance in the same change.
 - `Rust Imports`: Prefer direct `polkadot_sdk`, `frame_support`, and `sp_runtime` paths over compatibility shims unless a macro/generated boundary requires them.

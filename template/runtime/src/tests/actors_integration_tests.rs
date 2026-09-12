@@ -4676,9 +4676,12 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
     ));
 
     let consumed = Actors::service_crossing_transitions(Weight::MAX);
+    type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+    use pallet_deos_actors::WeightInfo as _;
     assert_eq!(
       consumed,
-      Weight::from_parts(14_876_034_000, 386_687),
+      Weight::from_parts(14_876_034_000, 386_687)
+        .saturating_add(W::crossing_selection_probe().saturating_mul(3)),
       "the generated Crossing worker owners must settle the complete one-Actor detector/latch path"
     );
     assert_eq!(
@@ -4723,6 +4726,508 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
         .is_some_and(|state| { !state.hot.pending_signal && state.hot.queue_ticket.is_none() })
     );
   });
+}
+
+/// Retained regression witness: measures how many ObservationCrossing candidates the real mandatory
+/// prepass materialization budget admits per block for one dense same-threshold cohort under the
+/// retained placed pair fallback. The pinned released cohort executed a deterministic `1/3/8`
+/// rotation cycle (mean four, ceiling `MaxCrossingTransitionsPerBlock`); the pair fallback settles
+/// the generated two-candidate placed owner whenever a classified multi-candidate batch does not
+/// fit its grant, so the lean phases execute `2` and `6` and the steady cycle is `2/6/8`. The
+/// first-block opening leaf still admits one scalar candidate. Exactly-once materialization, the
+/// per-block counter ceiling and the Actor Control root envelope bind both cohorts.
+#[test]
+fn crossing_prepass_materialization_rate_follows_the_materialization_family_rotation() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = deos_router_account();
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(8_097),
+    );
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    const MEMBERS: u32 = 48;
+    for index in 0..MEMBERS {
+      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
+      let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+        &owner,
+        1_000_000_000_000_000_000,
+      );
+      let actor_id = create_user(
+        owner,
+        RuntimeSchedule {
+          trigger: Trigger::observation_crossing(
+            feed,
+            CrossingDirection::Rising,
+            1_500_000_000_000,
+            800_000_000_000,
+          ),
+          cooldown_blocks: 0,
+        },
+        None,
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
+      );
+      fund_native(actor_id, 1_000_000_000_000_000);
+    }
+    assert_eq!(Actors::crossing_feed_membership_count(feed), MEMBERS);
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      100_000_000_000_000,
+    ));
+
+    let cap = <Runtime as pallet_deos_actors::Config>::MaxCrossingTransitionsPerBlock::get();
+    let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
+    let cutoff = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::scheduler_on_initialize_cutoff();
+    let coordinator_base = <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::materialization_coordinator_base();
+    let materialization_limit = Actors::materialization_weight_limit();
+    let minima: Vec<Weight> = (0u8..3)
+      .map(Actors::materialization_family_minimum)
+      .collect();
+    let minima_sum = minima
+      .iter()
+      .fold(Weight::zero(), |sum, weight| sum.saturating_add(*weight));
+    let materialization_budget = control_limit
+      .saturating_sub(cutoff)
+      .saturating_sub(coordinator_base);
+    println!(
+      "CROSSING_PREPASS_BUDGET_V1 control={control_limit:?} materialization_limit={materialization_limit:?} coordinator={coordinator_base:?} minima={minima:?} minima_sum={minima_sum:?} materialization_budget={materialization_budget:?} cap={cap}"
+    );
+    let mut per_block = Vec::new();
+    for block in 2..=14 {
+      System::set_block_number(block);
+      ensure_actor_prepass_context();
+      let cursor = pallet_deos_actors::MaterializationFamilyCursor::<Runtime>::get();
+      System::reset_events();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      let materialized = System::events()
+        .iter()
+        .filter(|record| {
+          matches!(
+            &record.event,
+            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+              trigger_family: TriggerFamily::ObservationCrossing,
+              ..
+            })
+          )
+        })
+        .count() as u32;
+      let usage = Actors::block_resource_state()
+        .expect("prepass records block resource usage")
+        .usage();
+      println!(
+        "CROSSING_PREPASS_MATERIALIZATION_V1 block={block} materialized={materialized} cap={cap} pending={} cursor={cursor} head={} tail={} control={:?} effect={:?}",
+        pallet_deos_actors::CrossingPendingFeedListState::<Runtime>::get().count,
+        pallet_deos_actors::ActorReadyHead::<Runtime>::get(),
+        pallet_deos_actors::ActorReadyTail::<Runtime>::get(),
+        usage.actor_control_used(),
+        usage.actor_effect_used(),
+      );
+      per_block.push(materialized);
+    }
+    assert_eq!(
+      per_block.iter().sum::<u32>(),
+      MEMBERS,
+      "the whole same-threshold cohort must materialize exactly once: {per_block:?}"
+    );
+    assert!(
+      per_block.iter().all(|materialized| *materialized <= cap),
+      "executed per-block materialization must stay within the transition candidate cap {cap}: {per_block:?}"
+    );
+    let released_cycle: u32 = 1 + 3 + 8;
+    assert_eq!(
+      per_block[..3],
+      [1u32, 6, 8],
+      "the first rotation must open the leaf with one scalar candidate and complete with the aggregate batch: {per_block:?}"
+    );
+    assert_eq!(
+      per_block[3..9],
+      [2u32, 6, 8, 2, 6, 8],
+      "the steady materialization rotation must execute the pair-owner cycle after the pair fallback: {per_block:?}"
+    );
+    assert_eq!(
+      per_block[9],
+      1,
+      "the final cohort remainder must materialize through its own rotation phase: {per_block:?}"
+    );
+    assert!(
+      per_block[10..].iter().all(|materialized| *materialized == 0),
+      "materialization stops exactly once the cohort is served: {per_block:?}"
+    );
+    let executed_cycle: u32 = 2 + 6 + 8;
+    assert!(
+      executed_cycle > released_cycle,
+      "the retained pair fallback must raise the executed three-block cycle above the released {released_cycle}, got {executed_cycle}: {per_block:?}"
+    );
+    assert!(
+      control_limit.proof_size() < materialization_limit.proof_size(),
+      "the Actor Control envelope, not the shared materialization limit, must remain the binding root envelope: {control_limit:?} vs {materialization_limit:?}"
+    );
+    assert!(
+      minima_sum.all_lte(materialization_budget)
+        && materialization_budget
+          .proof_size()
+          .saturating_sub(minima_sum.proof_size())
+          < 2_000,
+      "the three family minimum quanta must nearly exhaust the materialization budget so that the reservation set depends on family service order: {minima_sum:?} vs {materialization_budget:?}"
+    );
+  });
+}
+
+/// Campaign candidate witness: reconciles the executed Crossing materialization yield under the
+/// retained placed pair fallback with the generated reservation boundaries (single, pair and
+/// aggregate batch owners), the rotated family grant, and the remaining Actor Control phase
+/// budget. The executed rotation yield itself is owned by
+/// `crossing_prepass_materialization_rate_follows_the_materialization_family_rotation`.
+///
+/// Establishes: one scalar candidate needs a generated reservation of
+/// `base + probe + selection + placed + fault` and settles `base + probe + selection + placed`;
+/// the executed richest rotation block settles the aggregate owner plus two classification probes
+/// and leaves less than one further work probe, so the component counter cap is not the operative
+/// stop; the rotated-first grant is below the aggregate owner's reservation, so its six executed
+/// candidates settle three generated pair owners at three exact single-owner RefTime premiums
+/// plus four charged selection owners and unchanged ProofSize; and only the cursor-zero phase
+/// leaves enough reclaimed Actor Control for one ordinary User service.
+#[test]
+fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
+  use pallet_deos_actors::WeightInfo as _;
+
+  type ActorsWeight = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
+
+  let base = ActorsWeight::crossing_worker_base();
+  let probe = ActorsWeight::crossing_work_probe();
+  let placed = ActorsWeight::crossing_placed_unit();
+  let placed_pair = ActorsWeight::crossing_placed_pair_unit();
+  let placed_maximum = ActorsWeight::crossing_placed_maximum_unit();
+  let leaf_owner = ActorsWeight::crossing_leaf_unit().max(ActorsWeight::crossing_page_unit());
+  let fault = ActorsWeight::record_crossing_worker_fault();
+  let pair_premium = placed_pair.saturating_sub(placed);
+  let single_check = base
+    .saturating_add(probe)
+    .saturating_add(placed)
+    .saturating_add(fault);
+  let single_settled = base.saturating_add(probe).saturating_add(placed);
+  assert_eq!(
+    placed_pair.proof_size(),
+    placed.proof_size(),
+    "the pair owner carries the same generated ProofSize as the scalar single"
+  );
+  assert!(
+    pair_premium.ref_time() > 0 && pair_premium.proof_size() == 0,
+    "the pair fallback must trade exactly a bounded RefTime premium for the extra candidate: {pair_premium:?}"
+  );
+  println!(
+    "CROSSING_RECONCILIATION_V1 weights base={} probe={} placed={} placed_pair={} placed_maximum={} leaf={} fault={} pair_premium={} single_check={} single_settled={}",
+    base.proof_size(),
+    probe.proof_size(),
+    placed.proof_size(),
+    placed_pair.proof_size(),
+    placed_maximum.proof_size(),
+    leaf_owner.proof_size(),
+    fault.proof_size(),
+    pair_premium.ref_time(),
+    single_check.proof_size(),
+    single_settled.proof_size(),
+  );
+
+  let install_fixture = |feed_registry: u32, members: u32, crossing: bool| {
+    System::set_block_number(1);
+    let producer = deos_router_account();
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(feed_registry),
+    );
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    for index in 0..members {
+      let owner = crate::AccountId::new([40u8 + index as u8; 32]);
+      let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+        &owner,
+        1_000_000_000_000_000_000,
+      );
+      let actor_id = create_user(
+        owner,
+        observation_crossing_schedule(
+          feed,
+          CrossingDirection::Rising,
+          1_500_000_000_000,
+          800_000_000_000,
+        ),
+        None,
+        transfer_contract_steps(BOB, AssetKind::Native, 1),
+      );
+      fund_native(actor_id, 1_000_000_000_000_000);
+    }
+    assert_eq!(Actors::crossing_feed_membership_count(feed), members);
+    if crossing {
+      assert_ok!(Oracle::publish(
+        RuntimeOrigin::signed(producer),
+        feed,
+        100_000_000_000_000,
+      ));
+    }
+    feed
+  };
+
+  let sweep = |label: &str, proof_limit: u64| -> (u32, Weight) {
+    let grant = Weight::from_parts(1_000_000_000_000_000u64, proof_limit);
+    System::reset_events();
+    let consumed = Actors::service_crossing_transitions(grant);
+    let materialized = System::events()
+      .iter()
+      .filter(|record| {
+        matches!(
+          &record.event,
+          RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+            trigger_family: TriggerFamily::ObservationCrossing,
+            ..
+          })
+        )
+      })
+      .count() as u32;
+    println!(
+      "CROSSING_RECONCILIATION_V1 grant label={label} limit={proof_limit} consumed={} materialized={materialized}",
+      consumed.proof_size(),
+    );
+    (materialized, consumed)
+  };
+
+  // One proof below the generated reservation spends the common probe and settles nothing.
+  seeded_test_ext().execute_with(|| {
+    let _feed = install_fixture(8_103, 48, true);
+    let (materialized, consumed) = sweep("below_single_check", single_check.proof_size() - 1);
+    assert_eq!(
+      materialized, 0,
+      "below the reservation no candidate is admitted"
+    );
+    assert_eq!(
+      consumed.proof_size(),
+      base.saturating_add(probe).proof_size(),
+      "a refused frontier charges only the bounded common probe"
+    );
+  });
+
+  // At the generated reservation the branch owner settles without its fault reserve.
+  seeded_test_ext().execute_with(|| {
+    let _feed = install_fixture(8_104, 48, true);
+    let (materialized, consumed) = sweep("at_single_check", single_check.proof_size());
+    assert_eq!(
+      materialized, 1,
+      "the reservation admits exactly one candidate"
+    );
+    assert_eq!(
+      consumed.proof_size(),
+      single_settled.proof_size(),
+      "the branch owner settles while its fault reserve stays unspent"
+    );
+  });
+
+  let collect_blocks = |first: u32, last: u32| -> Vec<(u32, Weight, Weight)> {
+    let mut rows = Vec::new();
+    for block in first..=last {
+      System::set_block_number(block);
+      ensure_actor_prepass_context();
+      System::reset_events();
+      assert_ok!(Actors::actor_prepass(RuntimeOrigin::none()));
+      let materialized = System::events()
+        .iter()
+        .filter(|record| {
+          matches!(
+            &record.event,
+            RuntimeEvent::Actors(Event::TriggerOccurrenceProcessed {
+              trigger_family: TriggerFamily::ObservationCrossing,
+              ..
+            })
+          )
+        })
+        .count() as u32;
+      let usage = Actors::block_resource_state()
+        .expect("prepass records block resource usage")
+        .usage();
+      println!(
+        "CROSSING_RECONCILIATION_V1 block={block} materialized={materialized} control={} effect={}",
+        usage.actor_control_used().proof_size(),
+        usage.actor_effect_used().proof_size(),
+      );
+      rows.push((
+        materialized,
+        usage.actor_control_used(),
+        usage.actor_effect_used(),
+      ));
+    }
+    rows
+  };
+
+  // Empty-family baselines keep the identical topology but never cross the feed.
+  let empty_rows = seeded_test_ext().execute_with(|| {
+    let _feed = install_fixture(8_105, 48, false);
+    collect_blocks(2, 4)
+  });
+
+  // The executed rotation on the same topology.
+  let work_rows = seeded_test_ext().execute_with(|| {
+    let _feed = install_fixture(8_106, 48, true);
+    collect_blocks(2, 5)
+  });
+
+  let yields: Vec<u32> = work_rows.iter().map(|row| row.0).collect();
+  assert_eq!(
+    yields,
+    vec![1, 6, 8, 2],
+    "the pair fallback must settle the first-block scalar single, six candidates in the rotated-first phase, the aggregate batch, and the steady pair"
+  );
+
+  let control_limit = BlockResourceBudgetValue::get().limits().actor_control();
+  let cutoff = ActorsWeight::scheduler_on_initialize_cutoff();
+  let coordinator = ActorsWeight::materialization_coordinator_base();
+  let materialization_budget = control_limit
+    .proof_size()
+    .saturating_sub(cutoff.proof_size())
+    .saturating_sub(coordinator.proof_size());
+
+  // Rotated-last Crossing: the eight-candidate aggregate owner settles, and the whole
+  // grant residue is below one further admission probe, so an unbounded component counter could
+  // not admit another candidate under the executed grant.
+  let phase_c_control = work_rows[2].1.proof_size();
+  let phase_c_family_total = phase_c_control
+    .saturating_sub(cutoff.proof_size())
+    .saturating_sub(coordinator.proof_size());
+  let phase_c_residue = materialization_budget.saturating_sub(phase_c_family_total);
+  let phase_c_increment = phase_c_control.saturating_sub(empty_rows[2].1.proof_size());
+  println!(
+    "CROSSING_RECONCILIATION_V1 phase_c budget={materialization_budget} family_total={phase_c_family_total} residue={phase_c_residue} increment={phase_c_increment}"
+  );
+  assert_eq!(
+    phase_c_increment,
+    placed_maximum
+      .proof_size()
+      .saturating_add(probe.proof_size() * 2),
+    "the aggregate owner and two classification probes own the executed eight-candidate yield"
+  );
+  assert!(
+    phase_c_residue < probe.proof_size(),
+    "the executed rotated-last grant residue cannot fund one further admission probe"
+  );
+
+  // Rotated-first Crossing: the reserved grant is smaller than the aggregate owner's
+  // reservation alone, so each executed admission settles the generated pair owner through the
+  // bounded fallback: three pair admissions (one family service and two lending re-services)
+  // settle six candidates at the released three-single-owner ProofSize.
+  let phase_b_grant = materialization_budget
+    .saturating_sub(Actors::materialization_family_minimum(2).proof_size())
+    .saturating_sub(Actors::materialization_family_minimum(0).proof_size());
+  let phase_b_increment = work_rows[1]
+    .1
+    .proof_size()
+    .saturating_sub(empty_rows[1].1.proof_size());
+  println!(
+    "CROSSING_RECONCILIATION_V1 phase_b grant={phase_b_grant} increment={phase_b_increment}"
+  );
+  assert!(
+    phase_b_grant
+      < placed_maximum
+        .proof_size()
+        .saturating_add(fault.proof_size()),
+    "the rotated-first grant cannot reach the aggregate owner's reservation"
+  );
+  assert!(
+    phase_b_increment >= placed_pair.proof_size().saturating_mul(3)
+      && phase_b_increment < placed_pair.proof_size().saturating_mul(4),
+    "three executed pair-owner admissions settle six branch candidates"
+  );
+  const RELEASED_ROTATED_FIRST_REF_TIME: u64 = 40_415_301_374;
+  assert_eq!(
+    work_rows[1].1.ref_time(),
+    RELEASED_ROTATED_FIRST_REF_TIME
+      .saturating_add(pair_premium.ref_time().saturating_mul(3))
+      .saturating_add(
+        ActorsWeight::crossing_selection_probe()
+          .ref_time()
+          .saturating_mul(4)
+      ),
+    "the executed six-candidate phase must charge exactly three generated pair premiums and four selection owners over the released three-candidate phase"
+  );
+  seeded_test_ext().execute_with(|| {
+    let _feed = install_fixture(8_107, 48, true);
+    let (materialized, consumed) = sweep("phase_b_grant", phase_b_grant);
+    assert_eq!(
+      materialized, 1,
+      "a fresh rotated-first grant opens the leaf and serves its first classified candidate"
+    );
+    assert_eq!(
+      consumed.proof_size(),
+      base
+        .saturating_add(probe.saturating_mul(2))
+        .saturating_add(leaf_owner)
+        .proof_size(),
+      "the fresh grant charges its common probe, the ordinary leaf owner and one further work probe"
+    );
+  });
+
+  // Second-served Crossing: the first prepass opens the leaf and admits one candidate under the
+  // ordinary leaf owner plus the classification retries forced by the reduced grant, while the
+  // steady cursor-zero phase admits the generated pair (asserted through the block yields). The
+  // block residue funds one ordinary User service instead of further materialization.
+  let phase_a_increment = work_rows[0]
+    .1
+    .proof_size()
+    .saturating_sub(empty_rows[0].1.proof_size());
+  println!(
+    "CROSSING_RECONCILIATION_V1 phase_a increment={phase_a_increment} effect={}",
+    work_rows[0].2.proof_size()
+  );
+  assert_eq!(
+    phase_a_increment,
+    leaf_owner
+      .proof_size()
+      .saturating_add(probe.proof_size() * 3),
+    "the first cursor-zero prepass admits one leaf candidate and charges three classification probes"
+  );
+  assert!(
+    work_rows[0].2 == Weight::zero(),
+    "the first cursor-zero block has no earlier ticket to execute"
+  );
+  assert!(
+    work_rows[1].2 == Weight::zero() && work_rows[2].2 == Weight::zero(),
+    "the rotated-first and rotated-last materialization phases leave no control for a service"
+  );
+  assert!(
+    work_rows[3].2 != Weight::zero(),
+    "only the cursor-zero phase reclaims enough Actor Control for one ordinary User service"
+  );
 }
 
 #[test]

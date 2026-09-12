@@ -8,6 +8,8 @@ const sealed = new Set(['Accepted', 'Rejected', 'Inconclusive', 'Superseded', 'I
 const provisional = new Set(['Proposed', 'Prepared', 'Measuring', 'Measured']);
 const statuses = new Set([...sealed, ...provisional, 'Interpreted']);
 const proofFields = ['Obligation ID', 'Claim', 'Smallest falsifier', 'Evidence class', 'Owning Experiment', 'Required/conditional', 'Downstream consequence', 'Status'];
+const dispositionFields = ['Benchmark Evidence Status', 'Reassessment Trigger', 'Compared Observation IDs', 'Noise / Stability Evidence', 'Current Authority'];
+const dispositionStatuses = ['Authoritative', 'Qualified', 'Historical', 'Superseded', 'Invalidated', 'Inconclusive', 'Not applicable'];
 const graphPattern = /<!-- experiment-dependencies:start -->[\s\S]*?<!-- experiment-dependencies:end -->/;
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((s) => s.trim());
@@ -63,6 +65,13 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
     }
     for (const n of ['Freeze', 'Review triggers', 'Decomposition review']) if (!note(proofs, n)) fail(key, `missing ${n}`);
     if (!['Proposed', 'Prepared'].includes(meta.get('Status')) && !/^Frozen\b/.test(note(proofs, 'Freeze'))) fail(key, 'Measuring-or-later obligations must be frozen');
+    const disposition = source.split(/^### Benchmark Evidence Disposition\s*$/m)[1]?.split(/^#{2,3} /m)[0];
+    if (disposition !== undefined) {
+      const entries = [...disposition.matchAll(/^- `([^`]+)`: *(.+)$/gm)].map((m) => [m[1].trim(), m[2].trim()]);
+      if (JSON.stringify(entries.map(([k]) => k)) !== JSON.stringify(dispositionFields)) fail(key, `Benchmark Evidence Disposition fields differ from template (${dispositionFields.join(' | ')})`);
+      const status = entries[0]?.[1] ?? '';
+      if (!dispositionStatuses.some((s) => status.toLowerCase().startsWith(s.toLowerCase()))) fail(key, 'Benchmark Evidence Disposition status is invalid');
+    }
     const count = [...section(source, 'Measurements').matchAll(/^### /gm)].length;
     const triggers = note(proofs, 'Review triggers'), review = note(proofs, 'Decomposition review');
     if (kind === 'Leaf' && count > 6) {

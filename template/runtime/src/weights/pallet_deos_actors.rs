@@ -4341,6 +4341,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(Weight::from_parts(0, 15106))
 			.saturating_add(T::DbWeight::get().reads(11))
 	}
+	fn crossing_selection_probe() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `0`
+		//  Estimated: `0`
+		// Minimum execution time: 977_000 picoseconds.
+		Weight::from_parts(1_467_000, 0)
+			.saturating_add(Weight::from_parts(0, 0))
+	}
 	/// Storage: `Actors::CrossingPendingFeedListState` (r:1 w:1)
 	/// Proof: `Actors::CrossingPendingFeedListState` (`max_values`: Some(1), `max_size`: Some(58), added: 553, mode: `Measured`)
 	/// Storage: `Actors::CrossingTransitionQueues` (r:1 w:0)

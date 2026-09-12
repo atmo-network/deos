@@ -32,7 +32,7 @@ It wires pallets together through `Runtime-as-Config` adapters and hosts:
 
 Custom DEOS runtime pallets in the current reference configuration:
 
-- [`actor/`](./pallets/actors/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
+- [`actors/`](./pallets/actors/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
 - [`router/`](./pallets/router/) — DEOS Router routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
@@ -64,7 +64,7 @@ These are not part of the production runtime contract.
 The most relevant implementation docs live in `../docs/`:
 
 - [`core.architecture.en.md`](../docs/core.architecture.en.md)
-- [`actor/docs/architecture.en.md`](./pallets/actors/docs/architecture.en.md)
+- [`actors/docs/architecture.en.md`](./pallets/actors/docs/architecture.en.md)
 - [`oracle/docs/specification.en.md`](./pallets/oracle/docs/specification.en.md)
 - [`oracle/docs/architecture.en.md`](./pallets/oracle/docs/architecture.en.md)
 - [`tmc/docs/architecture.en.md`](./pallets/tmc/docs/architecture.en.md)

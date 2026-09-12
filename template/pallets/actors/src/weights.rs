@@ -49,6 +49,7 @@ pub trait WeightInfo {
   fn record_wakeup_worker_fault() -> Weight;
   fn crossing_worker_base() -> Weight { Weight::from_parts(25_000_000, 8_000) }
   fn crossing_work_probe() -> Weight { Weight::from_parts(400_000_000, 20_000) }
+  fn crossing_selection_probe() -> Weight { Weight::from_parts(50_000_000, 0) }
   fn crossing_search_probe() -> Weight { Weight::from_parts(400_000_000, 100_000) }
   fn crossing_fire_probe() -> Weight { Weight::from_parts(1_000_000_000, 300_000) }
   fn crossing_tail_refill_probe() -> Weight { Weight::from_parts(50_000_000, 10_000) }

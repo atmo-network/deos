@@ -8,8 +8,8 @@ import process from 'node:process';
 
 const skill = path.resolve(import.meta.dirname, '..');
 const root = path.resolve(skill, '../../..');
-const baseline = 'v0.7.24';
-const candidate = '0.7.25';
+const baseline = 'v0.7.25';
+const candidate = '0.7.26';
 const output = path.join(skill, 'evidence/runtime-weight-delta-ledger.md');
 const check = process.argv.includes('--check');
 const weightFiles = [
@@ -144,7 +144,7 @@ const lines = [
   '',
   `This generated ledger compares the production Weight implementations in Git tag \`${baseline}\` with the candidate worktree. RefTime formulas exclude database Weight; reads and writes are therefore recorded independently. ProofSize is the generated conservative estimate. A parameterized formula records its generated slope rather than collapsing it to an unstated component value.`,
   '',
-  `Candidate release: \`${candidate}\`. The locally validated production runtime was generated with \`./scripts/03-build-runtime.sh\`; compact Wasm SHA-256 is \`25b9695fd9e900f17ae1f3fb0b815ac1403830264d9c31f7cee54e29f434b700\`. The accepted benchmark owners use \`frame-omni-bencher 0.22.0\` / CLI \`58.0.0\`, \`50\` steps, \`20\` repeats, compiled Wasm execution, RocksDB, 1,024 MiB cache, host \`fedora\`, and CPU \`AMD Ryzen 7 4800H with Radeon Graphics\`; each generated method records date, reads, writes, measured ProofSize, and conservative ProofSize in its authoritative source. The benchmark-runtime Wasm and production Wasm are distinct evidence identities. Exact candidate commit/tree identity remains unavailable until the validated worktree is committed through the authorized release gate.`,
+  `Candidate release: \`${candidate}\`. The candidate production runtime was built with \`./scripts/03-build-runtime.sh\`; compact Wasm SHA-256 is \`91c23b2f77b57265e8e32ec8645610a32b7d4763b0ced31ab56ef64e8c0f5a2d\`. The accepted benchmark owners use \`frame-omni-bencher 0.22.0\` / CLI \`58.0.0\`, \`50\` steps, \`20\` repeats, compiled Wasm execution, RocksDB, 1,024 MiB cache, host \`fedora\`, and CPU \`AMD Ryzen 7 4800H with Radeon Graphics\`; each generated method records date, reads, writes, measured ProofSize, and conservative ProofSize in its authoritative source. The benchmark-runtime Wasm and production Wasm are distinct evidence identities. Exact candidate commit/tree identity remains unavailable until the validated worktree is committed through the authorized release gate.`,
   '',
   'Interpretation codes classify changed paths only: `I` identity guard; `C` correctness; `P` bounded service topology; `M` merged canonical work; `O` measured optimization.',
   '',

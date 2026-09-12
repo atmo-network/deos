@@ -142,7 +142,7 @@ Head fragmentation is acceptable only when all of the following hold:
 - In at least one blocking component, the stranded remainder is strictly less than the corresponding required head component.
 - The required head component is no greater than the configured maximum admitted single-Step component.
 
-This is the maximum semantic fragmentation bound. No stronger bound is valid for the non-blocking Weight component: a ProofSize-heavy head may strand substantial RefTime and vice versa. Production acceptance MUST report both components and MUST NOT disguise such stranding through a scalar percentage. If measured fragmentation prevents the release throughput contract, the implementation or admitted Step geometry must change; FIFO bypass is not an allowed correction.
+This is the maximum semantic fragmentation bound. No stronger bound is valid for the non-blocking Weight component: a ProofSize-heavy head may strand substantial RefTime and vice versa. Production acceptance MUST report both components and MUST NOT disguise such stranding through a scalar percentage. If measured fragmentation prevents the release's declared service or regression objectives, the implementation or admitted Step geometry must change; FIFO bypass is not an allowed correction.
 
 ## 6. Canonical Block Phase Protocol
 
