@@ -8013,7 +8013,6 @@ pub mod pallet {
             amount,
             AmountResolution::PercentageOfCurrent(value)
               | AmountResolution::PercentageAtOpening(value)
-              | AmountResolution::PercentageOfLastFunding(value)
               if value.is_zero()
           ),
         Error::<T>::InvalidAmountResolution
@@ -8034,77 +8033,9 @@ pub mod pallet {
     }
 
     fn derive_funding_tracked_assets(
-      contract_steps: &ContractSteps<T>,
+      _contract_steps: &ContractSteps<T>,
     ) -> Result<BoundedBTreeSet<T::AssetId, T::MaxFundingTrackedAssets>, DispatchError> {
-      let mut tracked = alloc::collections::BTreeSet::new();
-
-      let mut check_amount = |amount: &AmountResolution<T::Balance>, asset: T::AssetId| {
-        if matches!(amount, AmountResolution::PercentageOfLastFunding(_)) {
-          tracked.insert(asset);
-        }
-      };
-
-      for step in contract_steps.as_slice() {
-        match &step.task {
-          ActorTask::Transfer { asset, amount, .. }
-          | ActorTask::SplitTransfer { asset, amount, .. }
-          | ActorTask::Burn { asset, amount }
-          | ActorTask::Mint { asset, amount } => {
-            check_amount(amount, *asset);
-          }
-          ActorTask::RemoveLiquidity {
-            lp_asset: asset,
-            lp_amount,
-            ..
-          } => {
-            check_amount(lp_amount, *asset);
-          }
-          ActorTask::SwapIn {
-            asset_in,
-            amount_in,
-            ..
-          } => {
-            check_amount(amount_in, *asset_in);
-          }
-          ActorTask::SwapOut {
-            asset_out,
-            amount_out,
-            ..
-          } => {
-            check_amount(amount_out, *asset_out);
-          }
-          ActorTask::AddLiquidity {
-            asset_a,
-            asset_b,
-            amount_a,
-            amount_b,
-            ..
-          } => {
-            check_amount(amount_a, *asset_a);
-            check_amount(amount_b, *asset_b);
-          }
-          ActorTask::Stake { asset, amount } => {
-            check_amount(amount, *asset);
-          }
-          ActorTask::DonateLiquidity {
-            asset_a,
-            max_amount_a,
-            ..
-          } => {
-            check_amount(max_amount_a, *asset_a);
-          }
-          ActorTask::Unstake { asset, shares } => {
-            if matches!(shares, AmountResolution::PercentageOfLastFunding(_)) {
-              let share_asset =
-                T::StakingOps::share_asset(*asset).ok_or(Error::<T>::InvalidAmountResolution)?;
-              check_amount(shares, share_asset);
-            }
-          }
-          ActorTask::StopCycle => {}
-        }
-      }
-
-      BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::TooManyContractSteps.into())
+      Ok(Default::default())
     }
 
     pub(crate) fn validate_split_transfer_legs(legs: &SplitTransferLegsOf<T>) -> DispatchResult {
@@ -8671,29 +8602,11 @@ pub mod pallet {
         let hot = state.hot;
         let contract = state.contract;
         let funding = state.funding;
-        // Receipt identities are fixed at admission; the host mapping can disappear later.
-        let mut static_funding_steps = contract.steps.clone();
-        let mut staking_positions = alloc::collections::BTreeSet::new();
-        static_funding_steps.retain(|step| {
-          if let ActorTask::Unstake {
-            asset,
-            shares: AmountResolution::PercentageOfLastFunding(_),
-          } = &step.task
-          {
-            staking_positions.insert(*asset);
-            false
-          } else {
-            true
-          }
-        });
         let expected_tracked =
-          Self::derive_funding_tracked_assets(&static_funding_steps).map_err(|_| {
+          Self::derive_funding_tracked_assets(&contract.steps).map_err(|_| {
             TryRuntimeError::Other("Actor Contract funding sources cannot be rederived")
           })?;
-        if !expected_tracked.is_subset(&funding.funding_tracked_assets)
-          || funding.funding_tracked_assets.len() > expected_tracked.len() + staking_positions.len()
-          || (!staking_positions.is_empty() && funding.funding_tracked_assets.is_empty())
-        {
+        if funding.funding_tracked_assets != expected_tracked {
           return Err(TryRuntimeError::Other(
             "ActorFunding tracked assets disagree with the Actor Contract",
           ));

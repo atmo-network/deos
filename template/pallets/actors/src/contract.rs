@@ -515,7 +515,6 @@ pub enum AmountDataDependency {
   ArtifactValue,
   CurrentBalanceOrShares,
   OpeningSnapshot,
-  LastFundingSnapshot,
   TaskPolicyCapacity,
 }
 
@@ -555,11 +554,6 @@ pub fn describe_amount_resolution<Balance>(
     ),
     AmountResolution::PercentageAtOpening(_) => (
       AmountDataDependency::OpeningSnapshot,
-      ObservationWindow::LogicalCycleStart,
-      RetryObservation::ReuseFrozenValueWithLiveCapacity,
-    ),
-    AmountResolution::PercentageOfLastFunding(_) => (
-      AmountDataDependency::LastFundingSnapshot,
       ObservationWindow::LogicalCycleStart,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
@@ -883,8 +877,6 @@ mod tests {
       AmountResolution::Fixed(1u128),
       AmountResolution::PercentageOfCurrent(Perbill::one()),
       AmountResolution::PercentageAtOpening(Perbill::one()),
-      AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      AmountResolution::PercentageOfCurrent(Perbill::one()),
     ];
     for amount in cases {
       let contract = describe_amount_resolution(&amount);

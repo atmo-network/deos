@@ -1848,7 +1848,6 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "Fixed",
     "PercentageOfCurrent",
     "PercentageAtOpening",
-    "PercentageOfLastFunding",
   ]);
   assert_variant_names::<InputLimit<u128>>(&["LiveQuote", "Absolute"]);
   assert_variant_names::<Predicate<TestAsset, u128, u32, u32>>(&[

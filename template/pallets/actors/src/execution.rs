@@ -2884,7 +2884,7 @@ impl<T: Config> Pallet<T> {
     position_asset: T::AssetId,
     who: &T::AccountId,
     trigger_share_balances: &RunOpeningSnapshotOf<T>,
-    funding_snapshots: &FundingSnapshotOf<T>,
+    _funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let current_shares = T::StakingOps::share_balance(who, position_asset);
     let resolved = match spec {
@@ -2894,17 +2894,6 @@ impl<T: Config> Pallet<T> {
         trigger_share_balances,
         OpeningSurface::StakingShares(position_asset),
       )?),
-      AmountResolution::PercentageOfLastFunding(pct) => {
-        let share_asset =
-          T::StakingOps::share_asset(position_asset).ok_or(Error::<T>::InvalidAmountResolution)?;
-        let Some(snapshot) = funding_snapshots.get(&share_asset) else {
-          return Ok(AmountResolutionOutcome::FundingUnavailable);
-        };
-        if snapshot.is_zero() {
-          return Ok(AmountResolutionOutcome::FundingUnavailable);
-        }
-        pct.mul_floor(*snapshot)
-      }
     };
     if resolved.is_zero() {
       return Ok(AmountResolutionOutcome::Skipped);
@@ -2922,7 +2911,7 @@ impl<T: Config> Pallet<T> {
     actor_type: ActorType,
     reserved: T::Balance,
     trigger_balances: &RunOpeningSnapshotOf<T>,
-    funding_snapshots: &FundingSnapshotOf<T>,
+    _funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let spendable_current = Self::spendable_balance(who, asset, reserved);
@@ -2949,19 +2938,6 @@ impl<T: Config> Pallet<T> {
         let opening_balance = Self::opening_balance(trigger_balances, surface)?;
         let value = pct.mul_floor(opening_balance);
         if !pct.is_zero() && !opening_balance.is_zero() && value.is_zero() {
-          return Ok(AmountResolutionOutcome::Skipped);
-        }
-        value
-      }
-      AmountResolution::PercentageOfLastFunding(pct) => {
-        let Some(snapshot) = funding_snapshots.get(&asset) else {
-          return Ok(AmountResolutionOutcome::FundingUnavailable);
-        };
-        if snapshot.is_zero() {
-          return Ok(AmountResolutionOutcome::FundingUnavailable);
-        }
-        let value = pct.mul_floor(*snapshot);
-        if !pct.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
         value

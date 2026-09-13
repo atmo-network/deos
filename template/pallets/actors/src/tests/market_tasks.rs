@@ -1033,46 +1033,12 @@ fn swap_out_never_spends_above_explicit_input_cap() {
 }
 
 #[test]
-fn ordinary_transfer_updates_accumulator_without_resuming_paused_system_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    mutate_actor_hot_coherent(actor_id, |hot| {
-      hot.lifecycle = ActiveLifecycle::Paused;
-    });
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      123
-    ));
-    let updated = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(updated.lifecycle, ActiveLifecycle::Paused);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&123)
-    );
-    assert!(!has_actor_event(|event| {
-      matches!(event, Event::ActorResumed { actor_id: id } if *id == actor_id)
-    }));
-  });
-}
-
-#[test]
 fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
   new_test_ext().execute_with(|| {
     for amount in [
       AmountResolution::Fixed(0),
       AmountResolution::PercentageOfCurrent(Perbill::zero()),
       AmountResolution::PercentageAtOpening(Perbill::zero()),
-      AmountResolution::PercentageOfLastFunding(Perbill::zero()),
     ] {
       let plan = contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
@@ -2005,41 +1971,5 @@ fn user_dca_swap_then_cold_storage_transfer() {
       )),
       "Swap should be executed"
     );
-  });
-}
-
-#[test]
-fn multi_asset_contract_steps_tracks_all_referenced_assets() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let foreign_a = TestAsset::Local(1);
-    let foreign_b = TestAsset::Local(2);
-    // ContractSteps references both assets via PercentageOfLastFunding
-    let contract_steps = BoundedVec::try_from(vec![
-      StepOf::<Test> {
-        precondition: None,
-        task: Task::Transfer {
-          to: BOB,
-          asset: foreign_a,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(10)),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-      StepOf::<Test> {
-        precondition: None,
-        task: Task::Transfer {
-          to: CHARLIE,
-          asset: foreign_b,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(20)),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-    ])
-    .unwrap();
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let funding = actor_funding(actor_id);
-    // Verify both assets are tracked
-    assert!(funding.funding_tracked_assets.contains(&foreign_a));
-    assert!(funding.funding_tracked_assets.contains(&foreign_b));
   });
 }

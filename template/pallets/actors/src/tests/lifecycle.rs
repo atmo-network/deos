@@ -2643,42 +2643,6 @@ fn percentage_at_opening_uses_preservable_native_snapshot_for_user() {
 }
 
 #[test]
-fn notify_address_event_updates_accumulator_without_resuming_paused_system_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let actor = sovereign_account(actor_id);
-    fund_native(actor_id, 500);
-    mutate_actor_hot_coherent(actor_id, |hot| {
-      hot.lifecycle = ActiveLifecycle::Paused;
-    });
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      500,
-      &CHARLIE
-    ));
-    let updated = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(updated.lifecycle, ActiveLifecycle::Paused);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&500)
-    );
-    assert_eq!(native_balance(&actor), 500);
-    assert!(!has_actor_event(|event| {
-      matches!(event, Event::ActorResumed { actor_id: id } if *id == actor_id)
-    }));
-  });
-}
-
-#[test]
 fn actor_not_found_on_nonexistent_id() {
   new_test_ext().execute_with(|| {
     assert_noop!(

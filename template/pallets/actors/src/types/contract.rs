@@ -10,15 +10,11 @@ pub enum AmountResolution<Balance> {
   Fixed(Balance),
   PercentageOfCurrent(Perbill),
   PercentageAtOpening(Perbill),
-  PercentageOfLastFunding(Perbill),
 }
 
 impl<Balance> AmountResolution<Balance> {
   pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    matches!(
-      self,
-      Self::PercentageAtOpening(_) | Self::PercentageOfLastFunding(_)
-    )
+    matches!(self, Self::PercentageAtOpening(_))
   }
 }
 
