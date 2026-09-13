@@ -173,52 +173,6 @@ fn actor_state_hold_failure_and_lifecycle_deltas_are_atomic() {
 }
 
 #[test]
-fn funding_ingress_preflights_positive_state_hold_delta_as_temporary() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let owner = 79u64;
-    let _ = <Balances as Currency<AccountId>>::deposit_creating(&owner, 1_000_000);
-    let tracked_steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("tracked Step fits");
-    let actor_id = create_user_with(
-      owner,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      tracked_steps,
-    );
-    let sovereign = sovereign_account(actor_id);
-    let free = native_balance(&owner);
-    assert_ok!(<Balances as Currency<AccountId>>::transfer(
-      &owner,
-      &BOB,
-      free.saturating_sub(1),
-      polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
-    ));
-    let failure = Actors::preflight_ingress(&crate::AddressEvent {
-      destination: sovereign,
-      source: Some(owner),
-      asset: TestAsset::Native,
-      amount: 1,
-      provenance: Some(crate::FundingProvenance::Signed),
-    })
-    .expect_err("new funding entry needs additional owner hold capacity");
-    assert_eq!(failure.retry, RetryClass::Temporary);
-    assert_eq!(failure.error, Error::<Test>::StateHoldUnavailable.into());
-    assert!(
-      Actors::actor_funding(actor_id)
-        .expect("funding state exists")
-        .funding_accumulated
-        .is_empty()
-    );
-  });
-}
-
-#[test]
 fn actor_run_state_hold_is_reserved_for_the_active_installed_lifetime() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1141,11 +1095,7 @@ fn underfunded_address_event_advances_without_fee_readiness_or_apoptosis() {
       Mutability::Mutable,
       percentage_trigger_schedule(),
       None,
-      contract_steps_with_step(make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      })),
+      transfer_contract_steps(BOB, 1),
     );
     let sovereign = sovereign_account(actor_id);
     let balance = native_balance(&sovereign);
@@ -1165,12 +1115,6 @@ fn underfunded_address_event_advances_without_fee_readiness_or_apoptosis() {
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
     assert!(Actors::active_actor_view(actor_id).is_some());
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&1)
-    );
   });
 }
 
@@ -1183,11 +1127,7 @@ fn address_event_collection_failure_preserves_source_progress_without_readiness(
       Mutability::Mutable,
       percentage_trigger_schedule(),
       None,
-      contract_steps_with_step(make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      })),
+      transfer_contract_steps(BOB, 1),
     );
     let sovereign = sovereign_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
@@ -1207,12 +1147,6 @@ fn address_event_collection_failure_preserves_source_progress_without_readiness(
     let hot = Actors::actor_hot(actor_id).expect("process remains live");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&1)
-    );
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
@@ -1639,7 +1573,7 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
 }
 
 #[test]
-fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
+fn failed_pre_opening_weight_admission_preserves_latch() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -1649,7 +1583,7 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       })),
     );
     assert_ok!(Actors::notify_address_event(
@@ -1677,12 +1611,6 @@ fn failed_pre_opening_weight_admission_preserves_latch_and_funding() {
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert!(instance.pending_signal);
     assert_eq!(instance.cycle_nonce, 0);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&100),
-    );
   });
 }
 
@@ -2254,7 +2182,7 @@ fn expired_ingress_remains_balance_only_and_closes_inline() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       })),
     );
     let actor = sovereign_account(actor_id);
@@ -2559,89 +2487,6 @@ fn capped_exponential_balances_retry_pressure_and_recovery_at_maximum_occupancy(
 }
 
 #[test]
-fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let step = StepOf::<Test> {
-      precondition: None,
-      task: Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      },
-      on_error: RETRY_LATER,
-    };
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      contract_steps_with_step(step),
-    );
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::root(),
-      actor_id,
-      FundingSourcePolicy::AnyVerifiedIngress
-    ));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    let suspended = Actors::active_actor_view(actor_id).expect("suspended");
-    assert_eq!(suspended.cycle_state, CycleState::Suspended);
-    assert_eq!(suspended.cycle_nonce, 0);
-    let run_state = Actors::actor_run_state(actor_id).expect("funding suspension persists");
-    assert_eq!(run_state.cycle_nonce, 1);
-    assert!(run_state.funding_snapshot.is_empty());
-    assert_eq!(
-      run_state.last_step_outcome,
-      Some(StepOutcome::FundingUnavailable)
-    );
-    assert_eq!(
-      run_state.suspension,
-      Some(SuspensionReason::FundingUnavailable)
-    );
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::CycleSuspended {
-        actor_id: id,
-        cycle_nonce: 1,
-        cursor: 0,
-        reason: SuspensionReason::FundingUnavailable,
-        ..
-      } if *id == actor_id
-    )));
-    let retry_ticket = Actors::actor_hot(actor_id)
-      .expect("suspended actor")
-      .queue_ticket;
-
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      7,
-      &ALICE
-    ));
-    let funding = actor_funding(actor_id);
-    assert_eq!(
-      funding.funding_accumulated.get(&TestAsset::Native),
-      Some(&7)
-    );
-    assert!(
-      Actors::actor_run_state(actor_id)
-        .expect("later funding does not mutate the open snapshot")
-        .funding_snapshot
-        .is_empty()
-    );
-    assert_eq!(
-      Actors::actor_hot(actor_id)
-        .expect("suspended actor")
-        .queue_ticket,
-      retry_ticket
-    );
-  });
-}
-
-#[test]
 fn suspended_cycle_reloads_current_available_on_each_retry() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -2702,58 +2547,6 @@ fn suspended_cycle_reloads_current_available_on_each_retry() {
       "retry must resolve from the replenished current balance, not the initial 100-unit balance"
     );
     assert!(actor_funding(actor_id).funding_accumulated.is_empty());
-  });
-}
-
-#[test]
-fn update_contract_prunes_stale_funding_accumulators() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let initial_contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    }));
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      initial_contract_steps,
-    );
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    assert!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .contains_key(&TestAsset::Native)
-    );
-    let replacement = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Local(1),
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    }));
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      replacement,
-      crate::CompletionPolicy::Persistent,
-    ));
-    let funding_after = actor_funding(actor_id);
-    assert!(
-      !funding_after
-        .funding_accumulated
-        .contains_key(&TestAsset::Native)
-    );
-    assert!(
-      funding_after
-        .funding_tracked_assets
-        .contains(&TestAsset::Local(1))
-    );
   });
 }
 
