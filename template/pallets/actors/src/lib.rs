@@ -939,6 +939,7 @@ pub mod pallet {
     pub actor_id: ActorId,
     pub identity: ActorControlIdentity<AccountId, BlockNumber>,
     pub hot: ActorControlHotState<BlockNumber>,
+    pub pipeline_service_identity: [u8; 32],
     pub cursor: u32,
     pub eligible_at: Option<BlockNumber>,
     pub admission: Admission,
@@ -2170,6 +2171,7 @@ pub mod pallet {
         actor_id,
         identity: Self::control_identity_from_scalar(identity)?,
         hot: Self::control_hot_from_scalar(hot),
+        pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
         cursor: loaded_step.cursor,
         eligible_at,
         admission,
@@ -2238,6 +2240,7 @@ pub mod pallet {
         actor_id,
         identity: Self::control_identity_from_scalar(identity)?,
         hot: Self::control_hot_from_scalar(hot),
+        pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
         cursor: 0,
         eligible_at: Some(ticket.eligible_at),
         admission,
@@ -2272,6 +2275,7 @@ pub mod pallet {
         actor_id,
         identity: Self::control_identity_from_scalar(identity)?,
         hot: Self::control_hot_from_scalar(hot),
+        pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
         cursor: 0,
         eligible_at: None,
         admission,
@@ -2310,7 +2314,10 @@ pub mod pallet {
       ActorHotStateOf<T>,
       ActorAdmissionCertificateOf<T>,
     )> {
-      if !cell.admission.has_valid_identity() {
+      if !cell.admission.has_valid_identity()
+        || cell.pipeline_service_identity
+          != pipeline_service_identity(cell.admission.admission_identity)
+      {
         return None;
       }
       let queue_ticket = match location {
@@ -2436,6 +2443,7 @@ pub mod pallet {
         actor_id,
         identity: control_identity,
         hot: Self::control_hot_from_scalar(hot.clone()),
+        pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
         cursor: 0,
         eligible_at: None,
         admission: admission.clone(),
@@ -2503,6 +2511,7 @@ pub mod pallet {
       };
       cell.identity = control_identity;
       cell.hot = Self::control_hot_from_scalar(hot.clone());
+      cell.pipeline_service_identity = pipeline_service_identity(admission.admission_identity);
       cell.admission = admission.clone();
       let Some((restored_identity, restored_hot, restored_admission)) =
         Self::project_control_cell(&cell, location)
@@ -3077,6 +3086,7 @@ pub mod pallet {
           _ => return false,
         }
       }
+      cell.pipeline_service_identity = pipeline_service_identity(certificate.admission_identity);
       cell.admission = certificate.clone();
       cell.resources = resources;
       if Self::store_primary_control_cell(location, cell).is_err() {
@@ -8694,6 +8704,13 @@ pub mod pallet {
         let resources = Self::derive_step_resource_envelopes(&contract).ok_or(
           TryRuntimeError::Other("Active actor Step resources cannot be rederived"),
         )?;
+        if primary.pipeline_service_identity
+          != pipeline_service_identity(frame_admission.admission_identity)
+        {
+          return Err(TryRuntimeError::Other(
+            "ActorControl primary service identity is invalid",
+          ));
+        }
         let expected_cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
         if primary.cursor != expected_cursor {
           return Err(TryRuntimeError::Other(

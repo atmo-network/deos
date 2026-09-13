@@ -146,7 +146,7 @@ fn mixed_waiting_pages_reclaim_both_entry_kinds_through_real_close() {
 #[test]
 fn primary_inline_authority_matches_canonical_cursor_and_resources() {
   for zero_step in [false, true] {
-    for corruption in 0..3 {
+    for corruption in 0..4 {
       new_test_ext().execute_with(|| {
         frame_system::Pallet::<Test>::set_block_number(1);
         let steps = if zero_step {
@@ -162,7 +162,8 @@ fn primary_inline_authority_matches_canonical_cursor_and_resources() {
         assert_ok!(Actors::do_try_state());
         mutate_primary_control_cell(actor_id, |cell| match corruption {
           0 => cell.cursor += 1,
-          1 => {
+          1 => cell.pipeline_service_identity = [0xFF; 32],
+          2 => {
             cell.resources.control = cell
               .resources
               .control
@@ -176,10 +177,10 @@ fn primary_inline_authority_matches_canonical_cursor_and_resources() {
           }
         });
         let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-        let expected = if corruption == 0 {
-          "ActorControl primary cursor disagrees with canonical Run authority"
-        } else {
-          "ActorControl primary resources disagree with canonical Step authority"
+        let expected = match corruption {
+          0 => "ActorControl primary cursor disagrees with canonical Run authority",
+          1 => "ActorControl primary service identity is invalid",
+          _ => "ActorControl primary resources disagree with canonical Step authority",
         };
         assert_eq!(
           Actors::do_try_state(),

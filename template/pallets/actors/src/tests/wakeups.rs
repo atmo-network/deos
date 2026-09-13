@@ -721,6 +721,7 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
         actor_id,
         identity: Actors::control_identity_from_scalar(state.identity).expect("canonical identity"),
         hot: Actors::control_hot_from_scalar(state.hot),
+        pipeline_service_identity: crate::pipeline_service_identity(admission.admission_identity),
         admission,
         cursor: loaded_step.cursor,
         resources: loaded_step.resources,
@@ -2321,6 +2322,7 @@ fn pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently() {
       actor_id: id,
       identity: Actors::control_identity_from_scalar(state.identity).expect("canonical identity"),
       hot: Actors::control_hot_from_scalar(state.hot),
+      pipeline_service_identity: crate::pipeline_service_identity(admission.admission_identity),
       admission,
       cursor: loaded_step.cursor,
       resources: loaded_step.resources,
@@ -2481,4 +2483,22 @@ fn mixed_wakeup_bucket_rolls_back_valid_neighbors_around_corruption() {
       assert!(crate::Pallet::<Test>::do_try_state().is_err());
     });
   }
+}
+
+#[test]
+fn primary_service_membership_rejects_a_stale_pipeline_identity() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    mutate_primary_control_cell(actor_id, |cell| {
+      cell.pipeline_service_identity = [0xFF; 32];
+    });
+
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(Actors::actor_hot(actor_id).is_none());
+  });
 }

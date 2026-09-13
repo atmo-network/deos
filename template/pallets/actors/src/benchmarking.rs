@@ -88,6 +88,7 @@ mod benches {
         schedule_anchor: 0u32.into(),
         last_cycle_block: None,
       },
+      pipeline_service_identity: pipeline_service_identity([3u8; 32]),
       cursor: 0,
       eligible_at: Some(1u32.into()),
       admission: ActorAdmissionCertificate::<ActorAdmissionResourcesOf<T>>::new(
@@ -11868,12 +11869,13 @@ mod benches {
       authority.maximum_lifecycle_weight
     );
     frame::log::info!(
-      "Temporal control cell {}: total={}, nominal={}, identity={}, hot={}, cursor={}, eligible={}, certificate={}, resources={}; lifecycle={:?}, control={:?}, effect={:?}; Weight bytes={}/{}/{}; service={:?}",
+      "Temporal control cell {}: total={}, nominal={}, identity={}, hot={}, service_identity={}, cursor={}, eligible={}, certificate={}, resources={}; lifecycle={:?}, control={:?}, effect={:?}; Weight bytes={}/{}/{}; service={:?}",
       phase,
       cell.encoded_size(),
       ActorControlCellOf::<T>::max_encoded_len(),
       cell.identity.encoded_size(),
       cell.hot.encoded_size(),
+      cell.pipeline_service_identity.encoded_size(),
       cell.cursor.encoded_size(),
       cell.eligible_at.encoded_size(),
       cell.admission.encoded_size(),

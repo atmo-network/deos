@@ -3523,6 +3523,7 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor: step_ticket.cursor,
       eligible_at: Some(step_ticket.eligible_at),
       admission: admission.clone(),
@@ -3710,6 +3711,7 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor: run_state.map_or(0, |run| run.cursor),
       eligible_at: None,
       admission: admission.clone(),
@@ -5333,7 +5335,11 @@ impl<T: Config> Pallet<T> {
       }
     }
     .ok_or(ActorControlTransitionError::Invariant)?;
-    if cell.actor_id != actor_id {
+    if cell.actor_id != actor_id
+      || !cell.admission.has_valid_identity()
+      || cell.pipeline_service_identity
+        != pipeline_service_identity(cell.admission.admission_identity)
+    {
       return Err(ActorControlTransitionError::Invariant);
     }
     Ok((location, cell))
@@ -6322,6 +6328,7 @@ impl<T: Config> Pallet<T> {
       identity: Self::control_identity_from_scalar(identity.clone())
         .ok_or(EnqueueOutcome::CorruptedTopology)?,
       hot: Self::control_hot_from_scalar(hot),
+      pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
       cursor,
       eligible_at,
       admission: admission.clone(),

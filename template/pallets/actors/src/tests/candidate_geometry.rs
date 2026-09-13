@@ -184,6 +184,7 @@ fn frame_cell(actor_id: ActorId, eligible_at: MockBlockNumber) -> C1Cell {
       schedule_anchor: 0,
       last_cycle_block: None,
     },
+    pipeline_service_identity: crate::pipeline_service_identity([3u8; 32]),
     cursor: 0,
     eligible_at: Some(eligible_at),
     admission: crate::ActorAdmissionCertificate::<crate::ActorAdmissionResourcesOf<Test>>::new(
