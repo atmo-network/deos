@@ -139,7 +139,7 @@ use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
     StorageEntryMetadataIR, StorageEntryModifierIR, StorageEntryTypeIR, StorageHasherIR,
   },
-  BoundedBTreeMap, BoundedBTreeSet, BoundedVec, assert_noop, assert_ok,
+  BoundedBTreeMap, BoundedVec, assert_noop, assert_ok,
   traits::{Currency, Get, Hooks, LockableCurrency, StorageInfoTrait, WithdrawReasons},
 };
 use polkadot_sdk::sp_runtime::StateVersion;

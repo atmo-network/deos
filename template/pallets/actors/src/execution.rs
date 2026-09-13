@@ -354,7 +354,6 @@ impl<T: Config> Pallet<T> {
             existing.cycle_nonce == run_state.cycle_nonce
               && existing.opening_snapshot == run_state.opening_snapshot
               && existing.opening_predicate_results == run_state.opening_predicate_results
-              && existing.funding_snapshot == run_state.funding_snapshot
           })
           && run_state.cursor < step_count
           && run_state.has_contract_authority(
@@ -763,7 +762,7 @@ impl<T: Config> Pallet<T> {
             instance.actor_class.actor_type(),
             plan.maximum_fee.total_fee,
             &run.opening_snapshot,
-            &run.funding_snapshot,
+            &FundingSnapshotOf::<T>::default(),
           )
         },
         Err,
@@ -1112,7 +1111,7 @@ impl<T: Config> Pallet<T> {
             instance.actor_class.actor_type(),
             plan.maximum_fee.total_fee,
             &run.opening_snapshot,
-            &run.funding_snapshot,
+            &FundingSnapshotOf::<T>::default(),
           )
         },
         Err,
@@ -1592,7 +1591,6 @@ impl<T: Config> Pallet<T> {
             eligible_at,
             opening_snapshot,
             opening_predicate_results,
-            funding_snapshot,
             cumulative_outcomes: outcomes,
             last_step_outcome: Some(StepOutcome::FundingUnavailable),
             suspension: Some(SuspensionReason::FundingUnavailable),
@@ -1707,7 +1705,6 @@ impl<T: Config> Pallet<T> {
                 eligible_at,
                 opening_snapshot,
                 opening_predicate_results,
-                funding_snapshot,
                 cumulative_outcomes: outcomes,
                 last_step_outcome: Some(last_step_outcome),
                 suspension: Some(SuspensionReason::Temporary),
@@ -1799,7 +1796,6 @@ impl<T: Config> Pallet<T> {
         eligible_at,
         opening_snapshot,
         opening_predicate_results,
-        funding_snapshot,
         cumulative_outcomes: outcomes,
         last_step_outcome: Some(last_step_outcome),
         suspension: None,

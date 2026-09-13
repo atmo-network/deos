@@ -492,36 +492,25 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(
-  MaxSnapshotEntries,
-  MaxFundingTrackedAssets,
-  MaxOpeningPredicateResults
-))]
+#[scale_info(skip_type_params(MaxSnapshotEntries, MaxOpeningPredicateResults))]
 pub struct ActorRunPayload<
   AssetId,
   Balance,
   MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
   MaxOpeningPredicateResults: Get<u32>,
 > {
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
   pub opening_predicate_results:
     BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
-  pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(
-  MaxSnapshotEntries,
-  MaxFundingTrackedAssets,
-  MaxOpeningPredicateResults
-))]
+#[scale_info(skip_type_params(MaxSnapshotEntries, MaxOpeningPredicateResults))]
 pub struct ActorRunState<
   AssetId,
   Balance,
   BlockNumber,
   MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
   MaxOpeningPredicateResults: Get<u32>,
 > {
   pub contract_authority: ActorRunAuthority<[u8; 32]>,
@@ -535,7 +524,6 @@ pub struct ActorRunState<
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
   pub opening_predicate_results:
     BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
-  pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   pub cumulative_outcomes: OutcomeTotals,
   pub last_step_outcome: Option<StepOutcome>,
   pub suspension: Option<SuspensionReason>,
@@ -546,17 +534,9 @@ impl<
   Balance: Clone,
   BlockNumber: Clone,
   MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
   MaxOpeningPredicateResults: Get<u32>,
 > Clone
-  for ActorRunState<
-    AssetId,
-    Balance,
-    BlockNumber,
-    MaxSnapshotEntries,
-    MaxFundingTrackedAssets,
-    MaxOpeningPredicateResults,
-  >
+  for ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries, MaxOpeningPredicateResults>
 {
   fn clone(&self) -> Self {
     Self {
@@ -570,7 +550,6 @@ impl<
       eligible_at: self.eligible_at.clone(),
       opening_snapshot: self.opening_snapshot.clone(),
       opening_predicate_results: self.opening_predicate_results.clone(),
-      funding_snapshot: self.funding_snapshot.clone(),
       cumulative_outcomes: self.cumulative_outcomes,
       last_step_outcome: self.last_step_outcome.clone(),
       suspension: self.suspension,
@@ -583,36 +562,20 @@ impl<
   Balance: Encode,
   BlockNumber,
   MaxSnapshotEntries: Get<u32>,
-  MaxFundingTrackedAssets: Get<u32>,
   MaxOpeningPredicateResults: Get<u32>,
->
-  ActorRunState<
-    AssetId,
-    Balance,
-    BlockNumber,
-    MaxSnapshotEntries,
-    MaxFundingTrackedAssets,
-    MaxOpeningPredicateResults,
-  >
+> ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries, MaxOpeningPredicateResults>
 {
   pub fn into_tiers(
     self,
   ) -> (
     ActorRunHead<BlockNumber>,
-    ActorRunPayload<
-      AssetId,
-      Balance,
-      MaxSnapshotEntries,
-      MaxFundingTrackedAssets,
-      MaxOpeningPredicateResults,
-    >,
+    ActorRunPayload<AssetId, Balance, MaxSnapshotEntries, MaxOpeningPredicateResults>,
   ) {
     let opening_predicate_result_count =
       u32::try_from(self.opening_predicate_results.len()).unwrap_or(u32::MAX);
     let payload = ActorRunPayload {
       opening_snapshot: self.opening_snapshot,
       opening_predicate_results: self.opening_predicate_results,
-      funding_snapshot: self.funding_snapshot,
     };
     let payload_commitment =
       (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256);
@@ -638,13 +601,7 @@ impl<
 
   pub fn from_tiers(
     head: ActorRunHead<BlockNumber>,
-    payload: ActorRunPayload<
-      AssetId,
-      Balance,
-      MaxSnapshotEntries,
-      MaxFundingTrackedAssets,
-      MaxOpeningPredicateResults,
-    >,
+    payload: ActorRunPayload<AssetId, Balance, MaxSnapshotEntries, MaxOpeningPredicateResults>,
   ) -> Option<Self> {
     if (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256)
       != head.payload_commitment
@@ -664,7 +621,6 @@ impl<
       eligible_at: head.eligible_at,
       opening_snapshot: payload.opening_snapshot,
       opening_predicate_results: payload.opening_predicate_results,
-      funding_snapshot: payload.funding_snapshot,
       cumulative_outcomes: head.cumulative_outcomes,
       last_step_outcome: head.last_step_outcome,
       suspension: head.suspension,

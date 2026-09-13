@@ -540,7 +540,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
       eligible_at: plan.ticket.eligible_at,
       opening_snapshot: Default::default(),
       opening_predicate_results: Default::default(),
-      funding_snapshot: Default::default(),
       cumulative_outcomes: Default::default(),
       last_step_outcome: None,
       suspension: None,
@@ -1192,59 +1191,6 @@ fn try_state_qualifies_funding_sources_by_admitted_staking_positions() {
       crate::ActorFunding::<Test>::insert(actor_id, funding.clone());
       assert_ok!(Actors::do_try_state());
     }
-  });
-}
-
-#[cfg(feature = "try-runtime")]
-#[test]
-fn try_state_rejects_zero_funding_snapshot_in_a_coherent_run() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let mut steps = transfer_contract_steps(BOB, 1);
-    steps.try_push(steps[0].clone()).expect("second Step fits");
-    steps[0].task = Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    };
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    Actors::execute_cycle(Weight::MAX);
-    let run = ActorRunStateStore::<Test>::get(actor_id).expect("first Step leaves a live Run");
-    assert_eq!(run.cursor, 1);
-    assert_eq!(run.funding_snapshot.get(&TestAsset::Native), Some(&100));
-    assert_ok!(Actors::do_try_state());
-    let mut corrupt = run.clone();
-    corrupt
-      .funding_snapshot
-      .try_insert(TestAsset::Native, 0)
-      .expect("existing key fits");
-    ActorRunStateStore::<Test>::insert(actor_id, corrupt);
-    assert!(
-      ActorRunStateStore::<Test>::get(actor_id).is_some(),
-      "payload commitment remains coherent"
-    );
-    let result = Actors::do_try_state();
-    assert!(
-      matches!(
-        result,
-        Err(polkadot_sdk::sp_runtime::TryRuntimeError::Other(
-          "ActorRunState funding snapshot contains an untracked asset or zero amount"
-        ))
-      ),
-      "unreachable snapshot was not diagnosed: {result:?}"
-    );
-    ActorRunStateStore::<Test>::insert(actor_id, run);
-    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -2179,7 +2125,6 @@ fn actor_storage_schema_is_explicit() {
       "eligible_at",
       "opening_snapshot",
       "opening_predicate_results",
-      "funding_snapshot",
       "cumulative_outcomes",
       "last_step_outcome",
       "suspension"

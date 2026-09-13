@@ -885,7 +885,6 @@ pub mod pallet {
     <T as Config>::AssetId,
     <T as Config>::Balance,
     <T as Config>::MaxOpeningSnapshotEntries,
-    <T as Config>::MaxFundingTrackedAssets,
     <T as Config>::MaxOpeningPredicateResults,
   >;
 
@@ -894,7 +893,6 @@ pub mod pallet {
     <T as Config>::Balance,
     BlockNumberFor<T>,
     <T as Config>::MaxOpeningSnapshotEntries,
-    <T as Config>::MaxFundingTrackedAssets,
     <T as Config>::MaxOpeningPredicateResults,
   >;
 
@@ -1834,7 +1832,7 @@ pub mod pallet {
             (
               u32::try_from(run.opening_snapshot.len()).ok()?,
               u32::try_from(run.opening_predicate_results.len()).ok()?,
-              u32::try_from(run.funding_snapshot.len()).ok()?,
+              0,
             )
           }
         } else {
@@ -8921,13 +8919,6 @@ pub mod pallet {
           return Err(TryRuntimeError::Other(
             "ActorRunState opening predicate cursor disagrees with the committed Step prefix",
           ));
-        }
-        for (asset, amount) in &run_state.funding_snapshot {
-          if !state.funding.funding_tracked_assets.contains(asset) || amount.is_zero() {
-            return Err(TryRuntimeError::Other(
-              "ActorRunState funding snapshot contains an untracked asset or zero amount",
-            ));
-          }
         }
       }
       for actor_id in ActorRunPayloads::<T>::iter_keys() {
