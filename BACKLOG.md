@@ -6,7 +6,7 @@
 
 ## DEOS 0.7.27 — Current-State Actors, Persistent Live Ring and Certified Parking
 
-**Planning status:** this consolidated revision supersedes the previously supplied `0.7.27` planning files. It incorporates the task owner's decision to organize service around persistent live residency and dependency-indexed parking. It preserves all 32 previous N-task IDs and adds N3.6, N3.7, N3.8 and N6.5. All 36 items are pending until the implementing agent reconciles actual repository progress. This planning file does not claim a current code audit, an accepted implementation or new measurements.
+**Planning status:** repository intake was reconciled on branch `0.7.27` from baseline commit `5a99deee8ba5d0b3046f661eeddbd8f32b2441e5`, whose sole change above published `v0.7.26` commit `c16675edf03e3af0d6dcf3080a31c64b49765a5b` is this consolidated backlog. The current specification and runtime still implement the historical Trigger latch, `PercentageOfLastFunding`, per-Step ticket publication and strict FIFO service; no new-model implementation or measurement is imported as completed work. N0.1 is closed, all 35 remaining workstreams are pending, all previous N-task IDs are retained, and N3.6, N3.7, N3.8 and N6.5 are the four added IDs.
 
 **Release outcome:** deliver autonomous current-state Actors with multi-block programs, live sovereign-balance amounts and bounded retry/error policies. Keep useful near-term continuations resident in a live scheduling ring instead of removing and republishing a successor after every Step. Keep other nonterminal Actors outside ordinary service only under an explicit wake or timed-review contract. Implement generation-safe asynchronous reclamation and sound physical/resource coverage, and demonstrate a materially useful end-to-end result without hiding negative-check, indexing or cleanup costs.
 
@@ -333,8 +333,6 @@ If the finite campaign fails the materiality criterion, record its result and th
 
 ## N0 — Freeze the Current-State and Residency Contract
 
-- [ ] **N0.1 / Intake and Explicit Supersession.** Inspect actual refs, `AGENTS.md`, installed backlog and in-flight work before applying this revision. Preserve uncommitted work, published/reviewed history and already accepted evidence. Pin H, identify post-release changes and retain prior N-task IDs. Reconcile completion against the changed obligations rather than resetting or automatically preserving old checkmarks. Install one active release scope with the ring/parking direction and the later-tuning boundary. **Exit:** One reconciled backlog and baseline; no accidental restart, parallel plan, repository push or publication implied by this planning task.
-
 - [ ] **N0.2 / Configuration, Ordering and Wake Decision Table.** Map actual reference System Actors and representative Users to §1: recurrence/start condition, current-Step condition, amounts, error policy, ring order, Q1, round admission timing, short/long wait, complete/timed parking, manual controls, fees and cleanup. State precisely the change from global per-Step ticket FIFO to persistent ring service. Close the Opening-snapshot choice and unsupported legacy forms. Fix how each nonterminal state returns to service and what a false/unknown check means. Record any extra approval required for a changed guarantee. **Exit:** A finite supported capability/transition matrix; no unresolved semantics necessary to write or measure the kernel and no hidden scheduling or fee privilege.
 
 - [ ] **N0.3 / Normative State Machine and Independent Oracle.** Update the owning specification and build an independent executable semantic model. Model ring rounds abstractly, including mutation/removal/new membership, and parking invalidation separately from current execution. Cover multi-block Steps, retry, recurrence, Sleeping, Parked, Pending, disabled and retired generations. Classify old tests as retained, adapted or retired by requirement; old full-transition digests do not govern deliberately changed semantics. Keep resource soundness and current economic safety independent of scheduling-policy choice. **Exit:** A reference oracle for the new contract that does not duplicate the chosen physical implementation; explicit transition, ordering, wake and cleanup invariants.
@@ -587,7 +585,7 @@ The final Synthesis must answer all of the following without adding raw measurem
 
 ## Source Register and Handoff
 
-This is a consolidation of the supplied planning files and the latest conversation. It is **not a fresh repository review**. N0.1 verifies actual refs, progress, current procedure and supported configurations. Source links below are inherited historical provenance, not automatic authority over the new semantic mandate.
+This is a consolidation of the supplied planning files and the latest conversation. N0.1 verified refs, post-release progress and current implementation shape only; N0.2/N0.3 and N1 still own semantic decisions, supported-configuration closure and evidence applicability. Source links below are inherited historical provenance, not automatic authority over the new semantic mandate.
 
 The latest live-ring proposal supplies the design direction. The following are explicitly added design-closure requirements, not source-derived measured findings: robust mutable-round accounting rather than a length-only loop; bounded arbitrary unlink rather than an assumed free singly-linked removal; exact lost-wakeup/acknowledgment rules; separation of parked nonterminal state from reclaimable generations; and whole-service validation of residence savings. None claims that a particular carrier has already passed a benchmark.
 
@@ -597,7 +595,7 @@ The latest live-ring proposal supplies the design direction. The following are e
 | `DEOS_BACKLOG_0.7.27_REVISED.md` | `113c6a1ccb0f2dc26c11fb949ca18d6dc0b2d08021726648bcf406565372226b` | Current-state mandate and historical applicability retained; service architecture now explicit. |
 | `DEOS_BACKLOG_0.7.27_FINAL.md` | `73f6f00528cdd71a1bf808f5e772a938a699df2f91cae8b78c7002e46f7f8976` | All 32 N-task IDs preserved; generic service plan replaced by the selected persistent-residency/parking closure, with four new tasks. |
 
-All previous N0–N7 task IDs are retained. Historical completion is reconciled at subclaim scope; every checkbox in this proposed file is unverified work, not a report about the repository. Do not add the supplied planning artifacts to runtime/build dependencies or maintain a second active backlog.
+All previous N0–N7 task IDs are retained. N0.1 is complete; historical implementation and evidence may satisfy only explicitly requalified subclaims, while every remaining checkbox is unverified work. Do not add the supplied planning artifacts to runtime/build dependencies or maintain a second active backlog.
 
 [S1]: https://github.com/atmo-network/deos/releases/tag/v0.7.26
 [S2]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/template/pallets/actors/docs/specification.en.md
@@ -610,6 +608,6 @@ All previous N0–N7 task IDs are retained. Historical completion is reconciled 
 [S9]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/AGENTS.md
 [S10]: https://github.com/atmo-network/deos/blob/e449d20fd57aff48945663d974d0d4e8f0faffeb/BACKLOG.md
 
-**First actions:** N0.1 reconciles the current tree; N0.2/N0.3 fix the finite ring/current-state contract; N1 imports applicable hazards and N6.1 declares measurements. Build the current-balance multi-Step/retry slice while independently testing ring rounds and parked-wake handoff. Then choose one co-access-informed carrier and close its resources. Do not begin with a whole-corpus migration, a large actor scan disguised as parking or a catalogue of low-level tricks.
+**First actions:** N0.2/N0.3 fix the finite ring/current-state contract; N1 imports applicable hazards and N6.1 declares measurements. Build the current-balance multi-Step/retry slice while independently testing ring rounds and parked-wake handoff. Then choose one co-access-informed carrier and close its resources. Do not begin with a whole-corpus migration, a large actor scan disguised as parking or a catalogue of low-level tricks.
 
 **Governing rule:** keep useful continuations resident; park only with a complete wake or timed-review contract; move membership rather than the Actor; coalesce checks rather than preserve causes; preserve exactly one obligation under every mutation; price all work; measure the complete service; stop after the selected design closes.
