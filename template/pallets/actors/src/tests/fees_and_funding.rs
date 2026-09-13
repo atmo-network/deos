@@ -2642,7 +2642,7 @@ fn funding_arrival_during_suspension_accumulates_for_the_next_cycle() {
 }
 
 #[test]
-fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation() {
+fn suspended_cycle_reloads_current_available_on_each_retry() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_in = TestAsset::Local(5);
@@ -2654,7 +2654,7 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
       task: Task::SwapIn {
         asset_in,
         asset_out,
-        amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+        amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
         slippage_tolerance: Perbill::one(),
       },
       on_error: RETRY_LATER,
@@ -2679,38 +2679,29 @@ fn suspended_cycle_freezes_its_funding_snapshot_and_preserves_new_accumulation()
     run_idle(Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert!(continuation.opening_snapshot.is_empty());
-    assert_eq!(continuation.funding_snapshot.get(&asset_in), Some(&100));
+    assert!(continuation.funding_snapshot.is_empty());
 
-    set_asset_balance(&actor, asset_in, 30);
-    assert_ok!(Actors::notify_address_event(actor_id, asset_in, 30, &ALICE));
-    assert_eq!(
-      actor_funding(actor_id).funding_accumulated.get(&asset_in),
-      Some(&30)
-    );
+    set_asset_balance(&actor, asset_in, 200);
 
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert_eq!(
+    assert!(
       Actors::actor_run_state(actor_id)
         .expect("still suspended")
         .funding_snapshot
-        .get(&asset_in),
-      Some(&100)
-    );
-    assert_eq!(
-      actor_funding(actor_id).funding_accumulated.get(&asset_in),
-      Some(&30)
+        .is_empty()
     );
 
-    set_asset_balance(&actor, asset_in, 100);
+    set_asset_balance(&actor, asset_in, 300);
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(4);
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      actor_funding(actor_id).funding_accumulated.get(&asset_in),
-      Some(&30)
+    assert!(
+      asset_balance(&actor, asset_in) < 250,
+      "retry must resolve from the replenished current balance, not the initial 100-unit balance"
     );
+    assert!(actor_funding(actor_id).funding_accumulated.is_empty());
   });
 }
 
@@ -3170,50 +3161,28 @@ fn cycle_summary_fee_fairness_property_matrix() {
 }
 
 #[test]
-fn percentage_of_last_funding_consumes_each_cycle_open_snapshot() {
+fn percentage_of_current_reloads_available_at_each_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let bob_before = native_balance(&BOB);
     let actor = sovereign_account(actor_id);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&100)
-    );
+    fund_native_raw(&actor, 100);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
     run_idle_until_cycle_nonce(actor_id, 1);
-    assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(native_balance(&actor), 50);
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(49));
+    assert_eq!(native_balance(&actor), 51);
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(CHARLIE),
-      actor_id,
-      TestAsset::Native,
-      200
-    ));
-    assert_eq!(native_balance(&actor), 250);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&200)
-    );
+    fund_native_raw(&actor, 200);
+    assert_eq!(native_balance(&actor), 251);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -3221,8 +3190,38 @@ fn percentage_of_last_funding_consumes_each_cycle_open_snapshot() {
     run_idle_until_cycle_nonce(actor_id, 2);
     let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(inst.cycle_nonce, 2);
-    assert_eq!(native_balance(&BOB), bob_before.saturating_add(150));
-    assert!(actor_funding(actor_id).funding_accumulated.is_empty());
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(174));
+    assert_eq!(native_balance(&actor), 126);
+  });
+}
+
+#[test]
+fn percentage_of_current_reloads_after_prior_step_mutation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let transfer_half = |to| StepOf::<Test> {
+      precondition: None,
+      task: Task::Transfer {
+        to,
+        asset: TestAsset::Native,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    let contract_steps = BoundedVec::try_from(vec![transfer_half(BOB), transfer_half(CHARLIE)])
+      .expect("two Steps fit");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
+    let actor = sovereign_account(actor_id);
+    let bob_before = native_balance(&BOB);
+    let charlie_before = native_balance(&CHARLIE);
+    fund_native_raw(&actor, 100);
+
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    run_idle_until_cycle_nonce(actor_id, 1);
+
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(49));
+    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(25));
+    assert_eq!(native_balance(&actor), 26);
   });
 }
 
