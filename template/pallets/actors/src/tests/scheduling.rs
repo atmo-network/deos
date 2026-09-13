@@ -5042,7 +5042,7 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
 }
 
 #[test]
-fn busy_cadenced_occurrence_charges_and_preserves_independent_run_service() {
+fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let steps = BoundedVec::try_from(vec![
@@ -5066,16 +5066,24 @@ fn busy_cadenced_occurrence_charges_and_preserves_independent_run_service() {
     Actors::execute_cycle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
+    System::reset_events();
 
     frame_system::Pallet::<Test>::set_block_number(3);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
     Actors::drain_overdue_wakeups_cursor(3, &mut meter);
 
-    assert_eq!(fee_collections(), vec![cadenced_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("busy Cadenced Actor remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
-    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(!hot.pending_signal);
+    assert_eq!(
+      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
+      Some(4)
+    );
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
@@ -5108,6 +5116,7 @@ fn busy_cadenced_occurrence_preserves_frame_service_with_canonical_control() {
     Actors::execute_cycle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
+    System::reset_events();
 
     frame_system::Pallet::<Test>::set_block_number(3);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
@@ -5116,12 +5125,19 @@ fn busy_cadenced_occurrence_preserves_frame_service_with_canonical_control() {
     assert_eq!(stats.entries_scanned, 1);
     assert_eq!(stats.ready_entries, 1);
     assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
-    assert_eq!(fee_collections(), vec![cadenced_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     let (_, _, hot, _) = Actors::load_frame_control_authority(actor_id)
       .expect("busy Cadenced frame authority remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
-    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(!hot.pending_signal);
+    assert_eq!(
+      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
+      Some(4)
+    );
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);

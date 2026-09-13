@@ -6096,7 +6096,7 @@ impl<T: Config> Pallet<T> {
               anchor_tick: Some(anchor_tick),
               consumed: false,
             },
-          ) if idle_activation => TriggerRuntimeState::AtTime {
+          ) if idle_activation || busy_deferred => TriggerRuntimeState::AtTime {
             anchor_tick: Some(anchor_tick),
             consumed: true,
           },
@@ -6108,6 +6108,25 @@ impl<T: Config> Pallet<T> {
           ) => state,
           _ => return Err(ActorControlTransitionError::Invariant),
         };
+        if busy_deferred {
+          let mut cell = Self::control_consume_due_wakeup_reference(cell, key, now, now_tick)?;
+          if trigger_family == TriggerFamily::Cadenced {
+            let Trigger::Cadenced { every_ticks } = contract.trigger else {
+              return Err(ActorControlTransitionError::Invariant);
+            };
+            let anchor_tick = cell
+              .hot
+              .trigger_runtime_state
+              .temporal_anchor_tick()
+              .ok_or(ActorControlTransitionError::Invariant)?;
+            let next_due_tick = next_cadence_due_tick(anchor_tick, every_ticks, now_tick)
+              .ok_or(ActorControlTransitionError::Invariant)?;
+            cell =
+              Self::control_schedule_fresh_wakeup_reference(cell, WakeupKey::Tick(next_due_tick))?;
+          }
+          Self::store_primary_control_cell(location, cell)?;
+          return Ok((actor_id, location));
+        }
         let actor_type = identity.actor_class.actor_type();
         let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
         let charged = if trigger_family == TriggerFamily::AtTime {
@@ -7691,6 +7710,12 @@ impl<T: Config> Pallet<T> {
         "temporal progression state is corrupt",
       ));
     };
+    if matches!(
+      state.hot.cycle_state,
+      CycleState::Running | CycleState::Suspended
+    ) {
+      return Ok(false);
+    }
     let activation =
       Self::preflight_activation_from_authority(actor_id, state.clone(), admission.clone())
         .map_err(|_| DispatchError::Other("temporal activation preflight failed"))?;

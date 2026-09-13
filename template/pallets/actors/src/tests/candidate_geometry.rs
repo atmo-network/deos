@@ -1429,24 +1429,29 @@ fn control_cadenced_suspended_primary_retains_lightweight_trigger_rearm() {
     System::reset_events();
     let (deferred_actor, deferred_location) =
       Actors::control_latch_due_temporal_reference(trigger_key, opening_block, 11)
-        .expect("due cadence latches while Suspended");
+        .expect("due cadence advances while Suspended");
     assert_eq!(deferred_actor, actor_id);
     assert_eq!(deferred_location, location);
     let deferred = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
-      .expect("Suspended primary survives deferred latch");
+      .expect("Suspended primary survives cadence advance");
     assert_eq!(deferred.hot.cycle_state, CycleState::Suspended);
-    assert!(deferred.hot.pending_signal);
+    assert!(!deferred.hot.pending_signal);
     assert_eq!(deferred.eligible_at, Some(8));
-    assert!(deferred.hot.trigger_wakeup_pointer.is_none());
-    assert_eq!(Actors::wakeup_cursor_peek_key(WakeupClock::Tick), None);
-    assert!(has_actor_event(|event| matches!(
+    assert_eq!(
+      deferred
+        .hot
+        .trigger_wakeup_pointer
+        .map(|pointer| pointer.tick),
+      Some(21)
+    );
+    assert_eq!(
+      Actors::wakeup_cursor_peek_key(WakeupClock::Tick),
+      Some(WakeupKey::Tick(21))
+    );
+    assert!(!has_actor_event(|event| matches!(
       event,
-      Event::TriggerOccurrenceProcessed {
-        actor_id: id,
-        trigger_family: TriggerFamily::Cadenced,
-        fee,
-      } if *id == actor_id && *fee == 0
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
 
     frame_system::Pallet::<Test>::set_block_number(8);

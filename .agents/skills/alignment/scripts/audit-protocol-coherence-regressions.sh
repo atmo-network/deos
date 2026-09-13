@@ -846,7 +846,7 @@ main() {
     require_anchor 'cadenced_latch_disables_detection_until_pipeline_opening' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors Cadenced useful-latch disable/re-arm evidence is missing"
-    require_anchor 'busy_cadenced_occurrence_charges_and_preserves_independent_run_service' \
+    require_anchor 'busy_cadenced_occurrence_advances_deadline_without_future_cycle' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors busy Cadenced occurrence evidence is missing"
     require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \
