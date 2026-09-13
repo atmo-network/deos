@@ -129,22 +129,6 @@ function automationContinuationSnapshot(
   };
 }
 
-function automationFundingAccumulated(
-  funding: unknown,
-): ReadonlyArray<[string, bigint]> {
-  const value = triggerRecord(funding);
-  const accumulated = value?.funding_accumulated;
-  if (!Array.isArray(accumulated)) {
-    return [];
-  }
-  return accumulated.flatMap((entry) => {
-    if (!Array.isArray(entry) || entry.length !== 2) return [];
-    const [asset, amount] = entry;
-    if (typeof amount !== 'bigint') return [];
-    return [[String(asset), amount]];
-  });
-}
-
 function automationFundingSourcePolicy(policy: unknown): string | null {
   const value = triggerRecord(policy);
   return typeof value?.type === 'string' ? value.type : null;
@@ -542,7 +526,6 @@ export class BlockchainAdapter implements Adapter {
               control.status === 'Active' && control.location.type === 'Ready'
                 ? control.location.value.ticket
                 : null,
-            fundingAccumulated: automationFundingAccumulated(funding),
             fundingSourcePolicy: automationFundingSourcePolicy(
               contractHead?.header.funding,
             ),

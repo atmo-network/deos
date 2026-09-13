@@ -62,8 +62,6 @@ export type AutomationActorSnapshot = {
   nativeBalance: bigint;
   /** One-FIFO membership: the live queue ticket, or null when the actor is not queued. */
   queueTicket: bigint | null;
-  /** Bounded per-asset funding accumulator awaiting the next cycle open. */
-  fundingAccumulated: ReadonlyArray<[string, bigint]>;
   /** Funding source policy as a typed variant label. */
   fundingSourcePolicy: string | null;
   /**
