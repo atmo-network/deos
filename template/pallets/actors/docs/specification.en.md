@@ -25,6 +25,7 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | Function or semantic surface | Sole normative owner |
 | --- | --- |
 | Core determinism, boundedness, Q1, and atomicity | §2 |
+| Current-state inputs, residence, block rounds, parking, and generation safety | §2.3 |
 | Actor Contract public shape | §3.1 |
 | Semantic Contract identity and body commitment | §3.2 |
 | C6 hot-head/lazy-tail geometry | §3.3 |
@@ -111,6 +112,47 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | Provisional Task commit | Task layer succeeded inside the current Step transaction but is not durable until that transaction commits. |
 | Committed unsuccessful attempt | Current Step transaction durably commits suspension or failure; fees owned by that committed transition remain charged. |
 | Rolled-back scheduler attempt | Current Step transaction fails; queue, run, Task effects, Actors fees, and Actors events equal pre-attempt state. |
+
+### 2.3 Current-state service state machine
+
+This section is the sole owner of the fresh-genesis current-state service contract. Any later section that still names an Opening snapshot, historical Trigger cause, deferred second Cycle, per-Step successor ticket, `PercentageAtOpening`, `PercentageOfLastFunding`, or `AllAvailable` MUST be read as superseded and the encoded form MUST be rejected rather than reinterpreted. Later sections remain normative only where consistent with this owner until their implementation-shaped vocabulary is reconciled.
+
+Every admitted predicate observes current authoritative state at the actual check or Attempt. Every amount is exactly `Fixed(value)` or `Percent(perbill)`. `Percent` uses widened floor arithmetic over current Available at each Attempt; zero skips, a positive `Fixed` above capacity is funding unavailable without clipping, and `Percent(100%)` means all current Available. No Opening predicate result, Opening amount snapshot, funding-history basis, or event-sender history exists.
+
+The logical service states are:
+
+| State | Canonical obligation | Permitted exit |
+| --- | --- | --- |
+| `Live` | One persistent cyclic-ring membership and current process state. | One metered turn may retain Live, Sleep, Park, disable, or retire it. |
+| `Sleeping` | One known future eligibility or timed-review obligation. | Due extraction creates one coalesced return, no earlier than the next block round. |
+| `Parked` | Idle process plus a generation-bound negative current-state certificate and complete invalidation or timed-review plan. | Relevant invalidation creates one coalesced `Pending` check. |
+| `Pending` | One current-state activation check is owed; no Cycle is admitted yet. | False refreshes parking evidence; true admits Live no earlier than the next round; refusal retains Pending. |
+| `Disabled` | Serving authority is explicitly paused or revoked. | Only authorized control restores service; ordinary invalidation has no effect. |
+| `Retired` | Execution authority is revoked and bounded generation-bound reclamation may remain. | Cleanup only; no wake or partial revival. |
+
+An open Cycle is Live when eligible by the next permitted round and Sleeping when eligibility is known later. It is never Parked under an idle start certificate. An Idle Actor may be Live for its next current start check. False idle activation admits no Cycle and establishes or refreshes a valid park plan. Unknown, stale, unavailable, or corrupt state cannot certify indefinite parking; it selects a typed dependency deadline, deterministic timed review, or failure.
+
+One block owns one immutable round identity shared by every Actor pass. The semantic oracle snapshots the ordered eligible membership at the round boundary only to decide outcomes; production MUST use bounded frontier and membership authority rather than enumerate the ring. A member receives at most one ordinary turn per round, and at most one Step may commit for that Actor per block. A member admitted or reentered in block `B` is ineligible until `B + 1`. Removal never donates its turn; remove/reinsert and generation replacement cannot reset the same-block guards.
+
+FIFO admission determines initial ring order; thereafter service preserves cyclic encounter order among resident members. A successful Step whose continuation is due next round retains membership and advances the service cursor without a successor ticket. Head, tail, and interior deletion, sleeping, parking, retirement, and additions MUST preserve the encounter order of surviving members. A resource-blocked eligible head retains priority. Certified absence of current work is a distinct fully admitted transition and may detach it. Empty, stale, already-served, and ineligible physical entries have explicit bounded traversal and cannot permit an infinite wrap.
+
+Level-sensitive recurrence checks current state after Cycle completion no earlier than the next round and cannot start twice in one block. While an Actor is Running, Sleeping on retry, Pending, or Live, repeated Manual or source hints coalesce and create no second Cycle, cursor reset, retry reset, or fee claim. Cadence misses coalesce to one current check without catch-up. One-shot temporal service has no recurrence after its completed or terminal Cycle.
+
+A Park certificate binds Actor id, generation, admitted dependency plan, covered authoritative revisions, negative conclusion, and any validity deadline. Complete event-driven parking requires reliable invalidation for every supported change to Available or predicate truth, including balances, holds, locks, freezes, protected minima, staking shares, observation value/validity/age, time, and applicable configuration. Otherwise the profile MUST use a bounded timed review or be rejected.
+
+Invalidation records only that recheck is owed. Repeated updates coalesce. Registration, evaluation, and acknowledgment MUST be atomic or revisioned so an update before, during, or after evaluation cannot disappear: acknowledgment clears only the exact covered revision, and a later revision leaves Pending. Pending saturation preserves one durable obligation. Disabled and Retired generations ignore ordinary wake hints. Every membership, wake, pending record, and cleanup cursor binds the exact generation; stale-generation work has no authority over a recreated Actor.
+
+Each transition pre-admits its complete multidimensional Weight and economic charge before semantic mutation. Notification/invalidation, current activation checks, residence transfer, Attempt/effect, resource refusal, and reclamation are independently priced owners. No fee reserves future capacity or buys a second Cycle. A failed transfer preserves exactly one source or destination obligation. Cleanup revokes execution before bounded reclamation and never mutates sovereign custody.
+
+The independent executable reference is `tests/current_state_semantic_oracle.rs`. It imports no pallet scheduler type and covers mutable rounds, resident multi-block Q1, retry sleep/return, level recurrence, lost-wakeup revision acknowledgment, disablement, and stale retired generations. It decides semantics, not storage geometry.
+
+Existing test requirements are classified as follows:
+
+| Classification | Requirement disposition |
+| --- | --- |
+| Retained | Q1, committed-prefix preservation, current retry cursor/backoff, typed temporary/permanent failure, transactional mutation, custody-neutral close, bounded work, and class-neutral service remain requirements; their tests remain falsifiers where they do not depend on removed readiness semantics. |
+| Adapted | Scheduling, wakeup, cadence, Manual, balance/observation reaction, fee, and lifecycle tests MUST be rewritten to assert persistent residence, current checks, coalesced Pending, revision-safe acknowledgment, and generation-bound cleanup. |
+| Retired | Full-transition Debug digests and fixtures tied to scalar tickets, `pending_signal`, Trigger/Opening fees, Opening snapshots/timing, funding-history amounts, exact transient Crossing, sender-event history, `AllAvailable`, or successor-ticket FIFO do not govern delivery. Preserve them only as historical evidence until their replacement tests land; never regenerate them to bless the new model. |
 
 ---
 

@@ -362,10 +362,6 @@ If the finite campaign fails the materiality criterion, record its result and th
 
 **Freeze:** after N5.4/N6.4 choose one production service/physical design. N7 admits only required correctness, soundness, binding, review and public-truth corrections. Independent performance opportunities belong to the proposed `0.7.28` portfolio unless explicitly reauthorized.
 
-## N0 — Freeze the Current-State and Residency Contract
-
-- [ ] **N0.3 / Normative State Machine and Independent Oracle.** Update the owning specification and build an independent executable semantic model. Model ring rounds abstractly, including mutation/removal/new membership, and parking invalidation separately from current execution. Cover multi-block Steps, retry, recurrence, Sleeping, Parked, Pending, disabled and retired generations. Classify old tests as retained, adapted or retired by requirement; old full-transition digests do not govern deliberately changed semantics. Keep resource soundness and current economic safety independent of scheduling-policy choice. **Exit:** A reference oracle for the new contract that does not duplicate the chosen physical implementation; explicit transition, ordering, wake and cleanup invariants.
-
 ## N1 — Import Relevant Evidence and Hazards
 
 - [ ] **N1.1 / Active Semantic Lineage Projection.** Start the current-state/live-residency lineage in the existing Actors entrypoint. Show current obligations first, deliberate claim imports second, historical lineages last. Preserve old EXP IDs and paths. Import only the premises a current decision actually uses; extract independently reusable primary claims from old compound sections only when consumed. Carry old due-frontier results as baseline limits on new scalability claims, not as a mandate to retain old topology. **Exit:** The new proof graph is usable without reading the entire historical corpus; every imported claim has exact scope and a current consumer.
