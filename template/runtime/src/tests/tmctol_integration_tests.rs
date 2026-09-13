@@ -263,8 +263,8 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -274,7 +274,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
           slippage_tolerance: primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -283,7 +283,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         precondition: None,
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
           legs: alloc::vec![
             pallet_deos_actors::SplitLeg {
               to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_A_ACTORS_ID),
@@ -656,7 +656,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
           slippage_tolerance: Perbill::from_percent(5),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -668,7 +668,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         },]),
         task: Task::Burn {
           asset: AssetKind::Native,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -1839,7 +1839,9 @@ fn bldr_full_e2e_router_tmc_splitter_liquidity_anchor() {
       (
         pallet_deos_actors::Trigger::address_event(
           pallet_deos_actors::SourceFilter::Any,
-          pallet_deos_actors::AssetFilter::Any,
+          pallet_deos_actors::AssetFilter::Whitelist(
+            alloc::vec![bldr_asset].try_into().expect("one asset fits"),
+          ),
         ),
         0,
         None,

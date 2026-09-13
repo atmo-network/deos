@@ -131,7 +131,7 @@ Task set in implementation:
 | --- | --- | --- |
 | Predicate | `BalanceAbove`, `BalanceBelow`, `BalanceEquals`, `BalanceNotEquals`, `BlockNumberAbove`, `BlockNumberBelow`, `ObservationAbove`, `ObservationBelow`, `ObservationEquals`, `ObservationNotEquals` | Active contract calls; `every_predicate_is_pure_and_bounded`, predicate evaluator and observation tests |
 | Task | `Transfer`, `SplitTransfer`, `SwapIn`, `SwapOut`, `AddLiquidity`, `RemoveLiquidity`, `Burn`, `Mint`, `Stake`, `DonateLiquidity`, `Unstake`, `StopCycle` | Active contract calls; `every_task_has_one_exhaustive_semantic_contract`, task tests, and independent runtime profiles |
-| Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`, `AllAvailable`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests and independent exact-output evidence |
+| Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests, removed-form decoding tests and independent exact-output evidence |
 | Trigger | Exactly one of `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, or `Cadenced`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Actor Contract constructors plus raw typed calls; exhaustive Active replacement and Dormant lifecycle matrices; manual, certified-ingress, observation, timestamp-cadence, and embedding tests |
 | Funding | `OwnerOnly`, `SignedAllowlist`, `RuntimePolicy`, `AnyVerifiedIngress`; provenance `Signed`, `InternalProtocol`, `Xcm` | Active contract and certified producer constructors; funding-policy package tests and DEOS producer inventory |
 | Completion and step policy | `Persistent`, `CloseAfterProductiveCycle`; `AbortCycle`, `ContinueNextStep`, `RetryLater` | Active contract constructors; productive-close and exhaustive transition-matrix tests |
@@ -165,15 +165,14 @@ The pallet resolves dynamic amounts through `AmountResolution`:
 - `PercentageOfCurrent`
 - `PercentageAtOpening`
 - `PercentageOfLastFunding`
-- `AllAvailable`
 
 Resolution policy is task-bound in code:
 
 - `PreserveSpend`: applies to Transfer, SplitTransfer, Burn, exact-input swap, liquidity add/remove, Stake, and DonateLiquidity; computes one spend ceiling as adapter-visible balance minus reserved future User fees for the native fee asset and, for User fee-native direct debits, `max(MinUserBalance, asset minimum)`; other assets retain their adapter minimum.
-- `DonateLiquidity` resolves only declared `asset_a` as `max_amount_a` and passes the current preservable `asset_b` balance as `max_amount_b`; the host adapter must keep the paired debit within both caps and report exact used amounts. `Fixed`, every percentage basis, `SplitTransfer` total, and `AllAvailable` must stay within that ceiling.
+- `DonateLiquidity` resolves only declared `asset_a` as `max_amount_a` and passes the current preservable `asset_b` balance as `max_amount_b`; the host adapter must keep the paired debit within both caps and report exact used amounts. `Fixed`, every percentage basis, and `SplitTransfer` total must stay within that ceiling.
 - `ExpendableSpend`: consume available amount where task allows
 - `Mint`: amount interpreted in mint context
-- `Unstake share spend`: `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, and `AllAvailable` resolve against `StakingOps::share_balance(position_asset)` with full share withdrawal allowed; `PercentageOfLastFunding` reads the snapshot keyed by `StakingOps::share_asset(position_asset)`
+- `Unstake share spend`: `Fixed`, `PercentageOfCurrent`, and `PercentageAtOpening` resolve against `StakingOps::share_balance(position_asset)`; 100% of current shares permits full withdrawal. `PercentageOfLastFunding` reads the snapshot keyed by `StakingOps::share_asset(position_asset)`.
 
 Resolution outcomes are deterministic:
 
@@ -215,7 +214,7 @@ Resolution and charging follow these rules:
 - A multi-amount task resolves every field before dispatch and selects `FundingUnavailable > Skipped > Executable` independently of field order.
 - An Unstake last-funding plan fails validation when the runtime adapter cannot expose a transferable share asset.
 
-Pallet boundary tests cover fixed, current/trigger/last-funding percentages, split totals, and `AllAvailable` across native, sufficient-asset, and staking-share surfaces. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
+Pallet boundary tests cover fixed and current/trigger/last-funding percentages across native, sufficient-asset, split-total, and staking-share surfaces. A decoding regression rejects the retired `AllAvailable` discriminant. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
 
 Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier Steps in the same Actor Contract remain committed.
 

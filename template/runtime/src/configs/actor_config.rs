@@ -2804,7 +2804,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance: ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
@@ -2816,7 +2816,7 @@ impl TmctolGenesisSystemActors {
       precondition: dust_guard(AssetKind::Native),
       task: Task::Burn {
         asset: AssetKind::Native,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -2861,14 +2861,14 @@ impl TmctolGenesisSystemActors {
     let slippage_tolerance = Self::resolve_zap_slippage_tolerance(foreign);
     let steps: alloc::vec::Vec<pallet_deos_actors::StepOf<Runtime>> = alloc::vec![
       // Step 1: Opportunistic LP provisioning — add both sides at current pool ratio
-      // AllAvailable for native subtracts ED at resolution layer, safe with Preserve semantics
+      // A 100% current percentage subtracts ED at resolution, safe with Preserve semantics.
       Step {
         precondition: dual_dust_guard(AssetKind::Native, foreign),
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -2878,7 +2878,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllAvailable,
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance,
         },
@@ -2889,7 +2889,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(lp_asset),
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
           legs: alloc::vec![
             SplitLeg {
               to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
@@ -2979,7 +2979,7 @@ impl TmctolGenesisSystemActors {
         lp_asset,
         asset_a,
         asset_b,
-        lp_amount: AmountResolution::AllAvailable,
+        lp_amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -3015,7 +3015,7 @@ impl TmctolGenesisSystemActors {
       precondition: dust_guard(bldr_asset),
       task: Task::SplitTransfer {
         asset: bldr_asset,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         legs: alloc::vec![
           SplitLeg {
             to: bldr_liquidity_account,
@@ -3074,8 +3074,8 @@ impl TmctolGenesisSystemActors {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: bldr_asset,
-          amount_a: AmountResolution::AllAvailable,
-          amount_b: AmountResolution::AllAvailable,
+          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -3085,7 +3085,7 @@ impl TmctolGenesisSystemActors {
         task: Task::Transfer {
           to: bldr_anchor,
           asset: lp_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -3166,7 +3166,7 @@ impl TmctolGenesisSystemActors {
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
-        max_amount_a: AmountResolution::AllAvailable,
+        max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
         max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -3180,7 +3180,7 @@ impl TmctolGenesisSystemActors {
   ///
   /// Contract steps:
   /// 1. SwapIn(NTVE → target) — amount resolved as % of current NTVE balance
-  /// 2. Burn(target, AllAvailable) — destroy all acquired tokens
+  /// 2. Burn(target, 100% current) — destroy all acquired tokens
   ///
   /// Multiple small buybacks per day create smooth market pressure.
   pub fn build_treasury_b_buyback_contract_steps(
@@ -3215,7 +3215,7 @@ impl TmctolGenesisSystemActors {
         precondition: target_dust,
         task: Task::Burn {
           asset: target_asset,
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },

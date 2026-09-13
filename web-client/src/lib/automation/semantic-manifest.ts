@@ -36,8 +36,7 @@ export type ActorAmountName =
   | 'Fixed'
   | 'PercentageOfCurrent'
   | 'PercentageAtOpening'
-  | 'PercentageOfLastFunding'
-  | 'AllAvailable';
+  | 'PercentageOfLastFunding';
 
 const TASK_NAMES = [
   'Transfer',
@@ -72,7 +71,6 @@ const AMOUNT_NAMES = [
   'PercentageOfCurrent',
   'PercentageAtOpening',
   'PercentageOfLastFunding',
-  'AllAvailable',
 ] as const satisfies readonly ActorAmountName[];
 
 export type ActorSemanticRecipient =

@@ -376,23 +376,27 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         inputLimit: { type: 'Absolute', amount: '100' },
         slippageParts: 10_000_000,
       }),
-      authoringStep('transfer', transferTask({ type: 'AllAvailable' }), {
-        precondition: {
-          clauses: [
-            [
-              {
-                timing: 'Opening',
-                predicate: {
-                  type: 'BalanceAbove',
-                  asset: local,
-                  threshold: '0',
+      authoringStep(
+        'transfer',
+        transferTask({ type: 'PercentageOfCurrent', parts: 1_000_000_000 }),
+        {
+          precondition: {
+            clauses: [
+              [
+                {
+                  timing: 'Opening',
+                  predicate: {
+                    type: 'BalanceAbove',
+                    asset: local,
+                    threshold: '0',
+                  },
                 },
-              },
+              ],
             ],
-          ],
+          },
+          errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
         },
-        errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
-      }),
+      ),
     ],
     { completionPolicy: 'CloseAfterProductiveCycle' },
   );
@@ -648,7 +652,6 @@ test('every Predicate and AmountResolution lowers without changing step topology
     { type: 'PercentageOfCurrent', parts: 500_000_000 },
     { type: 'PercentageAtOpening', parts: 500_000_000 },
     { type: 'PercentageOfLastFunding', parts: 500_000_000 },
-    { type: 'AllAvailable' },
   ];
   for (const amount of amounts) {
     const lowered = lowerActorAuthoringContract(
@@ -841,7 +844,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const split = (asset = native) => ({
     type: 'SplitTransfer',
     asset,
-    amount: { type: 'AllAvailable' },
+    amount: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
     legs: [
       { to: accountA, shareParts: 500_000_000 },
       { to: accountB, shareParts: 500_000_000 },
@@ -850,7 +853,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const swap = {
     type: 'SwapIn',
     assetIn: local,
-    amountIn: { type: 'AllAvailable' },
+    amountIn: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
     assetOut: native,
     slippageParts: 10_000_000,
   };
@@ -865,7 +868,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           authoringStep('burn', {
             type: 'Burn',
             asset: native,
-            amount: { type: 'AllAvailable' },
+            amount: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
           }),
         ],
         { actorType: 'System', fundingPolicy: { type: 'RuntimePolicy' } },

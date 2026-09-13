@@ -85,7 +85,6 @@ export type ActorDonationSurface = {
   surface: string;
   resolution:
     | 'Fixed'
-    | 'AllAvailable'
     | 'PercentageOfCurrent'
     | 'PercentageAtOpening'
     | 'PercentageOfLastFunding';

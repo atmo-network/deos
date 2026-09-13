@@ -18,7 +18,6 @@ export const PERBILL_DENOMINATOR = 1_000_000_000n;
 
 export type ActorAmountResolution =
   | { type: 'Fixed'; value: bigint }
-  | { type: 'AllAvailable' }
   | {
       type:
         | 'PercentageOfCurrent'
@@ -154,10 +153,6 @@ export function resolveActorAmount(
     case 'Fixed':
       validateBalance(input.resolution.value, 'fixed amount');
       amount = input.resolution.value;
-      break;
-    case 'AllAvailable':
-      basis = isShares ? input.current : spendLimit;
-      amount = basis;
       break;
     case 'PercentageOfCurrent':
       basis = isShares ? input.current : spendLimit;

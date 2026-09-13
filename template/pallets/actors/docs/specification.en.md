@@ -848,7 +848,6 @@ enum AmountResolution<Balance> {
   PercentageOfCurrent(Perbill),
   PercentageAtOpening(Perbill),
   PercentageOfLastFunding(Perbill),
-  AllAvailable,
 }
 
 enum OpeningSurface<AssetId> {
@@ -874,7 +873,7 @@ Rules:
 - A positive exact debit above current capacity is `FundingUnavailable`;
 - Missing admitted Opening state is an invariant failure;
 - A positive exact amount MUST NOT be silently reduced;
-- `AllAvailable` is an ordinary authored amount mode with no lifecycle privilege.
+- `PercentageOfCurrent(100%)` is the only authored whole-current-available form and has no lifecycle privilege.
 
 For multiple amount fields:
 
@@ -889,7 +888,7 @@ Source-capacity calculations preserve the current Action-fee reservation and pro
 | Resolution surface | Tasks | Current/Opening basis |
 | --- | --- | --- |
 | Preserve-source | Transfer, SplitTransfer, SwapIn, AddLiquidity, RemoveLiquidity, Burn, Stake, DonateLiquidity | current preservable balance / `OpeningSurface::PreservableAsset` |
-| Output-target | Mint, SwapOut | current spendable target / `OpeningSurface::TargetAsset`; `AllAvailable` forbidden |
+| Output-target | Mint, SwapOut | Current spendable target / `OpeningSurface::TargetAsset`; percentage amounts forbidden |
 | Share-spend | Unstake | current staking shares / `OpeningSurface::StakingShares` |
 
 Fixed, Opening, and last-funding source/share values MUST fit current capacity. Output-target values are bounded by their own authored/adaptor rules, not current target balance. `PercentageAtOpening` never reads Trigger payload.
@@ -1017,7 +1016,7 @@ General rules:
 - Self-transfer and duplicate split recipients are invalid;
 - Each Task contains at most two `AmountResolution` fields;
 - Every debit preserves the protected minimum (§10.4);
-- `Transfer(AllAvailable)` has no close-specific privilege;
+- `Transfer(PercentageOfCurrent(100%))` has no close-specific privilege;
 - `CloseAfterProductiveCycle` observes only committed effectful Tasks (§9.2);
 - Task effects use canonical host operations (§11.1).
 
@@ -1437,7 +1436,7 @@ It MUST NOT occur after an Action effect or leave fee debt. Trigger and Pipeline
 
 Minimal apoptosis performs Close (§9.3) without a Task, custody scan, fee reserve, or economic policy. Its protocol cleanup obligation is economically backed by the committed Actor Creation Fee (§7.2).
 
-There is no `ActorFundingWait` and no automatic `Transfer(AllAvailable)`.
+There is no `ActorFundingWait` and no automatic whole-balance transfer.
 
 ### 9.5 Control transitions and breaker
 
@@ -1529,7 +1528,7 @@ spendable_balance = balance - current_action_fee_reservation
 preservable_balance = spendable_balance - protected_minimum
 ```
 
-All subtraction is saturating only where explicitly shown. Every authored debit, including `AllAvailable`, uses preservable capacity. No lifecycle branch grants source-exhaustion privilege.
+All subtraction is saturating only where explicitly shown. Every authored debit, including `PercentageOfCurrent(100%)`, uses preservable capacity. No lifecycle branch grants source-exhaustion privilege.
 
 ---
 
@@ -1653,7 +1652,7 @@ For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)`. Ze
 
 #### Staking
 
-Staking-share identity is admitted and stable. `Unstake(AllAvailable)` resolves to the full current share balance. Transferable staking receipts/NFTs, when provided by the host, remain ordinary custody (§10.3).
+Staking-share identity is admitted and stable. `Unstake(PercentageOfCurrent(100%))` resolves to the full current share balance. Transferable staking receipts/NFTs, when provided by the host, remain ordinary custody (§10.3).
 
 #### Certified AddressEvent ingress
 

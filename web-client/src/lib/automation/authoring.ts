@@ -39,8 +39,7 @@ export type ActorAuthoringAmount =
         | 'PercentageAtOpening'
         | 'PercentageOfLastFunding';
       parts: number;
-    }
-  | { type: 'AllAvailable' };
+    };
 
 export type ActorAuthoringObservationFeed = {
   assetIn: ActorAuthoringAsset;
@@ -488,8 +487,6 @@ function validateAmount(
           message: 'Percentage amount must be nonzero',
         });
       }
-      return;
-    case 'AllAvailable':
       return;
   }
 }
@@ -1157,8 +1154,6 @@ function lowerAmount(amount: ActorAuthoringAmount) {
     case 'PercentageAtOpening':
     case 'PercentageOfLastFunding':
       return runtimeVariant(amount.type, amount.parts);
-    case 'AllAvailable':
-      return runtimeVariant('AllAvailable');
   }
 }
 

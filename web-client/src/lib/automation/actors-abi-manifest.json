@@ -2,7 +2,7 @@
   "format": "deos.actor.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "75868ea75fd85e7b79db12650a7407e89e249f5564b2157d55ac46cd26cb5d12",
+    "sha256": "4f8e91a947e2c42196957176b935097e834c4e36c1cf321a0a6e52515337f84c",
     "version": 16
   },
   "pallet": {
@@ -2912,8 +2912,7 @@
             "fields": [{ "docs": [], "type": 213, "typeName": "Perbill" }],
             "index": 3,
             "name": "PercentageOfLastFunding"
-          },
-          { "docs": [], "fields": [], "index": 4, "name": "AllAvailable" }
+          }
         ]
       },
       "id": 246,
@@ -5576,6 +5575,12 @@
             "name": "admission_identity",
             "type": 2,
             "typeName": "Hash"
+          },
+          {
+            "docs": [],
+            "name": "pipeline_service_identity",
+            "type": 2,
+            "typeName": "Hash"
           }
         ]
       },
@@ -6082,6 +6087,12 @@
             "name": "hot",
             "type": 704,
             "typeName": "ActorControlHotState<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "pipeline_service_identity",
+            "type": 2,
+            "typeName": "[u8; 32]"
           },
           { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
           {

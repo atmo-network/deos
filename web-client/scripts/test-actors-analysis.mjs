@@ -79,7 +79,6 @@ const amountNames = [
   'PercentageOfCurrent',
   'PercentageAtOpening',
   'PercentageOfLastFunding',
-  'AllAvailable',
 ];
 const errorPolicies = ['AbortCycle', 'ContinueNextStep', 'RetryLater'];
 
@@ -287,7 +286,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
       step({ task: 'SwapIn' }),
       step({
         task: 'Transfer',
-        amount: { type: 'AllAvailable', value: undefined },
+        amount: { type: 'PercentageOfCurrent', value: 1_000_000_000 },
         predicates: [condition('BalanceAbove')],
         onError: 'RetryLater',
       }),
@@ -769,11 +768,7 @@ test('every current Predicate is pure, bounded, and explicitly timed', () => {
 test('every current AmountResolution reports frozen or live retry semantics', () => {
   for (const name of amountNames) {
     const amount =
-      name === 'Fixed'
-        ? fixed()
-        : name === 'AllAvailable'
-          ? { type: name, value: undefined }
-          : { type: name, value: 500_000_000 };
+      name === 'Fixed' ? fixed() : { type: name, value: 500_000_000 };
     const artifact = artifactFor({ steps: [step({ amount })] });
     const projected = analyze(artifact).steps[0].amounts[0];
     const contract = ACTORS_SEMANTIC_MANIFEST.amountResolutions.find(

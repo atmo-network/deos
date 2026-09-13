@@ -70,7 +70,7 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   assert.deepEqual(
     resolveActorAmount(
       observation({
-        resolution: { type: 'AllAvailable' },
+        resolution: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
         current: 201n,
         minimumBalance: 1n,
         minUserBalance: 50n,

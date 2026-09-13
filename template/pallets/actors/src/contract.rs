@@ -548,7 +548,7 @@ pub fn describe_amount_resolution<Balance>(
       ObservationWindow::ArtifactTime,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
-    AmountResolution::PercentageOfCurrent(_) | AmountResolution::AllAvailable => (
+    AmountResolution::PercentageOfCurrent(_) => (
       AmountDataDependency::CurrentBalanceOrShares,
       ObservationWindow::StepAttemptTime,
       RetryObservation::ReobserveLiveValue,
@@ -884,7 +884,7 @@ mod tests {
       AmountResolution::PercentageOfCurrent(Perbill::one()),
       AmountResolution::PercentageAtOpening(Perbill::one()),
       AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      AmountResolution::AllAvailable,
+      AmountResolution::PercentageOfCurrent(Perbill::one()),
     ];
     for amount in cases {
       let contract = describe_amount_resolution(&amount);

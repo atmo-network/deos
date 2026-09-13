@@ -1329,7 +1329,7 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       make_step(Task::Transfer {
         to: BOB,
         asset,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       }),
     ])
     .expect("system execution plan fits");

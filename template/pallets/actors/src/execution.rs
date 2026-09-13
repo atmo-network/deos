@@ -2889,7 +2889,6 @@ impl<T: Config> Pallet<T> {
     let current_shares = T::StakingOps::share_balance(who, position_asset);
     let resolved = match spec {
       AmountResolution::Fixed(shares) => *shares,
-      AmountResolution::AllAvailable => current_shares,
       AmountResolution::PercentageOfCurrent(pct) => pct.mul_floor(current_shares),
       AmountResolution::PercentageAtOpening(pct) => pct.mul_floor(Self::opening_balance(
         trigger_share_balances,
@@ -2934,7 +2933,6 @@ impl<T: Config> Pallet<T> {
     };
     let resolved = match spec {
       AmountResolution::Fixed(amount) => *amount,
-      AmountResolution::AllAvailable => policy_spend_limit,
       AmountResolution::PercentageOfCurrent(pct) => {
         let value = pct.mul_floor(policy_spend_limit);
         if !pct.is_zero() && !policy_spend_limit.is_zero() && value.is_zero() {

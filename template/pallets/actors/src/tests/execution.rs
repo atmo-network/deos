@@ -500,7 +500,6 @@ fn frozen_cycle_snapshot_dependency_is_closed_over_amounts_tasks_and_preconditio
   assert!(
     !AmountResolution::<u64>::PercentageOfCurrent(Perbill::one()).requires_frozen_cycle_snapshot()
   );
-  assert!(!AmountResolution::<u64>::AllAvailable.requires_frozen_cycle_snapshot());
   assert!(
     AmountResolution::<u64>::PercentageAtOpening(Perbill::one()).requires_frozen_cycle_snapshot()
   );

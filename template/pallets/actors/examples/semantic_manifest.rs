@@ -126,7 +126,6 @@ fn amount_resolution_cases() -> Vec<(&'static str, AmountResolution<u128>)> {
       "PercentageOfLastFunding",
       AmountResolution::PercentageOfLastFunding(Perbill::one()),
     ),
-    ("AllAvailable", AmountResolution::AllAvailable),
   ]
 }
 

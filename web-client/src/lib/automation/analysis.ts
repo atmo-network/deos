@@ -1451,9 +1451,7 @@ function findings(
     const reader = steps[dependency.toStep];
     if (
       reader.amounts.some(
-        (amount) =>
-          amount.resolution === 'PercentageOfCurrent' ||
-          amount.resolution === 'AllAvailable',
+        (amount) => amount.resolution === 'PercentageOfCurrent',
       )
     ) {
       results.push({

@@ -372,7 +372,7 @@ test('donation classification identifies observation window and amount surface',
       {
         stepIndex: 1,
         surface: 'asset:2:amount',
-        resolution: 'AllAvailable',
+        resolution: 'PercentageOfCurrent',
         observation: 'ActorBalance',
       },
       {
@@ -390,7 +390,7 @@ test('donation classification identifies observation window and amount surface',
       {
         stepIndex: 4,
         surface: 'pool:1:quote',
-        resolution: 'AllAvailable',
+        resolution: 'PercentageOfCurrent',
         observation: 'AdapterState',
       },
     ]).map(({ sensitivity }) => sensitivity),

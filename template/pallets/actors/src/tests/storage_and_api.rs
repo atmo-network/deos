@@ -1824,6 +1824,11 @@ fn profile_contract_geometry_state_footprint() {
 }
 
 #[test]
+fn removed_all_available_scale_form_is_rejected() {
+  assert!(AmountResolution::<u128>::decode(&mut &[4_u8][..]).is_err());
+}
+
+#[test]
 fn public_reachability_inventory_is_closed_and_canonical() {
   assert_variant_names::<RuntimeTask>(&[
     "Transfer",
@@ -1844,7 +1849,6 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "PercentageOfCurrent",
     "PercentageAtOpening",
     "PercentageOfLastFunding",
-    "AllAvailable",
   ]);
   assert_variant_names::<InputLimit<u128>>(&["LiveQuote", "Absolute"]);
   assert_variant_names::<Predicate<TestAsset, u128, u32, u32>>(&[

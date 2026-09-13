@@ -4361,7 +4361,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       }),
     ])
     .expect("system execution plan fits");
@@ -4452,7 +4452,7 @@ fn user_all_available_preserves_floor_and_underfunded_future_trigger_keeps_proce
     let task = Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::AllAvailable,
+      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
     };
     let contract_steps = contract_steps_with_step(make_step(task));
     let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
@@ -4669,7 +4669,7 @@ fn burn_all_balance_preserves_the_asset_minimum() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = contract_steps_with_step(make_step(Task::Burn {
       asset: TestAsset::Native,
-      amount: AmountResolution::AllAvailable,
+      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 500);
@@ -4680,7 +4680,7 @@ fn burn_all_balance_preserves_the_asset_minimum() {
     assert_eq!(
       native_balance(&actor),
       1,
-      "Burn(AllAvailable) must preserve the asset minimum"
+      "Burn(Percent(100%)) must preserve the asset minimum"
     );
     assert!(has_actor_event(|e| matches!(
       e,
@@ -4755,7 +4755,7 @@ fn unstake_all_balance_withdraws_all_staking_shares() {
     let asset = TestAsset::Local(8);
     let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
-      shares: AmountResolution::AllAvailable,
+      shares: AmountResolution::PercentageOfCurrent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);

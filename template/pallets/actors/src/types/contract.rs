@@ -11,7 +11,6 @@ pub enum AmountResolution<Balance> {
   PercentageOfCurrent(Perbill),
   PercentageAtOpening(Perbill),
   PercentageOfLastFunding(Perbill),
-  AllAvailable,
 }
 
 impl<Balance> AmountResolution<Balance> {

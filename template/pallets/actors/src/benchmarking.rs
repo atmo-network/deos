@@ -234,7 +234,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -247,7 +247,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::AllAvailable,
+        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -279,7 +279,7 @@ mod benches {
         task: ActorTask::Transfer {
           to: account("admitted-contract-filler", index as u32, 0),
           asset: T::FeeNativeAssetId::get(),
-          amount: AmountResolution::AllAvailable,
+          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       };
@@ -8527,7 +8527,7 @@ mod benches {
           ..
         }
         | ActorTask::Transfer {
-          amount: AmountResolution::Fixed(_) | AmountResolution::AllAvailable,
+          amount: AmountResolution::Fixed(_),
           ..
         }
     )));
