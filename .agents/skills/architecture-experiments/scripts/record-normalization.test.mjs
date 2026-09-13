@@ -92,6 +92,17 @@ export function selfTest(realSkillDir) {
     change(childFile, '## Measurements\n\nBounded fixture evidence.', `## Measurements\n\n${'Retained bounded evidence. '.repeat(2000)}`);
     const large = validate(skill, options); assert.equal(large.errors.length, 0); assert(large.warnings.some((w) => w.includes('large record'))); count++;
 
+    const backlogFile = path.join(temp, 'BACKLOG.md');
+    const activeLineage = `\n## 0.7.27 Active Current-State Lineage\n\n### Machine-Checkable Current Lineage\n\n| Lineage ID | Source claim | Applicability | Current consumers | Required proof | Closure owner |\n| --- | --- | --- | --- | --- | --- |\n| CL-01 | ${link(childId)} | Qualified | N1.2 | Round/wake proof | N1.3 |\n\n### Deliberate Claim Imports\n\n- ${link(childId)}: Qualified transfer.\n\n### Historical Lineages\n\nHistorical fixture.\n`;
+    reset();
+    fs.writeFileSync(backlogFile, '- [ ] **N1.2 / Fixture.** Current consumer.\n- [ ] **N1.3 / Fixture.** Closure owner.\n');
+    fs.appendFileSync(indexFile, activeLineage);
+    assert.deepEqual(validate(skill, options).errors, []); count++;
+    rejects('unqualified current lineage', () => { fs.appendFileSync(indexFile, activeLineage); change(indexFile, '| Qualified | N1.2 |', '| Historical | N1.2 |'); }, /unqualified applicability/);
+    rejects('dangling current transfer', () => { fs.appendFileSync(indexFile, activeLineage); change(indexFile, '| N1.2 | Round\/wake proof |', '| N9.9 | Round\/wake proof |'); }, /dangling current task/);
+    rejects('missing imported source qualification', () => { fs.appendFileSync(indexFile, activeLineage.replace(`- ${link(childId)}: Qualified transfer.`, `- ${link(parentId)}: Unqualified transfer.`)); }, /unqualified current use/);
+    fs.rmSync(backlogFile);
+
     // Former identity checks use an actual frozen baseline buffer, never the live file.
     const formerId = 'EXP-0089';
     function migrated(status = 'Proposed') {

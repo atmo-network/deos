@@ -38,12 +38,23 @@ This projection is the decision-facing entrypoint for the current-state/live-res
 | Own every retained service, negative check, wake, mutation and cleanup path by component-wise resources. | Actor resource-policy and performance-assurance specifications | N5.2–N5.4, N6.3–N6.5 | Path-by-path generated Weight, whole-service accounting and exact-tree assurance. |
 | Select one bounded physical design only after equal-semantics comparison. | Frozen 0.7.27 campaign in `BACKLOG.md` | N5.4, N6.2–N6.4 | Finite candidate closure, declared materiality and a labelled bridge to the old release. |
 
+### Machine-Checkable Current Lineage
+
+This table normalizes transfers only. Its proof labels identify the evidence class still required from the named owner; they do not certify semantic, wake, physical, or resource closure.
+
+| Lineage ID | Source claim | Applicability | Current consumers | Required proof | Closure owner |
+| --- | --- | --- | --- | --- | --- |
+| CL-01 | [EXP-0075](./EXP-0075.md) | Qualified | N5.4, N6.3 | Physical closure | N5.4 |
+| CL-02 | [EXP-0076](./EXP-0076.md) | Qualified | N4.2, N5.3 | Physical closure | N4.2 |
+| CL-03 | [EXP-0113](./EXP-0113.md), [EXP-0114](./EXP-0114.md) | Qualified | N5.2, N7.1 | Resource closure | N5.2 |
+| CL-04 | [EXP-0117](./EXP-0117.md) | Qualified | N1.3, N3.3–N3.7 | Round/wake proof | N1.3 |
+
 ### Deliberate Claim Imports
 
 An import below is usable only at its stated scope and by its named consumer. Numerical results remain with the original record and are not silently promoted to the current semantic or artifact identity.
 
 - [EXP-0075](./EXP-0075.md): Import only that, under the recorded C1 binding, adding 9,885 non-due identities changed neither service order nor charged Control for the same 100-Actor due frontier. N5.4 and N6.3 consume this as a baseline limit: a new scalability claim cannot assume old service scanned the whole identity population, and no old queue geometry is retained by implication.
-- [EXP-0076](./EXP-0076.md): Import only that legal closed-prefix reclamation consumed bounded service capacity and reduced the live FIFO prefix admitted under the recorded C32 topology. N4.4 and N5.3 consume this as hazard and old-baseline pressure, not as a claim about steady-state churn, alternate geometry or necessary tombstones.
+- [EXP-0076](./EXP-0076.md): Import only that legal closed-prefix reclamation consumed bounded service capacity and reduced the live FIFO prefix admitted under the recorded C32 topology. N4.2 and N5.3 consume this as hazard and old-baseline pressure, not as a claim about steady-state churn, alternate geometry or necessary tombstones.
 - [EXP-0113](./EXP-0113.md) and [EXP-0114](./EXP-0114.md): Import only the general failure scenario that consensus control-flow selection requires an explicit measured owner even when it performs no Task effect. N5.2 and N7.1 consume it; the old selector coefficient is excluded unless its exact implementation and benchmark domain survive.
 - [EXP-0117](./EXP-0117.md): Import only the finding that deep temporal coverage and full-capacity rearm were not established for every reachable path in the old topology. N1.3 and N3.3–N3.7 consume this immediate hazard transfer for any surviving retry, review or sweep cursor; removal closes nothing until replacement coverage is proved.
 

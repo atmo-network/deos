@@ -364,8 +364,6 @@ If the finite campaign fails the materiality criterion, record its result and th
 
 ## N1 — Import Relevant Evidence and Hazards
 
-- [ ] **N1.2 / Skill and Validator Boundaries.** Retain Leaf/Synthesis, allocation and benchmark reassessment. Add only necessary semantic-lineage, applicability, round/wake proof and physical-closure checks. A diagnostic Leaf owns an independently decidable question, not every fixture. Validate missing transfers, dangling references and unqualified current use; do not pretend a syntax validator establishes wake completeness or resource soundness. Keep method tooling Skill-private and legacy records valid without bulk rewriting. **Exit:** One methodology and small machine-checkable current graph; no project build/CI dependency on Skill files and no compulsory migration of all experiments.
-
 - [ ] **N1.3 / Applicable Hazard Closure Routes.** Route H1–H9 from §2.5 plus the new round-reentry, lost-wakeup, arbitrary-unlink, duplicate-residence and sweep-generation hazards. Repair retained/reachable mechanisms, refute a finding with scoped evidence, prove actual elimination plus replacement coverage, or apply an approved enforced restriction. If the old heap survives only for retry or sweep, its deep/full-capacity obligations survive. A rejected optimization does not close a safety question. **Exit:** Every known applicable hazard has a named closure owner; removed machinery does not require needless modernization and surviving fallbacks cannot evade coverage.
 
 ## N2 — Build the Current-State Execution Core

@@ -11,10 +11,14 @@ const proofFields = ['Obligation ID', 'Claim', 'Smallest falsifier', 'Evidence c
 const dispositionFields = ['Benchmark Evidence Status', 'Reassessment Trigger', 'Compared Observation IDs', 'Noise / Stability Evidence', 'Current Authority'];
 const dispositionStatuses = ['Authoritative', 'Qualified', 'Historical', 'Superseded', 'Invalidated', 'Inconclusive', 'Not applicable'];
 const graphPattern = /<!-- experiment-dependencies:start -->[\s\S]*?<!-- experiment-dependencies:end -->/;
+const currentLineageFields = ['Lineage ID', 'Source claim', 'Applicability', 'Current consumers', 'Required proof', 'Closure owner'];
+const currentLineageApplicability = new Set(['Qualified', 'Confirmed', 'Current']);
+const currentLineageProofs = new Set(['Semantic oracle', 'Round/wake proof', 'Physical closure', 'Resource closure']);
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((s) => s.trim());
 const fields = (s) => [...(s.match(/^\| Field \| Value \|\n\| --- \| --- \|\n((?:\|.*\n)+)/m)?.[1] ?? '').matchAll(/^\| ([^|]+) \| (.*) \|$/gm)].map((m) => [m[1].trim(), m[2].trim()]);
 const section = (s, h) => s.split(`\n## ${h}\n`)[1]?.split(/\n## /)[0]?.trim() ?? '';
+const subsection = (s, h) => `\n${s}`.split(`\n### ${h}\n`)[1]?.split(/\n### /)[0]?.trim() ?? '';
 const relations = (s) => [...section(s, 'Relations').matchAll(/^- `([^`]+)`: *(.*)$/gm)].map((m) => [m[1], m[2].trim()]);
 const headings = (s) => [...s.matchAll(/^## ([^#].*)$/gm)].map((m) => m[1].trim());
 const note = (s, name) => s.split('\n').find((l) => l.startsWith(`- \`${name}\`:`))?.split('`:').slice(1).join('`:').trim() ?? '';
@@ -30,6 +34,7 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
   const errors = [], warnings = [], nodes = new Map(), indexes = new Map();
   const template = fs.readFileSync(path.join(skillDir, 'templates/EXP-NNNN.md'), 'utf8');
   const root = path.resolve(skillDir, '../../..');
+  const backlog = fs.existsSync(path.join(root, 'BACKLOG.md')) ? fs.readFileSync(path.join(root, 'BACKLOG.md'), 'utf8') : '';
   const fail = (key, message) => errors.push(`${key}: ${message}`);
   const compare = (key, label, a, b) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) fail(key, `${label} differ from template (${b.join(' | ')})`);
@@ -100,6 +105,40 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
   }
   const indexWrites = new Map();
   for (const [track, index] of indexes) {
+    const activeHeading = headings(index.source).find((heading) => heading.endsWith('Active Current-State Lineage'));
+    const active = activeHeading ? section(index.source, activeHeading) : '';
+    if (active) {
+      const lineage = subsection(active, 'Machine-Checkable Current Lineage');
+      const table = lineage.match(/^\|.*\n\|[^\n]+\n((?:\|.*\n?)+)/m);
+      const header = lineage.split('\n').find((line) => line.startsWith('|'));
+      if (!table || !header) fail(index.file, 'active current lineage requires a Machine-Checkable Current Lineage table');
+      else {
+        compare(index.file, 'current-lineage columns', currentLineageFields, cells(header));
+        const rows = table[1].trimEnd().split('\n').map(cells);
+        const ids = new Set(), declaredSources = new Set();
+        for (const row of rows) {
+          const [lineageId, sourceClaim, applicability, consumers, proof, owner] = row;
+          if (row.length !== currentLineageFields.length || row.some((value) => !value)) { fail(index.file, 'incomplete current-lineage row'); continue; }
+          if (!/^CL-\d{2}$/.test(lineageId) || ids.has(lineageId)) fail(index.file, `invalid or duplicate current lineage ID ${lineageId}`);
+          ids.add(lineageId);
+          const sourceTargets = targets({ key: `${track}/${lineageId}`, track, file: index.file }, sourceClaim);
+          if (!sourceTargets.size || [...sourceTargets].some((target) => !nodes.get(target)?.source)) fail(index.file, `${lineageId} has dangling or non-record Source claim`);
+          for (const target of sourceTargets) declaredSources.add(target);
+          if (!currentLineageApplicability.has(applicability)) fail(index.file, `${lineageId} has unqualified applicability ${applicability}`);
+          if (!currentLineageProofs.has(proof)) fail(index.file, `${lineageId} has invalid Required proof ${proof}`);
+          for (const value of [consumers, owner]) {
+            const tasks = value.match(/N\d+(?:\.\d+)?/g) ?? [];
+            if (!tasks.length) fail(index.file, `${lineageId} is missing a current transfer owner`);
+            for (const task of tasks) if (!backlog.includes(`**${task} /`)) fail(index.file, `${lineageId} references dangling current task ${task}`);
+          }
+        }
+        const imports = subsection(active, 'Deliberate Claim Imports');
+        const importDeclarations = imports.split('\n').filter((line) => /^- \[EXP-\d{4}\]/.test(line)).join('\n');
+        const importedSources = targets({ key: `${track}/current-imports`, track, file: index.file }, importDeclarations);
+        for (const target of importedSources) if (!declaredSources.has(target)) fail(index.file, `unqualified current use of ${target}; add it to the current-lineage table`);
+        for (const target of declaredSources) if (!importedSources.has(target)) fail(index.file, `current-lineage source ${target} lacks a deliberate claim import`);
+      }
+    }
     for (const line of index.source.split('\n')) {
       const m = line.match(/^\| (EXP-\d{4}) \|/);
       if (!m || cells(line)[2] !== 'Proposed') continue;
