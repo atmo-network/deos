@@ -749,7 +749,7 @@ fn repeated_pending_manual_occurrence_is_latched_without_trigger_fee() {
 }
 
 #[test]
-fn busy_manual_occurrence_charges_and_latches_only_the_future_pipeline() {
+fn busy_manual_occurrence_creates_no_future_cycle_latch_or_trigger_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let plan = BoundedVec::try_from(vec![
@@ -782,14 +782,16 @@ fn busy_manual_occurrence_charges_and_latches_only_the_future_pipeline() {
       actor_id
     ));
 
-    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     assert!(!has_actor_event(|event| matches!(
       event,
-      Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. }
+        | Event::PipelineFeeCharged { actor_id: id, .. }
+        if *id == actor_id
     )));
     let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
+    assert!(!hot.pending_signal);
     #[cfg(not(feature = "runtime-benchmarks"))]
     {
       let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
@@ -800,7 +802,7 @@ fn busy_manual_occurrence_charges_and_latches_only_the_future_pipeline() {
       ));
       assert_eq!(
         frame_hot, hot,
-        "busy Trigger mutates the existing primary in place"
+        "ignored busy Trigger leaves the current primary unchanged"
       );
     }
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");

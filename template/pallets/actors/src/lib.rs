@@ -5477,6 +5477,11 @@ pub mod pallet {
         snapshot.trigger.manual_source_enabled(),
         Error::<T>::ManualSourceDisabled
       );
+      // A Manual occurrence while the current Cycle is open is intentionally ignored before
+      // Trigger-fee admission: current-state service owns no deferred future-Cycle latch.
+      if snapshot.cycle_state != CycleState::Idle {
+        return Ok(().into());
+      }
       let actor_type = snapshot.actor_class.actor_type();
       let breakdown = Self::trigger_fee_for_weight(
         actor_type,

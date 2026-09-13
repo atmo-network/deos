@@ -903,7 +903,7 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
 }
 
 #[test]
-fn signal_during_running_is_retained_for_a_later_cycle() {
+fn manual_signal_during_running_is_ignored_without_a_future_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut steps = inert_contract_steps();
@@ -916,49 +916,27 @@ fn signal_during_running_is_retained_for_a_later_cycle() {
       actor_id
     ));
     Actors::on_idle(1, Weight::MAX);
-    assert_eq!(
-      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
-      Some(CycleState::Running)
-    );
-    assert!(!Actors::pending_signal(actor_id));
+    let run_before = Actors::actor_run_state(actor_id).expect("Cycle is Running");
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(Actors::pending_signal(actor_id));
-    Actors::on_idle(1, Weight::MAX);
+    assert!(!Actors::pending_signal(actor_id));
     assert_eq!(
-      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
-      Some(CycleState::Running),
-      "the successor cannot execute in the commit block"
+      Actors::actor_run_state(actor_id)
+        .expect("ignored signal preserves the current Run")
+        .encode(),
+      run_before.encode()
     );
 
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::on_initialize(2);
     Actors::on_idle(2, Weight::MAX);
-    let after_first_cycle = Actors::active_actor_view(actor_id).expect("Actor remains active");
-    assert_eq!(after_first_cycle.cycle_nonce, 1);
-    assert_eq!(after_first_cycle.cycle_state, CycleState::Idle);
-    assert!(after_first_cycle.pending_signal);
-
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1),
-      "the retained signal cannot open another cycle in the completion block"
-    );
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    Actors::on_idle(3, Weight::MAX);
-    let next_cycle = Actors::active_actor_view(actor_id).expect("next Cycle remains active");
-    assert_eq!(next_cycle.cycle_nonce, 1);
-    assert_eq!(next_cycle.cycle_state, CycleState::Running);
-    assert!(!next_cycle.pending_signal);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|run| run.cycle_nonce),
-      Some(2)
-    );
+    let completed = Actors::active_actor_view(actor_id).expect("Actor remains active");
+    assert_eq!(completed.cycle_nonce, 1);
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert!(!completed.pending_signal);
   });
 }
 
@@ -1387,113 +1365,6 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
     )));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn run_control_placement_failures_roll_back_exactly() {
-  fn exhaust_ticket_namespace(actor_id: ActorId) {
-    let (location, cell) = Actors::actor_control_cell(actor_id).expect("suspended primary");
-    let crate::ActorControlLocation::Ready { ticket } = location else {
-      panic!("retry fixture retains its Ready ticket");
-    };
-    assert_eq!(Actors::queue_occupancy(), 1);
-    let old_page =
-      crate::ActorReadyFrameChunks::<Test>::take(ticket / 32).expect("sole Ready page");
-    assert_eq!(old_page.iter().flatten().count(), 1);
-    let final_ticket = u64::MAX - 1;
-    let mut final_page = old_page;
-    *final_page
-      .get_mut((ticket % 32) as usize)
-      .expect("old slot") = None;
-    *final_page
-      .get_mut((final_ticket % 32) as usize)
-      .expect("final slot") = Some(cell);
-    crate::ActorReadyFrameChunks::<Test>::insert(final_ticket / 32, final_page);
-    crate::ActorControlLocators::<Test>::insert(
-      actor_id,
-      crate::ActorControlLocation::Ready {
-        ticket: final_ticket,
-      },
-    );
-    crate::ActorReadyHead::<Test>::put(final_ticket);
-    crate::ActorReadyTail::<Test>::put(u64::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_some());
-  }
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::root(),
-        actor_id,
-        FundingSourcePolicy::AnyVerifiedIngress,
-      ),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      update_contract_partial!(
-        RuntimeOrigin::root(),
-        actor_id,
-        inert_contract_steps(),
-        crate::CompletionPolicy::Persistent,
-      ),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    exhaust_ticket_namespace(actor_id);
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let events_before = System::events();
-
-    assert_noop!(
-      Actors::cancel_run(RuntimeOrigin::root(), actor_id),
-      Error::<Test>::QueueTicketExhausted
-    );
-    assert!(Actors::actor_run_state(actor_id).is_some());
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
   });
 }
 
@@ -3108,11 +2979,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(
-      Actors::active_actor_view(actor_id)
-        .expect("suspended actor remains")
-        .pending_signal
-    );
+    assert!(!Actors::pending_signal(actor_id));
 
     let second_eligible_at = Actors::actor_run_state(actor_id)
       .expect("second unsuccessful attempt persists")

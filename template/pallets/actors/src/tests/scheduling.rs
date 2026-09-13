@@ -2,7 +2,7 @@ use super::*;
 use crate::{FundingProvenance, TriggerCauseProvenance};
 
 #[test]
-fn cancelled_run_auto_close_precedes_insufficient_next_pipeline_fee() {
+fn cancelled_run_returns_idle_without_a_deferred_manual_cycle() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     setup_temporary_retry_pool();
@@ -25,39 +25,22 @@ fn cancelled_run_auto_close_precedes_insufficient_next_pipeline_fee() {
     ));
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
+
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    assert!(!Actors::pending_signal(actor_id));
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
-    let cancelled =
-      Actors::active_actor_view(actor_id).expect("deferred readiness survives cancel");
+
+    let cancelled = Actors::active_actor_view(actor_id).expect("cancelled Actor remains active");
     assert_eq!(cancelled.cycle_nonce, 1);
-    assert!(cancelled.pending_signal);
+    assert_eq!(cancelled.cycle_state, CycleState::Idle);
+    assert!(!cancelled.pending_signal);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      Actors::actor_control_cell(actor_id).and_then(|(_, cell)| cell.eligible_at),
-      Some(3)
-    );
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    assert_eq!(Actors::active_actor_view(actor_id), Some(cancelled));
-    let sovereign = sovereign_account(actor_id);
-    let excess = native_balance(&sovereign)
-      .checked_sub(TestMinUserBalance::get())
-      .expect("funded Actor covers the protected floor");
-    deplete_user_sovereign(actor_id, excess);
-    System::set_block_number(3);
-    System::reset_events();
-    run_idle(Weight::MAX);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, reason: CloseReason::AutoCloseNonceReached }
-        if *id == actor_id
-    )));
     assert!(!has_actor_event(|event| matches!(
-      event, Event::CycleStarted { actor_id: id, .. } if *id == actor_id
+      event,
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
     )));
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
@@ -3789,14 +3772,14 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
 }
 
 #[test]
-fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
+fn cancellation_does_not_requeue_an_ignored_busy_manual_signal() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(Actors::pending_signal(actor_id));
+    assert!(!Actors::pending_signal(actor_id));
     assert_ok!(update_contract_partial!(
       RuntimeOrigin::root(),
       actor_id,
@@ -3805,21 +3788,9 @@ fn cancellation_requeues_a_signal_latched_for_the_next_logical_run() {
     ));
     let cancelled = Actors::active_actor_view(actor_id).expect("cancelled actor remains");
     assert_eq!(cancelled.cycle_state, CycleState::Idle);
-    assert!(cancelled.pending_signal);
-    assert!(cancelled.queue_ticket.is_some());
-
-    for block in 2..=4 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      Actors::on_idle(block, Weight::MAX);
-      if Actors::active_actor_view(actor_id).is_some_and(|actor| actor.cycle_nonce == 2) {
-        break;
-      }
-    }
-    let completed = Actors::active_actor_view(actor_id).expect("next logical cycle completes");
-    assert_eq!(completed.cycle_nonce, 2);
-    assert!(!completed.pending_signal);
+    assert_eq!(cancelled.cycle_nonce, 1);
+    assert!(!cancelled.pending_signal);
+    assert!(cancelled.queue_ticket.is_none());
   });
 }
 
