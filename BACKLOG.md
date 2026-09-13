@@ -4,12 +4,11 @@
 >
 > Pre-`1.0` boundary: no DEOS network will launch before `1.0`. The `0.7.x` line remains fresh-genesis and may change storage, metadata, runtime APIs, validation topology, physical execution geometry and release mechanics without deployed-lineage migration or live-network ceremony.
 
-## Status — `0.7.26` Release Evidence Open
+## Status — `0.7.26` External Release Gates Open
 
-Release readiness remains open after local PR #32 remediation. Continue corrected-candidate preparation; the pre-repair attestation and green CI on the old PR head do not cover this change.
+The corrected candidate passed canonical local full validation and its attestation now binds the validated source and artifact identities. Release readiness remains open on PR #32 external evidence.
 
-- [ ] `Release / Evidence`: Run `./scripts/validate-local.sh full` on the prepared corrected candidate and bind passing evidence to its current source and artifact identities before release acceptance.
-- [ ] `Release / PR`: Deliver the validated correction to PR #32 through a history-preserving route permitted by `AGENTS.md`, require fresh CI on the corrected head and resolve its review gate before any guarded merge, tag or publication.
+- [ ] `Release / PR`: Preserve reviewed history for any further PR update, require passing CI on the final corrected head and resolve its review gate before any guarded merge, tag or publication.
 
 Delivery history remains in `CHANGELOG.md`, campaign decisions and recorded next-release starting evidence remain in the Actors experiment track index, and artifact bindings remain in the release-assurance candidate attestation. Deferred programmes remain unselected.
 

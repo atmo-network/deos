@@ -2,7 +2,7 @@
 
 ## Current Applicability
 
-The recorded checkpoint evidence below predates the PR #32 non-tail Crossing admission repair and does not establish readiness of the corrected candidate. The local fix changes `select_crossing_admission` to exclude tail-only pair fallback when classification carries non-tail refill authority; it preserves the scalar path and invariant guards. Its regression reproduces a worker fault before the fix and proves exact scalar state-root equivalence and continued service afterward. Independent source-geometry and RefTime/ProofSize boundary checks cover the selector.
+The corrected PR #32 candidate changes `select_crossing_admission` to exclude tail-only pair fallback when classification carries non-tail refill authority; it preserves the scalar path and invariant guards. Its regression reproduces a worker fault before the fix and proves exact scalar state-root equivalence and continued service afterward. Independent source-geometry and RefTime/ProofSize boundary checks cover the selector.
 
 The corrected-source Weight reassessment is complete in [EXP-0114](../../architecture-experiments/tracks/actors/EXP-0114.md#corrected-source-reassessment--2026-09-12). Five focused selections and four controls on fresh benchmark Wasm `00b469b1…` confirm the installed `1,467,000` ps selector upper fit with zero ProofSize and database work. The production Weight source remains byte-identical at `46a89aa4…`; the other execution owners retain Case A applicability over unchanged paths and domains. The record owns the predeclared method, all observations, output hashes, invalid-launch classification and current evidence disposition.
 
@@ -10,29 +10,29 @@ The corrected canonical build produces production Wasm `91c23b2f77b57265e8e32ec8
 
 The build, metadata/descriptor export and observation-evidence freshness check passed over unchanged build inputs. Focused validation then passed on source identity `9f8c7d2c4cbe0de6ce9811d86b5c388727e2e1d2e7fde19a9916c8ef3bb4fc32`: all 151 client automation tests, one executed `reference_full_block_replays_in_production_wasm_with_verified_storage_proof` test, workspace/all-target/all-feature Clippy with `-D warnings`, and the changed-scope completion gate including native runtime tests. The replay retained exact source, Weight, Wasm and metadata identities.
 
-The focused replay stdout has SHA-256 `ff1ad7640cfea496fac4a51f314d4708a744774bb74f1e1a2dff124fcbb523d7`; `DEOS_VERBOSE=1 ./scripts/actors-assurance.sh --production-reference-replay` reproduces this proof boundary. Corrected-candidate full validation and its attestation reconciliation remain required under `BACKLOG.md`. The checkpoint identities and full-profile validation below remain pre-repair evidence only, not corrected-candidate release readiness.
+The focused replay stdout has SHA-256 `ff1ad7640cfea496fac4a51f314d4708a744774bb74f1e1a2dff124fcbb523d7`; `DEOS_VERBOSE=1 ./scripts/actors-assurance.sh --production-reference-replay` reproduces this proof boundary. The corrected candidate then passed the canonical full profile with Actors `quick: 0`, occupancy enabled, required production-Wasm identity and exact source `9f8c7d2c…`, Weight `46a89aa4…`, Wasm `91c23b2f…` and metadata `75868ea7…`. The full log has SHA-256 `6c3141d8ca9f364773dd4e912d634f5ad86794b027e8a7d5cdb241a8c7b5fe7e`; final regeneration preserved a clean worktree.
 
 ## Evidence Boundary
 
-This retained local preparation binds the pre-repair validated artifact-bearing release checkpoint. It proves local identity agreement for that checkpoint only; it is not a signed release attestation and does not claim corrected-candidate readiness, production-network safety or the unmet User reactive target.
+This retained local preparation binds the corrected artifact-bearing candidate at the exact validated commit. It proves local identity agreement for that candidate only; it is not a signed release attestation and does not claim production-network safety or the unmet User reactive target.
 
-- Candidate checkpoint: `7e0e1eb8` (release identity prepared and rebound; exactly the tree validated below).
-- Candidate tree: `c048b49f381dfbe4c2f84179a3e1e15997e12641`.
-- Sorted tracked-content manifest digest: `7c5847b3d3976df1f256c60342763f6b88dacc2371028c9385abb47103f31d36`.
-- Exact-tree `./scripts/validate-local.sh full` log: SHA-256 `ce1d09d45293d0308a43c45c505507e7834ebe02185493d295012da1734cb03d`.
+- Validated candidate commit: `1337726680238dd43191184d6cfc07ecb024ac84`.
+- Validated candidate tree: `f211d36dbfc60c7f141478ad096535a8e7f41735`.
+- Sorted tracked-content manifest digest: `b988f0d5c3dd875449dfab7f2cf2fe42348091bfc4bec2b18e277e8c6c63e089`.
+- Exact-tree `./scripts/validate-local.sh full` log: SHA-256 `6c3141d8ca9f364773dd4e912d634f5ad86794b027e8a7d5cdb241a8c7b5fe7e`.
 - Dependency-provenance log: SHA-256 `fc99520e835defdce4a51cca6720f64453b3ad5fe060b3caecdbb3970b31e70e`.
 
-The validation and dependency-provenance logs are transient local outputs; the recorded digests bind the observed runs and the commands below reproduce them from this checkpoint.
+The validation and dependency-provenance logs are transient local outputs; the recorded digests bind the observed runs and the commands below reproduce them from the stated commits and identities.
 
 ## Release-Version Reissue
 
-The workspace package-version bump `0.7.25 → 0.7.26` reissues the production Wasm byte identity while leaving every semantic artifact unchanged. The sealed candidate checkpoint built `77eaf529…`; the prepared release tree builds `3388be55…`, and the canonical build inside the full validation reproduced `3388be55…` bit-exactly. Production Weight, runtime metadata, PAPI descriptors, ABI, bounds, cost, fee, semantic and ingress evidence are byte-identical across the reissue; only the Wasm, its code hash in the observation evidence and identity prose moved. The exact-Wasm regression suite is rebound to the release artifact, including `ACCEPTED_PRODUCTION_WASM_SHA256` in `production_block_replay.rs`, and revalidated end to end.
+The workspace package-version bump `0.7.25 → 0.7.26` reissued the production Wasm byte identity while leaving every semantic artifact unchanged. The later non-tail admission repair produced corrected production Wasm `91c23b2f…`; the canonical build inside corrected full validation reproduced it bit-exactly. Production Weight, runtime metadata, PAPI descriptors, ABI, bounds, cost, fee, semantic and ingress evidence remain byte-identical across the repair; only the Wasm, its code hash in observation evidence and identity prose moved. The exact-Wasm regression suite is rebound to the corrected release artifact, including `ACCEPTED_PRODUCTION_WASM_SHA256` in `production_block_replay.rs`, and revalidated end to end.
 
 ## Artifact Identities
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Production compact Wasm | `3388be55da933c90c69465a35c08c09aae420165d7a6608816f65fb13b37cbf7` |
+| Production compact Wasm | `91c23b2f77b57265e8e32ec8645610a32b7d4763b0ced31ab56ef64e8c0f5a2d` |
 | Runtime metadata | `75868ea75fd85e7b79db12650a7407e89e249f5564b2157d55ac46cd26cb5d12` |
 | PAPI descriptor manifest | `2f9c6de877f2f4d575c49992a262109d1635f68e6b586cb9b34844cbf3849da2` |
 | Actors production Weight | `46a89aa48b6814b0d02b3b423b99a134cc6b84f08cbb1c3dfaf4bf4074c18346` |
@@ -41,12 +41,10 @@ The workspace package-version bump `0.7.25 → 0.7.26` reissues the production W
 | Actors cost vectors | `06bd4d21b7dcb5cb0d35336035689195714d4fcfa1e613ba1dd1e61f6cf22c69` |
 | Actors fee vectors | `4b902a9d8aca969e09b7cbe6a1227628a65f4c242f7b80f84e032c6245be5b56` |
 | Actors semantic manifest | `15ab53a31193e8a03686db673b0c57929f8425d92ea14868e7be7da831819342` |
-| Observation evidence | `8c6013905a0bbbf2be3dc81ef1d473e5760ae90a2da333a74b3b7ff8990e5a86` |
+| Observation evidence | `2823378de12a5b1cfaded2b3c6f335717dc8294932a03a4a526b3c073db116e7` |
 | Ingress evidence | `ea9697460ec0ad05c89b68f263b60ead719e26cc9164d240c1da3e2bd347c67a` |
 
-The descriptor-manifest digest above is corrected to match `web-client/.papi/descriptors/package.json` at `7e0e1eb8`; this corrects the recorded digest, not the artifact.
-
-The full profile passed on the checkpoint — simulator tests, complete Rust workspace CI, clean web-client validation, the full Actors assurance gate, benchmark compilation with the generated storage-name audit, the deterministic production runtime, and metadata, descriptor and generated-evidence regeneration — with zero worktree drift. The checkpoint's generated consumer identities carry the retained binding: the cost and fee vectors and the observation evidence name the reissued Actors Weight `46a89aa4…`, and the observation evidence names the release runtime code hash `0xe88130ce…`.
+The full profile passed on the corrected candidate — simulator tests, complete Rust workspace CI, clean web-client validation, the full Actors assurance gate, benchmark compilation with the generated storage-name audit, the deterministic production runtime, and metadata, descriptor and generated-evidence regeneration — with zero worktree drift. Generated consumer identities carry the retained binding: cost and fee vectors and observation evidence name Actors Weight `46a89aa4…`, while observation evidence names corrected runtime code hash `0x05ce940c…`.
 
 ## Weight Owner Soundness
 
@@ -65,8 +63,8 @@ The candidate diff adds no authority, storage partition, scheduler path, certifi
 - Manifest digest:
 
 ```text
-git ls-tree -r --name-only 7e0e1eb8 | LC_ALL=C sort | while IFS= read -r f; do
-  printf '%s  %s\n' "$(git show "7e0e1eb8:$f" | sha256sum | cut -d' ' -f1)" "$f"
+git ls-tree -r --name-only 1337726680238dd43191184d6cfc07ecb024ac84 | LC_ALL=C sort | while IFS= read -r f; do
+  printf '%s  %s\n' "$(git show "1337726680238dd43191184d6cfc07ecb024ac84:$f" | sha256sum | cut -d' ' -f1)" "$f"
 done | sha256sum
 ```
 
@@ -76,4 +74,4 @@ done | sha256sum
 
 ## Remaining External Gate
 
-After the local gates in `BACKLOG.md` pass, remote CI and review resolution must cover the corrected PR candidate before guarded merge, tag and release publication. PR #32 is already under review: the pre-PR squash is complete and must not be repeated. Corrected-candidate preparation has resumed; a remote correction must preserve reviewed history under `AGENTS.md` and pass the authorized release workflow rather than treating old-head CI as fresh evidence. Separate artifact packaging, published `SHA256SUMS`, and platform or signing attestation remain unselected capabilities, not established repository release requirements.
+Remote CI and review resolution must cover the corrected PR candidate before guarded merge, tag and release publication. PR #32 is already under review: the pre-PR squash is complete and must not be repeated. Any further PR update must preserve reviewed history under `AGENTS.md`; old-head CI is not evidence for a newer head. Separate artifact packaging, published `SHA256SUMS`, and platform or signing attestation remain unselected capabilities, not established repository release requirements.
