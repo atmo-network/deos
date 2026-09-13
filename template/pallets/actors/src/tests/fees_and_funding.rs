@@ -2704,53 +2704,6 @@ fn balance_conditions_never_read_staking_share_surfaces() {
 }
 
 #[test]
-fn true_balance_condition_can_precede_funding_unavailable_resolution() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let task = Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    };
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      contract_steps_with_step(StepOf::<Test> {
-        precondition: all_conditions(vec![Predicate::BalanceAbove {
-          asset: TestAsset::Native,
-          threshold: 1,
-        }]),
-        task,
-        on_error: StepErrorPolicy::ContinueNextStep,
-      }),
-    );
-    fund_native(actor_id, 1_000);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    clear_fee_collections();
-    run_idle(Weight::MAX);
-    let pipeline_fee = pipeline_opening_fee(
-      &Actors::active_actor_view(actor_id)
-        .expect("Actor remains")
-        .steps,
-    );
-    assert_eq!(fee_collections(), vec![pipeline_fee]);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::StepSkipped {
-        actor_id: id,
-        reason: StepSkippedReason::FundingUnavailable,
-        ..
-      } if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn executable_task_charges_pipeline_and_independent_action_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3089,7 +3042,7 @@ fn paid_readiness_closes_only_when_pipeline_charge_cannot_fit_above_floor() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      amount: AmountResolution::Fixed(250),
     }));
     let prefunded = user_prefunding_requirement(&contract_steps);
     let pipeline_fee = pipeline_opening_fee(&contract_steps);
@@ -4110,7 +4063,7 @@ fn condition_balance_above_executes_when_above() {
 }
 
 #[test]
-fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_balance() {
+fn preserve_spend_keeps_native_minimum_across_fixed_percentage_and_split_tasks() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let split_legs: SplitTransferLegsOf<Test> = BoundedVec::try_from(vec![
@@ -4135,16 +4088,6 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
       }),
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-      }),
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      }),
       make_step(Task::SplitTransfer {
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(100),
@@ -4159,14 +4102,6 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
     .expect("system execution plan fits");
     let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
-    crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("System Actors funding exists")
-        .funding_accumulated
-        .try_insert(TestAsset::Native, 100)
-        .expect("tracked snapshot fits");
-    });
     let actor = sovereign_account(actor_id);
     let bob_before = native_balance(&BOB);
     signal_percentage_trigger(actor_id, TestAsset::Native);
@@ -4186,7 +4121,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_split_and_all_bal
         )
       })
       .count();
-    assert_eq!(funding_skips, 4);
+    assert_eq!(funding_skips, 2);
     let resolution_skips = frame_system::Pallet::<Test>::events()
       .iter()
       .filter(|record| {
@@ -4563,13 +4498,13 @@ fn unstake_all_balance_withdraws_all_staking_shares() {
 }
 
 #[test]
-fn unstake_last_funding_tracks_transferable_share_asset() {
+fn unstake_percent_reads_the_current_transferable_share_surface() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
     let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
-      shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     set_asset_balance(&ALICE, asset, 100);
@@ -4587,62 +4522,6 @@ fn unstake_last_funding_tracks_transferable_share_asset() {
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 50);
     assert_eq!(unstaked_shares(actor, asset), 50);
-  });
-}
-
-#[test]
-fn unstake_last_funding_rejects_position_without_transferable_share_asset() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
-      asset: TestAsset::Local(u32::MAX),
-      shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    }));
-    assert_noop!(
-      Actors::create_system_actor(
-        RuntimeOrigin::root(),
-        ALICE,
-        Mutability::Mutable,
-        system_active_contract(manual_schedule(), None, contract_steps),
-      ),
-      Error::<Test>::InvalidAmountResolution
-    );
-  });
-}
-
-#[test]
-fn unstake_last_funding_fails_closed_if_share_mapping_disappears_mid_lifetime() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let asset = TestAsset::Local(8);
-    let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
-      asset,
-      shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    set_asset_balance(&ALICE, asset, 100);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      asset,
-      100,
-    ));
-    let actor = sovereign_account(actor_id);
-    set_staking_share_asset_available(false);
-
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-
-    assert_eq!(asset_balance(&actor, asset), 100);
-    assert_eq!(unstaked_shares(actor, asset), 0);
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::StepFailed { actor_id: id, step_index: 0, .. } if *id == actor_id
-    )));
   });
 }
 
