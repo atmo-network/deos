@@ -86,7 +86,7 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   );
 });
 
-test('snapshot, funding, rounding, mint, and staking-share outcomes remain distinct', () => {
+test('snapshot, rounding, mint, and staking-share outcomes remain distinct', () => {
   assert.equal(
     resolveActorAmount(
       observation({
@@ -94,18 +94,6 @@ test('snapshot, funding, rounding, mint, and staking-share outcomes remain disti
       }),
     ).status,
     'SnapshotUnavailable',
-  );
-  assert.equal(
-    resolveActorAmount(
-      observation({
-        resolution: {
-          type: 'PercentageOfLastFunding',
-          parts: 1_000_000_000,
-        },
-        lastFunding: 0n,
-      }),
-    ).status,
-    'FundingUnavailable',
   );
   assert.equal(
     resolveActorAmount(

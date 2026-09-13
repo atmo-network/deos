@@ -35,8 +35,6 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
         return 'Re-observed at each step attempt';
       case 'PercentageAtOpening':
         return 'Frozen at logical-cycle start';
-      case 'PercentageOfLastFunding':
-        return 'Frozen from the latest accepted funding';
     }
   });
 </script>
@@ -52,7 +50,6 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       <option value="Fixed">Fixed</option>
       <option value="PercentageOfCurrent">% current</option>
       <option value="PercentageAtOpening">% at opening</option>
-      <option value="PercentageOfLastFunding">% last funding</option>
     </SelectField>
     {#if amount.type === 'Fixed'}
       <TextField

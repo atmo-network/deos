@@ -34,10 +34,7 @@ export type ActorAuthoringAsset =
 export type ActorAuthoringAmount =
   | { type: 'Fixed'; value: string }
   | {
-      type:
-        | 'PercentageOfCurrent'
-        | 'PercentageAtOpening'
-        | 'PercentageOfLastFunding';
+      type: 'PercentageOfCurrent' | 'PercentageAtOpening';
       parts: number;
     };
 
@@ -479,7 +476,6 @@ function validateAmount(
       return;
     case 'PercentageOfCurrent':
     case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
       validatePerbill(amount.parts, `${path}.parts`, issues);
       if (amount.parts === 0) {
         issues.push({
@@ -1152,7 +1148,6 @@ function lowerAmount(amount: ActorAuthoringAmount) {
       return runtimeVariant('Fixed', BigInt(amount.value));
     case 'PercentageOfCurrent':
     case 'PercentageAtOpening':
-    case 'PercentageOfLastFunding':
       return runtimeVariant(amount.type, amount.parts);
   }
 }

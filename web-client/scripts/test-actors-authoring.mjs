@@ -651,7 +651,6 @@ test('every Predicate and AmountResolution lowers without changing step topology
     fixed(),
     { type: 'PercentageOfCurrent', parts: 500_000_000 },
     { type: 'PercentageAtOpening', parts: 500_000_000 },
-    { type: 'PercentageOfLastFunding', parts: 500_000_000 },
   ];
   for (const amount of amounts) {
     const lowered = lowerActorAuthoringContract(
@@ -700,7 +699,6 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     { type: 'Fixed', value: '0' },
     { type: 'PercentageOfCurrent', parts: 0 },
     { type: 'PercentageAtOpening', parts: 0 },
-    { type: 'PercentageOfLastFunding', parts: 0 },
   ]) {
     assert.equal(
       validateActorAuthoringContract(

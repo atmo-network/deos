@@ -83,12 +83,8 @@ export type ActorLocalSimulationResult<State> = {
 export type ActorDonationSurface = {
   stepIndex: number;
   surface: string;
-  resolution:
-    | 'Fixed'
-    | 'PercentageOfCurrent'
-    | 'PercentageAtOpening'
-    | 'PercentageOfLastFunding';
-  observation: 'ActorBalance' | 'ActorFunding' | 'AdapterState';
+  resolution: 'Fixed' | 'PercentageOfCurrent' | 'PercentageAtOpening';
+  observation: 'ActorBalance' | 'AdapterState';
 };
 
 export type ActorDonationSensitivity = {
@@ -98,7 +94,6 @@ export type ActorDonationSensitivity = {
     | 'InsensitiveFixedAmount'
     | 'BeforeStepResolution'
     | 'BeforeOpeningSnapshot'
-    | 'BeforeFundingSnapshot'
     | 'BeforeAdapterObservation';
   reason: string;
 };
@@ -399,15 +394,6 @@ export function classifyActorDonationSensitivity(
         sensitivity: 'BeforeOpeningSnapshot',
         reason:
           'Actor balance changes can affect the captured opening snapshot, but not its persisted value.',
-      };
-    }
-    if (surface.resolution === 'PercentageOfLastFunding') {
-      return {
-        stepIndex: surface.stepIndex,
-        surface: surface.surface,
-        sensitivity: 'BeforeFundingSnapshot',
-        reason:
-          'Funding included before batch promotion can affect the last-funding snapshot.',
       };
     }
     return {

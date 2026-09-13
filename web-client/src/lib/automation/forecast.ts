@@ -19,10 +19,7 @@ export const PERBILL_DENOMINATOR = 1_000_000_000n;
 export type ActorAmountResolution =
   | { type: 'Fixed'; value: bigint }
   | {
-      type:
-        | 'PercentageOfCurrent'
-        | 'PercentageAtOpening'
-        | 'PercentageOfLastFunding';
+      type: 'PercentageOfCurrent' | 'PercentageAtOpening';
       parts: number;
     };
 
@@ -42,7 +39,6 @@ export type ActorAmountObservation = {
   reservedFee: bigint;
   isFeeNative: boolean;
   trigger?: bigint;
-  lastFunding?: bigint;
 };
 
 export type ActorAmountForecast = {
@@ -126,8 +122,6 @@ export function resolveActorAmount(
   validateBalance(input.minUserBalance, 'minUserBalance');
   validateBalance(input.reservedFee, 'reservedFee');
   if (input.trigger != null) validateBalance(input.trigger, 'trigger');
-  if (input.lastFunding != null)
-    validateBalance(input.lastFunding, 'lastFunding');
 
   const isShares = input.policy === 'UnstakeShares';
   const spendableCurrent = isShares
@@ -173,21 +167,6 @@ export function resolveActorAmount(
       basis = input.trigger;
       amount = percentage(input.resolution.parts, basis);
       if (input.resolution.parts !== 0 && basis !== 0n && amount === 0n) {
-        return { status: 'Skipped', amount: null, basis, spendLimit };
-      }
-      break;
-    case 'PercentageOfLastFunding':
-      if (input.lastFunding == null || input.lastFunding === 0n) {
-        return {
-          status: 'FundingUnavailable',
-          amount: null,
-          basis: input.lastFunding ?? null,
-          spendLimit,
-        };
-      }
-      basis = input.lastFunding;
-      amount = percentage(input.resolution.parts, basis);
-      if (input.resolution.parts !== 0 && amount === 0n) {
         return { status: 'Skipped', amount: null, basis, spendLimit };
       }
       break;
