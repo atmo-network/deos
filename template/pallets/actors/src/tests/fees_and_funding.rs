@@ -1076,7 +1076,7 @@ fn repeated_pending_address_event_is_latched_without_trigger_fee() {
 }
 
 #[test]
-fn busy_address_event_charges_and_latches_only_the_future_pipeline() {
+fn busy_address_event_neither_charges_nor_latches_a_future_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let plan = BoundedVec::try_from(vec![
@@ -1118,14 +1118,14 @@ fn busy_address_event_charges_and_latches_only_the_future_pipeline() {
       &ALICE,
     ));
 
-    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
     let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
+    assert!(!hot.pending_signal);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);

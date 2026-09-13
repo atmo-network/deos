@@ -9117,7 +9117,10 @@ impl<T: Config> Pallet<T> {
     if classification.terminal_reason == Some(CloseReason::WindowExpired) {
       return Self::finalize_actor(actor_id, &instance, CloseReason::WindowExpired);
     }
-    let signal_matched = if !instance.pending_signal
+    // A busy Actor may still account authorized funding, but the open Cycle owns all
+    // process authority: the occurrence cannot pay for or latch a future Cycle.
+    let signal_matched = if instance.cycle_state == CycleState::Idle
+      && !instance.pending_signal
       && let Trigger::AddressEvent {
         source_filter,
         asset_filter,

@@ -2268,7 +2268,7 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
 }
 
 #[test]
-fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
+fn control_address_event_due_while_running_accumulates_without_deferred_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let steps = BoundedVec::try_from(vec![
@@ -2360,14 +2360,14 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
       .expect("busy AddressEvent transition commits"),
       Some(running_location)
     );
-    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    let deferred = crate::ActorReadyFrameChunks::<Test>::get(0)
+    assert!(fee_collections().is_empty());
+    let running = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
       .expect("busy AddressEvent preserves Running primary");
-    assert_eq!(deferred.hot.cycle_state, CycleState::Running);
-    assert!(deferred.hot.pending_signal);
-    assert_eq!(deferred.cursor, 1);
-    assert_eq!(deferred.eligible_at, Some(3));
+    assert_eq!(running.hot.cycle_state, CycleState::Running);
+    assert!(!running.hot.pending_signal);
+    assert_eq!(running.cursor, 1);
+    assert_eq!(running.eligible_at, Some(3));
     assert_eq!(
       Actors::control_apply_address_event(
         actor_id,
@@ -2377,10 +2377,10 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
         Some(&provenance),
         2,
       )
-      .expect("latched AddressEvent still commits funding"),
-      None
+      .expect("busy AddressEvent still commits funding"),
+      Some(running_location)
     );
-    assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     assert_eq!(
       ActorFunding::<Test>::get(actor_id)
         .expect("busy AddressEvent funding remains")
@@ -2400,14 +2400,12 @@ fn control_address_event_due_while_running_accumulates_and_defers_in_place() {
       Actors::queue_head().saturating_sub(head_before_completion),
       1
     );
-    let next_opening = crate::ActorReadyFrameChunks::<Test>::get(0)
-      .and_then(|chunk| chunk.get(2).cloned().flatten())
-      .expect("AddressEvent deferred latch enters exact N+1");
-    assert_eq!(next_opening.hot.cycle_state, CycleState::Idle);
-    assert!(next_opening.hot.pending_signal);
-    assert_eq!(next_opening.cursor, 0);
-    assert_eq!(next_opening.eligible_at, Some(4));
-    assert!(next_opening.hot.trigger_wakeup_pointer.is_none());
+    let completed = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      .expect("AddressEvent Cycle completes without deferred authority");
+    assert_eq!(completed.hot.cycle_state, CycleState::Idle);
+    assert!(!completed.hot.pending_signal);
+    assert!(completed.hot.queue_ticket.is_none());
+    assert!(completed.hot.wakeup_pointer.is_none());
     frame_assert_single_owner();
   });
 }

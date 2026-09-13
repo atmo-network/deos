@@ -1224,7 +1224,7 @@ fn canonical_head_discovery_distinguishes_empty_head_and_blocked() {
 }
 
 #[test]
-fn signal_during_suspension_latches_a_later_logical_run() {
+fn address_event_during_suspension_does_not_create_a_later_run() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -1264,7 +1264,7 @@ fn signal_during_suspension_latches_a_later_logical_run() {
       1,
       &ALICE
     ));
-    assert!(Actors::pending_signal(actor_id));
+    assert!(!Actors::pending_signal(actor_id));
     assert_eq!(
       Actors::actor_hot(actor_id)
         .expect("suspended actor")
@@ -1277,14 +1277,14 @@ fn signal_during_suspension_latches_a_later_logical_run() {
     let after_retry = Actors::active_actor_view(actor_id).expect("retry completes");
     assert_eq!(after_retry.cycle_nonce, 1);
     assert_eq!(after_retry.cycle_state, CycleState::Idle);
-    assert!(after_retry.pending_signal);
-    assert!(after_retry.queue_ticket.is_some());
+    assert!(!after_retry.pending_signal);
+    assert!(after_retry.queue_ticket.is_none());
 
     frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
-    let after_next_run = Actors::active_actor_view(actor_id).expect("later run completes");
-    assert_eq!(after_next_run.cycle_nonce, 2);
-    assert!(!after_next_run.pending_signal);
+    let after_idle = Actors::active_actor_view(actor_id).expect("completed run remains idle");
+    assert_eq!(after_idle.cycle_nonce, 1);
+    assert!(!after_idle.pending_signal);
   });
 }
 
