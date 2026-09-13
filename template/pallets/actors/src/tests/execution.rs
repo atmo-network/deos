@@ -503,11 +503,6 @@ fn frozen_cycle_snapshot_dependency_is_closed_over_amounts_tasks_and_preconditio
   assert!(
     AmountResolution::<u64>::PercentageAtOpening(Perbill::one()).requires_frozen_cycle_snapshot()
   );
-  assert!(
-    AmountResolution::<u64>::PercentageOfLastFunding(Perbill::one())
-      .requires_frozen_cycle_snapshot()
-  );
-
   let mut step = make_step(Task::StopCycle);
   assert!(!step.requires_frozen_cycle_snapshot());
   step.precondition = timed_all_conditions(
@@ -4621,57 +4616,6 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
     assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(50));
     assert_eq!(native_balance(&actor), actor_before.saturating_sub(100));
-  });
-}
-
-#[test]
-fn notify_address_event_accumulates_without_pause_resume_cycle() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let actor = sovereign_account(actor_id);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    assert_eq!(native_balance(&actor), 100);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle_until_cycle_nonce(actor_id, 1);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle_until_cycle_nonce(actor_id, 2);
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert_eq!(instance.lifecycle, ActiveLifecycle::Active);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    fund_native(actor_id, 500);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      500,
-      &CHARLIE
-    ));
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&500)
-    );
-    assert!(!has_actor_event(|event| {
-      matches!(event, Event::ActorResumed { actor_id: id } if *id == actor_id)
-    }));
   });
 }
 

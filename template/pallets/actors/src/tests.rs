@@ -1520,7 +1520,7 @@ mod proptest_actor {
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
-          amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(10)),
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,

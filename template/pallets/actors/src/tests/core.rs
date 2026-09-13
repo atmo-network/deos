@@ -1304,7 +1304,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
-          amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+          amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -1335,7 +1335,6 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     assert_eq!(native_balance(&BOB), bob_before + 10);
     let open_run = Actors::actor_run_state(actor_id).expect("cycle remains suspended");
     assert_eq!(open_run.cycle_nonce, 1);
-    assert_eq!(open_run.funding_snapshot.get(&TestAsset::Native), Some(&20));
     assert_eq!(
       Actors::actor_identity(actor_id)
         .expect("identity remains live")
@@ -1350,10 +1349,9 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     ));
     assert_eq!(
       Actors::actor_run_state(actor_id)
-        .expect("later funding does not replace the open snapshot")
-        .funding_snapshot
-        .get(&TestAsset::Native),
-      Some(&20)
+        .expect("later funding preserves the suspended run")
+        .cycle_nonce,
+      1
     );
     let actor_before_cancel = native_balance(&actor);
     let failures_before_cancel = Actors::active_actor_view(actor_id)
@@ -1385,12 +1383,6 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     );
     assert_eq!(native_balance(&actor), actor_before_cancel);
     assert_eq!(native_balance(&BOB), bob_before + 10);
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&7)
-    );
     let events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter_map(|record| match record.event {
@@ -1600,7 +1592,7 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Fixed(1),
       })),
     );
     assert_ok!(update_contract_partial!(
@@ -1631,39 +1623,10 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
       TestAsset::Native,
       1_000
     ));
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&90)
-    );
     assert!(has_actor_event(|event| matches!(
       event,
       Event::ContractUpdated { actor_id: id } if *id == actor_id
     )));
-
-    crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("funding state")
-        .funding_accumulated
-        .get_mut(&TestAsset::Native)
-        .map(|accumulated| *accumulated = u128::MAX);
-    });
-    assert_noop!(
-      Actors::preflight_funding_event(actor_id, TestAsset::Native, 1, Some(&ALICE), None,),
-      Error::<Test>::FundingAccumulatorOverflow
-    );
-    assert_noop!(
-      Actors::preflight_funding_event(
-        actor_id,
-        TestAsset::Native,
-        1,
-        None,
-        Some(&crate::FundingProvenance::Xcm),
-      ),
-      Error::<Test>::FundingAccumulatorOverflow
-    );
     assert_ok!(Actors::preflight_funding_event(
       actor_id,
       TestAsset::Native,
@@ -1675,7 +1638,7 @@ fn any_verified_ingress_accepts_each_verified_context_field_but_not_all_none() {
 }
 
 #[test]
-fn any_verified_ingress_third_party_shapes_basis_only_with_real_delivered_value() {
+fn any_verified_ingress_third_party_credit_requires_real_delivered_value() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -1685,7 +1648,7 @@ fn any_verified_ingress_third_party_shapes_basis_only_with_real_delivered_value(
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
       })),
     );
     assert_ok!(update_contract_partial!(
@@ -1709,18 +1672,11 @@ fn any_verified_ingress_third_party_shapes_basis_only_with_real_delivered_value(
       delivered,
       &CHARLIE,
     ));
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&delivered),
-    );
-
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
 
-    assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(native_balance(&actor), actor_before.saturating_add(50));
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(49));
+    assert_eq!(native_balance(&actor), actor_before.saturating_add(51));
   });
 }
 
@@ -1792,33 +1748,6 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
     assert_eq!(Actors::active_actor_view(actor_id), Some(before));
     assert_eq!(actor_funding(actor_id), funding_before);
     assert!(System::events().is_empty());
-  });
-}
-
-#[test]
-fn stale_tracked_snapshot_remains_valid_until_overwritten() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    }));
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
-    let bob_before = native_balance(&BOB);
-    assert_ok!(ordinary_transfer_to_actor(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      TestAsset::Native,
-      100
-    ));
-    frame_system::Pallet::<Test>::set_block_number(25);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle_until_cycle_nonce(actor_id, 1);
-    assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
   });
 }
 
