@@ -9,6 +9,12 @@ use frame::prelude::*;
 
 pub type ActorId = u64;
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
+pub const PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN: &[u8] = b"DEOS_PIPELINE_SERVICE_IDENTITY";
+
+pub fn pipeline_service_identity(admission_identity: [u8; 32]) -> [u8; 32] {
+  (PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN, admission_identity)
+    .using_encoded(frame::hashing::blake2_256)
+}
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -413,6 +419,7 @@ pub struct ActorRunAuthority<Hash> {
   pub semantic_contract_id: Hash,
   pub body_commitment: Hash,
   pub admission_identity: Hash,
+  pub pipeline_service_identity: Hash,
 }
 
 #[derive(
@@ -446,6 +453,7 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
         semantic_contract_id,
         body_commitment,
         admission_identity,
+        pipeline_service_identity: pipeline_service_identity(admission_identity),
       }
   }
 
@@ -674,6 +682,7 @@ impl<
         semantic_contract_id,
         body_commitment,
         admission_identity,
+        pipeline_service_identity: pipeline_service_identity(admission_identity),
       }
   }
 

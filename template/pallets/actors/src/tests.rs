@@ -175,6 +175,7 @@ fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
     semantic_contract_id: admission.semantic_contract_id,
     body_commitment: admission.body_commitment,
     admission_identity: admission.admission_identity,
+    pipeline_service_identity: crate::pipeline_service_identity(admission.admission_identity),
   }
 }
 

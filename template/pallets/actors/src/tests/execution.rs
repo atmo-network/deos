@@ -758,7 +758,7 @@ fn ordinary_one_attempt_run_keeps_run_state_sparse() {
 }
 
 #[test]
-fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_authority() {
+fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_service_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -799,6 +799,10 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
     assert_eq!(stored.eligible_at, running.eligible_at);
     assert_eq!(stored.cumulative_outcomes, running.cumulative_outcomes);
     assert_eq!(
+      stored.contract_authority.pipeline_service_identity,
+      crate::pipeline_service_identity(stored.contract_authority.admission_identity),
+    );
+    assert_eq!(
       Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
       Some(CycleState::Running)
     );
@@ -811,7 +815,7 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_autho
         .as_mut()
         .expect("Running state exists")
         .contract_authority
-        .admission_identity[0] ^= 1;
+        .pipeline_service_identity[0] ^= 1;
     });
     assert!(matches!(
       Actors::load_actor_state(actor_id),

@@ -1579,6 +1579,9 @@ impl<T: Config> Pallet<T> {
               semantic_contract_id: plan.admission.semantic_contract_id,
               body_commitment: plan.admission.body_commitment,
               admission_identity: plan.admission.admission_identity,
+              pipeline_service_identity: pipeline_service_identity(
+                plan.admission.admission_identity,
+              ),
             },
             cycle_nonce,
             cursor: 0,
@@ -1691,6 +1694,9 @@ impl<T: Config> Pallet<T> {
                   semantic_contract_id: plan.admission.semantic_contract_id,
                   body_commitment: plan.admission.body_commitment,
                   admission_identity: plan.admission.admission_identity,
+                  pipeline_service_identity: pipeline_service_identity(
+                    plan.admission.admission_identity,
+                  ),
                 },
                 cycle_nonce,
                 cursor: 0,
@@ -1781,6 +1787,7 @@ impl<T: Config> Pallet<T> {
           semantic_contract_id: plan.admission.semantic_contract_id,
           body_commitment: plan.admission.body_commitment,
           admission_identity: plan.admission.admission_identity,
+          pipeline_service_identity: pipeline_service_identity(plan.admission.admission_identity),
         },
         cycle_nonce,
         cursor: 1,
