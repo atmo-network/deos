@@ -1359,7 +1359,7 @@ fn repeated_pending_observation_change_is_latched_without_trigger_fee() {
 }
 
 #[test]
-fn busy_observation_change_charges_and_latches_only_the_future_pipeline() {
+fn busy_observation_change_is_ignored_without_fee_or_future_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let plan = BoundedVec::try_from(vec![
@@ -1393,14 +1393,15 @@ fn busy_observation_change_charges_and_latches_only_the_future_pipeline() {
     assert_ok!(Actors::note_observation_changed(33, 2));
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
 
-    assert_eq!(fee_collections(), vec![observation_change_trigger_fee()]);
+    assert!(fee_collections().is_empty());
     assert!(!has_actor_event(|event| matches!(
       event,
-      Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. }
+        | Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
     let hot = Actors::actor_hot(actor_id).expect("active Actor");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
+    assert!(!hot.pending_signal);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);

@@ -1320,6 +1320,9 @@ impl<T: Config> Pallet<T> {
       phase: CrossingPhase::WaitingForRearm,
       installed_at_revision,
     };
+    if loaded.hot.cycle_state != crate::CycleState::Idle {
+      return Ok((CrossingWorkPlan::FireCohortCoalesced, false, None));
+    }
     let activation = Self::preflight_activation_loaded(actor_id, loaded)
       .map_err(|_| Error::<T>::ActorInvariant)?;
     if activation.terminal_reason.is_some() || ActorReadyTail::<T>::get() == u64::MAX {

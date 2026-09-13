@@ -496,7 +496,7 @@ impl<T: Config> Pallet<T> {
         )
       };
     };
-    if state.hot.pending_signal {
+    if state.hot.cycle_state != crate::CycleState::Idle || state.hot.pending_signal {
       return Ok(ObservationActivationOutcome::Ordinary(
         ActivationOutcome::IgnoredStale,
       ));

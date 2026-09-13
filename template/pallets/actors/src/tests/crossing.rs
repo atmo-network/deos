@@ -344,7 +344,7 @@ fn repeated_latched_crossing_fires_charge_only_the_useful_transition() {
 }
 
 #[test]
-fn busy_crossing_fire_charges_and_latches_only_the_future_pipeline() {
+fn busy_crossing_fire_rearms_without_fee_or_future_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_observation(
@@ -400,10 +400,19 @@ fn busy_crossing_fire_charges_and_latches_only_the_future_pipeline() {
     ));
     drain_crossing_work();
 
-    assert_eq!(fee_collections(), vec![observation_crossing_trigger_fee()]);
+    assert!(fee_collections().is_empty());
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::ObservationCrossing,
+        ..
+      } if *id == actor_id
+    )));
     let hot = Actors::actor_hot(actor_id).expect("busy Actor remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(hot.pending_signal);
+    assert!(!hot.pending_signal);
+    assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
