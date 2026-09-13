@@ -24,6 +24,35 @@ This is the sole Actors experiment entrypoint and owner of shared track metadata
 - Current 0.7.25 physical baseline: [EXP-0025](./EXP-0025.md), Accepted with decision scope physical architecture only; **C1 PHYSICAL GEOMETRY: FROZEN**. Production Weight, bindings, throughput and release Geometry Freeze remain separate gates.
 - The 0.7.24 Actors baseline combines [EXP-0016](./EXP-0016.md) C6 Contract geometry, [EXP-0013](./EXP-0013.md) loaded-state reuse through one-Step planning and commit, and [EXP-0010](./EXP-0010.md) compact Observation activation. Complete renewed evidence binds the P32 runtime profile; [EXP-0001](./EXP-0001.md) preserves the rejected 0.7.23 throughput hypothesis as historical evidence.
 
+## 0.7.27 Active Current-State Lineage
+
+This projection is the decision-facing entrypoint for the current-state/live-residency redesign. It deliberately does not rewrite or renumber historical EXP records. The governing Actors specification owns semantics; this track owns only physical questions, evidence applicability and decision lineage.
+
+### Current Obligations
+
+| Current obligation | Governing scope | Current consumer | Evidence needed before closure |
+| --- | --- | --- | --- |
+| Realize current-only predicates and `Fixed`/`Percent(current Available)` without historical snapshots or causes. | `template/pallets/actors/docs/specification.en.md` §2.3 | N2.1–N2.3, N3.2, N4.3 | Executable semantic equivalence plus implementation tests over repeated Attempts and mutation. |
+| Preserve one persistent Q1 cyclic order across blocks, round-bound mutation, sleep, park, pending return, disablement and retirement. | Actors specification §2.3 residence and round machine | N2.1, N3.1–N3.8, N4.1–N4.4 | Independent round/wake models, supported-transition tests and bounded implementation evidence. |
+| Prove complete invalidation, no lost wakeup, no duplicate residence and generation-safe reclamation. | Actors specification §2.3 parking and generation rules | N1.3, N3.3–N3.7, N4.2–N4.4 | Hazard-specific closure routes and tests; syntax or graph reachability alone is insufficient. |
+| Own every retained service, negative check, wake, mutation and cleanup path by component-wise resources. | Actor resource-policy and performance-assurance specifications | N5.2–N5.4, N6.3–N6.5 | Path-by-path generated Weight, whole-service accounting and exact-tree assurance. |
+| Select one bounded physical design only after equal-semantics comparison. | Frozen 0.7.27 campaign in `BACKLOG.md` | N5.4, N6.2–N6.4 | Finite candidate closure, declared materiality and a labelled bridge to the old release. |
+
+### Deliberate Claim Imports
+
+An import below is usable only at its stated scope and by its named consumer. Numerical results remain with the original record and are not silently promoted to the current semantic or artifact identity.
+
+- [EXP-0075](./EXP-0075.md): Import only that, under the recorded C1 binding, adding 9,885 non-due identities changed neither service order nor charged Control for the same 100-Actor due frontier. N5.4 and N6.3 consume this as a baseline limit: a new scalability claim cannot assume old service scanned the whole identity population, and no old queue geometry is retained by implication.
+- [EXP-0076](./EXP-0076.md): Import only that legal closed-prefix reclamation consumed bounded service capacity and reduced the live FIFO prefix admitted under the recorded C32 topology. N4.4 and N5.3 consume this as hazard and old-baseline pressure, not as a claim about steady-state churn, alternate geometry or necessary tombstones.
+- [EXP-0113](./EXP-0113.md) and [EXP-0114](./EXP-0114.md): Import only the general failure scenario that consensus control-flow selection requires an explicit measured owner even when it performs no Task effect. N5.2 and N7.1 consume it; the old selector coefficient is excluded unless its exact implementation and benchmark domain survive.
+- [EXP-0117](./EXP-0117.md): Import only the finding that deep temporal coverage and full-capacity rearm were not established for every reachable path in the old topology. N1.3 and N3.3–N3.7 consume this immediate hazard transfer for any surviving retry, review or sweep cursor; removal closes nothing until replacement coverage is proved.
+
+No other historical result is currently imported. In particular, old P7/P8 percentages and rankings are diagnostic history rather than current candidate priorities, [EXP-0118](./EXP-0118.md) remains a narrow historical rejection rather than a ban on a new carrier, and old Opening, successor-ticket, tombstone or deferred-Cycle semantics have no authority over the current specification.
+
+### Historical Lineages
+
+The sections below and the [Experiment Index](#experiment-index) preserve the complete historical decision corpus, original IDs, paths, statuses, limitations and evidence relations. Read them only when a current consumer above requires the original evidence or when a new claim import is added here with exact applicability. Historical acceptance never substitutes for current semantic, artifact or physical closure.
+
 ## 0.7.26 Bounded Comparative Campaign
 
 The 0.7.26 campaign admits one comparative selection decision against sealed C1: whether one bounded **ObservationCrossing materialization** candidate is selected, rejected, or established as a limitation. The release-facing freeze lives in `BACKLOG.md` under Frozen Campaign Scope and Regression Policy; this track owns its experiment realization:
