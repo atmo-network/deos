@@ -74,12 +74,7 @@ const conditionNames = [
   'ObservationEquals',
   'ObservationNotEquals',
 ];
-const amountNames = [
-  'Fixed',
-  'PercentageOfCurrent',
-  'PercentageAtOpening',
-  'PercentageOfLastFunding',
-];
+const amountNames = ['Fixed', 'PercentageOfCurrent', 'PercentageAtOpening'];
 const errorPolicies = ['AbortCycle', 'ContinueNextStep', 'RetryLater'];
 
 const weightModel = {
@@ -784,7 +779,6 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
             ArtifactValue: 'artifact-value',
             CurrentBalanceOrShares: 'current-balance-or-shares',
             OpeningSnapshot: 'opening-snapshot',
-            LastFundingSnapshot: 'last-funding-snapshot',
             TaskPolicyCapacity: 'task-policy-capacity',
           })[dependency],
       ),

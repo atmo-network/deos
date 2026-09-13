@@ -35,8 +35,7 @@ export type ActorPredicateName =
 export type ActorAmountName =
   | 'Fixed'
   | 'PercentageOfCurrent'
-  | 'PercentageAtOpening'
-  | 'PercentageOfLastFunding';
+  | 'PercentageAtOpening';
 
 const TASK_NAMES = [
   'Transfer',
@@ -70,7 +69,6 @@ const AMOUNT_NAMES = [
   'Fixed',
   'PercentageOfCurrent',
   'PercentageAtOpening',
-  'PercentageOfLastFunding',
 ] as const satisfies readonly ActorAmountName[];
 
 export type ActorSemanticRecipient =
@@ -131,7 +129,6 @@ export type ActorSemanticAmountResolution = {
     | 'ArtifactValue'
     | 'CurrentBalanceOrShares'
     | 'OpeningSnapshot'
-    | 'LastFundingSnapshot'
     | 'TaskPolicyCapacity'
   >;
   minimumBalanceDependency: 'None' | 'TaskPolicy';

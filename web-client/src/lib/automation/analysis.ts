@@ -112,7 +112,6 @@ export type ActorAmountSemantics = {
     | 'artifact-value'
     | 'current-balance-or-shares'
     | 'opening-snapshot'
-    | 'last-funding-snapshot'
     | 'task-policy-capacity'
   >;
   minimumBalanceDependency: 'task-policy';
@@ -643,8 +642,6 @@ function taskAmounts(
             return 'current-balance-or-shares';
           case 'OpeningSnapshot':
             return 'opening-snapshot';
-          case 'LastFundingSnapshot':
-            return 'last-funding-snapshot';
           case 'TaskPolicyCapacity':
             return 'task-policy-capacity';
         }
