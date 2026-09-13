@@ -362,10 +362,6 @@ If the finite campaign fails the materiality criterion, record its result and th
 
 **Freeze:** after N5.4/N6.4 choose one production service/physical design. N7 admits only required correctness, soundness, binding, review and public-truth corrections. Independent performance opportunities belong to the proposed `0.7.28` portfolio unless explicitly reauthorized.
 
-## N1 — Import Relevant Evidence and Hazards
-
-- [ ] **N1.3 / Applicable Hazard Closure Routes.** Route H1–H9 from §2.5 plus the new round-reentry, lost-wakeup, arbitrary-unlink, duplicate-residence and sweep-generation hazards. Repair retained/reachable mechanisms, refute a finding with scoped evidence, prove actual elimination plus replacement coverage, or apply an approved enforced restriction. If the old heap survives only for retry or sweep, its deep/full-capacity obligations survive. A rejected optimization does not close a safety question. **Exit:** Every known applicable hazard has a named closure owner; removed machinery does not require needless modernization and surviving fallbacks cannot evade coverage.
-
 ## N2 — Build the Current-State Execution Core
 
 - [ ] **N2.1 / Minimal Canonical Continuation.** Implement one current Cycle, Actor/generation binding, cursor, bounded retry state and required outcomes under stable canonical ownership. Decouple process data from service membership. Start checks apply only while idle; an open Cycle follows its current Step regardless of changes to its old start condition. Build a minimal multi-Step and retry vertical slice before final carrier selection. No future-start latch is acquired while busy. **Exit:** Current-balance programs progress across blocks with one continuation owner, atomic Steps and durable committed prefixes, independent of a second future-Cycle machine.
