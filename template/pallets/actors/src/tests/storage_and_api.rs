@@ -8,8 +8,8 @@ use crate::{
   ProcessDisableCause, ProcessDisablement, ProcessPublicationError, ProcessResidence,
   ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError, ProcessTransitionObligation,
   ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind,
-  ServiceRingMutationError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  compile_legacy_process, plan_legacy_process_transition,
+  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -964,14 +964,14 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
       serving_process(first, ServiceResidenceKind::Live),
     );
     assert_eq!(
-      Actors::insert_service_member(first, ServiceResidenceKind::Live, 2, 1),
+      Actors::insert_service_member(first, ServiceResidenceKind::Live, 1),
       Err(ServiceRingMutationError::TransactionRequired)
     );
 
     let legacy_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let legacy_rejected = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-        Actors::insert_service_member(actor_ref(legacy_id, 1), ServiceResidenceKind::Live, 2, 1),
+        Actors::insert_service_member(actor_ref(legacy_id, 1), ServiceResidenceKind::Live, 1),
       )
     });
     assert_eq!(
@@ -992,7 +992,7 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
       );
       polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-          Actors::insert_service_member(actor, ServiceResidenceKind::Live, 2, 1),
+          Actors::insert_service_member(actor, ServiceResidenceKind::Live, 1),
         )
       })
       .expect("canonical insertion succeeds");
@@ -1030,13 +1030,126 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
       serving_process(rolled_back, ServiceResidenceKind::Pending),
     );
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::insert_service_member(rolled_back, ServiceResidenceKind::Pending, 3, 2)
+      Actors::insert_service_member(rolled_back, ServiceResidenceKind::Pending, 2)
         .expect("staged insertion is visible");
       assert!(ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
     assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+  });
+}
+
+#[test]
+fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
+  new_test_ext().execute_with(|| {
+    let members = [actor_ref(120, 1), actor_ref(121, 1), actor_ref(122, 1)];
+    for actor in members {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, 4)
+          .expect("same-block admission succeeds");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    assert_eq!(ServiceHeader::<Test>::get().round_block, Some(4));
+    assert!(members.iter().all(|actor| {
+      let node = ServiceNodes::<Test>::get(actor.actor_id).expect("member");
+      node.eligible_from == 5 && node.last_considered == 4
+    }));
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(5).expect("next round begins");
+      assert_eq!(
+        Actors::consider_service_head(5),
+        Ok(ServiceRoundEncounter::Eligible(members[0]))
+      );
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[0]));
+      Actors::advance_service_head(members[0], 5).expect("first consideration advances");
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[1]));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::advance_service_head(members[1], 5).expect("second consideration advances");
+      Actors::advance_service_head(members[2], 5).expect("third consideration wraps");
+      assert_eq!(
+        Actors::consider_service_head(5),
+        Ok(ServiceRoundEncounter::Closed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+  });
+}
+
+#[test]
+fn canonical_service_round_handles_empty_removal_interruption_and_faults() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      Actors::begin_service_round(1),
+      Err(ServiceRoundError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(1).expect("empty round begins");
+      assert_eq!(
+        Actors::consider_service_head(1),
+        Ok(ServiceRoundEncounter::Empty)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let first = actor_ref(130, 2);
+    let second = actor_ref(131, 2);
+    for actor in [first, second] {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(2).unwrap();
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Ok(ServiceRoundEncounter::Eligible(first))
+      );
+      Actors::remove_service_member(first).expect("cursor removal selects successor");
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(second));
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Ok(ServiceRoundEncounter::Eligible(second))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    ServiceNodes::<Test>::mutate(second.actor_id, |node| {
+      node.as_mut().unwrap().eligible_from = 9;
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Err(ServiceRoundError::FutureMemberUnmarked)
+      );
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(second));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+
+    ServiceNodes::<Test>::mutate(second.actor_id, |node| {
+      node.as_mut().unwrap().generation = 3;
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Err(ServiceRoundError::StaleGeneration)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
   });
 }
 

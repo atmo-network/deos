@@ -2480,8 +2480,7 @@ pub mod pallet {
     pub(crate) fn insert_service_member(
       actor: ActorRef,
       kind: ServiceResidenceKind,
-      eligible_from: BlockNumberFor<T>,
-      last_considered: BlockNumberFor<T>,
+      now: BlockNumberFor<T>,
     ) -> Result<(), ServiceRingMutationError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(ServiceRingMutationError::TransactionRequired);
@@ -2504,6 +2503,14 @@ pub mod pallet {
       }
 
       let mut header = ServiceHeader::<T>::get();
+      match header.round_block {
+        Some(round) if round > now => return Err(ServiceRingMutationError::CorruptRing),
+        Some(round) if round == now => {}
+        _ => header.round_block = Some(now),
+      }
+      let eligible_from = now
+        .checked_add(&One::one())
+        .ok_or(ServiceRingMutationError::BlockNumberOverflow)?;
       let next_count = header
         .count
         .checked_add(1)
@@ -2514,7 +2521,7 @@ pub mod pallet {
         next: actor,
         kind,
         eligible_from,
-        last_considered,
+        last_considered: now,
       };
       match (header.count, header.cursor) {
         (0, None) => header.cursor = Some(actor),
@@ -2557,6 +2564,107 @@ pub mod pallet {
         ServiceNodes::<T>::insert(actor.actor_id, node);
       }
       header.count = next_count;
+      ServiceHeader::<T>::put(header);
+      Ok(())
+    }
+
+    /// Opens or resumes exactly one immutable block round without moving its persistent cursor.
+    #[allow(
+      dead_code,
+      reason = "round frontier remains inert until scheduler authority cutover"
+    )]
+    pub(crate) fn begin_service_round(now: BlockNumberFor<T>) -> Result<(), ServiceRoundError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(ServiceRoundError::TransactionRequired);
+      }
+      let mut header = ServiceHeader::<T>::get();
+      if header.count == 0 {
+        if header.cursor.is_some() {
+          return Err(ServiceRoundError::CorruptRing);
+        }
+      } else if header.cursor.is_none() {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      match header.round_block {
+        Some(round) if round > now => Err(ServiceRoundError::RoundFromFuture),
+        Some(round) if round == now => Ok(()),
+        _ => {
+          header.round_block = Some(now);
+          ServiceHeader::<T>::put(header);
+          Ok(())
+        }
+      }
+    }
+
+    /// Classifies the current frontier without changing a blocked or closed head.
+    #[allow(
+      dead_code,
+      reason = "round frontier remains inert until scheduler authority cutover"
+    )]
+    pub(crate) fn consider_service_head(
+      now: BlockNumberFor<T>,
+    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(ServiceRoundError::TransactionRequired);
+      }
+      let header = ServiceHeader::<T>::get();
+      if header.round_block != Some(now) {
+        return Err(ServiceRoundError::RoundNotStarted);
+      }
+      let Some(actor) = header.cursor else {
+        return if header.count == 0 {
+          Ok(ServiceRoundEncounter::Empty)
+        } else {
+          Err(ServiceRoundError::CorruptRing)
+        };
+      };
+      if header.count == 0 {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      let node = ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRoundError::CorruptRing)?;
+      if node.generation != actor.generation {
+        return Err(ServiceRoundError::StaleGeneration);
+      }
+      let process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(ServiceRoundError::ProcessMissing)?;
+      if process.generation != actor.generation {
+        return Err(ServiceRoundError::StaleGeneration);
+      }
+      if process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Service(node.kind))
+      {
+        return Err(ServiceRoundError::ProcessResidenceMismatch);
+      }
+      if node.last_considered > now {
+        return Err(ServiceRoundError::RoundFromFuture);
+      }
+      if node.last_considered == now {
+        return Ok(ServiceRoundEncounter::Closed);
+      }
+      if node.eligible_from > now {
+        return Err(ServiceRoundError::FutureMemberUnmarked);
+      }
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    }
+
+    /// Commits one successful retained consideration and advances to its captured successor.
+    #[allow(
+      dead_code,
+      reason = "round frontier remains inert until scheduler authority cutover"
+    )]
+    pub(crate) fn advance_service_head(
+      actor: ActorRef,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRoundError> {
+      if Self::consider_service_head(now)? != ServiceRoundEncounter::Eligible(actor) {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      let mut node =
+        ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRoundError::CorruptRing)?;
+      let mut header = ServiceHeader::<T>::get();
+      node.last_considered = now;
+      header.cursor = Some(node.next);
+      ServiceNodes::<T>::insert(actor.actor_id, node);
       ServiceHeader::<T>::put(header);
       Ok(())
     }

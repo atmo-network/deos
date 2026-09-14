@@ -60,6 +60,28 @@ pub enum ServiceRingMutationError {
   StaleGeneration,
   CorruptRing,
   CapacityExceeded,
+  BlockNumberOverflow,
+}
+
+/// Read-only classification of the current inert service-ring frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRoundEncounter {
+  Empty,
+  Closed,
+  Eligible(ActorRef),
+}
+
+/// Rejected transaction-local operations on the inert service-ring round frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRoundError {
+  TransactionRequired,
+  RoundFromFuture,
+  RoundNotStarted,
+  CorruptRing,
+  StaleGeneration,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  FutureMemberUnmarked,
 }
 
 /// Bucket-level ownership for retained fixed-width deadline pages.
