@@ -3,7 +3,8 @@ use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyPublicationMutation, DependencyRegistrationError,
+  DeadlineMutationError, DeadlinePages, DependencyPlanMutation, DependencyPlanSource,
+  DependencyPlans, DependencyPublicationMutation, DependencyRegistrationError,
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
   DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
@@ -1790,6 +1791,203 @@ fn negative_dependency_evaluation_commits_only_exact_current_snapshot() {
       DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
       Some(original)
     );
+  });
+}
+
+#[test]
+fn complete_negative_dependency_plan_replaces_all_sources_atomically() {
+  new_test_ext().execute_with(|| {
+    let owner = PendingCheckOwner {
+      actor: actor_ref(238, 4),
+      plan_revision: 6,
+    };
+    for (source, revision) in [(41, 2), (42, 3), (43, 4), (44, 5)] {
+      DependencyRevisions::<Test>::insert(
+        source,
+        DependencyRevisionState {
+          revision,
+          scan_target: None,
+          scan_cursor: 0,
+          scan_end: 0,
+          exhausted: false,
+        },
+      );
+    }
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    let initial = [
+      DependencyPlanSource {
+        source: 41,
+        observed_revision: 2,
+      },
+      DependencyPlanSource {
+        source: 42,
+        observed_revision: 3,
+      },
+    ];
+    assert_eq!(
+      Actors::commit_negative_dependency_plan(owner, &initial),
+      Err(DependencyRegistrationError::TransactionRequired)
+    );
+    let installed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(owner, &initial),
+      )
+    });
+    assert_eq!(
+      installed,
+      Ok(DependencyPlanMutation {
+        installed: 2,
+        ..Default::default()
+      })
+    );
+    assert_eq!(DependencyPlans::<Test>::get(owner.actor.actor_id).len(), 2);
+
+    let revised_owner = PendingCheckOwner {
+      actor: owner.actor,
+      plan_revision: 7,
+    };
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, revised_owner);
+    let revised = [
+      DependencyPlanSource {
+        source: 42,
+        observed_revision: 3,
+      },
+      DependencyPlanSource {
+        source: 43,
+        observed_revision: 4,
+      },
+    ];
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::commit_negative_dependency_plan(revised_owner, &revised),
+        Ok(DependencyPlanMutation {
+          installed: 1,
+          replaced: 1,
+          removed: 1,
+          ..Default::default()
+        })
+      );
+      assert!(!DependencyRegistrations::<Test>::contains_key(
+        41,
+        owner.actor.actor_id
+      ));
+      assert!(DependencyRegistrations::<Test>::contains_key(
+        43,
+        owner.actor.actor_id
+      ));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      41,
+      owner.actor.actor_id
+    ));
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      43,
+      owner.actor.actor_id
+    ));
+    assert_eq!(DependencyPlans::<Test>::get(owner.actor.actor_id).len(), 2);
+
+    let duplicate = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(
+          revised_owner,
+          &[
+            DependencyPlanSource {
+              source: 41,
+              observed_revision: 2,
+            },
+            DependencyPlanSource {
+              source: 41,
+              observed_revision: 2,
+            },
+          ],
+        ),
+      )
+    });
+    let raced = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(
+          revised_owner,
+          &[DependencyPlanSource {
+            source: 43,
+            observed_revision: 3,
+          }],
+        ),
+      )
+    });
+    for refused in [duplicate, raced] {
+      assert!(matches!(
+        refused,
+        Err(DependencyRegistrationError::DuplicateSource)
+          | Err(DependencyRegistrationError::RevisionMismatch)
+      ));
+      assert_eq!(DependencyPlans::<Test>::get(owner.actor.actor_id).len(), 2);
+    }
+
+    DependencyRegistrationHeaders::<Test>::mutate(44, |header| {
+      let capacity: u32 = <Test as crate::Config>::MaxActiveActors::get();
+      header.count = capacity;
+      header.next_index = u64::from(capacity);
+    });
+    let capacity = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(
+          revised_owner,
+          &[DependencyPlanSource {
+            source: 44,
+            observed_revision: 5,
+          }],
+        ),
+      )
+    });
+    assert_eq!(capacity, Err(DependencyRegistrationError::CapacityExceeded));
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      41,
+      owner.actor.actor_id
+    ));
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      42,
+      owner.actor.actor_id
+    ));
+
+    let committed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(revised_owner, &revised),
+      )
+    });
+    assert_eq!(
+      committed,
+      Ok(DependencyPlanMutation {
+        installed: 1,
+        replaced: 1,
+        removed: 1,
+        ..Default::default()
+      })
+    );
+    let unchanged = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_plan(revised_owner, &revised),
+      )
+    });
+    assert_eq!(
+      unchanged,
+      Ok(DependencyPlanMutation {
+        retained: 2,
+        ..Default::default()
+      })
+    );
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      41,
+      owner.actor.actor_id
+    ));
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      42,
+      owner.actor.actor_id
+    ));
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      43,
+      owner.actor.actor_id
+    ));
   });
 }
 
@@ -4361,6 +4559,7 @@ fn actor_storage_schema_is_explicit() {
       ("DependencyRegistrationFreePositions", true, true),
       ("DependencyRegistrationPositions", true, true),
       ("DependencyRegistrations", true, true),
+      ("DependencyPlans", false, true),
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),

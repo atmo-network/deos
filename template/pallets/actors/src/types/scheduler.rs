@@ -140,6 +140,31 @@ pub struct DependencyRegistrationPosition {
   pub slot: u8,
 }
 
+/// One source snapshot in an explicitly complete negative-evaluation plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DependencyPlanSource {
+  pub source: DependencySourceId,
+  pub observed_revision: DependencyRevision,
+}
+
+/// Exact retained registration owned by one complete dependency plan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyPlanRegistration {
+  pub source: DependencySourceId,
+  pub handle: DependencyRegistrationHandle,
+}
+
+/// Bounded result of replacing one complete dependency plan.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DependencyPlanMutation {
+  pub installed: u32,
+  pub retained: u32,
+  pub replaced: u32,
+  pub removed: u32,
+}
+
 /// Bounded topology owner for one source's retained registration pages.
 #[derive(
   Clone,
@@ -191,6 +216,9 @@ pub enum DependencyRegistrationError {
   PositionMismatch,
   CorruptTopology,
   CapacityExceeded,
+  PlanTooLarge,
+  DuplicateSource,
+  StoredPlanMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

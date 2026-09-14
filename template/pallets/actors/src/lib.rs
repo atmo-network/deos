@@ -2999,6 +2999,131 @@ pub mod pallet {
       }
     }
 
+    /// Replaces one explicitly complete dependency plan after validating every old and new source.
+    #[allow(
+      dead_code,
+      reason = "complete dependency plans remain inert until parking authority cutover"
+    )]
+    pub(crate) fn commit_negative_dependency_plan(
+      owner: PendingCheckOwner,
+      desired: &[DependencyPlanSource],
+    ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      if desired.len() > T::MaxContractSteps::get() as usize {
+        return Err(DependencyRegistrationError::PlanTooLarge);
+      }
+      if PendingCheckOwners::<T>::get(owner.actor.actor_id) != Some(owner) {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      for (index, entry) in desired
+        .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the complete plan. */)
+        .enumerate()
+      {
+        if desired[..index]
+          .iter(/* deos-bypass: bounded-iter -- a prefix of the MaxContractSteps plan. */)
+          .any(|prior| prior.source == entry.source)
+        {
+          return Err(DependencyRegistrationError::DuplicateSource);
+        }
+        let state = DependencyRevisions::<T>::get(entry.source);
+        if state.exhausted {
+          return Err(DependencyRegistrationError::SourceExhausted);
+        }
+        if state.revision != entry.observed_revision {
+          return Err(DependencyRegistrationError::RevisionMismatch);
+        }
+      }
+
+      let old = DependencyPlans::<T>::get(owner.actor.actor_id);
+      for registration in &old {
+        if registration.handle.actor.actor_id != owner.actor.actor_id
+          || DependencyRegistrations::<T>::get(registration.source, owner.actor.actor_id)
+            != Some(registration.handle)
+        {
+          return Err(DependencyRegistrationError::StoredPlanMismatch);
+        }
+        Self::dependency_registration_position(
+          registration.source,
+          owner.actor.actor_id,
+          registration.handle,
+        )?;
+      }
+      for entry in desired {
+        let current = DependencyRegistrations::<T>::get(entry.source, owner.actor.actor_id);
+        let old_registration = old
+          .iter(/* deos-bypass: bounded-iter -- stored plan is MaxContractSteps-bounded. */)
+          .find(|value| value.source == entry.source);
+        if current != old_registration.map(|value| value.handle) {
+          return Err(DependencyRegistrationError::StoredPlanMismatch);
+        }
+        if current.is_none() {
+          let header = DependencyRegistrationHeaders::<T>::get(entry.source);
+          if header.count >= T::MaxActiveActors::get()
+            || (DependencyRevisions::<T>::get(entry.source)
+              .scan_target
+              .is_some()
+              && header.next_index >= u64::from(T::MaxActiveActors::get()))
+            || (header.free_count == 0 && header.next_index >= u64::from(T::MaxActiveActors::get()))
+          {
+            return Err(DependencyRegistrationError::CapacityExceeded);
+          }
+        }
+      }
+
+      let mut mutation = DependencyPlanMutation::default();
+      let mut next = BoundedVec::<DependencyPlanRegistration, T::MaxContractSteps>::default();
+      for entry in desired {
+        let result = match DependencyRegistrations::<T>::get(entry.source, owner.actor.actor_id) {
+          Some(current) => Self::replace_dependency_registration(
+            entry.source,
+            current,
+            owner,
+            entry.observed_revision,
+          )?,
+          None => {
+            Self::install_dependency_registration(entry.source, owner, entry.observed_revision)?
+          }
+        };
+        let counter = match result {
+          DependencyRegistrationMutation::Installed => &mut mutation.installed,
+          DependencyRegistrationMutation::Unchanged => &mut mutation.retained,
+          DependencyRegistrationMutation::Replaced => &mut mutation.replaced,
+          DependencyRegistrationMutation::Removed => {
+            return Err(DependencyRegistrationError::CorruptTopology);
+          }
+        };
+        *counter = counter
+          .checked_add(1)
+          .ok_or(DependencyRegistrationError::CapacityExceeded)?;
+        next
+          .try_push(DependencyPlanRegistration {
+            source: entry.source,
+            handle: DependencyRegistrationHandle {
+              actor: owner.actor,
+              plan_revision: owner.plan_revision,
+              acknowledged_revision: entry.observed_revision,
+            },
+          })
+          .map_err(|_| DependencyRegistrationError::PlanTooLarge)?;
+      }
+      for registration in &old {
+        if !desired
+          .iter(/* deos-bypass: bounded-iter -- MaxContractSteps bounds the complete plan. */)
+          .any(|entry| entry.source == registration.source)
+        {
+          Self::remove_dependency_registration(registration.source, registration.handle)?;
+          mutation.removed = mutation
+            .removed
+            .checked_add(1)
+            .ok_or(DependencyRegistrationError::CapacityExceeded)?;
+        }
+      }
+      DependencyPlans::<T>::insert(owner.actor.actor_id, next);
+      Ok(mutation)
+    }
+
     /// Installs or validates one exact dependency registration without releasing old authority.
     #[allow(
       dead_code,
@@ -5280,6 +5405,17 @@ pub mod pallet {
     ActorId,
     DependencyRegistrationHandle,
     OptionQuery,
+  >;
+
+  /// Inert Actor-owned complete registration plan; this is the removal-completeness authority.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_plans)]
+  pub type DependencyPlans<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    ActorId,
+    BoundedVec<DependencyPlanRegistration, T::MaxContractSteps>,
+    ValueQuery,
   >;
 
   /// Inert bucket ownership for the future retained C32 deadline carrier.
