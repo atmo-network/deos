@@ -1,10 +1,12 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorRef,
-  CloseReason, LegacyProcessPlacement, ParkEvidence, ParkNegativeReason,
+  CloseReason, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence, ParkNegativeReason,
   PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ServiceHeader, ServiceNode,
-  ServiceResidenceKind, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ServiceHeader, ServiceNode, ServiceResidenceKind,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -119,6 +121,138 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
 }
 
 #[test]
+fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_successors() {
+  let current = ActorProcess {
+    generation: 11,
+    status: ProcessStatus::Serving,
+    residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
+  };
+  let waiting = LegacyProcessPlacement::Waiting {
+    key: WakeupKey::Block(9u32),
+    page: 2,
+    slot: 3,
+  };
+  let disabled = ProcessDisablement {
+    cause: ProcessDisableCause::OwnerPaused,
+    revival_authority: ProcessRevivalAuthority::Owner,
+    basis: SuspendedProcessBasis::Running { eligible_at: 9u32 },
+  };
+
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::PublishTypedResidence,
+      LegacyProcessTransition::Publish(waiting),
+    ),
+    Ok(ActorProcess {
+      generation: 11,
+      status: ProcessStatus::Serving,
+      residence: Some(ProcessResidence::Deadline {
+        key: WakeupKey::Block(9),
+        page: 2,
+        slot: 3,
+      }),
+    })
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(Some(waiting)),
+    ),
+    compile_legacy_process(11, waiting).map_err(ProcessTransitionError::Compile)
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::PreserveProcess,
+      LegacyProcessTransition::Preserve,
+    ),
+    Ok(current)
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::CarrierOnly,
+      LegacyProcessTransition::CarrierOnly,
+    ),
+    Ok(current)
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(None),
+    ),
+    Err(ProcessTransitionError::DetachWithoutSuccessor)
+  );
+  for obligation in [
+    ProcessTransitionObligation::PublishTypedResidence,
+    ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+  ] {
+    let transition = match obligation {
+      ProcessTransitionObligation::PublishTypedResidence => {
+        LegacyProcessTransition::Publish(LegacyProcessPlacement::Unsignaled(None))
+      }
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval => {
+        LegacyProcessTransition::Replace(Some(LegacyProcessPlacement::Unsignaled(None)))
+      }
+      _ => unreachable!(),
+    };
+    assert_eq!(
+      plan_legacy_process_transition(current, obligation, transition),
+      Err(ProcessTransitionError::Compile(
+        ProcessCompileError::AmbiguousUnsignaled
+      ))
+    );
+  }
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::RetireOrDisable,
+      LegacyProcessTransition::Disable(disabled),
+    ),
+    Ok(ActorProcess {
+      generation: 11,
+      status: ProcessStatus::Disabled(disabled),
+      residence: None,
+    })
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Retire(CloseReason::OwnerInitiated),
+    ),
+    Ok(ActorProcess {
+      generation: 11,
+      status: ProcessStatus::Retired(CloseReason::OwnerInitiated),
+      residence: None,
+    })
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      current,
+      ProcessTransitionObligation::PreserveProcess,
+      LegacyProcessTransition::CarrierOnly,
+    ),
+    Err(ProcessTransitionError::ObligationMismatch)
+  );
+  assert_eq!(
+    plan_legacy_process_transition(
+      ActorProcess::<u32> {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: None,
+      },
+      ProcessTransitionObligation::PreserveProcess,
+      LegacyProcessTransition::Preserve,
+    ),
+    Err(ProcessTransitionError::InvalidCurrentProcess)
+  );
+}
+
+#[test]
 fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_cells() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -177,14 +311,7 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
     FunctionTransactional,
     InPlaceAtomicWrite,
   }
-  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-  enum RequiredProcessTransition {
-    PublishTypedResidence,
-    PreserveProcess,
-    AtomicSuccessorOrRemoval,
-    RetireOrDisable,
-    CarrierOnly,
-  }
+  type RequiredProcessTransition = ProcessTransitionObligation;
 
   const INVENTORY: &[(&str, &str, TransactionBoundary, RequiredProcessTransition)] = &[
     (

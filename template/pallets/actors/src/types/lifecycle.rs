@@ -156,6 +156,35 @@ pub enum ProcessCompileError {
   MalformedControlCell,
 }
 
+/// Cutover obligation assigned to every owner of legacy control-placement mutation.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ProcessTransitionObligation {
+  PublishTypedResidence,
+  PreserveProcess,
+  AtomicSuccessorOrRemoval,
+  RetireOrDisable,
+  CarrierOnly,
+}
+
+/// Typed evidence supplied by a legacy mutation owner to the storage-free cutover planner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyProcessTransition<BlockNumber> {
+  Publish(LegacyProcessPlacement<BlockNumber>),
+  Preserve,
+  Replace(Option<LegacyProcessPlacement<BlockNumber>>),
+  Disable(ProcessDisablement<BlockNumber>),
+  Retire(CloseReason),
+  CarrierOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessTransitionError {
+  InvalidCurrentProcess,
+  ObligationMismatch,
+  DetachWithoutSuccessor,
+  Compile(ProcessCompileError),
+}
+
 /// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
 pub fn compile_legacy_process<BlockNumber>(
   generation: ActorGeneration,
@@ -186,6 +215,63 @@ pub fn compile_legacy_process<BlockNumber>(
     status,
     residence,
   })
+}
+
+/// Plans one legacy control-owner mutation without publishing process storage. The obligation makes
+/// the owner inventory exhaustive; typed evidence prevents detach-first and ambiguous Unsignaled
+/// transitions from becoming a process state.
+pub fn plan_legacy_process_transition<BlockNumber: Copy>(
+  current: ActorProcess<BlockNumber>,
+  obligation: ProcessTransitionObligation,
+  transition: LegacyProcessTransition<BlockNumber>,
+) -> Result<ActorProcess<BlockNumber>, ProcessTransitionError> {
+  let coherent = matches!(
+    (current.status, current.residence),
+    (ProcessStatus::Serving, Some(_))
+      | (ProcessStatus::Disabled(_), None)
+      | (ProcessStatus::Retired(_), None)
+  );
+  if !coherent {
+    return Err(ProcessTransitionError::InvalidCurrentProcess);
+  }
+
+  match (obligation, transition) {
+    (
+      ProcessTransitionObligation::PublishTypedResidence,
+      LegacyProcessTransition::Publish(next),
+    )
+    | (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(Some(next)),
+    ) => compile_legacy_process(current.generation, next).map_err(ProcessTransitionError::Compile),
+    (ProcessTransitionObligation::PreserveProcess, LegacyProcessTransition::Preserve)
+    | (ProcessTransitionObligation::CarrierOnly, LegacyProcessTransition::CarrierOnly) => {
+      Ok(current)
+    }
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval,
+      LegacyProcessTransition::Replace(None),
+    ) => Err(ProcessTransitionError::DetachWithoutSuccessor),
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval
+      | ProcessTransitionObligation::RetireOrDisable,
+      LegacyProcessTransition::Disable(disablement),
+    ) => Ok(ActorProcess {
+      generation: current.generation,
+      status: ProcessStatus::Disabled(disablement),
+      residence: None,
+    }),
+    (
+      ProcessTransitionObligation::AtomicSuccessorOrRemoval
+      | ProcessTransitionObligation::RetireOrDisable,
+      LegacyProcessTransition::Retire(reason),
+    ) => Ok(ActorProcess {
+      generation: current.generation,
+      status: ProcessStatus::Retired(reason),
+      residence: None,
+    }),
+    _ => Err(ProcessTransitionError::ObligationMismatch),
+  }
 }
 
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
