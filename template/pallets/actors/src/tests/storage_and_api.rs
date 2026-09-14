@@ -53,6 +53,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       LegacyProcessPlacement::Ready(ServiceResidenceKind::Live),
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
       },
@@ -61,6 +62,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       LegacyProcessPlacement::Ready(ServiceResidenceKind::Pending),
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
       },
@@ -73,6 +75,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       },
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Deadline {
           key: WakeupKey::Block(9),
@@ -89,6 +92,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       },
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Deadline {
           key: WakeupKey::Tick(10),
@@ -101,6 +105,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Parked(parked))),
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Parked(parked)),
       },
@@ -109,16 +114,17 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
       LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Disabled(disabled))),
       ActorProcess {
         generation: 11,
+        last_attempted: Some(7),
         status: ProcessStatus::Disabled(disabled),
         residence: None,
       },
     ),
   ];
   for (placement, expected) in cases {
-    assert_eq!(compile_legacy_process(11, placement), Ok(expected));
+    assert_eq!(compile_legacy_process(11, Some(7), placement), Ok(expected));
   }
   assert_eq!(
-    compile_legacy_process::<u32>(11, LegacyProcessPlacement::Unsignaled(None)),
+    compile_legacy_process::<u32>(11, None, LegacyProcessPlacement::Unsignaled(None)),
     Err(ProcessCompileError::AmbiguousUnsignaled)
   );
 }
@@ -127,6 +133,7 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
 fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_successors() {
   let current = ActorProcess {
     generation: 11,
+    last_attempted: Some(7),
     status: ProcessStatus::Serving,
     residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
   };
@@ -149,6 +156,7 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
     ),
     Ok(ActorProcess {
       generation: 11,
+      last_attempted: Some(7),
       status: ProcessStatus::Serving,
       residence: Some(ProcessResidence::Deadline {
         key: WakeupKey::Block(9),
@@ -163,7 +171,7 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
       ProcessTransitionObligation::AtomicSuccessorOrRemoval,
       LegacyProcessTransition::Replace(Some(waiting)),
     ),
-    compile_legacy_process(11, waiting).map_err(ProcessTransitionError::Compile)
+    compile_legacy_process(11, Some(7), waiting).map_err(ProcessTransitionError::Compile)
   );
   assert_eq!(
     plan_legacy_process_transition(
@@ -217,6 +225,7 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
     ),
     Ok(ActorProcess {
       generation: 11,
+      last_attempted: Some(7),
       status: ProcessStatus::Disabled(disabled),
       residence: None,
     })
@@ -229,6 +238,7 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
     ),
     Ok(ActorProcess {
       generation: 11,
+      last_attempted: Some(7),
       status: ProcessStatus::Retired(CloseReason::OwnerInitiated),
       residence: None,
     })
@@ -245,6 +255,7 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
     plan_legacy_process_transition(
       ActorProcess::<u32> {
         generation: 11,
+        last_attempted: None,
         status: ProcessStatus::Serving,
         residence: None,
       },
@@ -260,6 +271,7 @@ fn process_publication_is_transaction_local_single_authority_and_rollback_safe()
   new_test_ext().execute_with(|| {
     let current = ActorProcess {
       generation: 11,
+      last_attempted: Some(7),
       status: ProcessStatus::Serving,
       residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
     };
@@ -370,7 +382,13 @@ fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_
     let (unsignaled_location, unsignaled_cell) =
       Actors::actor_control_cell(actor_id).expect("Manual Actor starts Unsignaled");
     assert_eq!(
-      Actors::compile_legacy_control_process(7, unsignaled_location, &unsignaled_cell, None,),
+      Actors::compile_legacy_control_process(
+        7,
+        Some(5),
+        unsignaled_location,
+        &unsignaled_cell,
+        None,
+      ),
       Err(ProcessCompileError::AmbiguousUnsignaled)
     );
     let park = ParkEvidence {
@@ -381,12 +399,14 @@ fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_
     assert_eq!(
       Actors::compile_legacy_control_process(
         7,
+        Some(5),
         unsignaled_location,
         &unsignaled_cell,
         Some(UnsignaledProcessEvidence::Parked(park)),
       ),
       Ok(ActorProcess {
         generation: 7,
+        last_attempted: Some(5),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Parked(park)),
       })
@@ -396,9 +416,10 @@ fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_
     let (ready_location, ready_cell) =
       Actors::actor_control_cell(actor_id).expect("latched Manual Actor is Ready");
     assert_eq!(
-      Actors::compile_legacy_control_process(7, ready_location, &ready_cell, None),
+      Actors::compile_legacy_control_process(7, Some(5), ready_location, &ready_cell, None),
       Ok(ActorProcess {
         generation: 7,
+        last_attempted: Some(5),
         status: ProcessStatus::Serving,
         residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
       })
@@ -407,7 +428,7 @@ fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_
     let mut malformed = ready_cell;
     malformed.eligible_at = None;
     assert_eq!(
-      Actors::compile_legacy_control_process(7, ready_location, &malformed, None),
+      Actors::compile_legacy_control_process(7, Some(5), ready_location, &malformed, None),
       Err(ProcessCompileError::MalformedControlCell)
     );
   });
@@ -777,6 +798,7 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
 fn process_status_separates_park_from_revocation_and_retirement() {
   let parked: ActorProcess<u32> = ActorProcess {
     generation: 11,
+    last_attempted: Some(7),
     status: ProcessStatus::Serving,
     residence: Some(ProcessResidence::Parked(ParkEvidence {
       plan_identity: [3; 32],
@@ -786,6 +808,7 @@ fn process_status_separates_park_from_revocation_and_retirement() {
   };
   let disabled: ActorProcess<u32> = ActorProcess {
     generation: 11,
+    last_attempted: Some(7),
     status: ProcessStatus::Disabled(ProcessDisablement {
       cause: ProcessDisableCause::OwnerPaused,
       revival_authority: ProcessRevivalAuthority::Owner,
@@ -795,6 +818,7 @@ fn process_status_separates_park_from_revocation_and_retirement() {
   };
   let retired: ActorProcess<u32> = ActorProcess {
     generation: 11,
+    last_attempted: Some(7),
     status: ProcessStatus::Retired(CloseReason::OwnerInitiated),
     residence: None,
   };
@@ -950,6 +974,7 @@ fn service_ring_oracle_rejects_stale_generation_without_mutation() {
 fn serving_process(actor: ActorRef, kind: ServiceResidenceKind) -> ActorProcess<u64> {
   ActorProcess {
     generation: actor.generation,
+    last_attempted: None,
     status: ProcessStatus::Serving,
     residence: Some(ProcessResidence::Service(kind)),
   }
@@ -1063,12 +1088,32 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
 
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       Actors::begin_service_round(5).expect("next round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::advance_service_head(members[0], 5).expect("staged attempt advances");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[0]));
+    assert_eq!(
+      ActorProcesses::<Test>::get(members[0].actor_id)
+        .unwrap()
+        .last_attempted,
+      None
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       assert_eq!(
         Actors::consider_service_head(5),
         Ok(ServiceRoundEncounter::Eligible(members[0]))
       );
-      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[0]));
       Actors::advance_service_head(members[0], 5).expect("first consideration advances");
+      assert_eq!(
+        ActorProcesses::<Test>::get(members[0].actor_id)
+          .unwrap()
+          .last_attempted,
+        Some(5)
+      );
       assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[1]));
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
@@ -1113,34 +1158,56 @@ fn canonical_service_round_handles_empty_removal_interruption_and_faults() {
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
       });
     }
+    ActorProcesses::<Test>::mutate(first.actor_id, |process| {
+      process.as_mut().unwrap().last_attempted = Some(2);
+    });
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       Actors::begin_service_round(2).unwrap();
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       assert_eq!(
         Actors::consider_service_head(2),
-        Ok(ServiceRoundEncounter::Eligible(first))
+        Ok(ServiceRoundEncounter::AlreadyAttempted(first))
       );
-      Actors::remove_service_member(first).expect("cursor removal selects successor");
+      Actors::converge_attempted_service_head(first, 2).unwrap();
       assert_eq!(ServiceHeader::<Test>::get().cursor, Some(second));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(first));
+    assert_eq!(
+      ServiceNodes::<Test>::get(first.actor_id)
+        .unwrap()
+        .last_considered,
+      1
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::converge_attempted_service_head(first, 2).unwrap();
+      Actors::remove_service_member(second).expect("cursor removal selects successor");
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(first));
       assert_eq!(
         Actors::consider_service_head(2),
-        Ok(ServiceRoundEncounter::Eligible(second))
+        Ok(ServiceRoundEncounter::Closed)
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
 
-    ServiceNodes::<Test>::mutate(second.actor_id, |node| {
-      node.as_mut().unwrap().eligible_from = 9;
+    ServiceNodes::<Test>::mutate(first.actor_id, |node| {
+      let node = node.as_mut().unwrap();
+      node.eligible_from = 9;
+      node.last_considered = 1;
     });
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       assert_eq!(
         Actors::consider_service_head(2),
         Err(ServiceRoundError::FutureMemberUnmarked)
       );
-      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(second));
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(first));
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
 
-    ServiceNodes::<Test>::mutate(second.actor_id, |node| {
+    ServiceNodes::<Test>::mutate(first.actor_id, |node| {
       node.as_mut().unwrap().generation = 3;
     });
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
@@ -1150,12 +1217,68 @@ fn canonical_service_round_handles_empty_removal_interruption_and_faults() {
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
+
+    ServiceNodes::<Test>::mutate(first.actor_id, |node| {
+      let node = node.as_mut().unwrap();
+      node.generation = 2;
+      node.eligible_from = 2;
+    });
+    ActorProcesses::<Test>::mutate(first.actor_id, |process| {
+      process.as_mut().unwrap().last_attempted = Some(3);
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Err(ServiceRoundError::AttemptFromFuture)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+  });
+}
+
+#[test]
+fn canonical_service_admission_rejects_overflow_and_defers_replacement() {
+  new_test_ext().execute_with(|| {
+    let actor = actor_ref(140, 1);
+    ActorProcesses::<Test>::insert(
+      actor.actor_id,
+      serving_process(actor, ServiceResidenceKind::Live),
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, u64::MAX),
+        Err(ServiceRingMutationError::BlockNumberOverflow)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
+    assert!(!ServiceNodes::<Test>::contains_key(actor.actor_id));
+
+    let replacement = actor_ref(actor.actor_id, 2);
+    ActorProcesses::<Test>::insert(
+      replacement.actor_id,
+      serving_process(replacement, ServiceResidenceKind::Live),
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_service_member(replacement, ServiceResidenceKind::Live, 8).unwrap();
+      assert_eq!(
+        Actors::consider_service_head(8),
+        Ok(ServiceRoundEncounter::Closed)
+      );
+      let node = ServiceNodes::<Test>::get(replacement.actor_id).unwrap();
+      assert_eq!(
+        (node.generation, node.eligible_from, node.last_considered),
+        (2, 9, 8)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
   });
 }
 
 fn deadline_process(handle: DeadlineHandle<u64>) -> ActorProcess<u64> {
   ActorProcess {
     generation: handle.actor.generation,
+    last_attempted: None,
     status: ProcessStatus::Serving,
     residence: Some(ProcessResidence::Deadline {
       key: handle.key,

@@ -68,6 +68,7 @@ pub enum ServiceRingMutationError {
 pub enum ServiceRoundEncounter {
   Empty,
   Closed,
+  AlreadyAttempted(ActorRef),
   Eligible(ActorRef),
 }
 
@@ -82,6 +83,7 @@ pub enum ServiceRoundError {
   ProcessMissing,
   ProcessResidenceMismatch,
   FutureMemberUnmarked,
+  AttemptFromFuture,
 }
 
 /// Bucket-level ownership for retained fixed-width deadline pages.

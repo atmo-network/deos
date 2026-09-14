@@ -121,6 +121,7 @@ pub enum ProcessStatus<BlockNumber> {
 )]
 pub struct ActorProcess<BlockNumber> {
   pub generation: ActorGeneration,
+  pub last_attempted: Option<BlockNumber>,
   pub status: ProcessStatus<BlockNumber>,
   pub residence: Option<ProcessResidence<BlockNumber>>,
 }
@@ -199,6 +200,7 @@ pub enum ProcessPublicationError {
 /// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
 pub fn compile_legacy_process<BlockNumber>(
   generation: ActorGeneration,
+  last_attempted: Option<BlockNumber>,
   placement: LegacyProcessPlacement<BlockNumber>,
 ) -> Result<ActorProcess<BlockNumber>, ProcessCompileError> {
   let (status, residence) = match placement {
@@ -223,6 +225,7 @@ pub fn compile_legacy_process<BlockNumber>(
   };
   Ok(ActorProcess {
     generation,
+    last_attempted,
     status,
     residence,
   })
@@ -254,7 +257,8 @@ pub fn plan_legacy_process_transition<BlockNumber: Copy>(
     | (
       ProcessTransitionObligation::AtomicSuccessorOrRemoval,
       LegacyProcessTransition::Replace(Some(next)),
-    ) => compile_legacy_process(current.generation, next).map_err(ProcessTransitionError::Compile),
+    ) => compile_legacy_process(current.generation, current.last_attempted, next)
+      .map_err(ProcessTransitionError::Compile),
     (ProcessTransitionObligation::PreserveProcess, LegacyProcessTransition::Preserve)
     | (ProcessTransitionObligation::CarrierOnly, LegacyProcessTransition::CarrierOnly) => {
       Ok(current)
@@ -269,6 +273,7 @@ pub fn plan_legacy_process_transition<BlockNumber: Copy>(
       LegacyProcessTransition::Disable(disablement),
     ) => Ok(ActorProcess {
       generation: current.generation,
+      last_attempted: current.last_attempted,
       status: ProcessStatus::Disabled(disablement),
       residence: None,
     }),
@@ -278,6 +283,7 @@ pub fn plan_legacy_process_transition<BlockNumber: Copy>(
       LegacyProcessTransition::Retire(reason),
     ) => Ok(ActorProcess {
       generation: current.generation,
+      last_attempted: current.last_attempted,
       status: ProcessStatus::Retired(reason),
       residence: None,
     }),

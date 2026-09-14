@@ -2405,6 +2405,7 @@ pub mod pallet {
     )]
     pub(crate) fn compile_legacy_control_process(
       generation: ActorGeneration,
+      last_attempted: Option<BlockNumberFor<T>>,
       location: ActorControlLocation<BlockNumberFor<T>>,
       cell: &ActorControlCellOf<T>,
       unsignaled_evidence: Option<UnsignaledProcessEvidence<BlockNumberFor<T>>>,
@@ -2425,7 +2426,7 @@ pub mod pallet {
         }
         ActorControlLocation::Unsignaled => LegacyProcessPlacement::Unsignaled(unsignaled_evidence),
       };
-      compile_legacy_process(generation, placement)
+      compile_legacy_process(generation, last_attempted, placement)
     }
 
     /// Publishes one already-inventoried legacy transition only inside its caller's transaction.
@@ -2644,7 +2645,11 @@ pub mod pallet {
       if node.eligible_from > now {
         return Err(ServiceRoundError::FutureMemberUnmarked);
       }
-      Ok(ServiceRoundEncounter::Eligible(actor))
+      match process.last_attempted {
+        Some(attempted) if attempted > now => Err(ServiceRoundError::AttemptFromFuture),
+        Some(attempted) if attempted == now => Ok(ServiceRoundEncounter::AlreadyAttempted(actor)),
+        _ => Ok(ServiceRoundEncounter::Eligible(actor)),
+      }
     }
 
     /// Commits one successful retained consideration and advances to its captured successor.
@@ -2657,6 +2662,32 @@ pub mod pallet {
       now: BlockNumberFor<T>,
     ) -> Result<(), ServiceRoundError> {
       if Self::consider_service_head(now)? != ServiceRoundEncounter::Eligible(actor) {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      let mut node =
+        ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRoundError::CorruptRing)?;
+      let mut process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(ServiceRoundError::ProcessMissing)?;
+      let mut header = ServiceHeader::<T>::get();
+      node.last_considered = now;
+      process.last_attempted = Some(now);
+      header.cursor = Some(node.next);
+      ServiceNodes::<T>::insert(actor.actor_id, node);
+      ActorProcesses::<T>::insert(actor.actor_id, process);
+      ServiceHeader::<T>::put(header);
+      Ok(())
+    }
+
+    /// Advances one already-attempted defensive encounter without admitting another attempt.
+    #[allow(
+      dead_code,
+      reason = "round frontier remains inert until scheduler authority cutover"
+    )]
+    pub(crate) fn converge_attempted_service_head(
+      actor: ActorRef,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRoundError> {
+      if Self::consider_service_head(now)? != ServiceRoundEncounter::AlreadyAttempted(actor) {
         return Err(ServiceRoundError::CorruptRing);
       }
       let mut node =
