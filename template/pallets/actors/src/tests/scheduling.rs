@@ -3345,6 +3345,65 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
 }
 
 #[test]
+fn repeated_scheduler_pass_same_block_preserves_one_committed_step_turn() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut steps = transfer_contract_steps(BOB, 10).into_inner();
+    steps.extend(transfer_contract_steps(BOB, 20).into_inner());
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(steps).expect("two Steps fit"),
+    );
+    fund_native(actor_id, 1_000_000_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let recipient_before = MockAssetOps::balance(&BOB, TestAsset::Native);
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
+    let first_run = Actors::actor_run_state(actor_id).expect("successor remains live");
+    let successor_ticket = Actors::actor_hot(actor_id)
+      .and_then(|hot| hot.queue_ticket)
+      .expect("successor owns one Ready ticket");
+    assert_eq!(first_run.cursor, 1);
+    assert_eq!(first_run.last_committed_step_block, Some(2));
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 10
+    );
+
+    Actors::execute_cycle(Weight::MAX);
+    let same_block_run = Actors::actor_run_state(actor_id).expect("successor remains live");
+    assert_eq!(same_block_run.cursor, first_run.cursor);
+    assert_eq!(
+      same_block_run.last_committed_step_block,
+      first_run.last_committed_step_block
+    );
+    assert_eq!(
+      Actors::actor_hot(actor_id).and_then(|hot| hot.queue_ticket),
+      Some(successor_ticket),
+      "same-block refusal preserves exact successor authority"
+    );
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 10
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 30
+    );
+  });
+}
+
+#[test]
 fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
