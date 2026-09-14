@@ -2725,6 +2725,42 @@ pub mod pallet {
       Ok(DependencyRevisionMutation::Advanced(next))
     }
 
+    /// Publishes one event-complete revision and retains exactly one fixed-target scan.
+    #[allow(
+      dead_code,
+      reason = "dependency publication remains inert until parking authority cutover"
+    )]
+    pub(crate) fn publish_dependency_event(
+      source: DependencySourceId,
+    ) -> Result<DependencyPublicationMutation, DependencyRevisionError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRevisionError::TransactionRequired);
+      }
+      let mut state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Ok(DependencyPublicationMutation::Exhausted);
+      }
+      let Some(next) = state.revision.checked_add(1) else {
+        state.exhausted = true;
+        DependencyRevisions::<T>::insert(source, state);
+        return Ok(DependencyPublicationMutation::Exhausted);
+      };
+      state.revision = next;
+      let outcome = if let Some(active_target) = state.scan_target {
+        DependencyPublicationMutation::Coalesced {
+          revision: next,
+          active_target,
+        }
+      } else {
+        state.scan_target = Some(next);
+        state.scan_cursor = 0;
+        state.scan_end = DependencyRegistrationHeaders::<T>::get(source).next_index;
+        DependencyPublicationMutation::Begun(next)
+      };
+      DependencyRevisions::<T>::insert(source, state);
+      Ok(outcome)
+    }
+
     /// Starts one fixed-revision source scan without disturbing an already-active target.
     #[allow(
       dead_code,

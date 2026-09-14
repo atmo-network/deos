@@ -3,7 +3,7 @@ use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyRegistrationError,
+  DeadlineMutationError, DeadlinePages, DependencyPublicationMutation, DependencyRegistrationError,
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
   DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
@@ -1117,6 +1117,116 @@ fn dependency_revision_is_nonwrapping_sticky_and_transactional() {
           scan_target: None,
           scan_cursor: 0,
           scan_end: 0,
+          exhausted: true,
+        }
+      );
+    }
+  });
+}
+
+#[test]
+fn dependency_event_publication_coalesces_behind_one_fixed_scan() {
+  new_test_ext().execute_with(|| {
+    let source = 18;
+    assert_eq!(
+      Actors::publish_dependency_event(source),
+      Err(DependencyRevisionError::TransactionRequired)
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_dependency_event(source),
+        Ok(DependencyPublicationMutation::Begun(1))
+      );
+      assert_eq!(
+        DependencyRevisions::<Test>::get(source),
+        DependencyRevisionState {
+          revision: 1,
+          scan_target: Some(1),
+          scan_cursor: 0,
+          scan_end: 0,
+          exhausted: false,
+        }
+      );
+      assert_eq!(
+        Actors::publish_dependency_event(source),
+        Ok(DependencyPublicationMutation::Coalesced {
+          revision: 2,
+          active_target: 1,
+        })
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(source, 1, 0),
+        Ok(DependencyScanMutation::HandedOff(2))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let owner = PendingCheckOwner {
+      actor: actor_ref(120, 4),
+      plan_revision: 6,
+    };
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::install_dependency_registration(source, owner, 2),
+        Ok(DependencyRegistrationMutation::Installed)
+      );
+      assert_eq!(
+        Actors::publish_dependency_event(source),
+        Ok(DependencyPublicationMutation::Coalesced {
+          revision: 3,
+          active_target: 2,
+        })
+      );
+      let fixed = DependencyRevisions::<Test>::get(source);
+      assert_eq!(fixed.scan_end, 0);
+      assert_eq!(
+        Actors::complete_dependency_scan(source, 2, 0),
+        Ok(DependencyScanMutation::HandedOff(3))
+      );
+      assert_eq!(DependencyRevisions::<Test>::get(source).scan_end, 1);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let retained = DependencyRevisions::<Test>::get(source);
+    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome = Actors::publish_dependency_event(source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
+    });
+    assert_eq!(
+      rolled_back,
+      Ok(DependencyPublicationMutation::Coalesced {
+        revision: 4,
+        active_target: 3,
+      })
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(source), retained);
+
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: u64::MAX,
+        scan_target: Some(9),
+        scan_cursor: 4,
+        scan_end: 7,
+        exhausted: false,
+      },
+    );
+    for _ in 0..2 {
+      let outcome = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::publish_dependency_event(source),
+        )
+      });
+      assert_eq!(outcome, Ok(DependencyPublicationMutation::Exhausted));
+      assert_eq!(
+        DependencyRevisions::<Test>::get(source),
+        DependencyRevisionState {
+          revision: u64::MAX,
+          scan_target: Some(9),
+          scan_cursor: 4,
+          scan_end: 7,
           exhausted: true,
         }
       );

@@ -204,6 +204,16 @@ pub enum DependencyRevisionError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyPublicationMutation {
+  Begun(DependencyRevision),
+  Coalesced {
+    revision: DependencyRevision,
+    active_target: DependencyRevision,
+  },
+  Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyScanMutation {
   Begun(DependencyRevision),
   Advanced(u64),
