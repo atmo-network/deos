@@ -39,8 +39,6 @@ pub enum EventCompleteDependencySource {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum EventCompleteTransitionBoundary {
   FunctionTransactional,
-  AtomicMutationRequiresCallerTransactionAtCutover,
-  FunctionTransactionRequiredAtCutover,
 }
 
 /// One finite Oracle state-transition owner that can invalidate a current-state dependency.
@@ -74,21 +72,21 @@ pub const EVENT_COMPLETE_TRANSITION_OWNERS: &[EventCompleteTransitionOwner] = &[
   EventCompleteTransitionOwner {
     owner: "set_lifecycle",
     mutation: "Feeds::try_mutate",
-    boundary: EventCompleteTransitionBoundary::AtomicMutationRequiresCallerTransactionAtCutover,
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
     source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
     publication_point: "after lifecycle mutation, before caller success event",
   },
   EventCompleteTransitionOwner {
     owner: "deactivate_feed",
     mutation: "Feeds::try_mutate",
-    boundary: EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
     source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
     publication_point: "after lifecycle mutation, before FeedDeactivated",
   },
   EventCompleteTransitionOwner {
     owner: "publish_with_provenance",
     mutation: "Observations::insert",
-    boundary: EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
     source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
     publication_point: "after observation insert, before ObservationPublished/Refreshed",
   },
@@ -322,6 +320,7 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = OracleProvenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
+  type OnFeedStateChanged = ();
   type OnObservationChanged = ActorObservationChangeIngress;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = OraclePublicationBenchmarkHelper;

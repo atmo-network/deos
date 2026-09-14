@@ -9281,11 +9281,7 @@ fn event_complete_dependency_owner_inventory_covers_every_oracle_state_writer() 
       .iter()
       .map(|row| row.boundary)
       .collect::<BTreeSet<_>>(),
-    BTreeSet::from([
-      EventCompleteTransitionBoundary::FunctionTransactional,
-      EventCompleteTransitionBoundary::AtomicMutationRequiresCallerTransactionAtCutover,
-      EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
-    ])
+    BTreeSet::from([EventCompleteTransitionBoundary::FunctionTransactional])
   );
   for row in EVENT_COMPLETE_TRANSITION_OWNERS {
     assert!(!row.mutation.is_empty());

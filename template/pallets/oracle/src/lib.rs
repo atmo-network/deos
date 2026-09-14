@@ -84,6 +84,27 @@ pub enum ObservationCauseProvenance {
   Deferred,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FeedStateChange {
+  Registered,
+  Paused,
+  Resumed,
+  Deactivated,
+  ObservationChanged,
+  ObservationRefreshed,
+}
+
+/// Bounded post-state notification for every canonical feed-state mutation.
+pub trait OnFeedStateChanged<FeedId> {
+  fn on_feed_state_changed(feed: FeedId, change: FeedStateChange) -> DispatchResult;
+}
+
+impl<FeedId> OnFeedStateChanged<FeedId> for () {
+  fn on_feed_state_changed(_: FeedId, _: FeedStateChange) -> DispatchResult {
+    Ok(())
+  }
+}
+
 pub trait OnObservationChanged<FeedId> {
   fn on_observation_changed(
     feed: FeedId,
@@ -169,6 +190,7 @@ pub mod pallet {
     type Provenance: Parameter + Member + MaxEncodedLen + Clone;
     type RegisterOrigin: EnsureOrigin<Self::RuntimeOrigin>;
     type PublishOrigin: EnsureOrigin<Self::RuntimeOrigin, Success = Self::ProducerId>;
+    type OnFeedStateChanged: super::OnFeedStateChanged<Self::FeedId>;
     type OnObservationChanged: super::OnObservationChanged<Self::FeedId>;
     #[cfg(feature = "runtime-benchmarks")]
     type BenchmarkHelper: super::PublicationBenchmarkHelper<Self::FeedId>;
@@ -355,30 +377,36 @@ pub mod pallet {
           lifecycle,
         },
       );
+      T::OnFeedStateChanged::on_feed_state_changed(feed, FeedStateChange::Registered)?;
       Self::deposit_event(Event::FeedRegistered { feed, producer });
       Ok(())
     }
 
     #[pallet::call_index(1)]
     #[pallet::weight(T::WeightInfo::pause_feed())]
+    #[transactional]
     pub fn pause_feed(origin: OriginFor<T>, feed: T::FeedId) -> DispatchResult {
       T::RegisterOrigin::ensure_origin(origin)?;
       Self::set_lifecycle(feed, FeedLifecycle::Active, FeedLifecycle::Paused)?;
+      T::OnFeedStateChanged::on_feed_state_changed(feed, FeedStateChange::Paused)?;
       Self::deposit_event(Event::FeedPaused { feed });
       Ok(())
     }
 
     #[pallet::call_index(2)]
     #[pallet::weight(T::WeightInfo::resume_feed())]
+    #[transactional]
     pub fn resume_feed(origin: OriginFor<T>, feed: T::FeedId) -> DispatchResult {
       T::RegisterOrigin::ensure_origin(origin)?;
       Self::set_lifecycle(feed, FeedLifecycle::Paused, FeedLifecycle::Active)?;
+      T::OnFeedStateChanged::on_feed_state_changed(feed, FeedStateChange::Resumed)?;
       Self::deposit_event(Event::FeedResumed { feed });
       Ok(())
     }
 
     #[pallet::call_index(3)]
     #[pallet::weight(T::WeightInfo::deactivate_feed())]
+    #[transactional]
     pub fn deactivate_feed(origin: OriginFor<T>, feed: T::FeedId) -> DispatchResult {
       T::RegisterOrigin::ensure_origin(origin)?;
       Feeds::<T>::try_mutate(feed, |maybe| {
@@ -390,6 +418,7 @@ pub mod pallet {
         config.lifecycle = FeedLifecycle::Deactivated;
         Ok::<_, DispatchError>(())
       })?;
+      T::OnFeedStateChanged::on_feed_state_changed(feed, FeedStateChange::Deactivated)?;
       Self::deposit_event(Event::FeedDeactivated { feed });
       Ok(())
     }
@@ -443,6 +472,7 @@ pub mod pallet {
       Self::publish_with_provenance(producer, feed, sample, ObservationCauseProvenance::Deferred)
     }
 
+    #[transactional]
     fn publish_with_provenance(
       producer: T::ProducerId,
       feed: T::FeedId,
@@ -509,6 +539,14 @@ pub mod pallet {
           revision,
         },
       );
+      T::OnFeedStateChanged::on_feed_state_changed(
+        feed,
+        if changed {
+          FeedStateChange::ObservationChanged
+        } else {
+          FeedStateChange::ObservationRefreshed
+        },
+      )?;
       if changed {
         Self::deposit_event(Event::ObservationPublished {
           feed,

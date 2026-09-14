@@ -161,6 +161,7 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = Provenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
+  type OnFeedStateChanged = ();
   type OnObservationChanged = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = ();

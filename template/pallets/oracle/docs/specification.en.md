@@ -126,13 +126,13 @@ Paused feeds retain their current Fresh/Stale classification but reject publicat
 
 The pallet exposes bounded current truth only. Historical revision lookup, charts, search, and replay belong to materialized providers and MUST NOT grow consensus storage.
 
-## 9. Transactional Change Hook
+## 9. Transactional Change Hooks
 
-The package exposes `OnObservationChanged(feed, revision, previous, current, cause_provenance) -> DispatchResult`. The signed `publish` extrinsic supplies `ExternalPhase`; the public `publish_from` adapter and `ObservationSink` supply fail-closed `Deferred`. It calls the hook exactly once after computing a changed published scalar and before committing the transition. `previous` is absent only for revision `1`; every later changed revision carries the exact previously committed value.
+The package exposes `OnFeedStateChanged(feed, change) -> DispatchResult` for the complete canonical mutation domain: registration, pause, resume, deactivation, changed observation publication, and equal-value refresh. `change` is a closed typed cause. The hook runs exactly once after its named state write and before the corresponding success event, so it can inspect authoritative post-state. Every owner is transactional; hook failure rolls back the state write, related indexes, event, and enclosing producer mutation.
 
-Hook work MUST remain O(1), bounded, and independent of subscriber count. The host-generated publication `WeightInfo` MUST measure the concrete changed-publication path with the hook composed and charge that synchronous path exactly once; the hook exposes no parallel numeric Weight authority. Hook failure rolls back observation state, revision, oracle event, and every mutation enclosed by the producer's outer transaction. Equal-output refreshes do not call the hook.
+The package separately exposes `OnObservationChanged(feed, revision, previous, current, cause_provenance) -> DispatchResult`. The signed `publish` extrinsic supplies `ExternalPhase`; the public `publish_from` adapter and `ObservationSink` supply fail-closed `Deferred`. It calls the hook exactly once after computing a changed published scalar. `previous` is absent only for revision `1`; every later changed revision carries the exact previously committed value. Equal-output refreshes do not call this transition-detail hook.
 
-Actors integration may use this hook only for bounded dirty-feed marking. It MUST NOT iterate subscribers or execute actors in producer context.
+Hook work MUST remain O(1), bounded, and independent of subscriber count. Host-generated `WeightInfo` MUST measure each concrete composed hook path and charge synchronous work exactly once; neither hook exposes a parallel numeric Weight authority. Actors integration may use the complete state hook only for bounded dirty-feed marking and the observation hook only for bounded transition capture. Neither may iterate subscribers or execute actors in producer context.
 
 The changed publication's canonical causal block is the current block in which the Oracle transition commits. A host that turns the hook into deferred consumer work MUST durably bind that work to the exact feed revision and causal block, explicitly or through equivalent temporal authority. Consumer readiness caused by publication in block `N` MUST have `eligible_at >= N + 1`; hook execution, dirty marking, bounded detector materialization, or spare block Weight cannot make a consumer effect eligible in block `N`.
 

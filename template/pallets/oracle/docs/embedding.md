@@ -14,8 +14,10 @@
 
 ## Hooks and Consumers
 
-- `OnObservationChanged` receives the exact revision, previous/current scalar transition, and closed `ObservationCauseProvenance`; signed `publish` supplies `ExternalPhase`, while `publish_from` and `ObservationSink` fail closed to `Deferred`. It must remain O(1), bounded, and subscriber-independent. It exposes no separate Weight estimate: host-generated publication weights measure the concrete composed changed path and charge it exactly once. A hook error atomically rejects publication.
-- A required hook failure must propagate and roll back the observation plus the producer's enclosing transaction.
+- `OnFeedStateChanged` receives one closed post-state cause for registration, pause, resume, deactivation, changed publication, and equal-value refresh. It runs after the canonical write and before the success event under the owning transaction.
+- `OnObservationChanged` receives the exact revision, previous/current scalar transition, and closed `ObservationCauseProvenance`; signed `publish` supplies `ExternalPhase`, while `publish_from` and `ObservationSink` fail closed to `Deferred`.
+- Both hooks must remain O(1), bounded, and subscriber-independent. They expose no separate Weight estimate: host-generated weights measure each concrete composed path and charge it exactly once.
+- A required hook failure must propagate and roll back Oracle state, indexes, events, and the producer's enclosing transaction.
 - Consumers must author a nonzero maximum age and distinguish Unavailable, Uninitialized, Fresh, and Stale.
 - History, search, charts, subscriber fanout, and strategy execution remain outside this package.
 

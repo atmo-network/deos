@@ -1,9 +1,9 @@
 use crate::{
-  Aggregation, Error, FeedLifecycle, Observation, ObservationCauseProvenance, ObservationState,
-  OracleValue, ZeroPolicy,
+  Aggregation, Error, FeedLifecycle, FeedStateChange, Observation, ObservationCauseProvenance,
+  ObservationState, OracleValue, ZeroPolicy,
   mock::{
     Oracle, RuntimeOrigin, System, Test, hook_calls, new_test_ext, set_hook_failure,
-    take_hook_provenance,
+    set_state_hook_failure, take_hook_provenance, take_state_hook_calls,
   },
 };
 use codec::{Decode, Encode};
@@ -272,6 +272,79 @@ fn ema_uses_elapsed_weighting_and_direct_initialization() {
     let observation = Oracle::observations(1).expect("EMA exists");
     assert_eq!(observation.value, 1_500);
     assert_eq!(observation.revision, 2);
+  });
+}
+
+#[test]
+fn feed_state_hook_covers_every_owner_after_write_and_rolls_back() {
+  new_test_ext().execute_with(|| {
+    set_state_hook_failure(true);
+    assert_eq!(
+      Oracle::register_feed(
+        RuntimeOrigin::root(),
+        1,
+        1,
+        10,
+        20,
+        6,
+        Aggregation::LastValue,
+        ZeroPolicy::Allow,
+        false,
+      ),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "FeedStateHookRejected"
+      ))
+    );
+    assert!(Oracle::feeds(1).is_none());
+    assert!(Oracle::feed_ids().is_empty());
+
+    set_state_hook_failure(false);
+    register(1, 1, Aggregation::LastValue);
+    assert_eq!(
+      take_state_hook_calls(),
+      vec![(1, FeedStateChange::Registered)]
+    );
+
+    set_state_hook_failure(true);
+    assert_eq!(
+      Oracle::pause_feed(RuntimeOrigin::root(), 1),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "FeedStateHookRejected"
+      ))
+    );
+    assert_eq!(Oracle::feeds(1).unwrap().lifecycle, FeedLifecycle::Active);
+    assert_eq!(
+      Oracle::deactivate_feed(RuntimeOrigin::root(), 1),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "FeedStateHookRejected"
+      ))
+    );
+    assert_eq!(Oracle::feeds(1).unwrap().lifecycle, FeedLifecycle::Active);
+    assert_eq!(
+      Oracle::publish(RuntimeOrigin::signed(1), 1, 10),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "FeedStateHookRejected"
+      ))
+    );
+    assert!(Oracle::observations(1).is_none());
+
+    set_state_hook_failure(false);
+    assert_ok!(Oracle::pause_feed(RuntimeOrigin::root(), 1));
+    assert_ok!(Oracle::resume_feed(RuntimeOrigin::root(), 1));
+    assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 10));
+    System::set_block_number(2);
+    assert_ok!(Oracle::publish(RuntimeOrigin::signed(1), 1, 10));
+    assert_ok!(Oracle::deactivate_feed(RuntimeOrigin::root(), 1));
+    assert_eq!(
+      take_state_hook_calls(),
+      vec![
+        (1, FeedStateChange::Paused),
+        (1, FeedStateChange::Resumed),
+        (1, FeedStateChange::ObservationChanged),
+        (1, FeedStateChange::ObservationRefreshed),
+        (1, FeedStateChange::Deactivated),
+      ]
+    );
   });
 }
 

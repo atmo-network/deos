@@ -22,11 +22,11 @@ Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../
 
 ## Host Contract
 
-`Config` binds generic `FeedId`, `ProducerId`, `Meaning`, and `Provenance` types. The host also provides registration and publication origins, `MaxFeeds`, `MaxFeedsPerProducer`, `MaxScale`, `OnObservationChanged`, and `WeightInfo`.
+`Config` binds generic `FeedId`, `ProducerId`, `Meaning`, and `Provenance` types. The host also provides registration and publication origins, `MaxFeeds`, `MaxFeedsPerProducer`, `MaxScale`, `OnFeedStateChanged`, `OnObservationChanged`, and `WeightInfo`.
 
 `FeedId` remains the immutable identity key chosen by the host. `FeedConfig` stores the authorized producer, explicit meaning and provenance, scalar scale, aggregation policy, zero policy, and lifecycle. The package never infers semantic equivalence, reverse direction, market meaning, or producer trust.
 
-`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnObservationChanged` receives `(feed, revision, previous, current, cause_provenance)` after a changed scalar; signed `publish` supplies `ExternalPhase`, while `publish_from` and `ObservationSink` supply fail-closed `Deferred`. The hook exposes no independent numeric Weight. Hook failure rolls back both the Oracle value and downstream transition admission.
+`RegisterOrigin` controls feed and lifecycle administration. `PublishOrigin` resolves directly to the typed producer identity checked against the immutable feed configuration. `OnFeedStateChanged` receives one closed cause after every canonical feed or observation write and before its event. `OnObservationChanged` additionally receives `(feed, revision, previous, current, cause_provenance)` for changed scalar detail; signed `publish` supplies `ExternalPhase`, while `publish_from` and `ObservationSink` supply fail-closed `Deferred`. Neither hook exposes independent numeric Weight. Hook failure rolls back Oracle state and downstream transition admission.
 
 ## Storage Topology
 
@@ -46,9 +46,9 @@ Try-state walks only host-bounded registries. It requires `FeedIds`, `Feeds`, `P
 
 Publication loads one feed, verifies the exact producer and Active lifecycle, applies the immutable zero policy, and computes LastValue or EMA. EMA uses `elapsed = max(current_block - updated_at, 1)` with `Perbill` floor arithmetic; block-age subtraction is the explicit observational-age clamp, while denominator, weighted-sum, and revision growth fail on checked overflow. Registration narrows decoded cardinalities with checked conversion before comparing host bounds. Observation presence, not scalar value, distinguishes initialization.
 
-The first accepted sample stores revision `1` and invokes `OnObservationChanged` with no previous value. A later changed scalar increments revision with checked arithmetic and supplies its exact committed previous and computed current values. Equal output refreshes `updated_at` without hook or revision increment.
+The first accepted sample stores revision `1` and invokes both hooks, with no previous value for `OnObservationChanged`. A later changed scalar increments revision with checked arithmetic and supplies its exact committed previous and computed current values. Equal output refreshes `updated_at` without a revision increment and invokes only `OnFeedStateChanged(ObservationRefreshed)`.
 
-The complete path is transactional. Hook failure propagates its dispatch error and rolls back observation state and publication events. The package does not iterate subscribers, execute downstream work, persist history, retry a failed hook, or weaken the host's rollback semantics. Recovery is a new producer attempt after the host integration becomes available.
+Registration and lifecycle calls are transactional for the same post-write hook contract as publication. Hook failure propagates its dispatch error and rolls back canonical state, indexes, and events. The package does not iterate subscribers, execute downstream work, persist history, retry a failed hook, or weaken the host's rollback semantics. Recovery is a new producer or administrator attempt after the host integration becomes available.
 
 ## Lifecycle and Read Surface
 
