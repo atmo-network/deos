@@ -2325,6 +2325,220 @@ fn due_dependency_review_publishes_exact_pending_authority_atomically() {
 }
 
 #[test]
+fn pending_dependency_review_installs_complete_successor_before_consumption() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(10);
+    let owner = PendingCheckOwner {
+      actor: actor_ref(244, 3),
+      plan_revision: 7,
+    };
+    for (source, revision) in [(47, 2), (48, 4)] {
+      DependencyRevisions::<Test>::insert(
+        source,
+        DependencyRevisionState {
+          revision,
+          scan_target: None,
+          scan_cursor: 0,
+          scan_end: 0,
+          exhausted: false,
+        },
+      );
+    }
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    let initial = [DependencyPlanSource {
+      source: 47,
+      observed_revision: 2,
+    }];
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::commit_negative_dependency_plan(owner, &initial, None),
+        Ok(DependencyPlanMutation {
+          installed: 1,
+          ..Default::default()
+        })
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let pending = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(10),
+    };
+    PendingDependencyReviews::<Test>::insert(owner.actor.actor_id, pending);
+    let successor = [DependencyPlanSource {
+      source: 48,
+      observed_revision: 4,
+    }];
+
+    assert_eq!(
+      Actors::consume_pending_dependency_review(pending, &successor, None),
+      Err(DependencyRegistrationError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::consume_pending_dependency_review(pending, &successor, None),
+        Ok(DependencyPlanMutation {
+          installed: 1,
+          removed: 1,
+          ..Default::default()
+        })
+      );
+      assert!(!PendingDependencyReviews::<Test>::contains_key(
+        owner.actor.actor_id
+      ));
+      assert!(DependencyRegistrations::<Test>::contains_key(
+        48,
+        owner.actor.actor_id
+      ));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+      Some(pending)
+    );
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      47,
+      owner.actor.actor_id
+    ));
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      48,
+      owner.actor.actor_id
+    ));
+
+    let invalid = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(pending, &successor, Some(WakeupKey::Block(10))),
+      )
+    });
+    assert_eq!(invalid, Err(DependencyRegistrationError::DeadlineNotFuture));
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+      Some(pending)
+    );
+
+    DependencyRevisions::<Test>::mutate(48, |state| state.revision = 5);
+    let revision_race = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(pending, &successor, None),
+      )
+    });
+    assert_eq!(
+      revision_race,
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    DependencyRevisions::<Test>::mutate(48, |state| state.revision = 4);
+
+    DependencyRevisions::<Test>::insert(
+      49,
+      DependencyRevisionState {
+        revision: 1,
+        scan_target: None,
+        scan_cursor: 0,
+        scan_end: 0,
+        exhausted: false,
+      },
+    );
+    DependencyRegistrationHeaders::<Test>::mutate(49, |header| {
+      let capacity = <Test as crate::Config>::MaxActiveActors::get();
+      header.count = capacity;
+      header.next_index = u64::from(capacity);
+    });
+    let capacity = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(
+          pending,
+          &[DependencyPlanSource {
+            source: 49,
+            observed_revision: 1,
+          }],
+          None,
+        ),
+      )
+    });
+    assert_eq!(capacity, Err(DependencyRegistrationError::CapacityExceeded));
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+      Some(pending)
+    );
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      47,
+      owner.actor.actor_id
+    ));
+
+    let raced_owner = PendingCheckOwner {
+      plan_revision: owner.plan_revision + 1,
+      ..owner
+    };
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, raced_owner);
+    let raced = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(pending, &successor, None),
+      )
+    });
+    assert_eq!(
+      raced,
+      Err(DependencyRegistrationError::PendingOwnerMismatch)
+    );
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+      Some(pending)
+    );
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+
+    let stale = DependencyTimedReview {
+      deadline: WakeupKey::Block(9),
+      ..pending
+    };
+    let mismatched = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(stale, &successor, None),
+      )
+    });
+    assert_eq!(
+      mismatched,
+      Err(DependencyRegistrationError::PendingReviewMismatch)
+    );
+
+    let committed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(pending, &successor, Some(WakeupKey::Tick(20))),
+      )
+    });
+    assert_eq!(
+      committed,
+      Ok(DependencyPlanMutation {
+        installed: 1,
+        removed: 1,
+        timed_review: DependencyTimedReviewMutation::Installed,
+        ..Default::default()
+      })
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(owner.actor.actor_id),
+      Some(DependencyTimedReview {
+        owner,
+        deadline: WakeupKey::Tick(20),
+      })
+    );
+    let replay = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(pending, &successor, None),
+      )
+    });
+    assert_eq!(
+      replay,
+      Err(DependencyRegistrationError::PendingReviewMissing)
+    );
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      48,
+      owner.actor.actor_id
+    ));
+  });
+}
+
+#[test]
 fn dependency_pages_keep_fixed_cursor_authority_across_fragmentation_and_new_members() {
   new_test_ext().execute_with(|| {
     let source = 29;

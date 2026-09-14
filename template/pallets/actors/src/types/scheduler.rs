@@ -259,6 +259,8 @@ pub enum DependencyRegistrationError {
   PlanTooLarge,
   DuplicateSource,
   StoredPlanMismatch,
+  PendingReviewMissing,
+  PendingReviewMismatch,
   DeadlineNotFuture,
   ClockUnavailable,
 }

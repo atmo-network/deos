@@ -3168,6 +3168,35 @@ pub mod pallet {
       Ok(mutation)
     }
 
+    /// Consumes one exact Pending review only after its complete successor plan is durable.
+    #[allow(
+      dead_code,
+      reason = "Pending-review consumption remains inert until parking authority cutover"
+    )]
+    pub(crate) fn consume_pending_dependency_review(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      desired: &[DependencyPlanSource],
+      timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      match PendingDependencyReviews::<T>::get(expected.owner.actor.actor_id) {
+        None => return Err(DependencyRegistrationError::PendingReviewMissing),
+        Some(current) if current != expected => {
+          return Err(DependencyRegistrationError::PendingReviewMismatch);
+        }
+        Some(_) => {}
+      }
+      let mutation = Self::commit_negative_dependency_plan(expected.owner, desired, timed_review)?;
+      match PendingDependencyReviews::<T>::get(expected.owner.actor.actor_id) {
+        Some(current) if current == expected => {}
+        _ => return Err(DependencyRegistrationError::PendingReviewMismatch),
+      }
+      PendingDependencyReviews::<T>::remove(expected.owner.actor.actor_id);
+      Ok(mutation)
+    }
+
     /// Publishes one exact due review into durable Pending authority before releasing its deadline.
     #[allow(
       dead_code,
