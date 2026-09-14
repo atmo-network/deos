@@ -3279,6 +3279,77 @@ fn semantic_crossing_replacement_reinitializes_from_current_observation() {
 }
 
 #[test]
+fn ready_crossing_replacement_rebinds_ticket_to_current_membership_and_contract() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_observation(
+      7,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    );
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    drain_crossing_work();
+    let ticket_before = Actors::actor_hot(actor_id)
+      .and_then(|hot| hot.queue_ticket)
+      .expect("Crossing occurrence publishes Ready authority");
+
+    let mut replacement = Actors::actor_contract(actor_id).expect("current Contract");
+    replacement.trigger = Trigger::manual();
+    replacement.steps = transfer_contract_steps(BOB, 7);
+    assert_ok!(Actors::update_contract(
+      RuntimeOrigin::signed(ALICE),
+      actor_id,
+      replacement,
+    ));
+
+    assert!(Actors::crossing_membership(actor_id).is_none());
+    let (_, _, hot, admission) =
+      Actors::load_frame_control_authority(actor_id).expect("replacement frame authority");
+    assert!(hot.pending_signal);
+    assert_eq!(hot.queue_ticket, Some(ticket_before));
+    let (_, ready) = Actors::paged_head_entry().expect("replacement retains Ready entry");
+    assert_eq!(ready.ticket, ticket_before);
+    assert_eq!(
+      ready.contract_commitment.semantic_contract_id,
+      admission.semantic_contract_id
+    );
+    assert_eq!(
+      ready.contract_commitment.body_commitment,
+      admission.body_commitment
+    );
+
+    let recipient_before = MockAssetOps::balance(&BOB, TestAsset::Native);
+    fund_native(actor_id, 1_000);
+    Actors::execute_cycle(Weight::MAX);
+    assert_eq!(
+      MockAssetOps::balance(&BOB, TestAsset::Native),
+      recipient_before + 7,
+      "retained ticket executes only the replacement Contract"
+    );
+    assert!(!Actors::pending_signal(actor_id));
+    assert!(Actors::crossing_membership(actor_id).is_none());
+  });
+}
+
+#[test]
 fn crossing_deactivation_and_close_remove_pending_members_without_stale_activation() {
   for deactivate in [true, false] {
     new_test_ext().execute_with(|| {
