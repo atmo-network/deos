@@ -3,13 +3,15 @@ use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, LegacyProcessPlacement, LegacyProcessTransition,
-  ParkEvidence, ParkNegativeReason, PipelineMachineFeeStrategy, ProcessCompileError,
-  ProcessDisableCause, ProcessDisablement, ProcessPublicationError, ProcessResidence,
-  ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError, ProcessTransitionObligation,
-  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind,
-  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
+  DeadlineMutationError, DeadlinePages, DependencyRevisionError, DependencyRevisionMutation,
+  DependencyRevisionState, DependencyRevisions, LegacyProcessPlacement, LegacyProcessTransition,
+  ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter,
+  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1062,6 +1064,83 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
     });
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
     assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+  });
+}
+
+#[test]
+fn dependency_revision_is_nonwrapping_sticky_and_transactional() {
+  new_test_ext().execute_with(|| {
+    let source = 17;
+    assert_eq!(
+      Actors::revise_dependency_source(source),
+      Err(DependencyRevisionError::TransactionRequired)
+    );
+    let first = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::revise_dependency_source(source),
+      )
+    });
+    assert_eq!(first, Ok(DependencyRevisionMutation::Advanced(1)));
+
+    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome = Actors::revise_dependency_source(source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
+    });
+    assert_eq!(rolled_back, Ok(DependencyRevisionMutation::Advanced(2)));
+    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 1);
+
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: u64::MAX,
+        exhausted: false,
+      },
+    );
+    for _ in 0..2 {
+      let outcome = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::revise_dependency_source(source),
+        )
+      });
+      assert_eq!(outcome, Ok(DependencyRevisionMutation::Exhausted));
+      assert_eq!(
+        DependencyRevisions::<Test>::get(source),
+        DependencyRevisionState {
+          revision: u64::MAX,
+          exhausted: true,
+        }
+      );
+    }
+  });
+}
+
+#[test]
+fn pending_check_owner_is_exactly_generation_and_plan_bound() {
+  new_test_ext().execute_with(|| {
+    let old = PendingCheckOwner {
+      actor: actor_ref(119, 7),
+      plan_revision: 3,
+    };
+    PendingCheckOwners::<Test>::insert(old.actor.actor_id, old);
+    assert_eq!(
+      PendingCheckOwners::<Test>::get(old.actor.actor_id),
+      Some(old)
+    );
+
+    let replacement = PendingCheckOwner {
+      actor: actor_ref(old.actor.actor_id, 8),
+      plan_revision: old.plan_revision,
+    };
+    let revised_plan = PendingCheckOwner {
+      actor: old.actor,
+      plan_revision: 4,
+    };
+    assert_ne!(old, replacement);
+    assert_ne!(old, revised_plan);
+    assert_eq!(
+      PendingCheckOwners::<Test>::get(old.actor.actor_id),
+      Some(old)
+    );
   });
 }
 
@@ -3495,6 +3574,8 @@ fn actor_storage_schema_is_explicit() {
       ("ActorProcesses", true, true),
       ("ServiceHeader", false, false),
       ("ServiceNodes", true, true),
+      ("DependencyRevisions", false, true),
+      ("PendingCheckOwners", true, true),
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),

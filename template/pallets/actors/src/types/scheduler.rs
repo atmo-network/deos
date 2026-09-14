@@ -86,6 +86,49 @@ pub enum ServiceRoundError {
   AttemptFromFuture,
 }
 
+pub type DependencySourceId = u64;
+pub type DependencyRevision = u64;
+pub type PlanRevision = u64;
+
+/// Checked monotone state owned by one event-complete dependency source.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencyRevisionState {
+  pub revision: DependencyRevision,
+  pub exhausted: bool,
+}
+
+/// One coalesced activation-check obligation bound to exact semantic authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct PendingCheckOwner {
+  pub actor: ActorRef,
+  pub plan_revision: PlanRevision,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRevisionMutation {
+  Advanced(DependencyRevision),
+  Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRevisionError {
+  TransactionRequired,
+}
+
 /// Bucket-level ownership for retained fixed-width deadline pages.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,

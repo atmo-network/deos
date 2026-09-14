@@ -2700,6 +2700,31 @@ pub mod pallet {
       Ok(())
     }
 
+    /// Advances one event-complete dependency source without wrapping its causal identity.
+    #[allow(
+      dead_code,
+      reason = "dependency revisions remain inert until parking authority cutover"
+    )]
+    pub(crate) fn revise_dependency_source(
+      source: DependencySourceId,
+    ) -> Result<DependencyRevisionMutation, DependencyRevisionError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRevisionError::TransactionRequired);
+      }
+      let mut state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Ok(DependencyRevisionMutation::Exhausted);
+      }
+      let Some(next) = state.revision.checked_add(1) else {
+        state.exhausted = true;
+        DependencyRevisions::<T>::insert(source, state);
+        return Ok(DependencyRevisionMutation::Exhausted);
+      };
+      state.revision = next;
+      DependencyRevisions::<T>::insert(source, state);
+      Ok(DependencyRevisionMutation::Advanced(next))
+    }
+
     /// Removes exactly one generation-bound member from the inert service ring.
     #[allow(
       dead_code,
@@ -4753,6 +4778,18 @@ pub mod pallet {
   #[pallet::getter(fn service_nodes)]
   pub type ServiceNodes<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ServiceNode<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Inert checked revisions for future event-complete dependency sources.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_revisions)]
+  pub type DependencyRevisions<T: Config> =
+    StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyRevisionState, ValueQuery>;
+
+  /// Inert one-per-Actor activation-check ownership, bound to generation and plan revision.
+  #[pallet::storage]
+  #[pallet::getter(fn pending_check_owners)]
+  pub type PendingCheckOwners<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, PendingCheckOwner, OptionQuery>;
 
   /// Inert bucket ownership for the future retained C32 deadline carrier.
   #[pallet::storage]
