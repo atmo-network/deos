@@ -2248,6 +2248,16 @@ pub mod pallet {
       Self::control_cell_from_parts(actor_id, identity, hot, admission, loaded_step, None)
     }
 
+    fn admission_matches_current_authority(admission: &ActorAdmissionCertificateOf<T>) -> bool {
+      T::AdmissionCertificateAuthority::current().is_some_and(|authority| {
+        admission.runtime_actor_semantics_version == authority.runtime_actor_semantics_version
+          && admission.production_weight_identity == authority.production_weight_identity
+          && admission.body_geometry_version == authority.body_geometry_version
+          && admission.configured_bounds_commitment == authority.configured_bounds_commitment
+          && admission.maximum_lifecycle_weight == authority.maximum_lifecycle_weight
+      })
+    }
+
     pub(crate) fn project_control_cell(
       cell: &ActorControlCellOf<T>,
       location: ActorControlLocation<BlockNumberFor<T>>,
@@ -2257,6 +2267,7 @@ pub mod pallet {
       ActorAdmissionCertificateOf<T>,
     )> {
       if !cell.admission.has_valid_identity()
+        || !Self::admission_matches_current_authority(&cell.admission)
         || cell.pipeline_service_identity
           != pipeline_service_identity(cell.admission.admission_identity)
       {

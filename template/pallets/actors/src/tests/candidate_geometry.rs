@@ -3677,6 +3677,44 @@ fn control_ready_user_opening_projects_exact_scalar_authority_without_event_drif
 }
 
 #[test]
+fn control_projection_rejects_certificate_after_host_authority_changes() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_contract_steps(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let (location, cell) = Actors::actor_control_cell(actor_id).expect("stored Ready authority");
+    assert!(
+      Actors::project_control_cell(&cell, location).is_some(),
+      "certificate is authoritative before the host version changes"
+    );
+
+    set_admission_semantics_version(2);
+
+    assert!(
+      cell.admission.has_valid_identity(),
+      "the stale certificate remains internally self-consistent"
+    );
+    assert!(
+      Actors::project_control_cell(&cell, location).is_none(),
+      "self-consistency cannot authorize service under stale host authority"
+    );
+    assert!(
+      Actors::load_frame_control_authority(actor_id).is_none(),
+      "the central authority loader fails closed"
+    );
+  });
+}
+
+#[test]
 fn control_complete_user_stop_cycle_projects_exact_scalar_authority_without_event_drift() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

@@ -1348,10 +1348,20 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
 
 pub struct MockAdmissionCertificateAuthority;
 
+const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
+
+pub fn set_admission_semantics_version(version: u32) {
+  polkadot_sdk::sp_io::storage::set(ADMISSION_SEMANTICS_VERSION_KEY, &version.encode());
+}
+
 impl crate::AdmissionCertificateAuthorityProvider for MockAdmissionCertificateAuthority {
   fn current() -> Option<crate::AdmissionCertificateAuthority> {
+    let runtime_actor_semantics_version =
+      polkadot_sdk::sp_io::storage::get(ADMISSION_SEMANTICS_VERSION_KEY)
+        .and_then(|encoded| u32::decode(&mut &encoded[..]).ok())
+        .unwrap_or(1);
     Some(crate::AdmissionCertificateAuthority {
-      runtime_actor_semantics_version: 1,
+      runtime_actor_semantics_version,
       production_weight_identity:
         crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32]),
       body_geometry_version: 1,
