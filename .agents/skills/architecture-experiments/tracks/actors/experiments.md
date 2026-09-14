@@ -64,6 +64,7 @@ This table normalizes transfers only. Its proof labels identify the evidence cla
 | CL-18 | [EXP-0133](./EXP-0133.md) | Current | N5.2–N5.4, N6.2–N6.5, N7.1–N7.4 | Resource closure | N5.3 |
 | CL-19 | [EXP-0134](./EXP-0134.md) | Current | N5.3–N5.4, N6.2–N6.5, N7.1–N7.4 | Round/wake proof | N7.2 |
 | CL-20 | [EXP-0135](./EXP-0135.md) | Current | N3.1–N5.4, N6.1–N6.5, N7.1–N7.4 | Physical closure | N5.4 |
+| CL-21 | [EXP-0136](./EXP-0136.md) | Current | N6.1–N6.5, N7.1–N7.4 | Resource closure | N6.1 |
 
 ### Current Hazard Closure Routes
 
@@ -108,6 +109,7 @@ An import below is usable only at its stated scope and by its named consumer. Nu
 - [EXP-0133](./EXP-0133.md): Bind every current-lineage selector, transition, refusal, rollback, effect, retained byte and mandatory cleanup suffix to explicit generated owners. Separate reservation, settlement, Control, effect and collateral/debt; require root-inclusive maximum legal fixtures and permit no assumed overlap discount.
 - [EXP-0134](./EXP-0134.md): Compose the supported-domain soundness boundary: typed selector/executor identity, generation and callback revalidation, monotone acknowledgment, immutable rounds, transactional residence, custody independence and capability-bounded wake completeness. Treat design closure as input only; N7.2 owns executable adversarial closure.
 - [EXP-0135](./EXP-0135.md): Use the composed physical design baseline: one stable generation process, actor-keyed Live/Pending ring, retained C32 deadline substrate, revisioned wake plans, immutable rounds, transactional residence, sealed cleanup and separate resource owners. It proves design composition only; N6.5 owns residency benefit and N3–N5/N7 own executable/generated closure.
+- [EXP-0136](./EXP-0136.md): Use the frozen twelve-workload matrix, exact populations/horizons, full censoring, equal-semantics versus historical-bridge split, matched-noise rule and mechanism-sized materiality boundary. It proves no benefit; N6.5/N6.3 own fixture realization and measurement.
 - [EXP-0075](./EXP-0075.md): Import only that, under the recorded C1 binding, adding 9,885 non-due identities changed neither service order nor charged Control for the same 100-Actor due frontier. N5.4 and N6.3 consume this as a baseline limit: a new scalability claim cannot assume old service scanned the whole identity population, and no old queue geometry is retained by implication.
 - [EXP-0076](./EXP-0076.md): Import only that legal closed-prefix reclamation consumed bounded service capacity and reduced the live FIFO prefix admitted under the recorded C32 topology. N4.2 and N5.3 consume this as hazard and old-baseline pressure, not as a claim about steady-state churn, alternate geometry or necessary tombstones.
 - [EXP-0113](./EXP-0113.md) and [EXP-0114](./EXP-0114.md): Import only the general failure scenario that consensus control-flow selection requires an explicit measured owner even when it performs no Task effect. N5.2 and N7.1 consume it; the old selector coefficient is excluded unless its exact implementation and benchmark domain survive.
@@ -2053,6 +2055,7 @@ Sealed historical decision IDs are stable. Provisional IDs may change only in an
 | [EXP-0133](./EXP-0133.md) | 0.7.27 | Accepted | Leaf: Complete Generated Resource-Domain Ownership Matrix | Current-lineage paths, retained classes and lifecycle/resource decisions on baseline `12399bf8` | Assign explicit generated owners to selectors, transitions, effects, refusal/rollback suffixes and retained state; separate reservation/settlement/collateral and require full legal fixtures | N5.2 implementation, N5.3/N5.4 closure and N7 generated binding |
 | [EXP-0134](./EXP-0134.md) | 0.7.27 | Accepted | Leaf: Composed Supported-Domain Soundness Matrix | Current hazard ledger and current-lineage mechanisms on baseline `3b3d393` | Bind typed selector/executor implication, callback and generation freshness, monotone wake acknowledgment, immutable rounds, transactional residence, custody independence and honest host fallback | N5.3 implementation, N5.4 synthesis and N7.2 adversarial closure |
 | [EXP-0135](./EXP-0135.md) | 0.7.27 | Accepted | Synthesis: Current-State Actors Physical Architecture Closure | Current-lineage EXP-0120–EXP-0134 on baseline `96081eb` | Compose one exact physical design and preserve N6.5 residency benefit plus runtime/generated evidence as explicit open gates | N3–N5 implementation, N6.5/N6.3 evidence, N6.4 freeze and N7 closure |
+| [EXP-0136](./EXP-0136.md) | 0.7.27 | Accepted | Leaf: Current-State Actors Workload and Materiality Freeze | EXP-0135 physical baseline and BACKLOG N6.1 on baseline `290dac7` | Freeze twelve workloads, exact outcomes/censoring, comparison boundaries, matched-noise rule and mechanism-sized materiality before measurement | N6.5 physical accounting, N6.3 whole-service comparison and N6.4/N7 freeze |
 
 ## Current Decision Critical Path
 
@@ -2559,6 +2562,7 @@ flowchart TD
   actors_EXP_0115["actors/EXP-0115: external"]
   actors_EXP_0116["actors/EXP-0116: external"]
   actors_EXP_0117["actors/EXP-0117: external"]
+  actors_EXP_0136["actors/EXP-0136: external"]
   actors_EXP_0020 -. uses .-> actors_EXP_0057
   actors_EXP_0024 -. produces .-> actors_EXP_0028
   actors_EXP_0024 -. produces .-> actors_EXP_0029
@@ -2766,6 +2770,7 @@ flowchart TD
   actors_EXP_0075 -. uses .-> actors_EXP_0076
   actors_EXP_0075 -. uses .-> actors_EXP_0077
   actors_EXP_0075 -. uses .-> actors_EXP_0078
+  actors_EXP_0075 -. uses .-> actors_EXP_0136
   actors_EXP_0076 -. produces .-> actors_EXP_0066
   actors_EXP_0076 -. uses .-> actors_EXP_0066
   actors_EXP_0076 -. uses .-> actors_EXP_0091
