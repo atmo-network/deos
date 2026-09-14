@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
-  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorRef,
-  CloseReason, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence, ParkNegativeReason,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ServiceHeader, ServiceNode, ServiceResidenceKind,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
+  ActorRef, CloseReason, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence,
+  ParkNegativeReason, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceNode,
+  ServiceResidenceKind, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
   plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
@@ -250,6 +250,113 @@ fn legacy_process_transition_planner_enforces_owner_obligations_and_typed_succes
     ),
     Err(ProcessTransitionError::InvalidCurrentProcess)
   );
+}
+
+#[test]
+fn process_publication_is_transaction_local_single_authority_and_rollback_safe() {
+  new_test_ext().execute_with(|| {
+    let current = ActorProcess {
+      generation: 11,
+      status: ProcessStatus::Serving,
+      residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
+    };
+    let waiting = LegacyProcessPlacement::Waiting {
+      key: WakeupKey::Block(9),
+      page: 2,
+      slot: 3,
+    };
+
+    assert_eq!(
+      Actors::publish_legacy_process_transition(
+        900,
+        current,
+        ProcessTransitionObligation::PublishTypedResidence,
+        LegacyProcessTransition::Publish(waiting),
+      ),
+      Err(ProcessPublicationError::TransactionRequired)
+    );
+
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let dual_authority = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_legacy_process_transition(
+          actor_id,
+          current,
+          ProcessTransitionObligation::PublishTypedResidence,
+          LegacyProcessTransition::Publish(waiting),
+        ),
+      )
+    });
+    assert_eq!(
+      dual_authority,
+      Err(ProcessPublicationError::LegacyAuthorityPresent)
+    );
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+
+    let rejected = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_legacy_process_transition(
+          902,
+          current,
+          ProcessTransitionObligation::PublishTypedResidence,
+          LegacyProcessTransition::Publish(LegacyProcessPlacement::Unsignaled(None)),
+        ),
+      )
+    });
+    assert_eq!(
+      rejected,
+      Err(ProcessPublicationError::Transition(
+        ProcessTransitionError::Compile(ProcessCompileError::AmbiguousUnsignaled)
+      ))
+    );
+    assert!(!ActorProcesses::<Test>::contains_key(902));
+
+    let published = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_legacy_process_transition(
+          900,
+          current,
+          ProcessTransitionObligation::PublishTypedResidence,
+          LegacyProcessTransition::Publish(waiting),
+        ),
+      )
+    })
+    .expect("typed process publication succeeds");
+    assert_eq!(ActorProcesses::<Test>::get(900), Some(published));
+
+    let mismatched = ActorProcess {
+      generation: 12,
+      ..published
+    };
+    let mismatch = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_legacy_process_transition(
+          900,
+          mismatched,
+          ProcessTransitionObligation::PreserveProcess,
+          LegacyProcessTransition::Preserve,
+        ),
+      )
+    });
+    assert_eq!(
+      mismatch,
+      Err(ProcessPublicationError::CurrentProcessMismatch)
+    );
+    assert_eq!(ActorProcesses::<Test>::get(900), Some(published));
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::publish_legacy_process_transition(
+        901,
+        current,
+        ProcessTransitionObligation::PublishTypedResidence,
+        LegacyProcessTransition::Publish(waiting),
+      )
+      .expect("transaction-local publication is initially visible");
+      assert!(ActorProcesses::<Test>::contains_key(901));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert!(!ActorProcesses::<Test>::contains_key(901));
+  });
 }
 
 #[test]
@@ -2757,6 +2864,7 @@ fn actor_storage_schema_is_explicit() {
       ("ActorRunHead", true, true),
       ("ActorRunPayload", true, true),
       ("ActorIdentities", true, true),
+      ("ActorProcesses", true, true),
       ("ActorIdentityCount", false, false),
       ("ActorStateHolds", true, true),
       ("ActiveActorCount", false, false),

@@ -185,6 +185,17 @@ pub enum ProcessTransitionError {
   Compile(ProcessCompileError),
 }
 
+/// Publication-boundary failures kept distinct from pure transition-planning failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessPublicationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessAlreadyExists,
+  ProcessMissing,
+  CurrentProcessMismatch,
+  Transition(ProcessTransitionError),
+}
+
 /// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
 pub fn compile_legacy_process<BlockNumber>(
   generation: ActorGeneration,

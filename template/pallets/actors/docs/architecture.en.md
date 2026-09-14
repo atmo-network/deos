@@ -69,6 +69,7 @@ Current owner-slot representation is fixed-width and runtime-shaped:
 The package stores each actor identity once and decomposes each active epoch into bounded hot, certified Contract, funding, and optional run owners:
 
 - `ActorIdentities`: dormant identity only; active identity belongs to the unique primary control cell
+- `ActorProcesses`: inert generation-bound process storage for the pending atomic carrier cutover; no production path populates or reads it, and legacy control cells remain sole scheduler authority
 - `ActorControlCell`: active identity, lifecycle/run state, failure counter, readiness latch, independent Block/Tick pointers, terminal block, schedule anchor, admission-derived Pipeline service identity, cursor/eligibility service projection, admission certificate, and resource envelope; `ActorControlLocators` resolves its Unsignaled/Ready/Waiting owner
 - `ActorContractHeads`: schedule/completion header, semantic/body/admission commitments, Step count, optional inline Step 0, and its optional control/effect envelope
 - `ActorControlCell.admission`: compact runtime semantics/layout/Weight and lifecycle identity, independent of the configured Step/resource ceiling
@@ -791,6 +792,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 - `NextActorId`: monotonic actor ID allocator
 - `ActorIdentities`: dormant identities, retaining owner, class/custody locator, mutability, cycle nonce, and last control-mutation block
+- `ActorProcesses`: inert optional generation-bound process record; its transaction-required helper rejects legacy locator/cell coexistence, stale-current replacement and failed planning, but remains unreachable from production until the complete carrier cutover
 - `ActorUnsignaledControlCells` / `ActorReadyFrameChunks` / `ActorWaitingFrameChunks`: exclusive active primary placements; Waiting additionally holds bounded exact-reference entries
 - `ActorContractHeads`: scalar trigger, schedule/window/completion authority, commitments, Step count, optional inline Step 0, and its optional resource envelope; the P32 generated `MaxEncodedLen` ceiling is 2,237 bytes
 - `ActorControlLocators`: exact active primary location; active identity, hot state, and admission have no duplicate scalar stores

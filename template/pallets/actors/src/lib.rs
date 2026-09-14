@@ -1029,6 +1029,7 @@ pub mod pallet {
   >;
 
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
+  pub type ActorProcessOf<T> = ActorProcess<BlockNumberFor<T>>;
 
   pub type ActorIdentityOf<T> =
     ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
@@ -2423,6 +2424,49 @@ pub mod pallet {
         ActorControlLocation::Unsignaled => LegacyProcessPlacement::Unsignaled(unsignaled_evidence),
       };
       compile_legacy_process(generation, placement)
+    }
+
+    /// Publishes one already-inventoried legacy transition only inside its caller's transaction.
+    /// The legacy locator must have been removed first, so failure rolls the whole authority move
+    /// back rather than creating dual process residence.
+    #[allow(
+      dead_code,
+      reason = "publication helper remains unreachable until all legacy mutation cohorts cut over together"
+    )]
+    pub(crate) fn publish_legacy_process_transition(
+      actor_id: ActorId,
+      current: ActorProcessOf<T>,
+      obligation: ProcessTransitionObligation,
+      transition: LegacyProcessTransition<BlockNumberFor<T>>,
+    ) -> Result<ActorProcessOf<T>, ProcessPublicationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(ProcessPublicationError::TransactionRequired);
+      }
+      if ActorControlLocators::<T>::contains_key(actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      {
+        return Err(ProcessPublicationError::LegacyAuthorityPresent);
+      }
+
+      let stored = ActorProcesses::<T>::get(actor_id);
+      match transition {
+        LegacyProcessTransition::Publish(_) if stored.is_some() => {
+          return Err(ProcessPublicationError::ProcessAlreadyExists);
+        }
+        LegacyProcessTransition::Publish(_) => {}
+        _ => match stored {
+          None => return Err(ProcessPublicationError::ProcessMissing),
+          Some(stored) if stored != current => {
+            return Err(ProcessPublicationError::CurrentProcessMismatch);
+          }
+          Some(_) => {}
+        },
+      }
+
+      let next = plan_legacy_process_transition(current, obligation, transition)
+        .map_err(ProcessPublicationError::Transition)?;
+      ActorProcesses::<T>::insert(actor_id, next);
+      Ok(next)
     }
 
     pub(crate) fn insert_unsignaled_control_authority(
@@ -3843,6 +3887,13 @@ pub mod pallet {
   #[pallet::getter(fn actor_identities)]
   pub type ActorIdentities<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorIdentityOf<T>, OptionQuery>;
+
+  /// Canonical generation-bound process owner. This remains inert until the legacy control
+  /// mutation cohorts atomically transfer scheduler authority into it.
+  #[pallet::storage]
+  #[pallet::getter(fn actor_processes)]
+  pub type ActorProcesses<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorProcessOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_identity_count)]
