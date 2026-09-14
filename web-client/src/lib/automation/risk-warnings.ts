@@ -100,9 +100,7 @@ export function projectActorCompositionWarnings(
   }
 
   const signalFindings = analysis.findings.filter(
-    (finding) =>
-      finding.kind === 'ExternallySignalledAdmission' ||
-      finding.kind === 'TriggerAmountCompatibilityViolation',
+    (finding) => finding.kind === 'ExternallySignalledAdmission',
   );
   const hasSameBlockCoalescing =
     analysis.trigger != null &&

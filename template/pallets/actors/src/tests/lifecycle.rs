@@ -260,34 +260,6 @@ fn trigger_transition_preflight_is_read_only() {
 }
 
 #[test]
-fn percentage_at_opening_is_independent_from_trigger_kind_and_payload() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let plan = contract_steps_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
-    }));
-    for schedule in [manual_schedule(), observation_schedule(vec![1])] {
-      assert_ok!(Actors::create_system_actor(
-        RuntimeOrigin::root(),
-        ALICE,
-        Mutability::Mutable,
-        system_active_contract(schedule, None, plan.clone()),
-      ));
-    }
-    let actor_id = Actors::next_actor_id().saturating_sub(1);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      percentage_trigger_schedule(),
-      None,
-    ));
-  });
-}
-
-#[test]
 fn already_live_map_error_fails_closed_without_panicking() {
   new_test_ext().execute_with(|| {
     assert_eq!(
@@ -381,7 +353,6 @@ fn deactivation_removes_active_epoch_and_all_contract_fragments_without_orphans(
       assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 1));
       assert!(!ActorRunHeads::<Test>::contains_key(actor_id));
       assert!(!ActorRunPayloads::<Test>::contains_key(actor_id));
-      assert!(!ActorFunding::<Test>::contains_key(actor_id));
     }
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
@@ -433,7 +404,6 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
       assert_eq!(dormant.cycle_nonce, 1);
       assert_eq!(ActorIdentities::<Test>::get(actor_id), Some(dormant));
       assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_funding(actor_id).is_none());
       assert!(Actors::actor_run_state(actor_id).is_none());
     }
 
@@ -461,7 +431,6 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
       assert!(ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
       assert_eq!(active.unsuccessful_attempt_streak, 0);
       assert!(!active.pending_signal);
-      assert!(actor_funding(actor_id).funding_accumulated.is_empty());
     }
 
     frame_system::Pallet::<Test>::set_block_number(4);
@@ -1512,7 +1481,6 @@ fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_primary() {
     let corrupt = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     Actors::remove_primary_control_cell_inner(corrupt).expect("primary removal succeeds");
     let corrupt_contract_before = ActorContractHeads::<Test>::get(corrupt);
-    let corrupt_funding_before = ActorFunding::<Test>::get(corrupt);
     let events_before = System::events();
     let sweep_ids: BoundedVec<u64, <Test as crate::Config>::MaxSweepBatch> =
       BoundedVec::try_from(vec![terminal, corrupt]).expect("batch fits");
@@ -1538,7 +1506,6 @@ fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_primary() {
       ActorContractHeads::<Test>::get(corrupt),
       corrupt_contract_before
     );
-    assert_eq!(ActorFunding::<Test>::get(corrupt), corrupt_funding_before);
     assert_eq!(System::events(), events_before);
   });
 }
@@ -1975,7 +1942,6 @@ fn exact_update_noops_preserve_all_actor_state_and_emit_nothing() {
       (
         Actors::actor_hot(actor_id).encode(),
         Actors::load_actor_contract(actor_id).encode(),
-        crate::ActorFunding::<Test>::get(actor_id).encode(),
         ActorRunStateStore::<Test>::get(actor_id).encode(),
       )
     };
@@ -2600,13 +2566,13 @@ fn permissionless_sweep_many_rolls_back_prior_closes_on_late_failure() {
 }
 
 #[test]
-fn percentage_at_opening_uses_preservable_native_snapshot_for_user() {
+fn percentage_of_current_uses_preservable_native_balance_for_user() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let task = Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     };
     let contract_steps = contract_steps_with_step(make_step(task.clone()));
     let pipeline_fee = pipeline_opening_fee(&contract_steps);
@@ -2695,7 +2661,7 @@ fn actor_id_collision_check_uses_frame_authority_with_canonical_control() {
 
 #[test]
 fn actor_id_collision_rejects_each_orphan_canonical_partition_without_writes() {
-  for partition in 0..5 {
+  for partition in 0..4 {
     for actor_type in [ActorType::User, ActorType::System] {
       new_test_ext().execute_with(|| {
         let source = create_suspended_system_retry(1);
@@ -2710,15 +2676,11 @@ fn actor_id_collision_rejects_each_orphan_canonical_partition_without_writes() {
             target,
             ActorContractHeads::<Test>::get(source).expect("source Contract head"),
           ),
-          2 => ActorFunding::<Test>::insert(
-            target,
-            ActorFunding::<Test>::get(source).expect("source funding"),
-          ),
-          3 => ActorRunHeads::<Test>::insert(
+          2 => ActorRunHeads::<Test>::insert(
             target,
             ActorRunHeads::<Test>::get(source).expect("source Run head"),
           ),
-          4 => ActorRunPayloads::<Test>::insert(
+          3 => ActorRunPayloads::<Test>::insert(
             target,
             ActorRunPayloads::<Test>::get(source).expect("source Run payload"),
           ),
@@ -3538,13 +3500,13 @@ fn mint_works_for_system_actor() {
 }
 
 #[test]
-fn mint_percentage_at_opening_uses_target_not_preservable_surface() {
+fn mint_percentage_of_current_uses_target_not_preservable_surface() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(5);
     let contract_steps = contract_steps_with_step(make_step(Task::Mint {
       asset,
-      amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);

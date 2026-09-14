@@ -409,7 +409,7 @@ fn all_zero_split_transfer_total_is_an_explicit_resolution_skip() {
     .expect("legs fit");
     let contract_steps = contract_steps_with_step(make_step(Task::SplitTransfer {
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
       legs,
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -1037,8 +1037,7 @@ fn zero_amount_resolutions_and_identical_market_assets_are_rejected() {
   new_test_ext().execute_with(|| {
     for amount in [
       AmountResolution::Fixed(0),
-      AmountResolution::PercentageOfCurrent(Perbill::zero()),
-      AmountResolution::PercentageAtOpening(Perbill::zero()),
+      AmountResolution::Percent(Perbill::zero()),
     ] {
       let plan = contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
@@ -1295,7 +1294,7 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       make_step(Task::Transfer {
         to: BOB,
         asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
     ])
     .expect("system execution plan fits");
@@ -1367,18 +1366,18 @@ fn unstake_task_delegates_to_staking_adapter() {
 }
 
 #[test]
-fn unstake_dynamic_modes_resolve_against_staking_shares() {
+fn unstake_percentage_resolves_against_current_staking_shares() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(8);
     let contract_steps = BoundedVec::try_from(vec![
       make_step(Task::Unstake {
         asset,
-        shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(25)),
+        shares: AmountResolution::Percent(Perbill::from_percent(25)),
       }),
       make_step(Task::Unstake {
         asset,
-        shares: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+        shares: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
     ])
     .expect("system execution plan fits");
@@ -1387,8 +1386,8 @@ fn unstake_dynamic_modes_resolve_against_staking_shares() {
     set_asset_balance(&actor, asset, 100);
     signal_percentage_trigger(actor_id, asset);
     run_idle(Weight::MAX);
-    assert_eq!(asset_balance(&actor, asset), 25);
-    assert_eq!(unstaked_shares(actor, asset), 75);
+    assert_eq!(asset_balance(&actor, asset), 38);
+    assert_eq!(unstaked_shares(actor, asset), 62);
   });
 }
 
@@ -1588,7 +1587,7 @@ fn donate_liquidity_percentage_resolves_only_against_asset_a() {
     let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
-      max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      max_amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
       max_ratio_error: Perbill::from_percent(1),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -1618,7 +1617,7 @@ fn donate_liquidity_asset_b_debit_is_capped_at_preservable_capacity() {
     let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
-      max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(100)),
+      max_amount_a: AmountResolution::Percent(Perbill::from_percent(100)),
       max_ratio_error: Perbill::from_percent(1),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
@@ -1943,7 +1942,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
         task: Task::Transfer {
           to: cold_wallet,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(80)),
+          amount: AmountResolution::Percent(Perbill::from_percent(80)),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },

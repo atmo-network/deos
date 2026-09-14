@@ -4593,7 +4593,6 @@ fn crossing_try_state_rejects_canonical_locator_radix_and_pending_list_corruptio
     let identity = Actors::actor_identity(actor_id).expect("actor identity exists");
     let hot = Actors::actor_hot(actor_id).expect("actor hot state exists");
     let contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
-    let funding = ActorFunding::<Test>::get(actor_id).expect("actor funding exists");
     assert_ok!(crate::Pallet::<Test>::do_try_state());
     ActorIdentities::<Test>::insert(actor_id, identity);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
@@ -4607,9 +4606,6 @@ fn crossing_try_state_rejects_canonical_locator_radix_and_pending_list_corruptio
     assert!(Actors::remove_admitted_contract_geometry(actor_id).is_some());
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
     assert_ok!(Actors::store_actor_contract(actor_id, contract));
-    ActorFunding::<Test>::remove(actor_id);
-    assert!(crate::Pallet::<Test>::do_try_state().is_err());
-    ActorFunding::<Test>::insert(actor_id, funding);
 
     let runtime_state = hot.trigger_runtime_state;
     mutate_actor_hot_coherent(actor_id, |hot| {

@@ -123,10 +123,6 @@ pub trait WeightInfo {
   fn opening_target_snapshot_capture(entries: u32) -> Weight;
   fn opening_share_mixed_capture(entries: u32) -> Weight;
   fn opening_snapshot_traversal() -> Weight;
-  fn opening_predicate_capture(predicates: u32) -> Weight;
-  fn opening_max_encoded_balance_capture(predicates: u32) -> Weight;
-  fn opening_observation_heavy_capture(observations: u32) -> Weight;
-  fn opening_predicate_traversal() -> Weight;
   fn scheduler_on_initialize_cutoff() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
   fn materialization_coordinator_base() -> Weight;
@@ -202,7 +198,6 @@ pub trait WeightInfo {
   fn scheduler_actor_state_probe() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
-  fn funding_snapshot_open(assets: u32) -> Weight;
   fn run_progress() -> Weight;
   fn run_suspend() -> Weight;
   fn run_complete() -> Weight;
@@ -538,24 +533,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Self::opening_snapshot_capture(entries)
   }
 
-  fn opening_predicate_capture(predicates: u32) -> Weight {
-    Weight::from_parts(25_000_000, 4_000)
-      .saturating_add(Weight::from_parts(15_000_000, 3_000).saturating_mul(predicates.into()))
-      .saturating_add(T::DbWeight::get().reads(u64::from(predicates)))
-  }
-
-  fn opening_max_encoded_balance_capture(predicates: u32) -> Weight {
-    Self::opening_predicate_capture(predicates)
-  }
-
-  fn opening_observation_heavy_capture(observations: u32) -> Weight {
-    Self::opening_predicate_capture(observations.saturating_add(1))
-  }
-
-  fn opening_predicate_traversal() -> Weight {
-    Weight::from_parts(25_000_000, 0)
-  }
-
   fn opening_snapshot_traversal() -> Weight {
     Weight::from_parts(25_000_000, 0)
   }
@@ -778,12 +755,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(6))
   }
 
-  fn funding_snapshot_open(assets: u32) -> Weight {
-    Weight::from_parts(15_653_872, 4_265)
-      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
-  }
-
   fn run_progress() -> Weight {
     Weight::from_parts(30_000_000, 8_000).saturating_add(T::DbWeight::get().reads_writes(6, 2))
   }
@@ -963,17 +934,6 @@ impl WeightInfo for TestWeightInfo {
   fn opening_share_mixed_capture(entries: u32) -> Weight {
     Self::opening_snapshot_capture(entries)
   }
-  fn opening_predicate_capture(predicates: u32) -> Weight {
-    Weight::from_parts(25_000_000, 4_000)
-      .saturating_add(Weight::from_parts(15_000_000, 3_000).saturating_mul(predicates.into()))
-  }
-  fn opening_max_encoded_balance_capture(predicates: u32) -> Weight {
-    Self::opening_predicate_capture(predicates)
-  }
-  fn opening_observation_heavy_capture(observations: u32) -> Weight {
-    Self::opening_predicate_capture(observations.saturating_add(1))
-  }
-  fn opening_predicate_traversal() -> Weight { Weight::from_parts(25_000_000, 0) }
   fn opening_snapshot_traversal() -> Weight { Weight::from_parts(25_000_000, 0) }
   fn scheduler_on_initialize_cutoff() -> Weight { Weight::from_parts(7_543_000, 1_493) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
@@ -1078,10 +1038,6 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_actor_state_probe() -> Weight { Weight::from_parts(38_413_000, 12_200) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
-  fn funding_snapshot_open(assets: u32) -> Weight {
-    Weight::from_parts(15_653_872, 4_265)
-      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
-  }
   fn run_progress() -> Weight { Weight::from_parts(30_000_000, 8_000) }
   fn run_suspend() -> Weight { Weight::from_parts(28_668_868, 4_178) }
   fn run_complete() -> Weight { Weight::from_parts(18_019_000, 4_030) }

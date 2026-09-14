@@ -79,12 +79,7 @@ function activeContract({
           predicates.length === 0
             ? null
             : {
-                clauses: [
-                  predicates.map((predicate) => ({
-                    timing: 'Current',
-                    predicate,
-                  })),
-                ],
+                clauses: [predicates],
               },
         task,
         errorPolicy: onError,
@@ -167,7 +162,7 @@ const partialScenarios = [
       task: {
         type: 'SplitTransfer',
         asset: native,
-        amount: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
+        amount: { type: 'Percent', parts: 1_000_000_000 },
         legs: [
           { to: recipient, shareParts: 500_000_000 },
           {
@@ -253,16 +248,14 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
   assert.deepEqual(
     descendingBuyBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].precondition.clauses[0][0].predicate
-          .threshold,
+        scenario.contract.steps[0].precondition.clauses[0][0].threshold,
     ),
     ['900000000000', '800000000000', '700000000000'],
   );
   assert.deepEqual(
     ascendingSellBuckets.map(
       (scenario) =>
-        scenario.contract.steps[0].precondition.clauses[0][0].predicate
-          .threshold,
+        scenario.contract.steps[0].precondition.clauses[0][0].threshold,
     ),
     ['1100000000000', '1200000000000', '1300000000000'],
   );

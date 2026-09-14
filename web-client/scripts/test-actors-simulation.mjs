@@ -94,7 +94,7 @@ test('productive completion closes only after one committed effectful task', () 
     steps: [
       localStep(0, 'AbortCycle', {
         precondition: {
-          clauses: [[{ timing: 'Current', predicate: 'latest-observation' }]],
+          clauses: [['latest-observation']],
         },
       }),
     ],
@@ -280,20 +280,16 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     steps: [
       localStep(0, 'ContinueNextStep', {
         precondition: {
-          clauses: [
-            [{ timing: 'Current', predicate: 'true' }],
-            [{ timing: 'Opening', predicate: 'error' }],
-            [{ timing: 'Current', predicate: 'false' }],
-          ],
+          clauses: [['true'], ['error'], ['false']],
         },
       }),
       localStep(1),
     ],
-    evaluatePredicate(timed) {
-      observations.push(timed.predicate);
-      return timed.predicate === 'error'
+    evaluatePredicate(predicate) {
+      observations.push(predicate);
+      return predicate === 'error'
         ? { kind: 'Error', retry: 'Permanent', error: 'observation-failed' }
-        : { kind: 'Value', value: timed.predicate === 'true' };
+        : { kind: 'Value', value: predicate === 'true' };
     },
     runTask(step, state) {
       state.balance += BigInt(step.stepIndex + 1);
@@ -314,12 +310,7 @@ test('bounded DNF visits every predicate and any error fails the expression', ()
     steps: [
       localStep(0, 'AbortCycle', {
         precondition: {
-          clauses: [
-            [true, false, true].map((predicate) => ({
-              timing: 'Current',
-              predicate,
-            })),
-          ],
+          clauses: [[true, false, true]],
         },
       }),
     ],
@@ -372,26 +363,19 @@ test('donation classification identifies observation window and amount surface',
       {
         stepIndex: 1,
         surface: 'asset:2:amount',
-        resolution: 'PercentageOfCurrent',
-        observation: 'ActorBalance',
-      },
-      {
-        stepIndex: 2,
-        surface: 'asset:3:opening',
-        resolution: 'PercentageAtOpening',
+        resolution: 'Percent',
         observation: 'ActorBalance',
       },
       {
         stepIndex: 3,
         surface: 'pool:1:quote',
-        resolution: 'PercentageOfCurrent',
+        resolution: 'Percent',
         observation: 'AdapterState',
       },
     ]).map(({ sensitivity }) => sensitivity),
     [
       'InsensitiveFixedAmount',
       'BeforeStepResolution',
-      'BeforeOpeningSnapshot',
       'BeforeAdapterObservation',
     ],
   );

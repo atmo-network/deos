@@ -146,7 +146,6 @@ fn actor_cost_quote_keeps_fee_boundaries_and_state_hold_provenance_separate() {
       hold.contract_head,
       hold.contract_body,
       hold.detector,
-      hold.funding,
       hold.run,
     ]
     .into_iter()
@@ -467,7 +466,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
     let identity = Actors::actor_identity(actor_id).expect("identity exists");
     let hot = Actors::actor_hot(actor_id).expect("hot state exists");
     assert_eq!(hot.queue_ticket, Some(9));
-    let funding = ActorFunding::<Test>::get(actor_id).expect("funding exists");
     let admission = Actors::actor_control_cell(actor_id)
       .map(|(_, cell)| cell.admission)
       .expect("canonical admission certificate exists");
@@ -517,7 +515,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
       identity.clone(),
       hot.clone(),
       None,
-      funding.clone(),
       admission.clone(),
       ticket,
       loaded_step.clone(),
@@ -533,13 +530,11 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: plan.ticket.cycle_nonce,
       cursor: plan.ticket.cursor,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 0,
       last_attempt_block: 0,
       last_committed_step_block: Some(0),
       eligible_at: plan.ticket.eligible_at,
       opening_snapshot: Default::default(),
-      opening_predicate_results: Default::default(),
       cumulative_outcomes: Default::default(),
       last_step_outcome: None,
       suspension: None,
@@ -574,7 +569,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         plan.identity.clone(),
         running_hot.clone(),
         Some(running.clone()),
-        plan.funding.clone(),
         plan.admission.clone(),
         plan.ticket,
         plan.loaded_step.clone(),
@@ -602,7 +596,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         plan.identity.clone(),
         running_hot.clone(),
         Some(stale_run),
-        plan.funding.clone(),
         plan.admission.clone(),
         plan.ticket,
         plan.loaded_step.clone(),
@@ -621,7 +614,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         plan.identity.clone(),
         suspended_hot,
         Some(suspended),
-        plan.funding.clone(),
         plan.admission.clone(),
         plan.ticket,
         plan.loaded_step.clone(),
@@ -637,7 +629,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         plan.identity.clone(),
         running_hot,
         Some(incoherent_suspension),
-        plan.funding.clone(),
         plan.admission.clone(),
         plan.ticket,
         plan.loaded_step.clone(),
@@ -654,7 +645,6 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         identity,
         hot,
         None,
-        funding,
         admission,
         stale_ticket,
         plan.loaded_step,
@@ -786,19 +776,16 @@ fn admission_certificate_builder_composes_compact_host_authority() {
 }
 
 #[test]
-fn step_resource_derivation_binds_authored_opening_and_predicate_geometry() {
+fn step_resource_derivation_binds_current_predicate_and_amount_geometry() {
   let steps = BoundedVec::try_from(vec![StepOf::<Test> {
-    precondition: timed_all_conditions(
-      ObservationTiming::Opening,
-      vec![Predicate::BalanceAbove {
-        asset: TestAsset::Native,
-        threshold: 1,
-      }],
-    ),
+    precondition: all_conditions(vec![Predicate::BalanceAbove {
+      asset: TestAsset::Native,
+      threshold: 1,
+    }]),
     task: Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     },
     on_error: StepErrorPolicy::AbortCycle,
   }])
@@ -809,8 +796,8 @@ fn step_resource_derivation_binds_authored_opening_and_predicate_geometry() {
   assert_eq!(resources.len(), 1);
   assert_eq!(
     resources[0].control,
-    Weight::from_parts(100_000_025, 100_023),
-    "control base + 2 evaluation units + 1 Opening surface + 1 Opening result + 10 funding entries",
+    Weight::from_parts(100_000_012, 100_023),
+    "control base plus current predicate and amount evaluation units",
   );
 }
 
@@ -863,8 +850,6 @@ fn unconfigured_resource_weight_ports_fail_closed() {
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       },
       &step,
     ),
@@ -878,8 +863,6 @@ fn unconfigured_resource_weight_ports_fail_closed() {
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       },
       &step,
       Weight::from_parts(1, 1),
@@ -915,43 +898,36 @@ fn unconfigured_resource_weight_ports_fail_closed() {
 #[test]
 fn step_control_weight_context_matches_c6_head_and_tail_geometry() {
   assert_eq!(
-    Actors::step_control_weight_context(1, 0, 7, 8, 9, 10),
+    Actors::step_control_weight_context(1, 0, 7, 8),
     Some(crate::StepControlWeightContext {
       cursor: 0,
       steps_in_fragment: 1,
       opening_tail_chunks: 0,
       predicate_evaluation_units: 7,
       opening_snapshot_entries: 8,
-      opening_predicate_results: 9,
-      funding_snapshot_entries: 10,
     })
   );
   assert_eq!(
-    Actors::step_control_weight_context(12, 0, 7, 8, 9, 10)
+    Actors::step_control_weight_context(12, 0, 7, 8)
       .expect("twelve-Step head context exists")
       .opening_tail_chunks,
     3,
   );
   for (cursor, steps_in_fragment) in [(1, 4), (4, 4), (5, 4), (8, 4), (9, 3), (11, 3)] {
     assert_eq!(
-      Actors::step_control_weight_context(12, cursor, 7, 8, 9, 10),
+      Actors::step_control_weight_context(12, cursor, 7, 8),
       Some(crate::StepControlWeightContext {
         cursor,
         steps_in_fragment,
         opening_tail_chunks: 0,
         predicate_evaluation_units: 7,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       })
     );
   }
-  assert_eq!(Actors::step_control_weight_context(0, 0, 0, 0, 0, 0), None);
-  assert_eq!(
-    Actors::step_control_weight_context(12, 12, 0, 0, 0, 0),
-    None
-  );
-  assert_eq!(Actors::step_control_weight_context(13, 0, 0, 0, 0, 0), None);
+  assert_eq!(Actors::step_control_weight_context(0, 0, 0, 0), None);
+  assert_eq!(Actors::step_control_weight_context(12, 12, 0, 0), None);
+  assert_eq!(Actors::step_control_weight_context(13, 0, 0, 0), None);
 }
 
 #[test]
@@ -1089,108 +1065,6 @@ fn pipeline_machine_envelope_absorbs_stop_cycle_control_effect() {
       TestWeightToFee::weight_to_fee(&resources[0].control.saturating_add(resources[0].effect))
     );
     assert_eq!(action_fee.total_fee, 0);
-  });
-}
-
-#[cfg(feature = "try-runtime")]
-#[test]
-fn try_state_rejects_funding_sources_outside_the_authored_contract() {
-  for corruption in 0..3 {
-    new_test_ext().execute_with(|| {
-      let mut steps = transfer_contract_steps(BOB, 1);
-      steps[0].task = Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      };
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-      let funding = crate::ActorFunding::<Test>::get(actor_id).expect("funding exists");
-      assert_eq!(funding.funding_tracked_assets.len(), 1);
-      assert!(funding.funding_tracked_assets.contains(&TestAsset::Native));
-      assert_ok!(Actors::do_try_state());
-      crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
-        let tracked = &mut maybe
-          .as_mut()
-          .expect("funding exists")
-          .funding_tracked_assets;
-        if corruption != 1 {
-          tracked.remove(&TestAsset::Native);
-        }
-        if corruption != 0 {
-          tracked
-            .try_insert(TestAsset::Local(1))
-            .expect("one extra source fits storage");
-        }
-      });
-      let result = Actors::do_try_state();
-      assert!(
-        matches!(
-          result,
-          Err(polkadot_sdk::sp_runtime::TryRuntimeError::Other(
-            "ActorFunding tracked assets disagree with the Actor Contract"
-          ))
-        ),
-        "funding source corruption was not diagnosed: {result:?}"
-      );
-      crate::ActorFunding::<Test>::insert(actor_id, funding);
-      assert_ok!(Actors::do_try_state());
-    });
-  }
-}
-
-#[cfg(feature = "try-runtime")]
-#[test]
-fn try_state_qualifies_funding_sources_by_admitted_staking_positions() {
-  new_test_ext().execute_with(|| {
-    let mut steps = transfer_contract_steps(BOB, 1);
-    steps.try_push(steps[0].clone()).expect("second Step fits");
-    steps.try_push(steps[0].clone()).expect("third Step fits");
-    steps[0].task = Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    };
-    for step in steps.iter_mut().skip(1) {
-      step.task = Task::Unstake {
-        asset: TestAsset::Local(1),
-        shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      };
-    }
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    let funding = crate::ActorFunding::<Test>::get(actor_id).expect("funding exists");
-    assert_eq!(funding.funding_tracked_assets.len(), 2);
-    assert_ok!(Actors::do_try_state());
-    set_staking_share_asset_available(false);
-    assert_ok!(Actors::do_try_state());
-    for corruption in 0..3 {
-      crate::ActorFunding::<Test>::mutate(actor_id, |maybe| {
-        let tracked = &mut maybe
-          .as_mut()
-          .expect("funding exists")
-          .funding_tracked_assets;
-        match corruption {
-          0 => {
-            tracked.remove(&TestAsset::Native);
-          }
-          1 => {
-            tracked
-              .try_insert(TestAsset::Local(2))
-              .expect("source fits storage");
-          }
-          _ => {
-            tracked.clear();
-          }
-        }
-      });
-      assert!(matches!(
-        Actors::do_try_state(),
-        Err(polkadot_sdk::sp_runtime::TryRuntimeError::Other(
-          "ActorFunding tracked assets disagree with the Actor Contract"
-        ))
-      ));
-      crate::ActorFunding::<Test>::insert(actor_id, funding.clone());
-      assert_ok!(Actors::do_try_state());
-    }
   });
 }
 
@@ -1770,8 +1644,10 @@ fn profile_contract_geometry_state_footprint() {
 }
 
 #[test]
-fn removed_all_available_scale_form_is_rejected() {
-  assert!(AmountResolution::<u128>::decode(&mut &[4_u8][..]).is_err());
+fn removed_amount_resolution_scale_forms_are_rejected() {
+  for discriminant in [2_u8, 3, 4] {
+    assert!(AmountResolution::<u128>::decode(&mut &[discriminant][..]).is_err());
+  }
 }
 
 #[test]
@@ -1790,11 +1666,7 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "Unstake",
     "StopCycle",
   ]);
-  assert_variant_names::<AmountResolution<u128>>(&[
-    "Fixed",
-    "PercentageOfCurrent",
-    "PercentageAtOpening",
-  ]);
+  assert_variant_names::<AmountResolution<u128>>(&["Fixed", "Percent"]);
   assert_variant_names::<InputLimit<u128>>(&["LiveQuote", "Absolute"]);
   assert_variant_names::<Predicate<TestAsset, u128, u32, u32>>(&[
     "BalanceAbove",
@@ -1808,7 +1680,6 @@ fn public_reachability_inventory_is_closed_and_canonical() {
     "ObservationEquals",
     "ObservationNotEquals",
   ]);
-  assert_variant_names::<ObservationTiming>(&["Opening", "Current"]);
   assert_variant_names::<crate::PredicateError>(&["InvalidObservation"]);
   assert_variant_names::<RuntimeSourceFilter>(&["Any", "OwnerOnly", "Whitelist"]);
   assert_variant_names::<RuntimeAssetFilter>(&["Any", "Whitelist"]);
@@ -1952,7 +1823,6 @@ fn actor_storage_schema_is_explicit() {
       ("ActorContractHead", true, true),
       ("ActorActivationAuthority", true, true),
       ("ActorContractTailChunk", true, true),
-      ("ActorFunding", true, true),
       ("ActorRunHead", true, true),
       ("ActorRunPayload", true, true),
       ("ActorIdentities", true, true),
@@ -2042,7 +1912,6 @@ fn actor_storage_schema_is_explicit() {
 
   assert_plain_storage_type::<u64>(entry("NextActorId"));
   assert_map_storage_types::<u64, crate::ActorContractHeadOf<Test>>(entry("ActorContractHead"));
-  assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(entry("ActorFunding"));
 
   assert_map_storage_types::<u64, crate::ActorActivationAuthorityOf<Test>>(entry(
     "ActorActivationAuthority",
@@ -2118,13 +1987,11 @@ fn actor_storage_schema_is_explicit() {
       "contract_authority",
       "cycle_nonce",
       "cursor",
-      "opening_predicate_cursor",
       "unsuccessful_attempts_at_cursor",
       "last_attempt_block",
       "last_committed_step_block",
       "eligible_at",
       "opening_snapshot",
-      "opening_predicate_results",
       "cumulative_outcomes",
       "last_step_outcome",
       "suspension"
@@ -2477,63 +2344,6 @@ fn temporal_membership_try_state_rejects_page_slot_pointing_at_different_actor()
   });
 }
 
-#[test]
-fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let asset_in = TestAsset::Local(8);
-    let asset_out = TestAsset::Local(9);
-    setup_pool(asset_in, asset_out, 10_000, 10_000);
-    set_asset_balance(&u64::MAX, asset_out, 10_000);
-    let step = StepOf::<Test> {
-      precondition: None,
-      task: Task::SwapIn {
-        asset_in,
-        asset_out,
-        amount_in: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
-        slippage_tolerance: Perbill::one(),
-      },
-      on_error: RETRY_LATER,
-    };
-    let actor_id = create_system_with(
-      ALICE,
-      percentage_trigger_schedule(),
-      None,
-      contract_steps_with_step(step),
-    );
-    let actor = sovereign_account(actor_id);
-    set_asset_balance(&actor, asset_in, 100);
-    set_temporary_dex_failure(true);
-    signal_percentage_trigger(actor_id, asset_in);
-    run_idle(Weight::MAX);
-    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("suspended continuation")
-        .opening_snapshot
-        .clear();
-    });
-
-    set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    let actor_state =
-      Actors::active_actor_view(actor_id).expect("actor remains after permanent failure");
-    assert_eq!(actor_state.cycle_state, CycleState::Idle);
-    assert_eq!(actor_state.unsuccessful_attempt_streak, 2);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::StepFailed {
-        actor_id: id,
-        step_index: 0,
-        error,
-        ..
-      } if *id == actor_id && *error == Error::<Test>::SnapshotUnavailable.into()
-    )));
-  });
-}
-
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
 fn canonical_loader_rejects_contract_admission_disagreement() {
@@ -2623,7 +2433,7 @@ fn canonical_loader_distinguishes_absence_dormancy_active_and_corruption() {
       LoadedActorStateOf::Active(_)
     ));
     assert!(!Actors::pending_signal(actor_id));
-    ActorFunding::<Test>::remove(actor_id);
+    ActorContractHeads::<Test>::remove(actor_id);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
@@ -2648,7 +2458,7 @@ fn canonical_loader_distinguishes_absence_dormancy_active_and_corruption() {
 
 #[test]
 fn canonical_loader_classifies_every_primary_partition_presence_mask() {
-  for mask in 0u8..16 {
+  for mask in 0u8..8 {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
@@ -2656,7 +2466,6 @@ fn canonical_loader_classifies_every_primary_partition_presence_mask() {
         crate::ActorUnsignaledControlCells::<Test>::take(actor_id).expect("primary fixture");
       let locator = crate::ActorControlLocators::<Test>::take(actor_id).expect("locator fixture");
       let head = ActorContractHeads::<Test>::take(actor_id).expect("Contract head fixture");
-      let funding = ActorFunding::<Test>::take(actor_id).expect("funding fixture");
       if mask & 0b0001 != 0 {
         crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
       }
@@ -2666,14 +2475,10 @@ fn canonical_loader_classifies_every_primary_partition_presence_mask() {
       if mask & 0b0100 != 0 {
         ActorContractHeads::<Test>::insert(actor_id, head);
       }
-      if mask & 0b1000 != 0 {
-        ActorFunding::<Test>::insert(actor_id, funding);
-      }
-
       let loaded = Actors::load_actor_state(actor_id);
       match mask {
         0 => assert!(matches!(loaded, LoadedActorStateOf::NotRegistered)),
-        15 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
+        7 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
         _ => assert!(
           matches!(loaded, LoadedActorStateOf::Corrupt),
           "mask {mask:04b}"
@@ -2747,7 +2552,7 @@ fn try_state_rejects_orphan_activation_authority() {
 #[cfg(feature = "try-runtime")]
 #[test]
 fn try_state_rejects_every_incomplete_primary_partition_presence_mask() {
-  for mask in 0u8..15 {
+  for mask in 0u8..7 {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
@@ -2755,7 +2560,6 @@ fn try_state_rejects_every_incomplete_primary_partition_presence_mask() {
         crate::ActorUnsignaledControlCells::<Test>::take(actor_id).expect("primary fixture");
       let locator = crate::ActorControlLocators::<Test>::take(actor_id).expect("locator fixture");
       let head = ActorContractHeads::<Test>::take(actor_id).expect("Contract head fixture");
-      let funding = ActorFunding::<Test>::take(actor_id).expect("funding fixture");
       if mask & 0b0001 != 0 {
         crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
       }
@@ -2765,10 +2569,6 @@ fn try_state_rejects_every_incomplete_primary_partition_presence_mask() {
       if mask & 0b0100 != 0 {
         ActorContractHeads::<Test>::insert(actor_id, head);
       }
-      if mask & 0b1000 != 0 {
-        ActorFunding::<Test>::insert(actor_id, funding);
-      }
-
       assert!(
         crate::Pallet::<Test>::do_try_state().is_err(),
         "mask {mask:04b}"
@@ -2805,7 +2605,7 @@ fn eligibility_projection_rejects_partial_active_partitions() {
     let expected_contract =
       system_active_contract(manual_schedule(), None, plan.clone()).expect("direct Actor Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-    ActorFunding::<Test>::remove(actor_id);
+    ActorContractHeads::<Test>::remove(actor_id);
     assert_eq!(
       Actors::actor_eligibility(actor_id),
       Err(ActorClassificationError::ActorInvariant)

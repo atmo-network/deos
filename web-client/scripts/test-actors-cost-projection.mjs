@@ -75,10 +75,9 @@ function activeUserQuote() {
           contract_head: 12n,
           contract_body: 0n,
           detector: 13n,
-          funding: 14n,
           run: 0n,
         },
-        total: 50n,
+        total: 36n,
       },
     },
   };
@@ -121,7 +120,7 @@ test('cost projection keeps every economic owner and provenance separate', () =>
     productionWeightIdentity: `0x${'03'.repeat(32)}`,
   });
   assert.equal(quote.maximumNextActionFee.maximumEffectFee, 280n);
-  assert.equal(quote.stateHold.total, 50n);
+  assert.equal(quote.stateHold.total, 36n);
   assert.equal('activationTotal' in quote, false);
   assert.equal('remainingMachineBudget' in quote, false);
 });

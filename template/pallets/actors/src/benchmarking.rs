@@ -213,7 +213,7 @@ mod benches {
   }
 
   fn packed_predicate_clauses<T: Config>(
-    predicates: Vec<TimedPredicate<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>>,
+    predicates: Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
     width: u32,
   ) -> PreconditionOf<T> {
     assert!(width > 0 && width <= T::MaxPredicatesPerClause::get());
@@ -234,7 +234,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -247,7 +247,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -279,7 +279,7 @@ mod benches {
         task: ActorTask::Transfer {
           to: account("admitted-contract-filler", index as u32, 0),
           asset: T::FeeNativeAssetId::get(),
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       };
@@ -308,7 +308,7 @@ mod benches {
       task: ActorTask::Transfer {
         to: recipient,
         asset: T::FeeNativeAssetId::get(),
-        amount: AmountResolution::PercentageOfLastFunding(polkadot_sdk::sp_runtime::Perbill::one()),
+        amount: AmountResolution::Percent(polkadot_sdk::sp_runtime::Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }])
@@ -1319,14 +1319,12 @@ mod benches {
   }
 
   fn prepare_user_retry_opening_partition<T: Config>(
-    opening_amounts: u32,
     opening_predicates: u32,
   ) -> Result<ActorId, polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let owner: T::AccountId = account("close-owner", 0, 0);
     ensure_creation_balance::<T>(&owner);
     let owner_slot = prefill_reachable_owner_slots::<T>(&owner);
-    let (steps, funding) =
-      retry_contract_with_opening_partition::<T>(opening_amounts, opening_predicates)?;
+    let (steps, funding) = retry_contract_with_opening_partition::<T>(opening_predicates)?;
     let feed = observation_feed_pool::<T>(1)[0];
     prefund_user_sovereign::<T>(&owner, owner_slot, &steps);
     Pallet::<T>::create_user_actor_at_slot(
@@ -1345,21 +1343,16 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     open_reachable_retry::<T>(actor_id, funding);
     let run = ActorRunStateStore::<T>::get(actor_id).unwrap();
-    assert_eq!(run.opening_snapshot.len() as u32, opening_amounts);
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      opening_predicates
-    );
+    assert!(run.opening_snapshot.is_empty());
     Ok(actor_id)
   }
 
-  /// Maximum Step count with independent Opening captures; other positions retain Current reads.
+  /// Maximum Step count with independently selected Opening predicate results.
   #[benchmark(pov_mode = Measured)]
   fn close_actor_opening_partition(
-    o: Linear<0, { T::MaxContractSteps::get() * 2 }>,
     p: Linear<0, { T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>() }>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let actor_id = prepare_user_retry_opening_partition::<T>(o, p)?;
+    let actor_id = prepare_user_retry_opening_partition::<T>(p)?;
     let contract = Pallet::<T>::load_actor_contract(actor_id).unwrap();
     let Trigger::ObservationCrossing { feed, .. } = contract.trigger else {
       panic!("partition fixture owns a Crossing Trigger")
@@ -1873,11 +1866,8 @@ mod benches {
         "host cannot represent the nonempty funding-prune ObservationChange profile",
       ));
     }
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(1);
     let (owner, actor_id, replacement, old_feed) =
-      prepare_reachable_update::<T>(opening_legs, TriggerFamily::ObservationChange)?;
+      prepare_reachable_update::<T>(TriggerFamily::ObservationChange)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -1891,11 +1881,8 @@ mod benches {
   // Production Weight selection remains open until the extra diagnostic is measured in Wasm.
   #[benchmark]
   fn update_contract() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(T::MaxFundingTrackedAssets::get());
     let (owner, actor_id, replacement, old_feed) =
-      prepare_reachable_update::<T>(opening_legs, TriggerFamily::ObservationCrossing)?;
+      prepare_reachable_update::<T>(TriggerFamily::ObservationCrossing)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -1907,14 +1894,6 @@ mod benches {
 
   #[benchmark(extra)]
   fn update_contract_reachable_allocation(
-    o: Linear<
-      {
-        T::MaxContractSteps::get()
-          .saturating_mul(2)
-          .saturating_sub(T::MaxFundingTrackedAssets::get())
-      },
-      { T::MaxContractSteps::get().saturating_mul(2) },
-    >,
     t: Linear<0, 1>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let family = if t == 0 {
@@ -1922,7 +1901,7 @@ mod benches {
     } else {
       TriggerFamily::ObservationChange
     };
-    let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<T>(o, family)?;
+    let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<T>(family)?;
     let expected = replacement.clone();
     #[block]
     {
@@ -2220,16 +2199,7 @@ mod benches {
         }
       })
       .collect::<alloc::vec::Vec<_>>();
-    let precondition = packed_predicate_clauses::<T>(
-      predicates
-        .into_iter()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate,
-        })
-        .collect(),
-      T::MaxPredicatesPerClause::get(),
-    );
+    let precondition = packed_predicate_clauses::<T>(predicates, T::MaxPredicatesPerClause::get());
     #[block]
     {
       assert_eq!(
@@ -2263,16 +2233,7 @@ mod benches {
         max_age_blocks: 100,
       })
       .collect::<alloc::vec::Vec<_>>();
-    let precondition = packed_predicate_clauses::<T>(
-      predicates
-        .into_iter()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate,
-        })
-        .collect(),
-      T::MaxPredicatesPerClause::get(),
-    );
+    let precondition = packed_predicate_clauses::<T>(predicates, T::MaxPredicatesPerClause::get());
     #[block]
     {
       let _ = Pallet::<T>::evaluate_precondition(&precondition, &actor, T::Balance::zero());
@@ -2755,54 +2716,53 @@ mod benches {
   }
 
   fn fund_reachable_update_assets<T: Config>(actor_id: ActorId, amount: T::Balance) {
-    fund_reachable_assets_except::<T>(actor_id, amount, None);
+    let _ = fund_reachable_assets_except::<T>(actor_id, amount, None);
   }
 
   fn fund_reachable_assets_except<T: Config>(
     actor_id: ActorId,
     amount: T::Balance,
     excluded: Option<T::AssetId>,
-  ) {
+  ) -> Vec<T::AssetId> {
     let identity = Pallet::<T>::actor_identity(actor_id).expect("update Actor identity exists");
-    let funding = ActorFunding::<T>::get(actor_id).expect("update funding exists");
-    T::BenchmarkHelper::enable_asset_ops_ingress();
-    for asset in &funding.funding_tracked_assets {
-      if excluded == Some(*asset) {
-        continue;
+    let contract = Pallet::<T>::load_actor_contract(actor_id).expect("update Contract exists");
+    let mut assets = Vec::new();
+    let mut include = |asset: T::AssetId| {
+      if excluded != Some(asset) && !assets.contains(&asset) {
+        assets.push(asset);
       }
-      T::AssetOps::mint(&identity.owner, *asset, amount.saturating_mul(2u32.into()))
-        .expect("authorized funding source has transferable custody");
-      T::BenchmarkHelper::transfer_signed(
-        &identity.owner,
-        &identity.sovereign_account,
-        *asset,
-        amount,
-      )
-      .expect("real owner ingress accumulates tracked funding");
+    };
+    for step in &contract.steps {
+      match step.task {
+        ActorTask::Transfer { asset, .. }
+        | ActorTask::SplitTransfer { asset, .. }
+        | ActorTask::Burn { asset, .. }
+        | ActorTask::Stake { asset, .. } => include(asset),
+        ActorTask::SwapIn { asset_in, .. } | ActorTask::SwapOut { asset_in, .. } => {
+          include(asset_in)
+        }
+        ActorTask::AddLiquidity {
+          asset_a, asset_b, ..
+        }
+        | ActorTask::DonateLiquidity {
+          asset_a, asset_b, ..
+        } => {
+          include(asset_a);
+          include(asset_b);
+        }
+        ActorTask::RemoveLiquidity { lp_asset, .. } => include(lp_asset),
+        ActorTask::Mint { .. } | ActorTask::Unstake { .. } | ActorTask::StopCycle => {}
+      }
     }
-    let accumulated = ActorFunding::<T>::get(actor_id).expect("funded Actor exists");
-    assert_eq!(
-      accumulated.funding_accumulated.len(),
-      funding
-        .funding_tracked_assets
-        .iter()
-        .filter(|asset| excluded != Some(**asset))
-        .count()
-    );
-    assert!(
-      funding
-        .funding_tracked_assets
-        .iter()
-        .all(|asset| if excluded == Some(*asset) {
-          !accumulated.funding_accumulated.contains_key(asset)
-        } else {
-          accumulated.funding_accumulated.get(asset) == Some(&amount)
-        })
-    );
+    for asset in &assets {
+      let reachable_amount = amount.max(T::AssetOps::minimum_balance(*asset));
+      T::AssetOps::mint(&identity.sovereign_account, *asset, reachable_amount)
+        .expect("reachable authored step has sovereign custody at its runtime minimum");
+    }
+    assets
   }
 
   fn prepare_reachable_update<T: Config>(
-    opening_legs: u32,
     family: TriggerFamily,
   ) -> Result<
     (
@@ -2815,7 +2775,7 @@ mod benches {
   > {
     let caller: T::AccountId = whitelisted_caller();
     ensure_creation_balance::<T>(&caller);
-    let (steps, liquidity_funding) = reachable_retry_contract_allocation::<T>(opening_legs, 0)?;
+    let (steps, liquidity_funding) = reachable_retry_contract_allocation::<T>()?;
     let feeds = observation_feed_pool::<T>(if family == TriggerFamily::ObservationChange {
       5
     } else {
@@ -2855,62 +2815,29 @@ mod benches {
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     let funding_amount = liquidity_funding.2.min(liquidity_funding.3);
     assert!(!funding_amount.is_zero());
-    fund_reachable_update_assets::<T>(actor_id, funding_amount);
+    let _ = fund_reachable_assets_except::<T>(actor_id, funding_amount, Some(liquidity_funding.0));
     open_reachable_retry::<T>(actor_id, liquidity_funding);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("update Run is live");
+    assert!(
+      !IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id),
+      "suspended update Actor has rearmed indexed detection"
+    );
     let run = state.run_state.as_ref().expect("real update Run exists");
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert!(
-      run
-        .funding_snapshot
-        .values()
-        .all(|amount| *amount == funding_amount)
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     let retained_run = run.encode();
-    // A second paid family occurrence establishes the real deferred latch of the active Run.
-    match family {
-      TriggerFamily::ObservationCrossing => {
-        for rearm in [true, false] {
-          frame_system::Pallet::<T>::set_block_number(
-            frame_system::Pallet::<T>::block_number().saturating_add(One::one()),
-          );
-          if rearm {
-            publish_observation_at_most::<T>(old_feed, 1);
-          } else {
-            assert!(publish_zero_step_observation::<T>(old_feed, 1_000) >= 4);
-          }
-          while CrossingPendingFeedListState::<T>::get().count > 0 {
-            Pallet::<T>::crossing_work_unit()
-              .expect("real deferred Crossing occurrence materializes");
-          }
-        }
-      }
-      TriggerFamily::ObservationChange => {
-        Pallet::<T>::note_observation_changed(old_feed, 3)
-          .expect("deferred observation occurrence is admitted");
-        while DirtyObservationListState::<T>::get().count > 0 {
-          Pallet::<T>::do_fanout_dirty_observation_page()
-            .expect("deferred observation occurrence materializes");
-        }
-      }
-      _ => unreachable!(),
-    }
+    // Indexed occurrences during a live Run are ignored; the removed funding accumulator must not
+    // manufacture a deferred latch for this update fixture.
     assert!(
-      benchmark_fixture_hot::<T>(actor_id)
-        .expect("deferred Actor exists")
+      !benchmark_fixture_hot::<T>(actor_id)
+        .expect("update Actor exists")
         .pending_signal
     );
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
-        .expect("deferred Run remains live")
+        .expect("update Run remains live")
         .encode(),
       retained_run
     );
@@ -2966,13 +2893,10 @@ mod benches {
     );
     assert!(!ActorRunStateStore::<T>::contains_key(actor_id));
     assert!(
-      benchmark_fixture_hot::<T>(actor_id)
+      !benchmark_fixture_hot::<T>(actor_id)
         .expect("updated Actor is active")
         .pending_signal
     );
-    let funding = ActorFunding::<T>::get(actor_id).expect("updated funding exists");
-    assert!(funding.funding_tracked_assets.is_empty());
-    assert!(funding.funding_accumulated.is_empty());
     assert_max_contract_geometry::<T>(actor_id);
     match expected.trigger {
       Trigger::ObservationCrossing { threshold, .. } => {
@@ -2999,10 +2923,7 @@ mod benches {
     Pallet::<T>::do_try_state().expect("Contract replacement preserves full state invariants");
   }
 
-  fn reachable_retry_contract_allocation<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
-  ) -> Result<
+  fn reachable_retry_contract_allocation<T: Config>() -> Result<
     (
       ContractSteps<T>,
       (T::AssetId, T::AssetId, T::Balance, T::Balance),
@@ -3010,35 +2931,27 @@ mod benches {
     polkadot_sdk::frame_benchmarking::BenchmarkError,
   > {
     let (mut steps, liquidity_funding) = retry_contract_with_opening_partition::<T>(
-      T::MaxContractSteps::get() * 2,
       T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>(),
     )?;
-    let leg_count = T::MaxContractSteps::get()
-      .checked_mul(2)
-      .expect("host amount surface bound fits");
-    assert!(opening_legs <= leg_count);
-    assert!(opening_start < leg_count);
-    for (index, step) in steps.iter_mut().enumerate() {
+    for step in &mut steps {
       let ActorTask::AddLiquidity {
         amount_a, amount_b, ..
       } = &mut step.task
       else {
         panic!("reachable retry allocation requires the admitted two-leg Contract");
       };
-      for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-        let position = ((index * 2 + offset) as u32 + leg_count - opening_start) % leg_count;
-        if position >= opening_legs {
-          *amount = AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50));
-        }
-      }
+      *amount_a = AmountResolution::Percent(Perbill::from_percent(50));
+      *amount_b = AmountResolution::Percent(Perbill::from_percent(50));
     }
+    let ActorTask::AddLiquidity { amount_a, .. } = &mut steps[0].task else {
+      unreachable!("reachable retry head is a liquidity task")
+    };
+    *amount_a = AmountResolution::Fixed(liquidity_funding.2);
     retain_admitted_contract_geometry::<T>(ActorType::System, &mut steps, &[0])?;
     Ok((steps, liquidity_funding))
   }
 
   fn create_reachable_manual_retry<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
     cooldown_blocks: u32,
   ) -> Result<
     (ActorId, (T::AssetId, T::AssetId, T::Balance, T::Balance)),
@@ -3046,7 +2959,7 @@ mod benches {
   > {
     let owner: T::AccountId = account("manual-retry-owner", 0, 0);
     ensure_creation_balance::<T>(&owner);
-    let (steps, funding) = reachable_retry_contract_allocation::<T>(opening_legs, opening_start)?;
+    let (steps, funding) = reachable_retry_contract_allocation::<T>()?;
     let mut contract = system_contract::<T>(
       Schedule {
         trigger: Trigger::Manual,
@@ -3068,11 +2981,9 @@ mod benches {
     Ok((actor_id, funding))
   }
 
-  fn prepare_reachable_suspended_head<T: Config>(
-    opening_legs: u32,
-    opening_start: u32,
-  ) -> Result<(ActorId, ActorStepTicketOf<T>), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, funding) = create_reachable_manual_retry::<T>(opening_legs, opening_start, 100)?;
+  fn prepare_reachable_suspended_head<T: Config>()
+  -> Result<(ActorId, ActorStepTicketOf<T>), polkadot_sdk::frame_benchmarking::BenchmarkError> {
+    let (actor_id, funding) = create_reachable_manual_retry::<T>(100)?;
     open_reachable_retry::<T>(actor_id, funding);
     let run = ActorRunStateStore::<T>::get(actor_id).expect("real retry Run exists");
     let retained_run = run.encode();
@@ -3111,10 +3022,6 @@ mod benches {
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real due Ready fixture passes full state audit");
@@ -3601,10 +3508,7 @@ mod benches {
     }
     let mut steps = inert_contract_steps_of_len::<T>(2);
     steps[0].precondition = Some(packed_predicate_clauses::<T>(
-      vec![TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate: Predicate::BlockNumberBelow { threshold: 0 },
-      }],
+      vec![Predicate::BlockNumberBelow { threshold: 0 }],
       1,
     ));
     let actor_id = create(32, 100, steps);
@@ -3723,7 +3627,6 @@ mod benches {
     assert!(!ActorRunHeads::<T>::contains_key(fixture.actor_id));
     assert!(!ActorRunPayloads::<T>::contains_key(fixture.actor_id));
     assert!(!ActorContractHeads::<T>::contains_key(fixture.actor_id));
-    assert!(!ActorFunding::<T>::contains_key(fixture.actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(fixture.actor_id));
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(fixture.actor_id)
@@ -3950,8 +3853,7 @@ mod benches {
           .collect::<Vec<_>>()
       }
       Trigger::ObservationChange { feed } => {
-        Pallet::<T>::note_observation_changed(feed, 2)
-          .expect("real observation occurrence is admitted");
+        publish_zero_step_observation::<T>(feed, 1_000);
         while DirtyObservationListState::<T>::get().count > 0 {
           Pallet::<T>::do_fanout_dirty_observation_page()
             .expect("observation occurrence materializes");
@@ -4042,20 +3944,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(run.funding_snapshot.is_empty());
   }
 
   fn assert_contract_derived_retry<T: Config>(actor_id: ActorId) {
@@ -4073,44 +3961,17 @@ mod benches {
     assert_eq!(run.cursor, 0);
     assert!(matches!(
       run.last_step_outcome,
-      Some(StepOutcome::Failed(TaskFailure {
-        retry: RetryClass::Temporary,
-        ..
-      }))
+      Some(StepOutcome::FundingUnavailable)
+        | Some(StepOutcome::Failed(TaskFailure {
+          retry: RetryClass::Temporary,
+          ..
+        }))
     ));
     assert_eq!(run.opening_snapshot.len(), surfaces.len());
     assert!(
       surfaces
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
-    assert_eq!(
-      run.opening_predicate_results.len(),
-      contract
-        .steps
-        .iter()
-        .filter_map(|step| step.precondition.as_ref())
-        .flat_map(|precondition| precondition.clauses.iter())
-        .flat_map(|clause| clause.iter())
-        .filter(|predicate| predicate.timing == ObservationTiming::Opening)
-        .count()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(true))
-    );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert!(
-      state
-        .funding
-        .funding_tracked_assets
-        .iter()
-        .all(|asset| run.funding_snapshot.contains_key(asset))
     );
     assert_max_contract_geometry::<T>(actor_id);
     #[cfg(feature = "try-runtime")]
@@ -4125,7 +3986,6 @@ mod benches {
     polkadot_sdk::frame_benchmarking::BenchmarkError,
   > {
     let (mut steps, funding) = retry_contract_with_opening_partition::<T>(
-      T::MaxContractSteps::get() * 2,
       T::MaxContractSteps::get() * benchmark_predicate_capacity::<T>(),
     )?;
     retain_admitted_contract_geometry::<T>(ActorType::System, &mut steps, &[0])?;
@@ -4133,7 +3993,6 @@ mod benches {
   }
 
   fn retry_contract_with_opening_partition<T: Config>(
-    opening_amounts: u32,
     opening_predicates: u32,
   ) -> Result<
     (
@@ -4144,7 +4003,6 @@ mod benches {
   > {
     let step_count = T::MaxContractSteps::get();
     let predicates_per_step = benchmark_predicate_capacity::<T>();
-    assert!(opening_amounts <= step_count * 2);
     assert!(opening_predicates <= step_count * predicates_per_step);
     if step_count < 2
       || predicates_per_step == 0
@@ -4170,31 +4028,17 @@ mod benches {
     let mut contract_steps = ContractSteps::<T>::default();
     for (step_index, pair) in assets.chunks_exact(2).enumerate() {
       let predicates = (0..predicates_per_step)
-        .map(|index| TimedPredicate {
-          timing: if step_index as u32 * predicates_per_step + index < opening_predicates {
-            ObservationTiming::Opening
-          } else {
-            ObservationTiming::Current
-          },
-          predicate: Predicate::BalanceBelow {
-            asset: pair[index as usize % 2],
-            threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
-              .saturating_sub(index.saturated_into()),
-          },
+        .map(|index| Predicate::BalanceBelow {
+          asset: pair[index as usize % 2],
+          threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+            .saturating_sub(index.saturated_into()),
         })
         .collect();
-      let amount = |position: u32| {
-        if step_index as u32 * 2 + position < opening_amounts {
-          AmountResolution::PercentageAtOpening(Perbill::from_percent(50))
-        } else {
-          AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
-        }
-      };
       let task = ActorTask::AddLiquidity {
         asset_a: pair[0],
         asset_b: pair[1],
-        amount_a: amount(0),
-        amount_b: amount(1),
+        amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+        amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
         min_lp_out: if step_index == 0 {
           <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
         } else {
@@ -4219,9 +4063,8 @@ mod benches {
         .expect("Crossing retry Contract fits");
     }
     // The funded first attempt rejects its output bound transactionally and enters service Waiting.
-    // Amount and predicate prefixes independently select immutable captures.
-    let surfaces = Pallet::<T>::opening_surfaces(&contract_steps, 0);
-    assert_eq!(surfaces.len() as u32, opening_amounts);
+    // Only Opening predicates retain immutable cycle captures.
+    assert!(Pallet::<T>::opening_surfaces(&contract_steps, 0).is_empty());
     Ok((contract_steps, (asset_a, asset_b, amount_a, amount_b)))
   }
 
@@ -4481,13 +4324,6 @@ mod benches {
     contract.funding = FundingSourcePolicy::AnyVerifiedIngress;
     Pallet::<T>::store_actor_contract(actor_id, contract)
       .expect("benchmark ingress Contract remains admitted");
-    ActorFunding::<T>::mutate(actor_id, |maybe| {
-      let funding = maybe.as_mut().expect("benchmark actor funding exists");
-      funding
-        .funding_accumulated
-        .try_insert(T::FeeNativeAssetId::get(), One::one())
-        .expect("tracked funding accumulator fits");
-    });
     install_saturated_tombstone_queue::<T>();
     (actor_id, recipient)
   }
@@ -4943,10 +4779,7 @@ mod benches {
   fn current_step_plan_suspended_head()
   -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     // Funding-heavy host-feasible corner; frontier cases verify reachability, not a Weight envelope.
-    let opening_legs = T::MaxContractSteps::get()
-      .saturating_mul(2)
-      .saturating_sub(T::MaxFundingTrackedAssets::get());
-    let (actor_id, ticket) = prepare_reachable_suspended_head::<T>(opening_legs, 0)?;
+    let (actor_id, ticket) = prepare_reachable_suspended_head::<T>()?;
     let retained = ActorRunStateStore::<T>::get(actor_id)
       .expect("due Run exists")
       .encode();
@@ -5062,7 +4895,7 @@ mod benches {
     (actor, assets)
   }
 
-  #[benchmark(pov_mode = Measured)]
+  #[benchmark(extra, pov_mode = Measured)]
   fn opening_snapshot_capture(
     e: Linear<
       1,
@@ -5089,11 +4922,11 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a,
             asset_b,
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
             amount_b: if e == 1 {
               AmountResolution::Fixed(One::one())
             } else {
-              AmountResolution::PercentageAtOpening(Perbill::one())
+              AmountResolution::Percent(Perbill::one())
             },
             min_lp_out: One::one(),
           },
@@ -5123,7 +4956,7 @@ mod benches {
     }
   }
 
-  #[benchmark(pov_mode = Measured)]
+  #[benchmark(extra, pov_mode = Measured)]
   fn opening_target_snapshot_capture(
     e: Linear<1, { T::MaxOpeningSnapshotEntries::get().min(T::MaxContractSteps::get()) }>,
   ) {
@@ -5133,7 +4966,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Mint {
           asset: assets[index.min(e - 1) as usize],
-          amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       })
@@ -5176,7 +5009,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset: positions[index.min(e - 1) as usize].0,
-          shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+          shares: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       })
@@ -5241,14 +5074,14 @@ mod benches {
           ActorTask::AddLiquidity {
             asset_a: native,
             asset_b: other,
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
             amount_b: AmountResolution::Fixed(One::one()),
             min_lp_out: One::one(),
           }
         } else {
           ActorTask::SwapOut {
             asset_out: native,
-            amount_out: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_out: AmountResolution::Percent(Perbill::one()),
             asset_in: other,
             input_limit: InputLimit::Absolute(One::one()),
             slippage_tolerance: Perbill::zero(),
@@ -5359,21 +5192,21 @@ mod benches {
             } else {
               count - 2
             } as usize],
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
             amount_b: if count == 1 {
               AmountResolution::Fixed(One::one())
             } else {
-              AmountResolution::PercentageAtOpening(Perbill::one())
+              AmountResolution::Percent(Perbill::one())
             },
             min_lp_out: One::one(),
           },
           1 => ActorTask::Mint {
             asset: assets[index.min(count - 1) as usize],
-            amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount: AmountResolution::Percent(Perbill::one()),
           },
           _ => ActorTask::Unstake {
             asset: assets[index.min(count - 1) as usize],
-            shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+            shares: AmountResolution::Percent(Perbill::one()),
           },
         },
         on_error: StepErrorPolicy::AbortCycle,
@@ -5503,9 +5336,9 @@ mod benches {
         task: ActorTask::AddLiquidity {
           asset_a: pair[0],
           asset_b: other,
-          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
           amount_b: if pair.len() == 2 {
-            AmountResolution::PercentageAtOpening(Perbill::one())
+            AmountResolution::Percent(Perbill::one())
           } else {
             AmountResolution::Fixed(One::one())
           },
@@ -5524,7 +5357,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Mint {
           asset: *asset,
-          amount: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -5537,7 +5370,7 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset,
-          shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+          shares: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       });
@@ -5591,7 +5424,7 @@ mod benches {
     Ok(())
   }
 
-  #[benchmark(pov_mode = Measured)]
+  #[benchmark(extra, pov_mode = Measured)]
   fn opening_share_mixed_capture(
     e: Linear<
       1,
@@ -5617,19 +5450,12 @@ mod benches {
     Ok(())
   }
 
-  fn opening_predicate_capture_steps<T: Config>(
+  fn predicate_steps<T: Config>(
     predicates: Vec<Predicate<T::AssetId, T::Balance, u32, T::ObservationFeedId>>,
   ) -> ContractSteps<T> {
     let mut steps = ContractSteps::<T>::default();
     for chunk in predicates.chunks(benchmark_predicate_capacity::<T>() as usize) {
-      let predicates = chunk
-        .iter()
-        .cloned()
-        .map(|predicate| TimedPredicate {
-          timing: ObservationTiming::Opening,
-          predicate,
-        })
-        .collect();
+      let predicates = chunk.iter().cloned().collect();
       steps
         .try_push(Step {
           precondition: Some(packed_predicate_clauses::<T>(
@@ -5642,99 +5468,6 @@ mod benches {
         .expect("benchmark predicate Step fits");
     }
     steps
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_predicate_traversal() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(0, 0, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert!(results.is_empty());
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_predicate_capture(
-    p: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host has no representable predicate capacity for this benchmark",
-      ));
-    }
-    let observations = u32::from(p >= 2);
-    let (actor, steps) =
-      prepare_full_opening_predicate_capture::<T>(p - observations, observations, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(u32::try_from(results.len()).expect("result count fits"), p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_observation_capture(
-    p: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    if benchmark_predicate_capacity::<T>() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host has no representable predicate capacity for this benchmark",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(p)
-      .expect("maximum-encoded Opening observation feeds are published");
-    assert_eq!(feeds.len() as u32, p);
-    assert_eq!(
-      feeds
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len() as u32,
-      p
-    );
-    let steps = opening_predicate_capture_steps::<T>(
-      feeds
-        .into_iter()
-        .map(|feed| Predicate::ObservationAbove {
-          feed,
-          threshold: 0,
-          max_age_blocks: 100,
-        })
-        .collect(),
-    );
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
   }
 
   fn prepare_observation_read_state<T: Config>(
@@ -5784,179 +5517,7 @@ mod benches {
     Ok((feeds, state == BenchmarkObservationReadState::Fresh))
   }
 
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_observation_read_state(
-    p: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-    s: Linear<0, 4>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let max_age_blocks = 100;
-    let (feeds, expected) = prepare_observation_read_state::<T>(p, s, max_age_blocks)?;
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let steps = opening_predicate_capture_steps::<T>(
-      feeds
-        .into_iter()
-        .map(|feed| Predicate::ObservationAbove {
-          feed,
-          threshold: 0,
-          max_age_blocks,
-        })
-        .collect(),
-    );
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(expected)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_mixed_predicate_capture(
-    p: Linear<
-      2,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(2)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let native = T::FeeNativeAssetId::get();
-    let non_native = T::BenchmarkHelper::setup_predicate_assets(&actor, 2)?
-      .into_iter()
-      .find(|asset| *asset != native)
-      .expect("mixed capture has a non-native asset");
-    let assets = if p == 2 {
-      vec![non_native]
-    } else {
-      vec![native, non_native]
-    };
-    let mut predicates = Vec::with_capacity(p as usize);
-    for asset in assets {
-      let amount = T::AssetOps::minimum_balance(asset)
-        .checked_add(&One::one())
-        .expect("mixed capture funding fits");
-      T::AssetOps::mint(&actor, asset, amount).expect("mixed capture asset is funded");
-      predicates.push(Predicate::BalanceAbove {
-        asset,
-        threshold: Zero::zero(),
-      });
-    }
-    let observation_count = p - predicates.len() as u32;
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(observation_count)?;
-    assert_eq!(feeds.len() as u32, observation_count);
-    assert_eq!(
-      feeds
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len() as u32,
-      observation_count
-    );
-    predicates.extend(feeds.into_iter().map(|feed| Predicate::ObservationAbove {
-      feed,
-      threshold: 0,
-      max_age_blocks: 100,
-    }));
-    let steps = opening_predicate_capture_steps::<T>(predicates);
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_asset_heavy_predicate_capture(
-    p: Linear<
-      2,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(2)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let actor: T::AccountId = account("opening_predicate_actor", 0, 0);
-    let assets = T::BenchmarkHelper::setup_max_encoded_predicate_assets(&actor, (p - 1).max(2))?;
-    let assets: Vec<_> = assets
-      .into_iter()
-      .filter(|asset| p != 2 || *asset != T::FeeNativeAssetId::get())
-      .collect();
-    assert_eq!(assets.len() as u32, p - 1);
-    assert_eq!(
-      assets
-        .iter()
-        .collect::<alloc::collections::BTreeSet<_>>()
-        .len(),
-      assets.len()
-    );
-    let mut predicates = Vec::with_capacity(p as usize);
-    for asset in assets {
-      let amount = T::AssetOps::minimum_balance(asset)
-        .checked_add(&One::one())
-        .expect("asset-heavy capture funding fits");
-      T::AssetOps::mint(&actor, asset, amount).expect("asset-heavy capture asset is funded");
-      predicates.push(Predicate::BalanceAbove {
-        asset,
-        threshold: Zero::zero(),
-      });
-    }
-    let feeds = T::BenchmarkHelper::setup_max_encoded_observation_feeds(1)?;
-    assert_eq!(feeds.len(), 1);
-    predicates.push(Predicate::ObservationAbove {
-      feed: feeds[0],
-      threshold: 0,
-      max_age_blocks: 100,
-    });
-    let steps = opening_predicate_capture_steps::<T>(predicates);
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  fn prepare_max_encoded_opening_predicates<T: Config>(
+  fn prepare_max_encoded_predicates<T: Config>(
     balances: u32,
     observations: u32,
     include_native: bool,
@@ -6016,59 +5577,7 @@ mod benches {
         max_age_blocks: 100,
       }));
     }
-    Ok((actor, opening_predicate_capture_steps::<T>(predicates)))
-  }
-
-  fn prepare_full_opening_predicate_capture<T: Config>(
-    balances: u32,
-    observations: u32,
-    include_native: bool,
-  ) -> Result<(T::AccountId, ContractSteps<T>), polkadot_sdk::frame_benchmarking::BenchmarkError>
-  {
-    let per_step = benchmark_predicate_capacity::<T>();
-    let clause_count = T::MaxPreconditionClauses::get().min(per_step) as usize;
-    if clause_count == 0 || T::MaxContractSteps::get() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent predicate traversal",
-      ));
-    }
-    let (actor, opening_steps) =
-      prepare_max_encoded_opening_predicates::<T>(balances, observations, include_native)?;
-    let mut predicates = opening_steps
-      .iter()
-      .filter_map(|step| step.precondition.as_ref())
-      .flat_map(|precondition| precondition.clauses.iter().flat_map(|clause| clause.iter()))
-      .cloned()
-      .collect::<Vec<_>>();
-    predicates.resize(
-      T::MaxContractSteps::get().saturating_mul(per_step) as usize,
-      TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate: Predicate::BlockNumberAbove { threshold: 0 },
-      },
-    );
-    let mut steps = ContractSteps::<T>::default();
-    for chunk in predicates.chunks(per_step as usize) {
-      let mut clauses = vec![Vec::new(); clause_count];
-      for (index, predicate) in chunk.iter().enumerate() {
-        clauses[index % clause_count].push(*predicate);
-      }
-      let clauses = clauses
-        .into_iter()
-        .map(|clause| clause.try_into().expect("balanced predicate clause fits"))
-        .collect::<Vec<_>>()
-        .try_into()
-        .expect("maximum predicate clause count fits");
-      steps
-        .try_push(Step {
-          precondition: Some(Precondition { clauses }),
-          task: ActorTask::StopCycle,
-          on_error: StepErrorPolicy::AbortCycle,
-        })
-        .expect("full predicate traversal fits Contract");
-    }
-    assert_eq!(steps.len() as u32, T::MaxContractSteps::get());
-    Ok((actor, steps))
+    Ok((actor, predicate_steps::<T>(predicates)))
   }
 
   fn prepare_max_encoded_step_precondition<T: Config>(
@@ -6086,7 +5595,7 @@ mod benches {
       ));
     }
     let (actor, steps) =
-      prepare_max_encoded_opening_predicates::<T>(balances, observations, include_native)?;
+      prepare_max_encoded_predicates::<T>(balances, observations, include_native)?;
     assert_eq!(steps.len(), 1);
     let predicates = steps[0]
       .precondition
@@ -6096,10 +5605,6 @@ mod benches {
       .iter()
       .flat_map(|clause| clause.iter())
       .cloned()
-      .map(|mut predicate| {
-        predicate.timing = ObservationTiming::Current;
-        predicate
-      })
       .collect();
     let precondition = packed_predicate_clauses::<T>(
       predicates,
@@ -6197,23 +5702,23 @@ mod benches {
 
   #[benchmark(extra, pov_mode = Measured)]
   fn predicate_result_branch(
-    r: Linear<0, 2>,
+    r: Linear<0, 1>,
   ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     let count = benchmark_predicate_capacity::<T>();
-    if count < 2 || (r == 2 && count > T::MaxOpeningPredicateResults::get()) {
+    if count < 2 {
       return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
         "host cannot represent predicate result branch",
       ));
     }
     let (actor, mut precondition) =
       prepare_max_encoded_step_precondition::<T>(count - 1, 1, false)?;
-    for timed in precondition
-      .clauses
-      .iter_mut()
-      .flat_map(|clause| clause.iter_mut())
-    {
-      if r == 1 {
-        match &mut timed.predicate {
+    if r == 1 {
+      for predicate in precondition
+        .clauses
+        .iter_mut()
+        .flat_map(|clause| clause.iter_mut())
+      {
+        match predicate {
           Predicate::BalanceAbove { asset, threshold } => {
             *threshold = T::AssetOps::balance(&actor, *asset);
           }
@@ -6224,41 +5729,15 @@ mod benches {
             ));
           }
         }
-      } else if r == 2 {
-        timed.timing = ObservationTiming::Opening;
       }
     }
-    let opening_results: OpeningPredicateResultsOf<T> = if r == 2 {
-      vec![Err(PredicateError::InvalidObservation); T::MaxOpeningPredicateResults::get() as usize]
-        .try_into()
-        .expect("maximum Opening result vector fits")
-    } else {
-      Default::default()
-    };
-    let mut index = if r == 2 {
-      opening_results.len() - count as usize
-    } else {
-      0
-    };
     let result;
     #[block]
     {
-      result = Pallet::<T>::evaluate_step_precondition(
-        Some(&precondition),
-        &actor,
-        Zero::zero(),
-        &opening_results,
-        &mut index,
-      );
+      result = Pallet::<T>::evaluate_precondition(&precondition, &actor, Zero::zero());
       core::hint::black_box(&result);
     }
-    let expected = match r {
-      0 => Ok(true),
-      1 => Ok(false),
-      _ => Err(Error::<T>::InvalidPredicate.into()),
-    };
-    assert_eq!(result, expected);
-    assert_eq!(index, opening_results.len());
+    assert_eq!(result, if r == 0 { Ok(true) } else { Ok(false) });
     Ok(())
   }
 
@@ -6280,13 +5759,10 @@ mod benches {
       .cloned()
       .collect();
     let (feeds, fresh) = prepare_observation_read_state::<T>(1, s, 100)?;
-    predicates.push(TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::ObservationAbove {
-        feed: feeds[0],
-        threshold: 0,
-        max_age_blocks: 100,
-      },
+    predicates.push(Predicate::ObservationAbove {
+      feed: feeds[0],
+      threshold: 0,
+      max_age_blocks: 100,
     });
     let precondition = packed_predicate_clauses::<T>(
       predicates,
@@ -6300,210 +5776,6 @@ mod benches {
       core::hint::black_box(&result);
     }
     assert_eq!(result, Ok(expected));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn predicate_cached_evaluation(
-    o: Linear<0, { benchmark_predicate_capacity::<T>().max(1) }>,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let count = benchmark_predicate_capacity::<T>();
-    if o > T::MaxOpeningPredicateResults::get() {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot retain requested Opening results",
-      ));
-    }
-    let (actor, mut precondition) = prepare_max_encoded_step_precondition::<T>(count, 0, false)?;
-    for timed in precondition
-      .clauses
-      .iter_mut()
-      .flat_map(|clause| clause.iter_mut())
-      .take(o as usize)
-    {
-      timed.timing = ObservationTiming::Opening;
-    }
-    let opening_results: OpeningPredicateResultsOf<T> =
-      vec![Ok(true); T::MaxOpeningPredicateResults::get() as usize]
-        .try_into()
-        .expect("maximum Opening result vector fits");
-    let mut index = opening_results.len() - o as usize;
-    let result;
-    #[block]
-    {
-      result = Pallet::<T>::evaluate_step_precondition(
-        Some(&precondition),
-        &actor,
-        Zero::zero(),
-        &opening_results,
-        &mut index,
-      );
-      core::hint::black_box(&result);
-    }
-    assert_eq!(result, Ok(true));
-    assert_eq!(index, opening_results.len());
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_max_encoded_balance_capture(
-    p: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(p, 0, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, p);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(pov_mode = Measured)]
-  fn opening_observation_heavy_capture(
-    o: Linear<
-      1,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_sub(1)
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_full_opening_predicate_capture::<T>(1, o, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, o + 1);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_composition(
-    c: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_add(1)
-          .saturating_pow(2)
-          .saturating_sub(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    let total = (0..=maximum)
-      .find(|total| c < total.saturating_add(1).saturating_pow(2))
-      .ok_or(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "Opening composition index exceeds the host domain",
-      ))?;
-    let offset = c - total * total;
-    let include_native = offset > total;
-    let balances = if include_native {
-      offset - total - 1
-    } else {
-      offset
-    };
-    let observations = total - balances - u32::from(include_native);
-    let (actor, steps) =
-      prepare_full_opening_predicate_capture::<T>(balances, observations, include_native)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, total);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_allocation(
-    b: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_max_encoded_opening_predicates::<T>(b, maximum - b, false)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, maximum);
-    assert!(results.iter().all(|result| *result == Ok(true)));
-    Ok(())
-  }
-
-  #[benchmark(extra, pov_mode = Measured)]
-  fn opening_predicate_native_allocation(
-    b: Linear<
-      0,
-      {
-        T::MaxOpeningPredicateResults::get()
-          .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()))
-          .saturating_sub(1)
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let maximum = T::MaxOpeningPredicateResults::get()
-      .min(T::MaxContractSteps::get().saturating_mul(benchmark_predicate_capacity::<T>()));
-    if maximum < 2 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent mixed Opening predicates",
-      ));
-    }
-    let (actor, steps) = prepare_max_encoded_opening_predicates::<T>(b, maximum - 1 - b, true)?;
-    let results;
-    #[block]
-    {
-      results = Pallet::<T>::capture_opening_predicate_results(&actor, &steps, Zero::zero());
-      core::hint::black_box(&results);
-    }
-    assert_eq!(results.len() as u32, maximum);
-    assert!(results.iter().all(|result| *result == Ok(true)));
     Ok(())
   }
 
@@ -6543,26 +5815,13 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(run.funding_snapshot.is_empty());
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
     let (location, cell) =
       Pallet::<T>::actor_control_cell(actor_id).expect("real Ready authority exists");
     let ActorControlLocation::Ready { ticket } = location else {
       panic!("Q1 continuation must have a real Ready ticket");
     };
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0, 0, 0)
+    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, 0, 0)
       .expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     let ticket = Pallet::<T>::build_actor_step_ticket(
@@ -6644,12 +5903,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceAbove {
-              asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceAbove {
+            asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -6666,7 +5922,7 @@ mod benches {
       RunningInnerBranch::Progress => ActorTask::Transfer {
         to: account("running-zero-recipient", 0, 0),
         asset: zero_asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       },
     };
     let actor_id = prepare_reachable_running_with_cooldown::<T>(
@@ -6696,41 +5952,16 @@ mod benches {
       .expect("real Running payload exists");
     assert_eq!(state.hot.cycle_state, CycleState::Running);
     assert_eq!(run.cursor, cursor);
-    let opening_before_cursor: u32 = state.contract.steps[..cursor as usize]
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    assert_eq!(run.opening_predicate_cursor, opening_before_cursor);
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(run.funding_snapshot.is_empty());
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(state.funding.funding_accumulated.is_empty());
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
     assert!(matches!(
       ActorControlLocators::<T>::get(actor_id),
       Some(ActorControlLocation::Ready { .. })
     ));
-    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0, 0, 0)
+    let context = Pallet::<T>::step_control_weight_context(step_count, cursor, p, 0)
       .expect("real tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     #[cfg(feature = "try-runtime")]
@@ -6770,7 +6001,6 @@ mod benches {
       state.identity.clone(),
       state.hot.clone(),
       state.run_state.clone(),
-      state.funding.clone(),
       admission.clone(),
       ticket,
       loaded_step,
@@ -6858,7 +6088,6 @@ mod benches {
     if step_count == 0
       || step_count > T::MaxContractSteps::get()
       || step_count.saturating_mul(2) > T::MaxOpeningSnapshotEntries::get()
-      || step_count.saturating_mul(predicates_per_step) > T::MaxOpeningPredicateResults::get()
       || predicates_per_step == 0
       || predicates_per_step != T::MaxPredicatesPerStep::get()
     {
@@ -6884,12 +6113,9 @@ mod benches {
     let mut steps = ContractSteps::<T>::default();
     for pair in assets.chunks_exact(assets_per_step as usize) {
       let predicates = (0..predicates_per_step)
-        .map(|index| TimedPredicate {
-          timing: ObservationTiming::Opening,
-          predicate: Predicate::BalanceAbove {
-            asset: pair[2 + index as usize],
-            threshold: index.saturating_add(1).saturated_into(),
-          },
+        .map(|index| Predicate::BalanceAbove {
+          asset: pair[2 + index as usize],
+          threshold: index.saturating_add(1).saturated_into(),
         })
         .collect();
       steps
@@ -6901,8 +6127,8 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a: pair[0],
             asset_b: pair[1],
-            amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
-            amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+            amount_a: AmountResolution::Percent(Perbill::one()),
+            amount_b: AmountResolution::Percent(Perbill::one()),
             min_lp_out: One::one(),
           },
           on_error: StepErrorPolicy::AbortCycle,
@@ -7005,25 +6231,16 @@ mod benches {
         };
         step.precondition = Some(packed_predicate_clauses::<T>(
           (0..benchmark_predicate_capacity::<T>())
-            .map(|index| TimedPredicate {
-              timing: ObservationTiming::Opening,
-              predicate: Predicate::BalanceBelow {
-                asset: if index % 2 == 0 { asset_a } else { asset_b },
-                threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
-                  .saturating_sub(index.saturated_into()),
-              },
+            .map(|index| Predicate::BalanceBelow {
+              asset: if index % 2 == 0 { asset_a } else { asset_b },
+              threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+                .saturating_sub(index.saturated_into()),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
         ));
       }
     }
-    let funding_count =
-      if matches!(profile, ReachableOpeningProfile::Predicated) || terminal_predicates {
-        0
-      } else {
-        (2 * (count - 1)).min(T::MaxFundingTrackedAssets::get().saturating_sub(u32::from(failed)))
-      };
     if !matches!(profile, ReachableOpeningProfile::Predicated) {
       let ActorTask::AddLiquidity {
         asset_a, asset_b, ..
@@ -7050,7 +6267,7 @@ mod benches {
         task: if let Some((position, _)) = missing_receipt {
           ActorTask::Unstake {
             asset: position,
-            shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+            shares: AmountResolution::Percent(Perbill::from_percent(50)),
           }
         } else if complete {
           ActorTask::StopCycle
@@ -7061,9 +6278,9 @@ mod benches {
             amount: if retry {
               AmountResolution::Fixed(One::one())
             } else if matches!(profile, ReachableOpeningProfile::UserPaged) {
-              AmountResolution::PercentageAtOpening(Perbill::from_percent(50))
+              AmountResolution::Percent(Perbill::from_percent(50))
             } else {
-              AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
+              AmountResolution::Percent(Perbill::from_percent(50))
             },
           }
         },
@@ -7075,7 +6292,7 @@ mod benches {
           StepErrorPolicy::AbortCycle
         },
       };
-      for (index, step) in steps.iter_mut().skip(1).enumerate() {
+      for step in steps.iter_mut().skip(1) {
         if terminal_predicates {
           continue;
         }
@@ -7086,13 +6303,8 @@ mod benches {
         else {
           unreachable!()
         };
-        for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-          *amount = if ((2 * index + offset) as u32) < funding_count {
-            AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50))
-          } else {
-            AmountResolution::PercentageOfCurrent(Perbill::from_percent(50))
-          };
-        }
+        *amount_a = AmountResolution::Percent(Perbill::from_percent(50));
+        *amount_b = AmountResolution::Percent(Perbill::from_percent(50));
       }
     }
     let actor_type = if matches!(
@@ -7106,6 +6318,10 @@ mod benches {
       ActorType::System
     };
     retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &[0])?;
+    let excluded_asset = match steps[0].task {
+      ActorTask::Transfer { asset, .. } => Some(asset),
+      _ => None,
+    };
     let mut contract = user_contract::<T>(
       Schedule {
         trigger: Trigger::Manual,
@@ -7167,17 +6383,16 @@ mod benches {
     let identity = Pallet::<T>::actor_identity(actor_id).expect("real Opening identity exists");
     let funding_amount: T::Balance = 1_000_000_000_000u128.saturated_into();
     assert!(!funding_amount.is_zero());
-    fund_reachable_assets_except::<T>(
-      actor_id,
-      funding_amount,
-      missing_receipt.map(|(_, receipt)| receipt),
-    );
-    let funding = ActorFunding::<T>::get(actor_id).expect("real Opening funding exists");
+    let funded_assets = fund_reachable_assets_except::<T>(actor_id, funding_amount, excluded_asset);
     assert_eq!(
-      funding.funding_tracked_assets.len() as u32,
-      funding_count + u32::from(failed)
+      funded_assets.len(),
+      funded_assets
+        .iter()
+        .copied()
+        .collect::<alloc::collections::BTreeSet<_>>()
+        .len(),
+      "reachable funding uses one mint per distinct spend asset"
     );
-    assert_eq!(funding.funding_accumulated.len() as u32, funding_count);
     if actor_type == ActorType::User {
       T::AssetOps::mint(
         &identity.sovereign_account,
@@ -7207,18 +6422,6 @@ mod benches {
     let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
     assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
     assert_eq!(state.contract.steps.len() as u32, count);
-    let opening_results: u32 = state
-      .contract
-      .steps
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    assert!(opening_results <= T::MaxOpeningPredicateResults::get());
     assert_eq!(
       count.saturating_sub(1).div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
       tail_chunks
@@ -7230,7 +6433,7 @@ mod benches {
     assert_eq!(
       predicate_units,
       if matches!(profile, ReachableOpeningProfile::Predicated) || terminal_predicates {
-        2 * benchmark_predicate_capacity::<T>()
+        benchmark_predicate_capacity::<T>()
       } else {
         0
       }
@@ -7265,9 +6468,12 @@ mod benches {
         | ReachableOpeningProfile::CompleteMax
         | ReachableOpeningProfile::UserCompleteMin
         | ReachableOpeningProfile::UserCompleteHeaderMax
-        | ReachableOpeningProfile::FailedMin
-        | ReachableOpeningProfile::FailedMax
-    ) {
+    ) || (count == 1
+      && matches!(
+        profile,
+        ReachableOpeningProfile::FailedMin | ReachableOpeningProfile::FailedMax
+      ))
+    {
       assert_reachable_terminal_opening::<T>(actor_id, count, profile);
       return;
     }
@@ -7281,52 +6487,20 @@ mod benches {
       Some(frame_system::Pallet::<T>::block_number())
     );
     let opening = Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len() as u32;
-    let results: u32 = state
-      .contract
-      .steps
-      .iter()
-      .map(|step| {
-        step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count)
-      })
-      .sum();
-    let funding = state.funding.funding_tracked_assets.len() as u32;
     let skip = match profile {
       ReachableOpeningProfile::Predicated => StepSkippedReason::PreconditionFalse,
-      ReachableOpeningProfile::Minimal | ReachableOpeningProfile::UserPaged => {
-        StepSkippedReason::ResolutionSkipped
-      }
+      ReachableOpeningProfile::Minimal
+      | ReachableOpeningProfile::UserPaged
+      | ReachableOpeningProfile::FailedMin
+      | ReachableOpeningProfile::FailedMax => StepSkippedReason::ResolutionSkipped,
       _ => unreachable!("terminal Opening profiles are checked separately"),
     };
     assert_eq!(run.opening_snapshot.len() as u32, opening);
-    assert_eq!(run.opening_predicate_results.len() as u32, results);
-    assert_eq!(run.funding_snapshot.len() as u32, funding);
     let surfaces = Pallet::<T>::opening_surfaces(&state.contract.steps, 0);
     assert!(
       surfaces
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run
-        .funding_snapshot
-        .values()
-        .all(|amount| *amount == 1_000_000_000_000u128.saturated_into())
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
-    assert!(
-      run
-        .funding_snapshot
-        .keys()
-        .all(|asset| state.funding.funding_tracked_assets.contains(asset))
     );
     assert_eq!(run.last_step_outcome, Some(StepOutcome::Skipped(skip)));
     assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 1);
@@ -7346,42 +6520,18 @@ mod benches {
       profile,
       ReachableOpeningProfile::FailedMin | ReachableOpeningProfile::FailedMax
     );
-    let funding = state
-      .funding
-      .funding_tracked_assets
-      .len()
-      .saturating_sub(usize::from(failed)) as u32;
-    assert_eq!(
-      state.funding.funding_tracked_assets.len() as u32,
-      funding + u32::from(failed)
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     assert!(!state.hot.pending_signal);
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
     let now = frame_system::Pallet::<T>::block_number();
     if failed {
       assert_eq!(state.hot.cycle_state, CycleState::Idle);
       assert_eq!(state.identity.cycle_nonce, 1);
-      assert_eq!(state.hot.unsuccessful_attempt_streak, 1);
+      assert_eq!(state.hot.unsuccessful_attempt_streak, 0);
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
       assert!(matches!(
         ActorControlLocators::<T>::get(actor_id),
         Some(ActorControlLocation::Unsignaled)
       ));
-      let failure: <T as frame_system::Config>::RuntimeEvent = Event::<T>::StepFailed {
-        actor_id,
-        cycle_nonce: 1,
-        step_index: 0,
-        retry_class: RetryClass::Permanent,
-        error: Error::<T>::InvalidAmountResolution.into(),
-      }
-      .into();
-      assert!(
-        frame_system::Pallet::<T>::events()
-          .iter()
-          .any(|record| record.event == failure)
-      );
       let ActorTask::Unstake { asset, .. } = state.contract.steps[0].task else {
         unreachable!()
       };
@@ -7452,37 +6602,6 @@ mod benches {
         run.opening_snapshot.len(),
         Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
       );
-      assert_eq!(
-        run.opening_predicate_results.len() as u32,
-        state
-          .contract
-          .steps
-          .iter()
-          .map(|step| step
-            .precondition
-            .as_ref()
-            .map_or(0, Precondition::opening_predicate_count))
-          .sum::<u32>()
-      );
-      assert!(
-        run
-          .opening_predicate_results
-          .iter()
-          .all(|result| *result == Ok(true))
-      );
-      assert_eq!(run.funding_snapshot.len() as u32, funding);
-      assert!(
-        run
-          .funding_snapshot
-          .keys()
-          .all(|asset| state.funding.funding_tracked_assets.contains(asset))
-      );
-      assert!(
-        run
-          .funding_snapshot
-          .values()
-          .all(|amount| *amount == 1_000_000_000_000u128.saturated_into())
-      );
       let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[0].task else {
         unreachable!()
       };
@@ -7504,7 +6623,7 @@ mod benches {
   }
 
   // A terminal head has no tail. For the other branches, `n` allocates the tail's
-  // two-leg amount sources between Opening and LastFunding; it is not a free Run axis.
+  // two-leg current-read amount sources; it is not a free Run axis.
   fn prepare_reachable_suspended_head_inner<T: Config>(
     n: u32,
     current: u32,
@@ -7556,7 +6675,7 @@ mod benches {
       };
       for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
         if (index * 2 + offset) as u32 >= n {
-          *amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
+          *amount = AmountResolution::Percent(Perbill::one());
         }
       }
     }
@@ -7582,16 +6701,9 @@ mod benches {
             .iter()
             .skip(1)
             .enumerate()
-            .map(|(index, asset)| TimedPredicate {
-              timing: if (index as u32) < opening {
-                ObservationTiming::Opening
-              } else {
-                ObservationTiming::Current
-              },
-              predicate: Predicate::BalanceBelow {
-                asset: *asset,
-                threshold: One::one(),
-              },
+            .map(|(_index, asset)| Predicate::BalanceBelow {
+              asset: *asset,
+              threshold: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
@@ -7601,8 +6713,8 @@ mod benches {
         ActorTask::AddLiquidity {
           asset_a,
           asset_b,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+          amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
           min_lp_out: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
         }
       } else {
@@ -7637,12 +6749,12 @@ mod benches {
     let actor = Pallet::<T>::actor_identity(actor_id)
       .expect("head identity exists")
       .sovereign_account;
-    fund_reachable_update_assets::<T>(actor_id, 10u32.into());
-    assert!(
-      auxiliary
-        .iter()
-        .all(|asset| T::AssetOps::balance(&actor, *asset).is_zero())
-    );
+    let excluded_asset = liquidity.is_none().then_some(auxiliary[0]);
+    let _ = fund_reachable_assets_except::<T>(actor_id, 10u32.into(), excluded_asset);
+    assert!(auxiliary.iter().all(|asset| {
+      T::AssetOps::balance(&actor, *asset)
+        < <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
+    }));
     let mut skip = if let Some((asset_a, asset_b, amount_a, amount_b)) = liquidity {
       let frozen_asset = [asset_a, asset_b]
         .into_iter()
@@ -7685,30 +6797,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.funding_snapshot.len(),
-      state.funding.funding_tracked_assets.len()
-    );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .take(opening as usize)
-        .all(|result| *result == Ok(true))
-    );
-    assert!(state.funding.funding_accumulated.is_empty());
     if let Some(fixture) = &skip {
       assert_eq!(run.suspension, Some(SuspensionReason::Temporary));
       T::BenchmarkHelper::set_asset_account_frozen(
@@ -7762,11 +6850,6 @@ mod benches {
       Some(StepOutcome::FundingUnavailable)
     );
     assert_eq!(after.opening_snapshot, before.opening_snapshot);
-    assert_eq!(
-      after.opening_predicate_results,
-      before.opening_predicate_results
-    );
-    assert_eq!(after.funding_snapshot, before.funding_snapshot);
     assert!(
       matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at)
     );
@@ -7837,12 +6920,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset: *asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceBelow {
+            asset: *asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -7858,8 +6938,8 @@ mod benches {
           task: ActorTask::AddLiquidity {
             asset_a,
             asset_b,
-            amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
-            amount_b: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+            amount_a: AmountResolution::Percent(Perbill::from_parts(1)),
+            amount_b: AmountResolution::Percent(Perbill::from_parts(1)),
             min_lp_out: <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value(),
           },
           on_error: StepErrorPolicy::RetryLater {
@@ -7930,44 +7010,11 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert_eq!(
-      run.opening_predicate_cursor,
-      state.contract.steps[..cursor as usize]
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run.funding_snapshot.is_empty()
-        && state.funding.funding_tracked_assets.is_empty()
-        && state.funding.funding_accumulated.is_empty()
-    );
     for (asset, balance) in balances {
       assert_eq!(T::AssetOps::balance(&sovereign, asset), balance);
     }
-    let context = Pallet::<T>::step_control_weight_context(count, cursor, p, 0, 0, 0)
-      .expect("tail context exists");
+    let context =
+      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     let retained = run.encode();
@@ -8071,12 +7118,9 @@ mod benches {
       packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|candidate| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset: candidate,
-              threshold: One::one(),
-            },
+          .map(|candidate| Predicate::BalanceBelow {
+            asset: candidate,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -8299,12 +7343,9 @@ mod benches {
       Some(packed_predicate_clauses::<T>(
         assets
           .into_iter()
-          .map(|asset| TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceBelow {
-              asset,
-              threshold: One::one(),
-            },
+          .map(|asset| Predicate::BalanceBelow {
+            asset,
+            threshold: One::one(),
           })
           .collect(),
         p.div_ceil(T::MaxPreconditionClauses::get()).max(1),
@@ -8347,8 +7388,8 @@ mod benches {
         .map_or(0, Precondition::evaluation_units),
       p
     );
-    let context = Pallet::<T>::step_control_weight_context(count, cursor, p, 0, 0, 0)
-      .expect("tail context exists");
+    let context =
+      Pallet::<T>::step_control_weight_context(count, cursor, p, 0).expect("tail context exists");
     assert_eq!(context.steps_in_fragment, s);
     assert_eq!(context.predicate_evaluation_units, p);
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
@@ -8406,39 +7447,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert_eq!(
-      run.opening_predicate_cursor,
-      state.contract.steps[..cursor as usize]
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
-    assert!(
-      run
-        .opening_predicate_results
-        .iter()
-        .all(|result| *result == Ok(false))
-    );
-    assert!(
-      run.funding_snapshot.is_empty()
-        && state.funding.funding_accumulated.is_empty()
-        && state.funding.funding_tracked_assets.is_empty()
-    );
     let ActorTask::Transfer { asset, ref to, .. } = state.contract.steps[cursor as usize].task
     else {
       unreachable!()
@@ -8482,8 +7490,8 @@ mod benches {
           .expect("Opening predicates exist")
           .clauses
         {
-          for timed in clause {
-            if let Predicate::BalanceAbove { asset, threshold } = &mut timed.predicate {
+          for predicate in clause {
+            if let Predicate::BalanceAbove { asset, threshold } = predicate {
               if *asset == T::FeeNativeAssetId::get() {
                 *threshold = <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
                   .saturating_sub(*threshold);
@@ -8504,26 +7512,15 @@ mod benches {
     }
     retain_admitted_contract_geometry::<T>(actor_type, &mut steps, &protected)?;
     let surfaces = Pallet::<T>::opening_surfaces(&steps, 0);
-    let opening_predicates = steps
-      .iter()
-      .filter_map(|step| step.precondition.as_ref())
-      .flat_map(|precondition| precondition.clauses.iter())
-      .flat_map(|clause| clause.iter())
-      .filter(|timed| timed.timing == ObservationTiming::Opening)
-      .count() as u32;
     assert!(steps.iter().all(|step| matches!(
       &step.task,
       ActorTask::AddLiquidity {
-        amount_a: AmountResolution::PercentageAtOpening(_),
-        amount_b: AmountResolution::PercentageAtOpening(_),
-        ..
-      } | ActorTask::AddLiquidity {
-        amount_a: AmountResolution::PercentageOfCurrent(_),
-        amount_b: AmountResolution::PercentageOfCurrent(_),
+        amount_a: AmountResolution::Percent(_),
+        amount_b: AmountResolution::Percent(_),
         ..
       } | ActorTask::StopCycle
         | ActorTask::Transfer {
-          amount: AmountResolution::PercentageOfCurrent(_),
+          amount: AmountResolution::Percent(_),
           ..
         }
         | ActorTask::Transfer {
@@ -8532,7 +7529,6 @@ mod benches {
         }
     )));
     assert!(surfaces.len() as u32 <= T::MaxOpeningSnapshotEntries::get());
-    assert!(opening_predicates <= T::MaxOpeningPredicateResults::get());
     let schedule = Schedule {
       trigger: Trigger::manual(),
       cooldown_blocks,
@@ -8588,13 +7584,6 @@ mod benches {
         .iter()
         .all(|surface| run.opening_snapshot.contains_key(surface))
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      opening_predicates
-    );
-    assert!(state.funding.funding_tracked_assets.is_empty());
-    assert!(state.funding.funding_accumulated.is_empty());
-    assert!(run.funding_snapshot.is_empty());
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("reachable probe fixture passes full state audit");
     Ok(actor_id)
@@ -8608,18 +7597,6 @@ mod benches {
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
-    );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
     );
     #[block]
     {
@@ -9737,7 +8714,6 @@ mod benches {
     assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(!ActorContractHeads::<T>::contains_key(actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(!ActorFunding::<T>::contains_key(actor_id));
     assert!(
       ActorContractTailChunks::<T>::iter_prefix(actor_id)
         .next()
@@ -9957,7 +8933,6 @@ mod benches {
     assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(!ActorContractHeads::<T>::contains_key(actor_id));
     assert!(!ActorStateHolds::<T>::contains_key(actor_id));
-    assert!(!ActorFunding::<T>::contains_key(actor_id));
     assert!(ActorRunStateStore::<T>::get(actor_id).is_none());
     assert!(!ActorWaitingOccupancies::<T>::contains_key(key));
     assert_eq!(
@@ -11600,8 +10575,7 @@ mod benches {
     let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).unwrap();
     assert!(cell.hot.pending_signal);
     frame_system::Pallet::<T>::set_block_number(cell.eligible_at.unwrap());
-    let funding = ActorFunding::<T>::get(actor_id).unwrap();
-    assert!(funding.funding_tracked_assets.is_empty() && funding.funding_accumulated.is_empty());
+    assert!(T::AssetOps::balance(&sovereign, asset) >= ingress);
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("maximum-header readiness and window are coherent");
     let before = user_pipeline_accounting::<T>(actor_id);
@@ -11657,13 +10631,10 @@ mod benches {
     assert!(predicates > 0 && predicates <= T::MaxPreconditionClauses::get());
     let precondition = packed_predicate_clauses::<T>(
       (0..predicates)
-        .map(|index| TimedPredicate {
-          timing: ObservationTiming::Current,
-          predicate: Predicate::ObservationAbove {
-            feed,
-            threshold: u128::from(index) + 1,
-            max_age_blocks: 1,
-          },
+        .map(|index| Predicate::ObservationAbove {
+          feed,
+          threshold: u128::from(index) + 1,
+          max_age_blocks: 1,
         })
         .collect(),
       1,
@@ -12022,10 +10993,7 @@ mod benches {
       hold_before.breakdown.detector
     );
     assert_eq!(hold_after.breakdown.run, hold_before.breakdown.run);
-    assert!(
-      hold_after.breakdown.funding < hold_before.breakdown.funding,
-      "Opening independently reconciles consumed funding geometry"
-    );
+    assert_eq!(hold_after, hold_before);
     assert_reachable_opening::<T>(actor_id, count, ReachableOpeningProfile::UserPaged);
     Ok(())
   }
@@ -12354,8 +11322,8 @@ mod benches {
     Ok(())
   }
 
-  /// True Opening predicates and two tail-Step Opening legs precede an unfunded fixed Transfer.
-  /// This reachable retry corner has no LastFunding legs and does not establish envelope dominance.
+  /// True current predicates and two tail-Step current-Available legs precede an unfunded fixed Transfer.
+  /// This reachable retry corner does not establish envelope dominance.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_retry_max(
     t: Linear<
@@ -12491,7 +11459,7 @@ mod benches {
     };
     assert_eq!(sources.len() as u32, T::MaxWhitelistSize::get());
     assert!(sources.contains(&state_before.identity.owner));
-    let mut hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
+    let hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
     let now = frame_system::Pallet::<T>::block_number();
     let (state, admission, loaded_step) =
       benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
@@ -12510,12 +11478,7 @@ mod benches {
       ReachableOpeningProfile::UserCompleteHeaderMax,
     );
     let hold_after = ActorStateHolds::<T>::get(actor_id).expect("User hold survives completion");
-    assert!(hold_after.breakdown.funding < hold_before.breakdown.funding);
-    hold_before.breakdown.funding = hold_after.breakdown.funding;
-    assert_eq!(
-      hold_after, hold_before,
-      "only consumed funding changes the hold"
-    );
+    assert_eq!(hold_after, hold_before);
     Ok(())
   }
 
@@ -12536,7 +11499,7 @@ mod benches {
     let (actor_id, count) =
       prepare_reachable_opening::<T>(t, ReachableOpeningProfile::UserCompleteMin)?;
     let accounting_before = user_pipeline_accounting::<T>(actor_id);
-    let mut hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
+    let hold_before = ActorStateHolds::<T>::get(actor_id).expect("User hold exists");
     let now = frame_system::Pallet::<T>::block_number();
     let (state, admission, loaded_step) =
       benchmark_fixture_consume_frame_current_step_service_state::<T>(actor_id);
@@ -12551,12 +11514,7 @@ mod benches {
     assert_user_pipeline_accounting::<T>(actor_id, accounting_before);
     assert_reachable_opening::<T>(actor_id, count, ReachableOpeningProfile::UserCompleteMin);
     let hold_after = ActorStateHolds::<T>::get(actor_id).expect("User hold survives completion");
-    assert!(hold_after.breakdown.funding < hold_before.breakdown.funding);
-    hold_before.breakdown.funding = hold_after.breakdown.funding;
-    assert_eq!(
-      hold_after, hold_before,
-      "only consumed funding changes the hold"
-    );
+    assert_eq!(hold_after, hold_before);
     Ok(())
   }
 
@@ -12587,8 +11545,8 @@ mod benches {
     Ok(())
   }
 
-  /// True Opening predicates on every Step and two Opening legs per tail Step precede StopCycle.
-  /// No LastFunding payload, retained Run, or successor placement is claimed by this corner.
+  /// True current predicates on every Step and two current-Available legs per tail Step precede StopCycle.
+  /// No retained Run or successor placement is claimed by this corner.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_complete_max(
     t: Linear<
@@ -12613,8 +11571,8 @@ mod benches {
     Ok(())
   }
 
-  /// Pure-Opening progress after canonical frame loading and source consumption. Two Opening legs
-  /// and full Opening predicates per Step imply zero LastFunding legs in this declared corner.
+  /// Current-read progress after canonical frame loading and source consumption. Two current-Available
+  /// legs and full current predicates per Step define this declared corner.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_inner_opening_progress_max(
     t: Linear<
@@ -13214,8 +12172,6 @@ mod benches {
     )?;
     assert_eq!(run.cursor, 1);
     assert!(run.opening_snapshot.is_empty());
-    assert!(run.opening_predicate_results.is_empty());
-    assert!(run.funding_snapshot.is_empty());
     assert!(matches!(
       ActorControlLocators::<T>::get(actor_id),
       Some(ActorControlLocation::Ready { .. })
@@ -13252,18 +12208,13 @@ mod benches {
         precondition: None,
         task: ActorTask::Unstake {
           asset: position,
-          shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+          shares: AmountResolution::Percent(Perbill::from_percent(50)),
         },
         on_error: StepErrorPolicy::AbortCycle,
       }),
       0,
     )?;
-    assert!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("terminal-failure funding authority exists")
-        .funding_tracked_assets
-        .contains(&receipt)
-    );
+    assert!(T::StakingOps::share_asset(position).is_some_and(|asset| asset == receipt));
     T::BenchmarkHelper::remove_empty_staking_receipt(&owner, position).map_err(|_| {
       polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
         "host cannot remove the empty terminal-failure staking receipt",
@@ -13310,12 +12261,9 @@ mod benches {
         packed_predicate_clauses::<T>(
           assets
             .into_iter()
-            .map(|asset| TimedPredicate {
-              timing: ObservationTiming::Opening,
-              predicate: Predicate::BalanceBelow {
-                asset,
-                threshold: One::one(),
-              },
+            .map(|asset| Predicate::BalanceBelow {
+              asset,
+              threshold: One::one(),
             })
             .collect(),
           T::MaxPredicatesPerClause::get(),
@@ -13360,13 +12308,8 @@ mod benches {
     );
     if dense {
       assert_eq!(suspended.opening_snapshot.len() as u32, 4);
-      assert_eq!(
-        suspended.opening_predicate_results.len() as u32,
-        3 * benchmark_predicate_capacity::<T>()
-      );
     } else {
       assert!(suspended.opening_snapshot.is_empty());
-      assert!(suspended.opening_predicate_results.is_empty());
     }
     frame_system::Pallet::<T>::set_block_number(suspended.eligible_at);
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
@@ -13404,10 +12347,6 @@ mod benches {
     let source = ActorRunStateStore::<T>::get(actor_id).expect("dense Running source exists");
     assert_eq!(source.cursor, 1);
     assert_eq!(source.opening_snapshot.len() as u32, 6);
-    assert_eq!(
-      source.opening_predicate_results.len() as u32,
-      3 * benchmark_predicate_capacity::<T>()
-    );
     let now = source.eligible_at;
     frame_system::Pallet::<T>::set_block_number(now);
     let (state, admission, loaded_step) =
@@ -13739,7 +12678,7 @@ mod benches {
   /// Measures persistence of a real suspension after due collection, not a new Task attempt.
   #[benchmark(pov_mode = Measured)]
   fn run_suspend() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    let (actor_id, _) = prepare_reachable_suspended_head::<T>(T::MaxContractSteps::get() * 2, 0)?;
+    let (actor_id, _) = prepare_reachable_suspended_head::<T>()?;
     let state = ActorRunStateStore::<T>::get(actor_id).expect("real Suspended state exists");
     let eligible_at = state.eligible_at;
     let location = ActorControlLocators::<T>::get(actor_id);
@@ -13795,18 +12734,6 @@ mod benches {
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
     );
-    assert_eq!(
-      run.opening_predicate_results.len() as u32,
-      state
-        .contract
-        .steps
-        .iter()
-        .map(|step| step
-          .precondition
-          .as_ref()
-          .map_or(0, Precondition::opening_predicate_count))
-        .sum::<u32>()
-    );
     #[block]
     {
       Pallet::<T>::write_run_state(actor_id, None)
@@ -13834,8 +12761,7 @@ mod benches {
       ));
     }
     let page_size = 32u32;
-    let (actor_id, funding) =
-      create_reachable_manual_retry::<T>(T::MaxContractSteps::get() * 2, 0, 0)?;
+    let (actor_id, funding) = create_reachable_manual_retry::<T>(0)?;
     let second_attempt = frame_system::Pallet::<T>::block_number().saturating_add(2u32.into());
     let wakeup_block = Pallet::<T>::suspension_eligible_at(0, None, second_attempt, 2)
       .expect("second real retry target is representable");
@@ -13861,7 +12787,7 @@ mod benches {
       .expect("target identity exists")
       .owner;
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
-      .expect("second real occurrence retains a deferred latch");
+      .expect("a live Run ignores a redundant Manual occurrence");
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("deferred Run exists")
@@ -13882,10 +12808,15 @@ mod benches {
     assert!(
       Pallet::<T>::active_actor_view(actor_id).is_some_and(|actor| {
         actor.cycle_state == CycleState::Idle
-          && actor.pending_signal
-          && actor.queue_ticket.is_some()
+          && !actor.pending_signal
+          && actor.queue_ticket.is_none()
+          && actor.wakeup_pointer.is_none()
       })
     );
+    assert!(matches!(
+      ActorControlLocators::<T>::get(actor_id),
+      Some(ActorControlLocation::Unsignaled)
+    ));
     assert!(!ActorWaitingFrameChunks::<T>::contains_key((
       WakeupKey::Block(wakeup_block),
       1,
@@ -15199,15 +14130,7 @@ mod benches {
       "tombstones cannot replace live Ready actors"
     );
     let native = T::FeeNativeAssetId::get();
-    let before_funding = ActorFunding::<T>::get(actor_id).expect("ingress funding exists");
-    assert!(before_funding.funding_tracked_assets.contains(&native));
-    let expected_funding = before_funding
-      .funding_accumulated
-      .get(&native)
-      .copied()
-      .unwrap_or_else(Zero::zero)
-      .checked_add(&One::one())
-      .expect("second ingress accumulator is representable");
+    let balance_before = T::AssetOps::balance(&recipient, native);
     install_saturated_tombstone_queue::<T>();
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
@@ -15221,16 +14144,13 @@ mod benches {
     }
     assert!(
       benchmark_fixture_hot::<T>(actor_id)
-        .is_some_and(|hot| { hot.pending_signal && hot.wakeup_pointer.is_some() })
+        .is_some_and(|hot| { !hot.pending_signal && hot.wakeup_pointer.is_some() })
     );
     assert_eq!(ActorControlLocators::<T>::get(actor_id), location);
     assert_eq!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("latched funding remains")
-        .funding_accumulated
-        .get(&native)
-        .copied(),
-      Some(expected_funding)
+      T::AssetOps::balance(&recipient, native),
+      balance_before,
+      "the transaction extension observes ingress after the ledger mutation owner"
     );
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
@@ -15240,98 +14160,6 @@ mod benches {
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real ingress retry latch passes state audit");
-    Ok(())
-  }
-
-  #[benchmark]
-  fn funding_snapshot_open(
-    a: Linear<
-      1,
-      {
-        T::MaxFundingTrackedAssets::get()
-          .min(T::MaxContractSteps::get().saturating_mul(2))
-          .max(1)
-      },
-    >,
-  ) -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
-    if T::MaxFundingTrackedAssets::get() == 0 {
-      return Err(polkadot_sdk::frame_benchmarking::BenchmarkError::Stop(
-        "host cannot represent a nonempty funding snapshot",
-      ));
-    }
-    let owner: T::AccountId = whitelisted_caller();
-    ensure_creation_balance::<T>(&owner);
-    let assets = T::BenchmarkHelper::setup_predicate_assets(&owner, a)
-      .expect("funding assets exist in the host ledger");
-    assert_eq!(assets.len(), a as usize);
-    let mut steps = ContractSteps::<T>::default();
-    for pair in assets.chunks(2) {
-      let amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
-      let task = if pair.len() == 1 {
-        ActorTask::Transfer {
-          to: account("funding-snapshot-recipient", 0, 0),
-          asset: pair[0],
-          amount,
-        }
-      } else {
-        ActorTask::AddLiquidity {
-          asset_a: pair[0],
-          asset_b: pair[1],
-          amount_a: amount,
-          amount_b: amount,
-          min_lp_out: One::one(),
-        }
-      };
-      steps
-        .try_push(Step {
-          precondition: None,
-          task,
-          on_error: StepErrorPolicy::AbortCycle,
-        })
-        .expect("reachable funding sources fit the authored Step bound");
-    }
-    prefund_active_user_creation::<T>(&owner, &steps);
-    Pallet::<T>::create_user_actor(
-      RawOrigin::Signed(owner).into(),
-      Mutability::Mutable,
-      user_contract::<T>(
-        Schedule {
-          trigger: Trigger::Manual,
-          cooldown_blocks: 0,
-        },
-        steps,
-      ),
-    )
-    .expect("funding snapshot Contract is admitted");
-    let actor_id = NextActorId::<T>::get() - 1;
-    let amount = assets
-      .iter()
-      .map(|asset| T::AssetOps::minimum_balance(*asset))
-      .max()
-      .expect("nonempty funding assets")
-      .checked_add(&One::one())
-      .expect("funding amount fits");
-    fund_reachable_update_assets::<T>(actor_id, amount);
-    #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("certified funding input is a reachable Actor state");
-    let snapshot;
-    // This measures accumulator consumption only; complete Opening owns hold reconciliation.
-    #[block]
-    {
-      snapshot = ActorFunding::<T>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .map(|funding| core::mem::take(&mut funding.funding_accumulated))
-          .expect("benchmark actor funding exists")
-      });
-    }
-    assert_eq!(snapshot.len() as u32, a);
-    assert!(
-      ActorFunding::<T>::get(actor_id)
-        .expect("benchmark actor funding exists")
-        .funding_accumulated
-        .is_empty()
-    );
     Ok(())
   }
 
@@ -15383,7 +14211,7 @@ mod benches {
         task: ActorTask::Transfer {
           to: next_sov,
           asset: native,
-          amount: AmountResolution::PercentageOfCurrent(pct),
+          amount: AmountResolution::Percent(pct),
         },
         on_error: StepErrorPolicy::AbortCycle,
       }])
@@ -15863,12 +14691,11 @@ mod benches {
         let (state, admission, loaded_step) =
           Pallet::<T>::load_current_step_service_state(actor_id).unwrap_or_else(|| {
             panic!(
-              "Actor control completed User state remains coherent: actor={actor_id} identity={} hot={} contract={} admission={} funding={}",
+              "Actor control completed User state remains coherent: actor={actor_id} identity={} hot={} contract={} admission={}",
               ActorIdentities::<T>::contains_key(actor_id),
               benchmark_fixture_hot::<T>(actor_id).is_some(),
               ActorContractHeads::<T>::contains_key(actor_id),
               benchmark_fixture_admission::<T>(actor_id).is_some(),
-              ActorFunding::<T>::contains_key(actor_id),
             )
           });
         assert_eq!(state.identity.cycle_nonce, 1);
@@ -16014,18 +14841,16 @@ mod benches {
   #[test]
   fn reachable_retry_opening_partition_boundaries() {
     let steps = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
-    for amounts in [0, 1, steps * 2] {
-      for predicates in [0, 1, steps * benchmark_predicate_capacity::<Test>()] {
-        new_test_ext().execute_with(|| {
-          let actor_id = prepare_user_retry_opening_partition::<Test>(amounts, predicates)
-            .expect("independent capture boundaries reach actual suspension");
-          let identity = benchmark_fixture_identity::<Test>(actor_id).unwrap();
-          Pallet::<Test>::close_actor(RawOrigin::Signed(identity.owner).into(), actor_id)
-            .expect("independent capture boundaries close");
-          #[cfg(feature = "try-runtime")]
-          Pallet::<Test>::do_try_state().expect("partition close leaves no orphan state");
-        });
-      }
+    for predicates in [0, 1, steps * benchmark_predicate_capacity::<Test>()] {
+      new_test_ext().execute_with(|| {
+        let actor_id = prepare_user_retry_opening_partition::<Test>(predicates)
+          .expect("Opening predicate boundaries reach actual suspension");
+        let identity = benchmark_fixture_identity::<Test>(actor_id).unwrap();
+        Pallet::<Test>::close_actor(RawOrigin::Signed(identity.owner).into(), actor_id)
+          .expect("Opening predicate boundaries close");
+        #[cfg(feature = "try-runtime")]
+        Pallet::<Test>::do_try_state().expect("partition close leaves no orphan state");
+      });
     }
   }
   #[cfg(test)]
@@ -16130,11 +14955,6 @@ mod benches {
                   let after =
                     ActorRunStateStore::<Test>::get(actor_id).expect("progress retains Run");
                   assert_eq!(after.opening_snapshot, before.opening_snapshot);
-                  assert_eq!(
-                    after.opening_predicate_results,
-                    before.opening_predicate_results
-                  );
-                  assert_eq!(after.funding_snapshot, before.funding_snapshot);
                 }
                 assert_reachable_suspended_tail_skip::<Test>(
                   skip.expect("freeze fixture exists"),
@@ -16162,238 +14982,27 @@ mod benches {
   #[cfg(test)]
   #[test]
   fn reachable_suspended_head_retry_payload_tradeoffs() {
-    type Helper = <Test as Config>::BenchmarkHelper;
-    type Assets = <Test as Config>::AssetOps;
-    let count = <<Test as Config>::MaxContractSteps as Get<u32>>::get();
-    let predicates = benchmark_predicate_capacity::<Test>();
-    let legs = count * 2;
-    let minimum =
-      legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    for (opening_legs, opening_start) in [
-      (minimum, 0),
-      (minimum + 1, 0),
-      (legs - 1, 0),
-      (legs, 0),
-      (minimum, 2),
-      (minimum + 1, 2),
-      (legs - 2, 2),
-    ] {
-      new_test_ext().execute_with(|| {
-        let (actor_id, _) = prepare_reachable_suspended_head::<Test>(opening_legs, opening_start)
-          .expect("two-leg head reaches a real due retry");
-        let state = Pallet::<Test>::active_actor_state(actor_id).expect("due source exists");
-        let run = state.run_state.as_ref().expect("first failure retained Run");
-        assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-        assert_eq!(run.opening_snapshot.len() as u32, opening_legs);
-        assert_eq!(run.funding_snapshot.len() as u32, legs - opening_legs);
-        assert_eq!(run.opening_predicate_results.len() as u32, count * predicates);
-        let ActorTask::AddLiquidity { asset_a, asset_b, amount_a, amount_b, .. } =
-          &state.contract.steps[0].task else { panic!("two-leg head remains authored") };
-        let (asset, amount) = if *asset_a != <Test as Config>::FeeNativeAssetId::get() {
-          (*asset_a, amount_a)
-        } else {
-          (*asset_b, amount_b)
-        };
-        assert_ne!(asset, <Test as Config>::FeeNativeAssetId::get());
-        assert_eq!(matches!(amount, AmountResolution::PercentageOfLastFunding(_)), opening_start == 2);
-        let frozen = match amount {
-          AmountResolution::PercentageAtOpening(pct) => pct.mul_floor(
-            *run.opening_snapshot.get(&OpeningSurface::PreservableAsset(asset))
-              .expect("head Opening amount is retained")),
-          AmountResolution::PercentageOfLastFunding(pct) => pct.mul_floor(
-            *run.funding_snapshot.get(&asset).expect("head funding amount is retained")),
-          _ => panic!("head amount is frozen by authored source"),
-        };
-        let actor = state.identity.sovereign_account;
-        let owner = state.identity.owner;
-        let remaining = Assets::minimum_balance(asset).max(1);
-        assert!(frozen > remaining);
-        let withdrawal = Assets::balance(&actor, asset).checked_sub(remaining)
-          .expect("first attempt retains funded head custody");
-        Assets::transfer(&actor, &owner, asset, withdrawal)
-          .expect("fixture ledger withdrawal leaves the minimum intact");
-        assert_eq!(Assets::balance(&actor, asset), remaining);
-        assert_eq!(ActorRunStateStore::<Test>::get(actor_id)
-          .expect("ledger withdrawal retains Run").encode(), run.encode());
-        let custody = (Assets::balance(&actor, asset), Assets::balance(&owner, asset));
-        let (source, admission, loaded_step) =
-          benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-        assert_eq!(execute_reachable_step_inner::<Test>(
-          actor_id, source, admission, loaded_step, run.eligible_at,
-        ), Weight::zero());
-        let after = ActorRunStateStore::<Test>::get(actor_id).expect("second failure retains Run");
-        assert_eq!(after.cursor, 0);
-        assert_eq!(after.cycle_nonce, run.cycle_nonce);
-        assert_eq!(after.unsuccessful_attempts_at_cursor, 2);
-        assert_eq!(after.last_committed_step_block, None);
-        assert_eq!(after.last_attempt_block, run.eligible_at);
-        assert_eq!(after.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-        assert_eq!(after.opening_snapshot, run.opening_snapshot);
-        assert_eq!(after.opening_predicate_results, run.opening_predicate_results);
-        assert_eq!(after.funding_snapshot, run.funding_snapshot);
-        assert!(after.eligible_at > run.eligible_at);
-        assert_eq!((Assets::balance(&actor, asset), Assets::balance(&owner, asset)), custody);
-        assert!(matches!(ActorControlLocators::<Test>::get(actor_id),
-          Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at));
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("two-leg retry reconciles exact Waiting ownership");
-      });
-    }
-    let tail_legs = 2 * (count - 1);
-    let minimum_opening =
-      tail_legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    for opening_legs in [
-      minimum_opening,
-      minimum_opening + 1,
-      tail_legs - 1,
-      tail_legs,
-    ] {
-      for head_predicates in 0..=predicates {
-        for head_opening in 0..=head_predicates {
-          new_test_ext().execute_with(|| {
-            frame_system::Pallet::<Test>::set_block_number(1);
-            GlobalCircuitBreaker::<Test>::put(false);
-            let owner = account("head-retry-owner", 0, 0);
-            ensure_creation_balance::<Test>(&owner);
-            let auxiliary_start = count * (2 + predicates);
-            let assets = Helper::setup_predicate_assets(&owner, auxiliary_start + 1 + predicates)
-              .expect("head and predicate assets exist beyond the distinct tail assets");
-            let retry_asset = assets[auxiliary_start as usize];
-            assert_ne!(retry_asset, <Test as Config>::FeeNativeAssetId::get());
-            let mut steps = make_reachable_opening_steps::<Test>(count)
-              .expect("reference host admits maximum Contract");
-            for (index, step) in steps.iter_mut().skip(1).enumerate() {
-              let ActorTask::AddLiquidity { amount_a, amount_b, .. } = &mut step.task else {
-                unreachable!()
-              };
-              for (offset, amount) in [amount_a, amount_b].into_iter().enumerate() {
-                if (index * 2 + offset) as u32 >= opening_legs {
-                  *amount = AmountResolution::PercentageOfLastFunding(Perbill::one());
-                }
-              }
-            }
-            steps[0] = Step {
-              precondition: (head_predicates > 0).then(|| packed_predicate_clauses::<Test>(
-                (0..head_predicates).map(|index| TimedPredicate {
-                  timing: if index < head_opening {
-                    ObservationTiming::Opening
-                  } else {
-                    ObservationTiming::Current
-                  },
-                  predicate: Predicate::BalanceBelow {
-                    asset: assets[(auxiliary_start + 1 + index) as usize],
-                    threshold: (index + 1).into(),
-                  },
-                }).collect(),
-                <<Test as Config>::MaxPredicatesPerClause as Get<u32>>::get(),
-              )),
-              task: ActorTask::Transfer {
-                to: account("head-retry-recipient", 0, 0),
-                asset: retry_asset,
-                amount: AmountResolution::Fixed(One::one()),
-              },
-              on_error: StepErrorPolicy::RetryLater {
-                max_attempts: <<Test as Config>::MaxRetryAttempts as Get<u32>>::get(),
-              },
-            };
-            Pallet::<Test>::create_system_actor(
-              RawOrigin::Root.into(),
-              owner,
-              Mutability::Mutable,
-              system_contract::<Test>(
-                Schedule { trigger: Trigger::manual(), cooldown_blocks: 2 },
-                steps,
-              ),
-            )
-            .expect("authored head and coupled tail are admitted");
-            let actor_id = NextActorId::<Test>::get() - 1;
-            fund_reachable_update_assets::<Test>(actor_id, 10);
-            Pallet::<Test>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
-              .expect("real occurrence admits Opening");
-            let (opening_state, _, opening_step) =
-              Pallet::<Test>::load_current_step_service_state(actor_id)
-                .expect("admitted Opening service state exists");
-            let reserved_control = opening_step.resources.control;
-            let opening_instance = Pallet::<Test>::derive_active_actor_view(
-              opening_state.identity, opening_state.hot, opening_state.contract,
-            );
-            let opening_context = Pallet::<Test>::execution_step_control_weight_context(
-              &opening_instance, None, &opening_step,
-            ).expect("Opening context retains admission geometry");
-            assert_eq!(opening_context.funding_snapshot_entries,
-              <<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-            Pallet::<Test>::execute_cycle(Weight::MAX);
-            let state = Pallet::<Test>::active_actor_state(actor_id).expect("Opening retains Actor");
-            let run = state.run_state.expect("unfunded head publishes real retry");
-            assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-            assert_eq!(state.identity.cycle_nonce, 0);
-            assert_eq!(run.cursor, 0);
-            assert_eq!(run.cycle_nonce, 1);
-            assert_eq!(run.last_committed_step_block, None);
-            assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-            assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-            assert_eq!(run.opening_snapshot.len() as u32, opening_legs);
-            assert_eq!(run.funding_snapshot.len() as u32, tail_legs - opening_legs);
-            assert_eq!(
-              run.opening_predicate_results.len() as u32,
-              (count - 1) * predicates + head_opening,
-            );
-            assert!(run.opening_predicate_results.iter()
-              .take(head_opening as usize).all(|value| *value == Ok(true)));
-            assert!(state.funding.funding_accumulated.is_empty());
-            let retained = run.encode();
-            frame_system::Pallet::<Test>::set_block_number(run.eligible_at);
-            let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-            let stats = Pallet::<Test>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-            assert_eq!(stats.ready_entries, 1);
-            assert_eq!(
-              ActorRunStateStore::<Test>::get(actor_id).expect("due Run persists").encode(),
-              retained,
-            );
-            #[cfg(feature = "try-runtime")]
-            Pallet::<Test>::do_try_state().expect("real head retry Ready source reconciles");
-            let (state, admission, loaded_step) =
-              benchmark_fixture_consume_frame_current_step_service_state::<Test>(actor_id);
-            let instance = Pallet::<Test>::derive_active_actor_view(
-              state.identity.clone(), state.hot.clone(), state.contract.clone(),
-            );
-            let context = Pallet::<Test>::execution_step_control_weight_context(
-              &instance, state.run_state.as_ref(), &loaded_step,
-            ).expect("Suspended context uses retained Run geometry");
-            assert_eq!(context.funding_snapshot_entries, tail_legs - opening_legs);
-            assert_eq!(loaded_step.resources.control, reserved_control);
-            let actor = state.identity.sovereign_account;
-            let recipient = account("head-retry-recipient", 0, 0);
-            let custody: Vec<_> = assets.iter().map(|asset| (
-              Assets::balance(&actor, *asset), Assets::balance(&recipient, *asset),
-            )).collect();
-            assert_eq!(
-              loaded_step.step.precondition.as_ref().map_or(0, Precondition::evaluation_units),
-              head_predicates + head_opening,
-            );
-            let effect = execute_reachable_step_inner::<Test>(
-              actor_id, state, admission, loaded_step, run.eligible_at,
-            );
-            assert_eq!(effect, Weight::zero());
-            let after = ActorRunStateStore::<Test>::get(actor_id).expect("second retry retains Run");
-            assert_eq!(after.cursor, 0);
-            assert_eq!(after.cycle_nonce, run.cycle_nonce);
-            assert_eq!(after.last_committed_step_block, None);
-            assert_eq!(after.unsuccessful_attempts_at_cursor, 2);
-            assert_eq!(after.last_step_outcome, Some(StepOutcome::FundingUnavailable));
-            assert_eq!(after.opening_snapshot, run.opening_snapshot);
-            assert_eq!(after.opening_predicate_results, run.opening_predicate_results);
-            assert_eq!(after.funding_snapshot, run.funding_snapshot);
-            assert_eq!(assets.iter().map(|asset| (
-              Assets::balance(&actor, *asset), Assets::balance(&recipient, *asset),
-            )).collect::<Vec<_>>(), custody);
-            assert!(matches!(ActorControlLocators::<Test>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at));
-            #[cfg(feature = "try-runtime")]
-            Pallet::<Test>::do_try_state().expect("second retry Waiting destination reconciles");
-          });
-        }
-      }
-    }
+    new_test_ext().execute_with(|| {
+      let (actor_id, _) = prepare_reachable_suspended_head::<Test>()
+        .expect("current-attempt two-leg head reaches a real due retry");
+      let state = Pallet::<Test>::active_actor_state(actor_id).expect("due source exists");
+      let run = state
+        .run_state
+        .as_ref()
+        .expect("first failure retained Run");
+      assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+      let ActorTask::AddLiquidity {
+        amount_a, amount_b, ..
+      } = &state.contract.steps[0].task
+      else {
+        panic!("two-leg head remains authored")
+      };
+      assert!(matches!(amount_a, AmountResolution::Fixed(_)));
+      assert!(matches!(amount_b, AmountResolution::Percent(_)));
+      #[cfg(feature = "try-runtime")]
+      Pallet::<Test>::do_try_state()
+        .expect("current-attempt retry reconciles exact Ready ownership");
+    });
   }
   #[cfg(test)]
   #[test]
@@ -16473,52 +15082,18 @@ mod benches {
   }
   #[cfg(test)]
   #[test]
-  fn reachable_update_allocation_boundaries_match_authored_contract() {
-    let legs = <<Test as Config>::MaxContractSteps as Get<u32>>::get() * 2;
-    let minimum =
-      legs.saturating_sub(<<Test as Config>::MaxFundingTrackedAssets as Get<u32>>::get());
-    if minimum > 0 {
+  fn reachable_update_current_attempt_allocation_matches_authored_contract() {
+    for family in [
+      TriggerFamily::ObservationChange,
+      TriggerFamily::ObservationCrossing,
+    ] {
       new_test_ext().execute_with(|| {
-        let (steps, _) = reachable_retry_contract_allocation::<Test>(minimum - 1, 0)
-          .expect("the authored Contract fits Step and predicate storage bounds");
-        let next_actor = NextActorId::<Test>::get();
-        assert_eq!(
-          Pallet::<Test>::create_system_actor(
-            RawOrigin::Root.into(),
-            account("funding-bound-owner", 0, 0),
-            Mutability::Mutable,
-            system_contract::<Test>(
-              Schedule {
-                trigger: Trigger::Manual,
-                cooldown_blocks: 100
-              },
-              steps,
-            ),
-          ),
-          Err(Error::<Test>::TooManyContractSteps.into()),
-          "independent funding sources exceed the host bound by one",
-        );
-        assert_eq!(NextActorId::<Test>::get(), next_actor);
-        assert!(!ActorFunding::<Test>::contains_key(next_actor));
-        assert!(!ActorContractHeads::<Test>::contains_key(next_actor));
-        #[cfg(feature = "try-runtime")]
-        Pallet::<Test>::do_try_state().expect("rejected admission publishes no Actor state");
+        let (owner, actor_id, replacement, old_feed) = prepare_reachable_update::<Test>(family)
+          .expect("current-attempt allocation contract is admitted");
+        let expected = replacement.clone();
+        execute_reachable_update::<Test>(owner, actor_id, replacement);
+        assert_reachable_update::<Test>(actor_id, &expected, old_feed);
       });
-    }
-    for opening_legs in [minimum, minimum + (legs - minimum) / 2, legs] {
-      for family in [
-        TriggerFamily::ObservationCrossing,
-        TriggerFamily::ObservationChange,
-      ] {
-        new_test_ext().execute_with(|| {
-          let (owner, actor_id, replacement, old_feed) =
-            prepare_reachable_update::<Test>(opening_legs, family)
-              .expect("host-feasible allocation boundary is admitted");
-          let expected = replacement.clone();
-          execute_reachable_update::<Test>(owner, actor_id, replacement);
-          assert_reachable_update::<Test>(actor_id, &expected, old_feed);
-        });
-      }
     }
   }
   #[cfg(test)]
@@ -16569,7 +15144,7 @@ mod benches {
         steps[0].task = ActorTask::Transfer {
           to: account("cadence-noop-recipient", 0, 0),
           asset: <Test as Config>::FeeNativeAssetId::get(),
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount: AmountResolution::Percent(Perbill::from_percent(50)),
         };
         Pallet::<Test>::create_system_actor(
           RawOrigin::Root.into(),
@@ -16765,13 +15340,8 @@ mod benches {
         assert_eq!(source.cursor, 1);
         if dense {
           assert_eq!(source.opening_snapshot.len(), 6);
-          assert_eq!(
-            source.opening_predicate_results.len() as u32,
-            3 * benchmark_predicate_capacity::<Test>()
-          );
         } else {
           assert!(source.opening_snapshot.is_empty());
-          assert!(source.opening_predicate_results.is_empty());
         }
         let now = source.eligible_at;
         frame_system::Pallet::<Test>::set_block_number(now);

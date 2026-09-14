@@ -315,7 +315,6 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
     run_suspend,
     run_complete,
     run_cancel,
-    opening_predicate_traversal,
     opening_snapshot_traversal,
     update_contract,
     set_global_circuit_breaker,
@@ -339,16 +338,12 @@ fn test_weight_fallback_equals_reference_interface_for_all_classes() {
   same_at!(opening_snapshot_capture, 1, 8, 16, 24);
   same_at!(opening_target_snapshot_capture, 1, 8, 12);
   same_at!(opening_share_mixed_capture, 1, 8, 23);
-  same_at!(opening_predicate_capture, 0, 1, 24, 48);
-  same_at!(opening_max_encoded_balance_capture, 0, 1, 24, 48);
-  same_at!(opening_observation_heavy_capture, 1, 24, 47);
   same_at!(predicate_set_evaluation, 0, 1, 8);
   same_at!(task_split_transfer, 0, 1, 8);
   same_at!(scheduler_paged_tombstone_drain, 0, 1, 10_000);
   same_at!(scheduler_paged_mixed_scan, 0, 1, 10_000);
   same_at!(scheduler_paged_execute_cheap, 0, 1, 1_000);
   same_at!(scheduler_paged_execute_cheap_mixed, 0, 1, 1_000);
-  same_at!(funding_snapshot_open, 0, 1, 10);
   same_at!(permissionless_sweep_many, 0, 1, 5);
 }
 
@@ -836,11 +831,6 @@ fn typed_ingress_zero_movement_creates_no_ingress() {
       "zero movement must not latch readiness (spec 5.3)"
     );
     assert!(hot.queue_ticket.is_none(), "zero movement must not enqueue");
-    let funding = crate::ActorFunding::<Test>::get(actor_id).expect("funding state");
-    assert!(
-      funding.funding_accumulated.is_empty(),
-      "zero movement must not accumulate funding"
-    );
   });
 }
 
@@ -1304,7 +1294,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -1648,7 +1638,7 @@ fn any_verified_ingress_third_party_credit_requires_real_delivered_value() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       })),
     );
     assert_ok!(update_contract_partial!(
@@ -1720,7 +1710,6 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
       transfer_contract_steps(BOB, 10),
     );
     let before = Actors::active_actor_view(actor_id).expect("actor exists");
-    let funding_before = actor_funding(actor_id);
     let funding_policy_before = Actors::load_actor_contract(actor_id)
       .expect("active Actor Contract")
       .funding;
@@ -1746,7 +1735,6 @@ fn canonical_control_replacements_are_exact_noops_before_rate_limiting() {
       before.completion,
     ));
     assert_eq!(Actors::active_actor_view(actor_id), Some(before));
-    assert_eq!(actor_funding(actor_id), funding_before);
     assert!(System::events().is_empty());
   });
 }
@@ -1908,16 +1896,10 @@ fn optional_bounded_dnf_is_canonical_and_mode_distinct() {
 fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let first = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BlockNumberAbove { threshold: 0 },
-    };
-    let second = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BalanceAbove {
-        asset: TestAsset::Native,
-        threshold: 0,
-      },
+    let first = Predicate::BlockNumberAbove { threshold: 0 };
+    let second = Predicate::BalanceAbove {
+      asset: TestAsset::Native,
+      threshold: 0,
     };
     let raw_precondition = || {
       Some(Precondition {
@@ -1999,14 +1981,8 @@ fn admission_canonicalizes_dnf_and_equivalent_update_is_exact_noop() {
 fn admission_absorbs_exact_dnf_superset_clause() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let first = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BlockNumberAbove { threshold: 0 },
-    };
-    let second = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BlockNumberBelow { threshold: 10 },
-    };
+    let first = Predicate::BlockNumberAbove { threshold: 0 };
+    let second = Predicate::BlockNumberBelow { threshold: 10 };
     let absorbed = Some(Precondition {
       clauses: BoundedVec::try_from(vec![
         BoundedVec::try_from(vec![first]).expect("subset fits"),
@@ -2217,7 +2193,7 @@ fn user_copybook_savings() {
       task: Task::Transfer {
         to: savings,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(5)),
+        amount: AmountResolution::Percent(Perbill::from_percent(5)),
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -2248,7 +2224,7 @@ fn percentage_modes_excluding_total_supply_remain_supported() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+        amount: AmountResolution::Percent(Perbill::from_percent(10)),
       })),
     );
     let sovereign = sovereign_account(actor_id);

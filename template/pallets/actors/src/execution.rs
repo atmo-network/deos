@@ -139,7 +139,7 @@ pub(crate) fn evaluate_precondition_with<P, MaxClauses, MaxPerClause, E, Evaluat
 where
   MaxClauses: Get<u32>,
   MaxPerClause: Get<u32>,
-  Evaluate: FnMut(&TimedPredicate<P>) -> Result<bool, E>,
+  Evaluate: FnMut(&P) -> Result<bool, E>,
 {
   let clauses = &precondition.clauses;
   let mut expression_passes = false;
@@ -169,12 +169,6 @@ where
 enum LoadedFundingDisposition {
   Preserve,
   Clear,
-}
-
-impl LoadedFundingDisposition {
-  fn clears(self) -> bool {
-    matches!(self, Self::Clear)
-  }
 }
 
 pub(crate) enum LoadedCancellationContext<T: Config> {
@@ -353,7 +347,6 @@ impl<T: Config> Pallet<T> {
           && existing_run.as_ref().is_none_or(|existing| {
             existing.cycle_nonce == run_state.cycle_nonce
               && existing.opening_snapshot == run_state.opening_snapshot
-              && existing.opening_predicate_results == run_state.opening_predicate_results
           })
           && run_state.cursor < step_count
           && run_state.has_contract_authority(
@@ -555,7 +548,7 @@ impl<T: Config> Pallet<T> {
     mut plan: CurrentStepPlanOf<T>,
     run: ActorRunStateOf<T>,
     unsuccessful_attempt_streak: u32,
-    funding_disposition: LoadedFundingDisposition,
+    _funding_disposition: LoadedFundingDisposition,
     effect_execution: TaskEffectExecution,
   ) -> Result<
     (
@@ -580,10 +573,6 @@ impl<T: Config> Pallet<T> {
     plan.hot.unsuccessful_attempt_streak = unsuccessful_attempt_streak;
     plan.hot.pending_signal = deferred_signal;
     plan.hot.queue_ticket = None;
-    if funding_disposition.clears() {
-      plan.funding.funding_accumulated.clear();
-      ActorFunding::<T>::insert(actor_id, &plan.funding);
-    }
     plan.last_step_outcome = run.last_step_outcome.clone();
     ActorRunStateStore::<T>::insert(actor_id, run.clone());
     plan.run = Some(run);
@@ -643,7 +632,7 @@ impl<T: Config> Pallet<T> {
     cycle_nonce: u64,
     unsuccessful_attempt_streak: u32,
     outcomes: OutcomeTotals,
-    funding_disposition: LoadedFundingDisposition,
+    _funding_disposition: LoadedFundingDisposition,
     effect_execution: TaskEffectExecution,
     now: BlockNumberFor<T>,
   ) -> Result<
@@ -665,10 +654,6 @@ impl<T: Config> Pallet<T> {
     plan.hot.queue_ticket = None;
     plan.hot.last_cycle_block = Some(now);
     plan.hot.unsuccessful_attempt_streak = unsuccessful_attempt_streak;
-    if funding_disposition.clears() {
-      plan.funding.funding_accumulated.clear();
-      ActorFunding::<T>::insert(actor_id, &plan.funding);
-    }
     Self::deposit_event(Event::CycleSummary {
       actor_id,
       cycle_nonce,
@@ -742,13 +727,10 @@ impl<T: Config> Pallet<T> {
       cycle_nonce,
       cursor,
     });
-    let mut predicate_index = run.opening_predicate_cursor as usize;
     let predicate_result = Self::evaluate_step_precondition(
       step.precondition.as_ref(),
       &instance.sovereign_account,
       plan.maximum_fee.total_fee,
-      &run.opening_predicate_results,
-      &mut predicate_index,
     );
     let predicate_error = predicate_result.as_ref().err().cloned();
     let predicate_matches = predicate_result.unwrap_or(true);
@@ -997,8 +979,6 @@ impl<T: Config> Pallet<T> {
       .checked_add(&One::one())
       .ok_or(AttemptTransactionError::Invariant)?;
     run.cursor = next_cursor;
-    run.opening_predicate_cursor =
-      u32::try_from(predicate_index).map_err(|_| AttemptTransactionError::Invariant)?;
     run.unsuccessful_attempts_at_cursor = 0;
     run.last_committed_step_block = Some(now);
     run.eligible_at = eligible_at;
@@ -1088,13 +1068,10 @@ impl<T: Config> Pallet<T> {
     let cycle_nonce = run.cycle_nonce;
     let cursor = run.cursor;
     run.last_attempt_block = now;
-    let mut predicate_index = run.opening_predicate_cursor as usize;
     let predicate_result = Self::evaluate_step_precondition(
       step.precondition.as_ref(),
       &instance.sovereign_account,
       plan.maximum_fee.total_fee,
-      &run.opening_predicate_results,
-      &mut predicate_index,
     );
     let predicate_error = predicate_result.as_ref().err().cloned();
     let predicate_matches = predicate_result.unwrap_or(true);
@@ -1353,8 +1330,6 @@ impl<T: Config> Pallet<T> {
       .checked_add(&One::one())
       .ok_or(AttemptTransactionError::Invariant)?;
     run.cursor = next_cursor;
-    run.opening_predicate_cursor =
-      u32::try_from(predicate_index).map_err(|_| AttemptTransactionError::Invariant)?;
     run.unsuccessful_attempts_at_cursor = 0;
     run.last_committed_step_block = Some(now);
     run.eligible_at = eligible_at;
@@ -1448,25 +1423,17 @@ impl<T: Config> Pallet<T> {
       &instance.steps,
       plan.maximum_fee.total_fee,
     );
-    let opening_predicate_results = Self::capture_opening_predicate_results(
-      &instance.sovereign_account,
-      &instance.steps,
-      plan.maximum_fee.total_fee,
-    );
-    let funding_snapshot = plan.funding.funding_accumulated.clone();
+    let funding_snapshot = FundingSnapshotOf::<T>::default();
     let cycle_nonce = plan.ticket.cycle_nonce;
     plan.hot.last_cycle_block = Some(now);
     Self::deposit_event(Event::CycleStarted {
       actor_id,
       cycle_nonce,
     });
-    let mut opening_predicate_index = 0usize;
     let predicate_result = Self::evaluate_step_precondition(
       step.precondition.as_ref(),
       &instance.sovereign_account,
       plan.maximum_fee.total_fee,
-      &opening_predicate_results,
-      &mut opening_predicate_index,
     );
     let predicate_error = predicate_result.as_ref().err().cloned();
     let predicate_matches = predicate_result.unwrap_or(true);
@@ -1584,13 +1551,11 @@ impl<T: Config> Pallet<T> {
             },
             cycle_nonce,
             cursor: 0,
-            opening_predicate_cursor: 0,
             unsuccessful_attempts_at_cursor,
             last_attempt_block: now,
             last_committed_step_block: None,
             eligible_at,
             opening_snapshot,
-            opening_predicate_results,
             cumulative_outcomes: outcomes,
             last_step_outcome: Some(StepOutcome::FundingUnavailable),
             suspension: Some(SuspensionReason::FundingUnavailable),
@@ -1698,13 +1663,11 @@ impl<T: Config> Pallet<T> {
                 },
                 cycle_nonce,
                 cursor: 0,
-                opening_predicate_cursor: 0,
                 unsuccessful_attempts_at_cursor,
                 last_attempt_block: now,
                 last_committed_step_block: None,
                 eligible_at,
                 opening_snapshot,
-                opening_predicate_results,
                 cumulative_outcomes: outcomes,
                 last_step_outcome: Some(last_step_outcome),
                 suspension: Some(SuspensionReason::Temporary),
@@ -1788,14 +1751,11 @@ impl<T: Config> Pallet<T> {
         },
         cycle_nonce,
         cursor: 1,
-        opening_predicate_cursor: u32::try_from(opening_predicate_index)
-          .map_err(|_| AttemptTransactionError::Invariant)?,
         unsuccessful_attempts_at_cursor: 0,
         last_attempt_block: now,
         last_committed_step_block: Some(now),
         eligible_at,
         opening_snapshot,
-        opening_predicate_results,
         cumulative_outcomes: outcomes,
         last_step_outcome: Some(last_step_outcome),
         suspension: None,
@@ -1810,8 +1770,6 @@ impl<T: Config> Pallet<T> {
       plan.hot.queue_ticket = None;
       plan.hot.last_cycle_block = Some(now);
       plan.hot.unsuccessful_attempt_streak = 0;
-      plan.funding.funding_accumulated.clear();
-      ActorFunding::<T>::insert(actor_id, &plan.funding);
       return Ok((
         plan,
         effect_execution,
@@ -1832,8 +1790,6 @@ impl<T: Config> Pallet<T> {
     plan.hot.queue_ticket = None;
     plan.hot.last_cycle_block = Some(now);
     plan.hot.unsuccessful_attempt_streak = 0;
-    plan.funding.funding_accumulated.clear();
-    ActorFunding::<T>::insert(actor_id, &plan.funding);
     Ok((
       plan,
       effect_execution,
@@ -1934,128 +1890,11 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
   }
 
-  fn push_trigger_surface(
-    amount: &AmountResolution<T::Balance>,
-    surface: OpeningSurface<T::AssetId>,
-    surfaces: &mut alloc::vec::Vec<OpeningSurface<T::AssetId>>,
-  ) {
-    if matches!(amount, AmountResolution::PercentageAtOpening(_)) && !surfaces.contains(&surface) {
-      surfaces.push(surface);
-    }
-  }
-
-  fn collect_percentage_opening_surfaces(
-    task: &TaskOf<T>,
-    surfaces: &mut alloc::vec::Vec<OpeningSurface<T::AssetId>>,
-  ) {
-    match task {
-      ActorTask::Transfer { asset, amount, .. }
-      | ActorTask::SplitTransfer { asset, amount, .. }
-      | ActorTask::Burn { asset, amount } => {
-        Self::push_trigger_surface(amount, OpeningSurface::PreservableAsset(*asset), surfaces)
-      }
-      ActorTask::Mint { asset, amount } => {
-        Self::push_trigger_surface(amount, OpeningSurface::TargetAsset(*asset), surfaces)
-      }
-      ActorTask::RemoveLiquidity {
-        lp_asset: asset,
-        lp_amount,
-        ..
-      } => Self::push_trigger_surface(
-        lp_amount,
-        OpeningSurface::PreservableAsset(*asset),
-        surfaces,
-      ),
-      ActorTask::SwapIn {
-        asset_in,
-        amount_in,
-        ..
-      } => Self::push_trigger_surface(
-        amount_in,
-        OpeningSurface::PreservableAsset(*asset_in),
-        surfaces,
-      ),
-      ActorTask::SwapOut {
-        asset_out,
-        amount_out,
-        ..
-      } => Self::push_trigger_surface(
-        amount_out,
-        OpeningSurface::TargetAsset(*asset_out),
-        surfaces,
-      ),
-      ActorTask::AddLiquidity {
-        asset_a,
-        asset_b,
-        amount_a,
-        amount_b,
-        ..
-      } => {
-        Self::push_trigger_surface(
-          amount_a,
-          OpeningSurface::PreservableAsset(*asset_a),
-          surfaces,
-        );
-        Self::push_trigger_surface(
-          amount_b,
-          OpeningSurface::PreservableAsset(*asset_b),
-          surfaces,
-        );
-      }
-      ActorTask::Stake { asset, amount } => {
-        Self::push_trigger_surface(amount, OpeningSurface::PreservableAsset(*asset), surfaces);
-      }
-      ActorTask::DonateLiquidity {
-        asset_a,
-        max_amount_a,
-        ..
-      } => {
-        Self::push_trigger_surface(
-          max_amount_a,
-          OpeningSurface::PreservableAsset(*asset_a),
-          surfaces,
-        );
-      }
-      ActorTask::Unstake { asset, shares } => {
-        Self::push_trigger_surface(shares, OpeningSurface::StakingShares(*asset), surfaces)
-      }
-      ActorTask::StopCycle => {}
-    }
-  }
-
   pub(crate) fn opening_surfaces(
-    contract_steps: &ContractSteps<T>,
-    start_cursor: usize,
+    _contract_steps: &ContractSteps<T>,
+    _start_cursor: usize,
   ) -> alloc::vec::Vec<OpeningSurface<T::AssetId>> {
-    let mut surfaces = alloc::vec::Vec::new();
-    for step_index in start_cursor..contract_steps.len() {
-      Self::collect_percentage_opening_surfaces(&contract_steps[step_index].task, &mut surfaces);
-    }
-    surfaces
-  }
-
-  pub(crate) fn capture_opening_predicate_results(
-    actor: &T::AccountId,
-    contract_steps: &ContractSteps<T>,
-    reserved: T::Balance,
-  ) -> OpeningPredicateResultsOf<T> {
-    let mut results = OpeningPredicateResultsOf::<T>::default();
-    for step in contract_steps {
-      let Some(precondition) = &step.precondition else {
-        continue;
-      };
-      let clauses = &precondition.clauses;
-      for timed in clauses.iter().flat_map(|clause| clause.iter()) {
-        if timed.timing != ObservationTiming::Opening {
-          continue;
-        }
-        let result = Self::evaluate_atomic_predicate(&timed.predicate, actor, reserved);
-        results
-          .try_push(result)
-          .unwrap_or_else(|_| panic!("admitted opening predicates fit MaxOpeningPredicateResults"));
-      }
-    }
-    results
+    alloc::vec::Vec::new()
   }
 
   pub(crate) fn capture_opening_snapshot(
@@ -2078,16 +1917,6 @@ impl<T: Config> Pallet<T> {
         .unwrap_or_else(|_| panic!("trigger surfaces fit MaxOpeningSnapshotEntries"));
     }
     snapshot
-  }
-
-  fn opening_balance(
-    opening_snapshot: &RunOpeningSnapshotOf<T>,
-    surface: OpeningSurface<T::AssetId>,
-  ) -> Result<T::Balance, DispatchError> {
-    opening_snapshot
-      .get(&surface)
-      .copied()
-      .ok_or(Error::<T>::SnapshotUnavailable.into())
   }
 
   fn prepare_task(
@@ -2731,27 +2560,13 @@ impl<T: Config> Pallet<T> {
     precondition: Option<&PreconditionOf<T>>,
     who: &T::AccountId,
     reserved: T::Balance,
-    opening_results: &OpeningPredicateResultsOf<T>,
-    opening_index: &mut usize,
   ) -> Result<bool, DispatchError> {
     let Some(precondition) = precondition else {
       return Ok(true);
     };
-    evaluate_precondition_with(precondition, |timed| match timed.timing {
-      ObservationTiming::Current => {
-        Self::evaluate_atomic_predicate(&timed.predicate, who, reserved)
-          .map_err(|_| Error::<T>::InvalidPredicate.into())
-      }
-      ObservationTiming::Opening => {
-        let result = opening_results
-          .get(*opening_index)
-          .copied()
-          .ok_or(Error::<T>::SnapshotUnavailable)?;
-        *opening_index = opening_index
-          .checked_add(1)
-          .ok_or(Error::<T>::ComputationOverflow)?;
-        result.map_err(|_| Error::<T>::InvalidPredicate.into())
-      }
+    evaluate_precondition_with(precondition, |predicate| {
+      Self::evaluate_atomic_predicate(predicate, who, reserved)
+        .map_err(|_| Error::<T>::InvalidPredicate.into())
     })
   }
 
@@ -2761,8 +2576,7 @@ impl<T: Config> Pallet<T> {
     who: &T::AccountId,
     reserved: T::Balance,
   ) -> Result<bool, DispatchError> {
-    let opening_results = OpeningPredicateResultsOf::<T>::default();
-    Self::evaluate_step_precondition(Some(precondition), who, reserved, &opening_results, &mut 0)
+    Self::evaluate_step_precondition(Some(precondition), who, reserved)
   }
 
   fn evaluate_atomic_predicate(
@@ -2879,17 +2693,17 @@ impl<T: Config> Pallet<T> {
     spec: &AmountResolution<T::Balance>,
     position_asset: T::AssetId,
     who: &T::AccountId,
-    trigger_share_balances: &RunOpeningSnapshotOf<T>,
+    _trigger_share_balances: &RunOpeningSnapshotOf<T>,
     _funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
+    ensure!(
+      T::StakingOps::share_asset(position_asset).is_some(),
+      Error::<T>::InvalidAmountResolution
+    );
     let current_shares = T::StakingOps::share_balance(who, position_asset);
     let resolved = match spec {
       AmountResolution::Fixed(shares) => *shares,
-      AmountResolution::PercentageOfCurrent(pct) => pct.mul_floor(current_shares),
-      AmountResolution::PercentageAtOpening(pct) => pct.mul_floor(Self::opening_balance(
-        trigger_share_balances,
-        OpeningSurface::StakingShares(position_asset),
-      )?),
+      AmountResolution::Percent(pct) => pct.mul_floor(current_shares),
     };
     if resolved.is_zero() {
       return Ok(AmountResolutionOutcome::Skipped);
@@ -2906,7 +2720,7 @@ impl<T: Config> Pallet<T> {
     who: &T::AccountId,
     actor_type: ActorType,
     reserved: T::Balance,
-    trigger_balances: &RunOpeningSnapshotOf<T>,
+    _trigger_balances: &RunOpeningSnapshotOf<T>,
     _funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
@@ -2918,22 +2732,9 @@ impl<T: Config> Pallet<T> {
     };
     let resolved = match spec {
       AmountResolution::Fixed(amount) => *amount,
-      AmountResolution::PercentageOfCurrent(pct) => {
+      AmountResolution::Percent(pct) => {
         let value = pct.mul_floor(policy_spend_limit);
         if !pct.is_zero() && !policy_spend_limit.is_zero() && value.is_zero() {
-          return Ok(AmountResolutionOutcome::Skipped);
-        }
-        value
-      }
-      AmountResolution::PercentageAtOpening(pct) => {
-        let surface = if policy == AmountResolutionPolicy::PreserveSpend {
-          OpeningSurface::PreservableAsset(asset)
-        } else {
-          OpeningSurface::TargetAsset(asset)
-        };
-        let opening_balance = Self::opening_balance(trigger_balances, surface)?;
-        let value = pct.mul_floor(opening_balance);
-        if !pct.is_zero() && !opening_balance.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
         value
@@ -2958,21 +2759,17 @@ mod step_control_tests {
     use polkadot_sdk::frame_support::traits::ConstU32;
 
     let clause = |predicates| BoundedVec::try_from(predicates).expect("predicates fit");
-    let timed = |predicate| TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate,
-    };
     let precondition = Precondition::<u8, ConstU32<4>, ConstU32<4>> {
       clauses: BoundedVec::try_from(alloc::vec![
-        clause(alloc::vec![timed(1), timed(2)]),
-        clause(alloc::vec![timed(3)]),
+        clause(alloc::vec![1, 2]),
+        clause(alloc::vec![3]),
       ])
       .expect("clauses fit"),
     };
     let mut visited = alloc::vec::Vec::new();
-    let result = evaluate_precondition_with(&precondition, |timed| {
-      visited.push(timed.predicate);
-      match timed.predicate {
+    let result = evaluate_precondition_with(&precondition, |predicate| {
+      visited.push(*predicate);
+      match predicate {
         1 => Ok(true),
         2 => Err("predicate failed"),
         _ => Ok(false),
@@ -2990,12 +2787,9 @@ mod step_control_tests {
     new_test_ext().execute_with(|| {
       let precondition = Precondition {
         clauses: BoundedVec::try_from(alloc::vec![
-          BoundedVec::try_from(alloc::vec![TimedPredicate {
-            timing: ObservationTiming::Current,
-            predicate: Predicate::BalanceAbove {
-              asset: TestAsset::Native,
-              threshold: 1,
-            },
+          BoundedVec::try_from(alloc::vec![Predicate::BalanceAbove {
+            asset: TestAsset::Native,
+            threshold: 1,
           }])
           .expect("one predicate fits"),
         ])
@@ -3016,7 +2810,7 @@ mod step_control_tests {
       let before_resolution = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
         Pallet::<Test>::resolve_amount_with_policy(
-          &AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          &AmountResolution::Percent(Perbill::from_percent(50)),
           TestAsset::Native,
           &ALICE,
           ActorType::System,

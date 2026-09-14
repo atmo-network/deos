@@ -2297,35 +2297,35 @@ fn assert_successful_transfer_resource_ledger(
     (
       "discovery",
       W::scheduler_paged_tombstone_drain(1),
-      35_663_374,
+      33_101_962,
       3_111,
       DatabaseIo::new(4, 2),
     ),
     (
       "state-probe",
       W::scheduler_actor_state_probe(),
-      114_890_000,
-      15_106,
-      DatabaseIo::new(7, 0),
+      88_351_000,
+      16_130,
+      DatabaseIo::new(6, 0),
     ),
     (
       "consume-envelope",
       W::scheduler_paged_consume_preserve_page(),
-      72_287_000,
-      5_118,
+      67_118_000,
+      5_182,
       DatabaseIo::new(5, 4),
     ),
     (
       "opening-complete-inclusive",
       W::scheduler_inner_opening_user_complete_header_max(),
-      175_025_000,
-      7_990,
-      DatabaseIo::new(9, 5),
+      143_875_000,
+      7_974,
+      DatabaseIo::new(9, 4),
     ),
     (
       "invocation-receipt",
       W::action_invocation_receipt(),
-      4_680_000,
+      4_261_000,
       0,
       DatabaseIo::new(0, 0),
     ),
@@ -2342,8 +2342,8 @@ fn assert_successful_transfer_resource_ledger(
     control_io_per_step = control_io_per_step.saturating_add(*io);
   }
   let effect_per_step = W::task_transfer();
-  let effect_io_per_step = DatabaseIo::new(25, 12);
-  assert_production_weight_component(effect_per_step, 468_433_000, 29_222, effect_io_per_step);
+  let effect_io_per_step = DatabaseIo::new(23, 11);
+  assert_production_weight_component(effect_per_step, 424_991_000, 31_270, effect_io_per_step);
   let pair = |weight: Weight| [weight.ref_time(), weight.proof_size()];
   let reference_events = |authored: &AuthoredBlock| {
     let ids = (0..ActorId::from(REFERENCE_SYSTEM_ACTOR_IDENTITIES)).collect::<Vec<_>>();
@@ -4216,13 +4216,6 @@ fn full_executive_user_completion_header_domain_witness() {
       let head = pallet_deos_actors::ActorContractHeads::<Runtime>::get(actor_id).unwrap();
       assert_eq!(head.header.step_count, 1);
       assert_eq!(head.first_step, Some(step.clone()));
-      assert!(
-        Actors::active_actor_state(actor_id)
-          .unwrap()
-          .funding
-          .funding_tracked_assets
-          .is_empty()
-      );
       // Source-derived context: the production constructor uses Step/capture geometry, not funding policy.
       let context = StepControlWeightContext {
         cursor: 0,
@@ -4230,9 +4223,6 @@ fn full_executive_user_completion_header_domain_witness() {
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries:
-          <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
       };
       let resources = head.first_step_resources.unwrap();
       assert_eq!(
@@ -4275,8 +4265,7 @@ fn full_executive_user_completion_header_domain_witness() {
       "funding": if wide { "signed-allowlist-max" } else { "owner-only" },
       "headBytes": head_bytes, "fundingBytes": funding_bytes,
       "context": [context.cursor, context.steps_in_fragment, context.opening_tail_chunks,
-        context.predicate_evaluation_units, context.opening_snapshot_entries,
-        context.opening_predicate_results, context.funding_snapshot_entries],
+        context.predicate_evaluation_units, context.opening_snapshot_entries],
       "storedControl": [resources.control.ref_time(), resources.control.proof_size()],
       "blockControl": [authored.metrics.actor_control.ref_time(), authored.metrics.actor_control.proof_size()],
     }));
@@ -4310,8 +4299,8 @@ fn assert_w5_resource_ledger(
   let probe = W::scheduler_actor_state_probe();
   let consume =
     W::scheduler_paged_consume_preserve_page().max(W::scheduler_paged_consume_delete_page());
-  let append = W::scheduler_paged_append_new_page();
-  assert!(W::scheduler_paged_append_existing_page().all_lte(append));
+  let queue_append = W::scheduler_paged_append_new_page();
+  let append = queue_append.max(W::scheduler_paged_append_existing_page());
   let close = Actors::close_cleanup_weight_upper();
   let receipt = W::action_invocation_receipt();
   let opening_progress = W::scheduler_inner_opening_progress_min(1);
@@ -4325,26 +4314,32 @@ fn assert_w5_resource_ledger(
   for (weight, base, proof, reads, writes) in [
     (
       W::pipeline_admission_apoptosis(),
-      387_346_000,
-      15_106,
-      19,
-      16,
+      210_994_000,
+      16_130,
+      18,
+      15,
     ),
     (
       W::scheduler_inner_zero_step_complete(),
-      58_109_000,
+      45_677_000,
       4_388,
       2,
-      3,
+      2,
     ),
-    (opening_progress, 185_578_808 + 14_888_868, 9_320, 12, 7),
-    (running_progress, 284_303_244, 12_546, 18, 5),
-    (running_complete, 133_921_853 + 2 * 2_058_487, 10_974, 11, 4),
-    (tail_plan, 117_787_560 + 2 * 1_082_421, 5_942, 7, 0),
-    (suspend, 286_075_000, 5_871, 13, 9),
-    (complete, 201_984_000, 6_237, 8, 6),
-    (append, 109_653_000, 16_446, 6, 4),
-    (W::task_dex_exact_out(), 714_697_000, 19_253, 40, 17),
+    (opening_progress, 164_317_518 + 21_901_203, 9_320, 12, 6),
+    (
+      running_progress,
+      163_752_618 + 2 * 18_929_893,
+      12_409,
+      17,
+      5,
+    ),
+    (running_complete, 139_483_665, 10_802, 10, 4),
+    (tail_plan, 107_924_520, 5_836, 6, 0),
+    (suspend, 249_896_000, 5_688, 12, 9),
+    (complete, 199_959_000, 6_132, 7, 6),
+    (append, 95_059_000, 17_470, 6, 4),
+    (W::task_dex_exact_out(), 673_630_000, 19_253, 39, 17),
   ] {
     assert_production_weight_component(weight, base, proof, DatabaseIo::new(reads, writes));
   }
@@ -4404,12 +4399,6 @@ fn assert_w5_resource_ledger(
         },
         predicate_evaluation_units: 0,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: if cursor == 0 {
-          <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get()
-        } else {
-          0
-        },
       };
       let (outcome, placement, selected) = if block == 2 && count == 3 {
         (
@@ -4439,7 +4428,9 @@ fn assert_w5_resource_ledger(
         (
           StepControlOutcome::Suspended,
           StepControlPlacement::Queue,
-          tail_plan.saturating_add(suspend).saturating_add(append),
+          tail_plan
+            .saturating_add(suspend)
+            .saturating_add(queue_append),
         )
       } else {
         assert_eq!(
@@ -4477,7 +4468,8 @@ fn assert_w5_resource_ledger(
             action_fee_collected: false
           }
         ),
-        Some(selected.saturating_add(receipt))
+        Some(selected.saturating_add(receipt)),
+        "block={block} actor={actor_id} cursor={cursor} phase={phase:?} outcome={outcome:?} placement={placement:?}"
       );
     }
   });
@@ -4534,8 +4526,8 @@ fn assert_w5_resource_ledger(
       [0, 0, 1],
     ),
     (
-      "ready-append-envelope",
-      append,
+      "ready-append-new-page",
+      queue_append,
       DatabaseIo::new(6, 4),
       [0, 1, 0],
     ),
@@ -6194,7 +6186,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "cutoff",
       W::scheduler_on_initialize_cutoff(),
-      12_292_000,
+      10_965_000,
       1_560,
       DatabaseIo::new(2, 2),
       1,
@@ -6202,7 +6194,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "coordinator",
       W::materialization_coordinator_base(),
-      25_842_000,
+      25_423_000,
       5_982,
       DatabaseIo::new(10, 1),
       1,
@@ -6210,7 +6202,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "clock-probe",
       W::scheduler_wakeup_cursor_worker_future(),
-      24_305_000,
+      23_467_000,
       6_566,
       DatabaseIo::new(6, 0),
       2,
@@ -6218,7 +6210,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "crossing-base",
       W::crossing_worker_base(),
-      6_984_000,
+      7_124_000,
       1_543,
       DatabaseIo::new(2, 0),
       1,
@@ -6226,7 +6218,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "fanout-base",
       W::observation_fanout_base(),
-      6_775_000,
+      6_565_000,
       1_629,
       DatabaseIo::new(2, 0),
       1,
@@ -6234,7 +6226,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "empty-discovery",
       W::scheduler_paged_tombstone_drain(1),
-      35_663_374,
+      33_101_962,
       3_111,
       DatabaseIo::new(4, 2),
       2,
@@ -6242,7 +6234,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "idle-base",
       W::scheduler_on_idle_base(),
-      19_626_000,
+      18_997_000,
       1_560,
       DatabaseIo::new(7, 2),
       1,
@@ -6250,7 +6242,7 @@ fn full_executive_empty_workload_control_baseline_has_explicit_owners() {
     (
       "finalize",
       W::block_resource_finalize(),
-      9_010_000,
+      8_660_000,
       1_560,
       DatabaseIo::new(1, 2),
       1,
@@ -6353,58 +6345,58 @@ fn control_temporal_weight_io_ledger_matches_production_selectors() {
 
   let coordinator_io = DatabaseIo::new(10, 1);
   let future_probe_io = DatabaseIo::new(6, 0);
-  let partial_worker_io = DatabaseIo::new(21, 13);
-  let remove_worker_io = DatabaseIo::new(65, 35);
-  let at_time_occurrence_io = DatabaseIo::new(20, 9);
-  let cadenced_occurrence_io = DatabaseIo::new(27, 16);
-  let close_contingency_io = DatabaseIo::new(66, 65);
+  let partial_worker_io = DatabaseIo::new(20, 13);
+  let remove_worker_io = DatabaseIo::new(64, 35);
+  let at_time_occurrence_io = DatabaseIo::new(19, 9);
+  let cadenced_occurrence_io = DatabaseIo::new(26, 16);
+  let close_contingency_io = DatabaseIo::new(65, 64);
   let fault_contingency_io = DatabaseIo::new(1, 1);
 
   assert_production_weight_component(
     ProductionWeight::materialization_coordinator_base(),
-    25_842_000,
+    25_423_000,
     5_982,
     coordinator_io,
   );
   assert_production_weight_component(
     ProductionWeight::scheduler_wakeup_cursor_worker_future(),
-    24_305_000,
+    23_467_000,
     6_566,
     future_probe_io,
   );
   assert_production_weight_component(
     ProductionWeight::scheduler_wakeup_cursor_worker_partial(),
-    235_997_000,
-    7_959,
+    221_819_000,
+    7_882,
     partial_worker_io,
   );
   assert_production_weight_component(
     ProductionWeight::scheduler_wakeup_cursor_worker_remove(),
-    806_400_000,
-    55_857,
+    713_999_000,
+    55_752,
     remove_worker_io,
   );
   assert_production_weight_component(
     ProductionWeight::at_time_trigger_occurrence(),
-    349_561_000,
-    8_451,
+    340_831_000,
+    8_330,
     at_time_occurrence_io,
   );
   assert_production_weight_component(
     ProductionWeight::cadenced_trigger_occurrence(),
-    536_041_000,
-    8_450,
+    470_249_000,
+    8_329,
     cadenced_occurrence_io,
   );
   assert_production_weight_component(
     ProductionWeight::close_actor(),
-    973_883_000,
+    828_400_000,
     81_886,
     close_contingency_io,
   );
   assert_production_weight_component(
     ProductionWeight::record_wakeup_worker_fault(),
-    9_917_000,
+    9_568_000,
     1_503,
     fault_contingency_io,
   );
@@ -6428,10 +6420,10 @@ fn control_temporal_weight_io_ledger_matches_production_selectors() {
   );
 
   assert_eq!(no_due_probe_io, DatabaseIo::new(12, 0));
-  assert_eq!(retained_actual_io, DatabaseIo::new(48, 29));
-  assert_eq!(removed_actual_io, DatabaseIo::new(92, 51));
-  assert_eq!(retained_admission_io, DatabaseIo::new(115, 95));
-  assert_eq!(removed_admission_io, DatabaseIo::new(159, 117));
+  assert_eq!(retained_actual_io, DatabaseIo::new(46, 29));
+  assert_eq!(removed_actual_io, DatabaseIo::new(90, 51));
+  assert_eq!(retained_admission_io, DatabaseIo::new(112, 94));
+  assert_eq!(removed_admission_io, DatabaseIo::new(156, 116));
   assert_eq!(rearm_topology_io, DatabaseIo::new(7, 7));
 
   let cadenced = ProductionWeight::cadenced_trigger_occurrence();
@@ -6537,11 +6529,11 @@ fn assert_control_phase_attribution_campaign(wasm: &[u8], replay_wasm: bool) {
   assert_eq!(manual.steps, vec![14, 17, 17, 17, 17, 17, 1, 0, 0]);
   assert_eq!(manual.prepass_steps, manual.steps);
   assert_eq!(manual.trigger_occurrences, vec![0; 9]);
-  assert_eq!(cadenced.steps, vec![0, 0, 4, 0, 0, 4, 2, 13, 5]);
+  assert_eq!(cadenced.steps, vec![0, 0, 4, 0, 0, 6, 1, 14, 4]);
   assert_eq!(cadenced.prepass_steps, cadenced.steps);
   assert_eq!(
     cadenced.trigger_occurrences,
-    vec![16, 19, 13, 18, 19, 13, 10, 2, 12]
+    vec![16, 20, 13, 19, 20, 11, 11, 1, 13]
   );
   assert!(manual.steps.iter().sum::<u32>() > cadenced.steps.iter().sum());
   assert!(

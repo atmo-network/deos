@@ -174,7 +174,7 @@ fn observation_only_sources_admit_non_trigger_amount_resolutions() {
     let plan = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, observation_schedule(vec![4]), None, plan);
     assert_eq!(Actors::observation_subscriber_count(4), 1);
@@ -442,7 +442,6 @@ fn compact_observation_activation_loads_only_current_authority_tiers() {
       Some(1)
     );
 
-    crate::ActorFunding::<Test>::remove(actor_id);
     crate::ActorRunPayloads::<Test>::remove(actor_id);
     let compact = Actors::load_observation_activation_state(actor_id, 7)
       .expect("compact activation ignores extended execution payload");

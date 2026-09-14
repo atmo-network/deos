@@ -366,12 +366,6 @@ fn control_zero_step_user_opening_completes_without_action_or_scalar_owner() {
       Event::ActionFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("zero-Step funding remains")
-        .funding_accumulated
-        .is_empty()
-    );
     let (location, identity, hot, _) = Actors::load_frame_control_authority(actor_id)
       .expect("zero-Step output retains sole frame authority");
     assert_eq!(location, C1Location::Unsignaled);
@@ -426,7 +420,6 @@ fn control_zero_step_auto_close_removes_frame_authority_and_preserves_cycle_even
     )));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorContractHeads::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(!ActorStateHolds::<Test>::contains_key(actor_id));
     assert_eq!(ActiveActorCount::<Test>::get(), 0);
@@ -520,7 +513,6 @@ fn control_immutable_zero_step_at_time_closes_after_frame_owned_temporal_path() 
     )));
     assert_eq!(asset_balance(&sovereign, residual_asset), 919);
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!ActorStateHolds::<Test>::contains_key(actor_id));
     frame_assert_single_owner();
   });
@@ -762,9 +754,7 @@ fn control_zero_step_user_opening_matches_immutable_oracle_logical_authority_and
         hot.queue_ticket,
         hot.last_cycle_block,
         admission,
-        ActorFunding::<Test>::get(actor_id)
-          .expect("zero-Step differential funding remains")
-          .funding_accumulated,
+        native_balance(&sovereign),
         ActorRunStateStore::<Test>::contains_key(actor_id),
         event_counts,
       )
@@ -843,7 +833,7 @@ fn control_running_branch_snapshot(step_count: u32) -> Vec<Vec<u8>> {
       identity.encode(),
       hot.encode(),
       admission.encode(),
-      ActorFunding::<Test>::get(actor_id).encode(),
+      <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset).encode(),
       ActorRunStateStore::<Test>::get(actor_id).encode(),
       crate::ActorStateHolds::<Test>::get(actor_id)
         .map(|hold| hold.owner)
@@ -1536,7 +1526,6 @@ fn control_underfunded_at_time_closes_from_frame_authority_without_custody_movem
       actor_id
     ));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
-    assert!(!ActorFunding::<Test>::contains_key(actor_id));
     assert!(!crate::ActorContractHeads::<Test>::contains_key(actor_id));
     assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
@@ -2099,7 +2088,7 @@ fn ordinary_fifo_preserves_ingress_latched_by_an_earlier_step() {
 }
 
 #[test]
-fn control_address_event_commits_funding_independently_and_latches_once() {
+fn control_address_event_latches_matching_ingress_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_filter = AssetFilter::Whitelist(
@@ -2113,7 +2102,7 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       })),
     );
     let sovereign = Actors::active_actor_view(actor_id)
@@ -2152,12 +2141,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       .expect("unmatched AddressEvent is a balance-only consequence"),
       None
     );
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("unmatched AddressEvent funding state remains")
-        .funding_accumulated
-        .is_empty()
-    );
     assert!(fee_collections().is_empty());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -2180,25 +2163,9 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
     set_fail_fee_sink_transfer(false);
     clear_fee_collections();
     assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&100)
-    );
-    assert_eq!(
       crate::ActorUnsignaledControlCells::<Test>::get(actor_id),
       Some(cell)
     );
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::FundingAccumulated {
-        actor_id: id,
-        asset: TestAsset::Native,
-        added: 100,
-        accumulated: 100,
-      } if *id == actor_id
-    )));
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
@@ -2215,13 +2182,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
     .expect("funded AddressEvent transition commits")
     .expect("matched AddressEvent latches");
     assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&150)
-    );
     assert!(has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed {
@@ -2244,13 +2204,6 @@ fn control_address_event_commits_funding_independently_and_latches_once() {
       None
     );
     assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("coalesced AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&175)
-    );
     let C1Location::Waiting { page, .. } = destination else {
       panic!("matched AddressEvent enters N+1 Waiting");
     };
@@ -2281,7 +2234,7 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
       make_step(Task::StopCycle),
     ])
@@ -2346,12 +2299,6 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
     assert!(!running.hot.pending_signal);
     assert_eq!(running.cursor, 1);
     assert_eq!(running.eligible_at, Some(3));
-    assert!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("Opening funding state remains")
-        .funding_accumulated
-        .is_empty()
-    );
 
     clear_fee_collections();
     assert_eq!(
@@ -2387,13 +2334,6 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
       Some(running_location)
     );
     assert!(fee_collections().is_empty());
-    assert_eq!(
-      ActorFunding::<Test>::get(actor_id)
-        .expect("busy AddressEvent funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native),
-      Some(&30)
-    );
 
     frame_system::Pallet::<Test>::set_block_number(3);
     let head_before_completion = Actors::queue_head();
@@ -2410,7 +2350,6 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
       .expect("AddressEvent Cycle completes without deferred authority");
     assert_eq!(completed.hot.cycle_state, CycleState::Idle);
     assert!(!completed.hot.pending_signal);
-    assert!(completed.hot.queue_ticket.is_none());
     assert!(completed.hot.wakeup_pointer.is_none());
     frame_assert_single_owner();
   });
@@ -2943,7 +2882,7 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
         contract_steps_with_step(make_step(Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         })),
       );
       let sovereign = Actors::active_actor_view(actor_id)
@@ -2967,11 +2906,7 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
         ));
         Actors::actor_hot(actor_id).expect("reference AddressEvent differential hot state exists")
       };
-      let funding = ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent differential funding exists")
-        .funding_accumulated
-        .get(&TestAsset::Native)
-        .copied();
+      let funding = native_balance(&sovereign);
       let funding_events = System::events()
         .iter()
         .filter(|record| {
@@ -3349,7 +3284,7 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
         contract_steps_with_step(make_step(Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         })),
       );
       let sovereign = Actors::active_actor_view(actor_id)
@@ -3375,11 +3310,7 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
       set_fail_fee_sink_transfer(false);
       let hot =
         { Actors::actor_hot(actor_id).expect("reference AddressEvent failure hot state remains") };
-      let funding = ActorFunding::<Test>::get(actor_id)
-        .expect("AddressEvent failure funding remains")
-        .funding_accumulated
-        .get(&TestAsset::Native)
-        .copied();
+      let funding = native_balance(&sovereign);
       let funding_events = System::events()
         .iter()
         .filter(|record| {
@@ -3838,7 +3769,7 @@ fn control_direct_ready_stop_cycle_matches_immutable_oracle() {
     run_idle(Weight::MAX);
     let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
       .expect("reference StopCycle successor is coherent");
-    let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+    let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
     let hold = crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
     (
       state.identity,
@@ -3869,8 +3800,7 @@ fn control_direct_transfer_predicate_matrix_matches_immutable_oracle() {
         .map(|index| TestAsset::Local(10_000 + index))
         .collect::<Vec<_>>();
       let precondition = (!predicate_assets.is_empty()).then(|| {
-        timed_all_conditions(
-          ObservationTiming::Opening,
+        all_conditions(
           predicate_assets
             .iter()
             .copied()
@@ -3926,7 +3856,7 @@ fn control_direct_transfer_predicate_matrix_matches_immutable_oracle() {
         run_idle(Weight::MAX);
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Transfer successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4010,7 +3940,7 @@ fn control_direct_funding_unavailable_requeues_exact_next_block_matching_immutab
         let run = state
           .run_state
           .expect("reference FundingUnavailable run persists");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4080,7 +4010,7 @@ fn control_direct_temporary_failure_requeues_with_atomic_effect_rollback_matchin
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Temporary suspension is coherent");
         let run = state.run_state.expect("reference Temporary run persists");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4156,7 +4086,7 @@ fn control_suspended_temporary_continuation_matches_immutable_oracle_success_and
       {
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference retry successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (
@@ -4242,7 +4172,7 @@ fn control_suspended_funding_continuation_matches_immutable_oracle_success_and_b
       {
         let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
           .expect("reference Funding retry successor is coherent");
-        let funding = ActorFunding::<Test>::get(actor_id).expect("reference funding survives");
+        let funding = <Test as crate::Config>::AssetOps::balance(&sovereign, native_asset);
         let hold =
           crate::ActorStateHolds::<Test>::get(actor_id).expect("reference User hold survives");
         (

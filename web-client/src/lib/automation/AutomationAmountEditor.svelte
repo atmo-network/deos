@@ -31,10 +31,8 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     switch (amount.type) {
       case 'Fixed':
         return 'Artifact value; live capacity still applies';
-      case 'PercentageOfCurrent':
+      case 'Percent':
         return 'Re-observed at each step attempt';
-      case 'PercentageAtOpening':
-        return 'Frozen at logical-cycle start';
     }
   });
 </script>
@@ -48,8 +46,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       selectClass="h-9 py-1.5 text-xs"
     >
       <option value="Fixed">Fixed</option>
-      <option value="PercentageOfCurrent">% current</option>
-      <option value="PercentageAtOpening">% at opening</option>
+      <option value="Percent">% current</option>
     </SelectField>
     {#if amount.type === 'Fixed'}
       <TextField

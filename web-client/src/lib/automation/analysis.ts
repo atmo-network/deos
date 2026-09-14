@@ -44,7 +44,6 @@ export type ActorRequiredAdapter =
 
 export type ActorStaticObservationWindow =
   | 'artifact-time'
-  | 'logical-cycle-start'
   | 'step-attempt-time'
   | 'retry-time';
 
@@ -109,10 +108,7 @@ export type ActorAmountSemantics = {
   path: string;
   resolution: ActorAmountName;
   dataDependencies: Array<
-    | 'artifact-value'
-    | 'current-balance-or-shares'
-    | 'opening-snapshot'
-    | 'task-policy-capacity'
+    'artifact-value' | 'current-balance-or-shares' | 'task-policy-capacity'
   >;
   minimumBalanceDependency: 'task-policy';
   feeReserveDependency: 'task-policy';
@@ -145,7 +141,7 @@ export type ActorStaticStepAnalysis = {
   predicates: Array<{
     type: ActorPredicateName;
     value: ActorContractProjection;
-    timing: 'Opening' | 'Current';
+    timing: 'Current';
     observation: 'balance' | 'block-number' | 'scalar-observation';
     readSurface:
       | ActorContractProjection
@@ -157,7 +153,7 @@ export type ActorStaticStepAnalysis = {
           nonFreshResult: 'false';
         };
     pure: true;
-    observationWindow: 'step-attempt-time' | 'cycle-opening-frozen';
+    observationWindow: 'step-attempt-time';
     boundedReadCount: 1;
   }>;
   task: ActorTaskName;
@@ -258,14 +254,6 @@ export type ActorStaticFinding =
     }
   | { kind: 'OneShotTemporalAdmission'; afterTicks: number }
   | { kind: 'PeriodicAdmission'; everyTicks: number }
-  | {
-      kind: 'TriggerAmountCompatibilityViolation';
-      steps: number[];
-      sourceKinds: Array<
-        'Manual' | 'AddressEvent' | 'ObservationChange' | 'ObservationCrossing'
-      >;
-      reason: 'AddressEventOnlyRequired';
-    }
   | {
       kind: 'CommittedEffectBeforeRetryableStep';
       before: number;
@@ -640,8 +628,6 @@ function taskAmounts(
             return 'artifact-value';
           case 'CurrentBalanceOrShares':
             return 'current-balance-or-shares';
-          case 'OpeningSnapshot':
-            return 'opening-snapshot';
           case 'TaskPolicyCapacity':
             return 'task-policy-capacity';
         }
@@ -652,8 +638,6 @@ function taskAmounts(
         switch (amount.valueObservationWindow) {
           case 'ArtifactTime':
             return 'artifact-time' as const;
-          case 'LogicalCycleStart':
-            return 'logical-cycle-start' as const;
           case 'StepAttemptTime':
             return 'step-attempt-time' as const;
         }
@@ -731,14 +715,8 @@ function taskSemantics(
   };
 }
 
-function predicateAnalysis(timedPredicate: ActorContractProjection) {
-  const timed = record(timedPredicate, 'TimedPredicate');
-  const timing = variant(timed.timing, 'TimedPredicate.timing');
-  if (timing.type !== 'Opening' && timing.type !== 'Current') {
-    throw new Error(`Unsupported ObservationTiming variant: ${timing.type}`);
-  }
-  const observationTiming = timing.type as 'Opening' | 'Current';
-  const parsed = variant(timed.predicate, 'TimedPredicate.predicate');
+function predicateAnalysis(predicate: ActorContractProjection) {
+  const parsed = variant(predicate, 'Predicate');
   const semantics = actorPredicateSemantics(parsed.type);
   const label = `Predicate.${semantics.predicate}`;
   const readSurface = (() => {
@@ -785,14 +763,11 @@ function predicateAnalysis(timedPredicate: ActorContractProjection) {
   return {
     type: semantics.predicate,
     value: parsed.value,
-    timing: observationTiming,
+    timing: 'Current' as const,
     observation,
     readSurface,
     pure: semantics.pure,
-    observationWindow:
-      observationTiming === 'Opening'
-        ? ('cycle-opening-frozen' as const)
-        : ('step-attempt-time' as const),
+    observationWindow: 'step-attempt-time' as const,
     boundedReadCount: semantics.boundedReadCount,
   };
 }
@@ -1264,24 +1239,6 @@ function findings(
   minimumBalanceEvidence?: ActorMinimumBalanceEvidence,
 ): ActorStaticFinding[] {
   const results: ActorStaticFinding[] = [];
-  const triggerAmountSteps = steps
-    .filter((step) =>
-      step.amounts.some(
-        (amount) => amount.resolution === 'PercentageAtOpening',
-      ),
-    )
-    .map((step) => step.index);
-  if (
-    triggerAmountSteps.length > 0 &&
-    (trigger == null || trigger.kind !== 'AddressEvent')
-  ) {
-    results.push({
-      kind: 'TriggerAmountCompatibilityViolation',
-      steps: triggerAmountSteps,
-      sourceKinds: trigger?.sourceKinds ?? [],
-      reason: 'AddressEventOnlyRequired',
-    });
-  }
   if (trigger?.kind === 'AtTime') {
     results.push({
       kind: 'OneShotTemporalAdmission',
@@ -1448,7 +1405,7 @@ function findings(
     const reader = steps[dependency.toStep];
     if (
       reader.amounts.some(
-        (amount) => amount.resolution === 'PercentageOfCurrent',
+        (amount) => amount.resolution === 'Percent',
       )
     ) {
       results.push({

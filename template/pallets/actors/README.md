@@ -12,12 +12,12 @@ The 2606 upgrade did not require pallet-local semantic changes here; the relevan
 The current kernel/runtime slice provides:
 
 - User and System Actor creation with deterministic sovereign accounts
-- Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF with explicit Opening/Current timed Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
+- Bounded Actor Contracts whose Steps own an optional canonical `Precondition` DNF of current-state Predicates and one typed Task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.); absence is the sole unconditional form
 - One scheduler over a canonical paged FIFO with monotonic `NextQueueTicket`, common block cutoff, exact physical occupancy, one actor-local live ticket, strict global ticket order across actor types, and shared time-ordered wakeup storage
 - Exactly one `Manual`, `AddressEvent`, `ObservationChange`, or timestamp-tick `Cadenced` trigger per Actor; one-feed subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
-- Sparse progress-preserving `ActorRunState` for Mutable suspension, with an open nonce separate from finalized identity, one scalar cursor, exact eligibility, immutable Opening/funding snapshots, exact outcomes, Temporary-only retry, deterministic cancellation, and no prefix replay
+- Sparse progress-preserving `ActorRunState` for Mutable suspension, with an open nonce separate from finalized identity, one scalar cursor, exact eligibility, current-state reevaluation, exact outcomes, Temporary-only retry, deterministic cancellation, and no prefix replay
 - A bounded `simulate_current_contract` rollback core and versioned `ActorSimulationApi` declaration that require exact stored-contract identity, follow fresh/current-run readiness, return ordered outcomes, and roll the entire attempt back
 - A read-only `actor_eligibility` projection behind the versioned `ActorEligibilityApi` declaration that reports current readiness, the scheduler-owned phase, and the next eligible block by reusing the same cadence/cooldown/window/backoff/breaker/latch owners as admission
 - Runtime-configured adapters for assets, swaps, liquidity, staking, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `ActorType` through a minimal execution context
@@ -29,7 +29,7 @@ The current kernel/runtime slice provides:
 DEOS Actors is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
 Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
 
-`PercentageAtOpening` reads a typed balance/share snapshot captured when a fresh cycle opens. Its values remain independent of trigger kind, signal payload, and AddressEvent amount.
+`Percent` reads the applicable live balance or share surface at every execution attempt. `Fixed` preserves its authored debit and fails rather than silently shrinking when current capacity is insufficient.
 
 Active Actor Contracts choose `Persistent` or `CloseAfterProductiveCycle`. Productive closure requires successful logical-cycle completion with at least one committed effectful task; false Precondition results, skipped Steps, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 

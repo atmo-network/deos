@@ -337,9 +337,6 @@ pub struct StepControlWeightContext {
   pub opening_tail_chunks: u32,
   pub predicate_evaluation_units: u32,
   pub opening_snapshot_entries: u32,
-  pub opening_predicate_results: u32,
-  /// Configured bound for admission/Opening; retained count for a resumed head.
-  pub funding_snapshot_entries: u32,
 }
 
 /// Runtime-owned maximum Actor-control Weight used by admission before semantic evaluation.

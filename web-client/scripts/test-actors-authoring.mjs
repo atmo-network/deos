@@ -245,7 +245,7 @@ test('observation authoring exposes freshness and validates bounded identity', (
     contract([
       authoringStep('observation', transferTask(), {
         precondition: {
-          clauses: [[{ timing: 'Current', predicate: invalid }]],
+          clauses: [[invalid]],
         },
       }),
     ]),
@@ -301,12 +301,12 @@ test('trigger editor exposes one scalar trigger without graph vocabulary', () =>
   }
 });
 
-test('observation sources lower exactly and PercentageAtOpening is trigger-independent', () => {
-  const openingAmountStep = authoringStep(
-    'opening-amount',
-    transferTask({ type: 'PercentageAtOpening', parts: 500_000_000 }),
+test('observation sources lower exactly and current percentages are trigger-independent', () => {
+  const currentAmountStep = authoringStep(
+    'current-amount',
+    transferTask({ type: 'Percent', parts: 500_000_000 }),
   );
-  const observationOnly = contract([openingAmountStep], {
+  const observationOnly = contract([currentAmountStep], {
     trigger: observationTrigger,
   });
   assert.equal(validateActorAuthoringContract(observationOnly).valid, true);
@@ -325,7 +325,7 @@ test('observation sources lower exactly and PercentageAtOpening is trigger-indep
   });
   assert.equal(
     validateActorAuthoringContract(
-      contract([openingAmountStep], { trigger: addressTrigger }),
+      contract([currentAmountStep], { trigger: addressTrigger }),
     ).valid,
     true,
   );
@@ -378,18 +378,15 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
       }),
       authoringStep(
         'transfer',
-        transferTask({ type: 'PercentageOfCurrent', parts: 1_000_000_000 }),
+        transferTask({ type: 'Percent', parts: 1_000_000_000 }),
         {
           precondition: {
             clauses: [
               [
                 {
-                  timing: 'Opening',
-                  predicate: {
-                    type: 'BalanceAbove',
-                    asset: local,
-                    threshold: '0',
-                  },
+                  type: 'BalanceAbove',
+                  asset: local,
+                  threshold: '0',
                 },
               ],
             ],
@@ -557,10 +554,7 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
 
 test('Unconditional and bounded DNF lower exactly and empty forms fail before encoding', () => {
   const atom = { type: 'BlockNumberAbove', threshold: 1 };
-  for (const precondition of [
-    null,
-    { clauses: [[{ timing: 'Opening', predicate: atom }]] },
-  ]) {
+  for (const precondition of [null, { clauses: [[atom]] }]) {
     const lowered = lowerActorAuthoringContract(
       contract([authoringStep('only', transferTask(), { precondition })]),
     );
@@ -621,17 +615,16 @@ test('every Predicate and AmountResolution lowers without changing step topology
       contract([
         authoringStep('only', transferTask(), {
           precondition: {
-            clauses: [[{ timing: 'Current', predicate: current }]],
+            clauses: [[current]],
           },
         }),
       ]),
     );
     assert.equal(lowered.steps.length, 1);
     const loweredPredicate = lowered.steps[0].precondition[0][0];
-    assert.equal(loweredPredicate.timing.type, 'Current');
-    assert.equal(loweredPredicate.predicate.type, current.type);
+    assert.equal(loweredPredicate.type, current.type);
     if (current.type.startsWith('Observation')) {
-      assert.deepEqual(loweredPredicate.predicate.value, {
+      assert.deepEqual(loweredPredicate.value, {
         feed: {
           asset_in: { type: 'Native', value: undefined },
           asset_out: { type: 'Local', value: 7 },
@@ -649,8 +642,7 @@ test('every Predicate and AmountResolution lowers without changing step topology
   }
   const amounts = [
     fixed(),
-    { type: 'PercentageOfCurrent', parts: 500_000_000 },
-    { type: 'PercentageAtOpening', parts: 500_000_000 },
+    { type: 'Percent', parts: 500_000_000 },
   ];
   for (const amount of amounts) {
     const lowered = lowerActorAuthoringContract(
@@ -697,8 +689,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
   assert.equal(validateActorAuthoringContract(userMint).valid, false);
   for (const amount of [
     { type: 'Fixed', value: '0' },
-    { type: 'PercentageOfCurrent', parts: 0 },
-    { type: 'PercentageAtOpening', parts: 0 },
+    { type: 'Percent', parts: 0 },
   ]) {
     assert.equal(
       validateActorAuthoringContract(
@@ -830,9 +821,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
 
 test('scenario corpus lowers every expressible or partial execution core without inventing missing predicates', () => {
   const all = (...predicates) => ({
-    clauses: [
-      predicates.map((predicate) => ({ timing: 'Current', predicate })),
-    ],
+    clauses: [predicates],
   });
   const balanceAbove = (asset = native) => ({
     type: 'BalanceAbove',
@@ -842,7 +831,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const split = (asset = native) => ({
     type: 'SplitTransfer',
     asset,
-    amount: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
+    amount: { type: 'Percent', parts: 1_000_000_000 },
     legs: [
       { to: accountA, shareParts: 500_000_000 },
       { to: accountB, shareParts: 500_000_000 },
@@ -851,7 +840,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const swap = {
     type: 'SwapIn',
     assetIn: local,
-    amountIn: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
+    amountIn: { type: 'Percent', parts: 1_000_000_000 },
     assetOut: native,
     slippageParts: 10_000_000,
   };
@@ -866,7 +855,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           authoringStep('burn', {
             type: 'Burn',
             asset: native,
-            amount: { type: 'PercentageOfCurrent', parts: 1_000_000_000 },
+            amount: { type: 'Percent', parts: 1_000_000_000 },
           }),
         ],
         { actorType: 'System', fundingPolicy: { type: 'RuntimePolicy' } },

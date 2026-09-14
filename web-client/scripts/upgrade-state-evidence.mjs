@@ -109,7 +109,6 @@ async function chainSnapshot(client, api) {
     lpPairs,
     observation,
     actorContractHead,
-    actorFunding,
   ] = await Promise.all([
     api.query.System.Account.getValue(burnAccount, { at: block.hash }),
     api.view.Assets.balance_of(burnAccount, foreignId, { at: block.hash }),
@@ -123,15 +122,13 @@ async function chainSnapshot(client, api) {
     api.query.Actors.ActorContractHead.getValue(burnActorId, {
       at: block.hash,
     }),
-    api.query.Actors.ActorFunding.getValue(burnActorId, { at: block.hash }),
   ]);
   if (!assetDetails)
     throw new Error(`foreign asset ${foreignId} is unavailable`);
   if (!pool || !reserves.success)
     throw new Error('Native/foreign pool state is unavailable');
   if (!observation) throw new Error('Oracle observation is unavailable');
-  if (!actorContractHead || !actorFunding)
-    throw new Error('Burn Actor state is incomplete');
+  if (!actorContractHead) throw new Error('Burn Actor state is incomplete');
 
   return jsonValue({
     finalized_block: {

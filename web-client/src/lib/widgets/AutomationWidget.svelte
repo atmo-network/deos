@@ -71,7 +71,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + Actors.ActorFunding + System.Account + ActorEligibilityApi',
+    'automationWidget <- bounded Actors control locator/cell projection + Actors.ActorContractHead + Actors.ActorRunHead + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -827,7 +827,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         <div class="grid gap-2">
           {#if draft.steps.length === 0}
             <Notice variant="muted">
-              Opening-only Contract: the Trigger completes a bounded lifecycle
+              Zero-Step Contract: the Trigger completes a bounded lifecycle
               without an Action.
             </Notice>
           {/if}

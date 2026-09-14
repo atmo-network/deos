@@ -1,6 +1,4 @@
 use crate::types::{AmountResolution, Mutability, Precondition, Predicate, StepErrorPolicy, Task};
-#[cfg(test)]
-use crate::types::{ObservationTiming, TimedPredicate};
 use crate::{RetryClass, WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
@@ -547,15 +545,10 @@ pub fn describe_amount_resolution<Balance>(
       ObservationWindow::ArtifactTime,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
-    AmountResolution::PercentageOfCurrent(_) => (
+    AmountResolution::Percent(_) => (
       AmountDataDependency::CurrentBalanceOrShares,
       ObservationWindow::StepAttemptTime,
       RetryObservation::ReobserveLiveValue,
-    ),
-    AmountResolution::PercentageAtOpening(_) => (
-      AmountDataDependency::OpeningSnapshot,
-      ObservationWindow::LogicalCycleStart,
-      RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
   };
   AmountInstructionContract {
@@ -793,10 +786,7 @@ mod tests {
   fn precondition_contract_exposes_optional_bounded_dnf_without_dynamic_control() {
     type TestPredicate = Predicate<u32, u128, u32>;
     type TestPrecondition = Precondition<TestPredicate, ConstU32<4>, ConstU32<4>>;
-    let atom: TimedPredicate<TestPredicate> = TimedPredicate {
-      timing: ObservationTiming::Current,
-      predicate: Predicate::BlockNumberAbove { threshold: 1 },
-    };
+    let atom: TestPredicate = Predicate::BlockNumberAbove { threshold: 1 };
     let clause: BoundedVec<_, ConstU32<4>> =
       BoundedVec::try_from(alloc::vec![atom]).expect("one predicate fits");
     let clauses: BoundedVec<_, ConstU32<4>> =
@@ -875,8 +865,7 @@ mod tests {
   fn every_amount_resolution_has_a_live_task_policy_constructor() {
     let cases = [
       AmountResolution::Fixed(1u128),
-      AmountResolution::PercentageOfCurrent(Perbill::one()),
-      AmountResolution::PercentageAtOpening(Perbill::one()),
+      AmountResolution::Percent(Perbill::one()),
     ];
     for amount in cases {
       let contract = describe_amount_resolution(&amount);

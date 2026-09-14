@@ -40,7 +40,7 @@ A repeated description MUST NOT redefine behavior. If two passages conflict, the
 | Trigger-family timing and crossing semantics | §4.7 |
 | Cycle and run state | §5.1 |
 | Pipeline Opening | §5.2 |
-| Opening and funding snapshots | §5.3 |
+| Current Attempt inputs | §5.3 |
 | Cycle nonce | §5.4 |
 | Zero-Step Cycle | §5.5 |
 | Cycle completion and cancellation | §5.6 |
@@ -362,11 +362,6 @@ struct ActorHot<BlockNumber> {
   terminal_at: Option<BlockNumber>,
 }
 
-struct ActorFunding<AssetId, Balance> {
-  funding_accumulated: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
-  funding_tracked_assets: BoundedBTreeSet<AssetId, MaxFundingTrackedAssets>,
-}
-
 struct OutcomeTotals {
   executed_steps: u32,
   committed_effectful_tasks: u32,
@@ -390,15 +385,15 @@ Semantic owners:
 | Authored Contract, identities, Step count, first Step, admission authority, Pipeline envelope | C6 hot head (§3.3) |
 | Authored Steps 1..N | C6 tail chunks (§3.3) |
 | Lifecycle, cycle phase, Trigger phase, latch, placement pointers, failure streak, clocks | `ActorHot` |
-| Funding accumulation and tracked set | `ActorFunding` |
-| Open-cycle cursor, snapshots, outcomes, retry state, paid Pipeline authority | `ActorRunState` (§5.1) |
+| Funding authorization | Authored Contract policy |
+| Open-cycle cursor, outcomes, retry state, and bounded run payload | `ActorRunState` (§5.1) |
 | Physical queue, detector, wakeup, locator, and page authority | derived topology only (§8.2, §8.4, §10.2) |
 
 `ActorType` is derived from `ActorClass` and MUST NOT be stored.
 
 Composite Actor values and runtime API views are read-only and MUST NOT become write models.
 
-Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, funding, run state, detector membership, ticket, wakeup, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity, which can never activate or close through Actor control.
+Dormant means only `ActorIdentity` and class locator/slot authority exist. Dormant Actors own no hot Contract, hot state, run state, detector membership, ticket, wakeup, or Active-state hold. Public creation admits Dormant only as Mutable; a host genesis configuration MAY declare a sealed Immutable System identity, which can never activate or close through Actor control.
 
 ---
 
@@ -503,7 +498,7 @@ While `pending_signal == true`:
 - No additional Trigger fee is charged;
 - No additional Pipeline is queued;
 - No Trigger history is accumulated for the Actor;
-- No Opening/funding snapshot is changed;
+- No run cursor, current-state basis, or sovereign balance is changed;
 - Where practical, the Actor MUST be absent or disabled in the relevant detector topology.
 
 Source-owned canonical state MAY continue changing. Economic ingress MAY still update custody and funding (§6.4, §11.4).
@@ -647,14 +642,10 @@ struct ActorRunState<BlockNumber, AssetId, Balance> {
   pipeline_service_identity: Hash,
   cycle_nonce: u64,
   cursor: u32,
-  opening_predicate_cursor: u32,
   unsuccessful_attempts_at_cursor: u32,
   last_attempt_block: BlockNumber,
   last_committed_step_block: Option<BlockNumber>,
   eligible_at: BlockNumber,
-  opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxOpeningSnapshotEntries>,
-  opening_predicate_results: BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
-  funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   cumulative_outcomes: OutcomeTotals,
   last_step_outcome: Option<StepOutcome>,
   suspension: Option<SuspensionReason>,
@@ -682,12 +673,11 @@ Opening MUST execute in this order:
 4. Check and charge the complete Pipeline Machine fee (§7.4).
 5. Preserve the existing run-state hold without a Cycle-local hold mutation (§7.2).
 6. Derive `run.cycle_nonce = identity.cycle_nonce + 1` without changing `identity.cycle_nonce` (§5.4).
-7. Capture Opening and funding snapshots (§5.3).
-8. Consume `pending_signal` and the current funding accumulator (§4.3, §6.4).
-9. Re-arm the Trigger (§4.5).
-10. Emit `CycleStarted` (§12.2).
-11. For a nonempty Contract, execute Step 0 in the same current-Step transaction (§6.1).
-12. For a zero-Step Contract, finalize atomically (§5.5).
+7. Consume `pending_signal` (§4.3).
+8. Re-arm the Trigger (§4.5).
+9. Emit `CycleStarted` (§12.2).
+10. For a nonempty Contract, execute Step 0 in the same current-Step transaction (§6.1).
+11. For a zero-Step Contract, finalize atomically (§5.5).
 
 If the Actor cannot pay the Pipeline Machine fee, or its active-installed run-state hold authority is inconsistent, Opening MUST NOT partially occur. Insufficient Pipeline payment invokes minimal apoptosis with `CycleAdmissionInsufficient` (§9.4); inconsistent hold authority fails closed as an Actor invariant. The prior Trigger fee remains final (§7.3).
 
@@ -695,25 +685,11 @@ If Pipeline fee collection fails despite valid capacity, the entire Opening atte
 
 If Trigger rearm requires a current authoritative observation (§4.5) and that observation is unavailable or uninitialized, Opening MUST atomically refuse. The latch, placement, cycle nonce, and prior Trigger payment remain unchanged; no Pipeline fee, Run, or Task effect commits. This refusal grants no bypass, retry Continuation, or observation-loss close authority. Independently applicable terminal checks, including insufficient Pipeline capacity, retain their existing precedence and do not require successful rearm (§9.2, §9.4).
 
-### 5.3 Opening and funding snapshots
+### 5.3 Current Attempt inputs
 
-Create/update derive one body-commitment-bound `OpeningDependencyPlan` containing only exact fragment locators and counts for authored `Opening` predicates and `PercentageAtOpening` surfaces. It is derived authority, not a second semantic owner. Opening loads only those named fragments and rejects any locator/body mismatch. A Contract with no Opening dependency loads none.
+Cycle admission captures no predicate result, amount basis, or funding history. Each Attempt loads only its current Step and reads every predicate and dynamic amount from current authoritative state after the required fee reservation. A retry repeats those reads at the later Attempt; it never reuses a cycle-admission value.
 
-After the Pipeline fee debit and before any Step-0 Task effect, Opening captures once:
-
-```text
-opening_snapshot = every unique OpeningSurface referenced by any Step
-funding_snapshot = funding_accumulated before its consumption
-opening_predicate_results = every admitted Opening predicate result
-```
-
-Opening balances are read after the Pipeline fee debit and before any transient Action-fee debit. Each later exact debit independently preserves its own current Action-fee reservation (§7.5, §10.4).
-
-Every admitted Opening surface exists in the snapshot even when zero. Missing admitted keys are invariant failures.
-
-Opening facts are immutable until Cycle termination. Later Steps MAY load only snapshot keys/results referenced by the current Step, but MUST NOT recapture, prune, or rewrite them. `opening_predicate_cursor` maps the current Step to its exact frozen predicate-result range; advance adds that Step's admitted Opening-predicate count, and retry preserves the cursor.
-
-Funding accepted after Opening belongs to the next Cycle and cannot repair the current funding snapshot (§6.4).
+`Fixed` remains the authored artifact value but is checked against current task capacity at the Attempt. `Percent` reads current Available for the task's typed surface and uses widened floor arithmetic. Every debit independently preserves its current Action-fee reservation and protected minimum (§7.5, §10.4).
 
 ### 5.4 Cycle nonce
 
@@ -799,15 +775,8 @@ An advancing Step with a successor sets `eligible_at = current_block + 1` and cr
 ### 6.2 Precondition
 
 ```rust
-enum ObservationTiming { Opening, Current }
-
-struct TimedPredicate<P> {
-  timing: ObservationTiming,
-  predicate: P,
-}
-
 struct Precondition<P, MaxClauses, MaxPerClause> {
-  clauses: BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>,
+  clauses: BoundedVec<BoundedVec<P, MaxPerClause>, MaxClauses>,
 }
 ```
 
@@ -834,7 +803,7 @@ Admission canonicalizes predicates and clauses by canonical typed SCALE order, r
 
 Every admitted predicate is evaluated; there is no short-circuit because Weight MUST be data-independent.
 
-`Opening` predicates are evaluated once during Opening and frozen (§5.3). `Current` predicates are evaluated immediately before the owning Step and observe prior committed Steps plus intervening external state.
+Every predicate is evaluated immediately before the owning Step and observes prior committed Steps plus intervening external state.
 
 Predicate error is Permanent Step failure. False emits `StepSkipped(PreconditionFalse)` and advances (§6.5).
 
@@ -845,15 +814,7 @@ Predicate error is Permanent Step failure. False emits `StepSkipped(Precondition
 ```rust
 enum AmountResolution<Balance> {
   Fixed(Balance),
-  PercentageOfCurrent(Perbill),
-  PercentageAtOpening(Perbill),
-  PercentageOfLastFunding(Perbill),
-}
-
-enum OpeningSurface<AssetId> {
-  PreservableAsset(AssetId),
-  TargetAsset(AssetId),
-  StakingShares(AssetId),
+  Percent(Perbill),
 }
 ```
 
@@ -869,11 +830,9 @@ Rules:
 
 - Percentages use widened floor division;
 - Dynamic zero is `Skipped`;
-- Absent/zero last-funding basis is `FundingUnavailable`;
 - A positive exact debit above current capacity is `FundingUnavailable`;
-- Missing admitted Opening state is an invariant failure;
 - A positive exact amount MUST NOT be silently reduced;
-- `PercentageOfCurrent(100%)` is the only authored whole-current-available form and has no lifecycle privilege.
+- `Percent(100%)` is the only authored whole-current-available form and has no lifecycle privilege.
 
 For multiple amount fields:
 
@@ -885,13 +844,13 @@ else                   -> Executable(all values)
 
 Source-capacity calculations preserve the current Action-fee reservation and protected minimum (§7.5, §10.4).
 
-| Resolution surface | Tasks | Current/Opening basis |
+| Resolution surface | Tasks | Current basis |
 | --- | --- | --- |
-| Preserve-source | Transfer, SplitTransfer, SwapIn, AddLiquidity, RemoveLiquidity, Burn, Stake, DonateLiquidity | current preservable balance / `OpeningSurface::PreservableAsset` |
-| Output-target | Mint, SwapOut | Current spendable target / `OpeningSurface::TargetAsset`; percentage amounts forbidden |
-| Share-spend | Unstake | current staking shares / `OpeningSurface::StakingShares` |
+| Preserve-source | Transfer, SplitTransfer, SwapIn, AddLiquidity, RemoveLiquidity, Burn, Stake, DonateLiquidity | current preservable balance |
+| Output-target | Mint, SwapOut | Current spendable target; percentage amounts forbidden |
+| Share-spend | Unstake | current staking shares |
 
-Fixed, Opening, and last-funding source/share values MUST fit current capacity. Output-target values are bounded by their own authored/adaptor rules, not current target balance. `PercentageAtOpening` never reads Trigger payload.
+Fixed source/share values MUST fit current capacity. Output-target values are bounded by their own authored/adaptor rules, not current target balance.
 
 ### 6.4 Funding accumulation
 
@@ -904,12 +863,7 @@ enum FundingSourcePolicy<AccountId> {
 }
 ```
 
-Contract admission derives the exact bounded `funding_tracked_assets` set from all `PercentageOfLastFunding` references, including the canonical staking-share asset mapped for `Unstake`.
-
-A positive certified credit is accumulated only when:
-
-1. Its asset is tracked; and
-2. The funding policy accepts source and provenance.
+A positive certified credit is authorized only when the funding policy accepts its source and provenance. Actors retain no amount accumulator or funding-history basis.
 
 Policy acceptance is exact:
 
@@ -920,9 +874,7 @@ Policy acceptance is exact:
 | `RuntimePolicy` | configured authority accepts the exact source/provenance pair; all-`None` is denied |
 | `AnyVerifiedIngress` | concrete source or typed provenance exists; all-`None` is denied |
 
-Rejected or untracked credit remains custody only. Trigger matching is independent (§4.7).
-
-Opening snapshots and clears the accumulator (§5.2, §5.3). Later funding belongs to the next Cycle. Close or deactivation deletes the accumulator but does not move custody (§9.3).
+Rejected credit remains custody only. Trigger matching is independent (§4.7). Accepted credit changes ordinary sovereign custody; every later amount resolution reads current Available rather than an Actor-maintained funding history. Close or deactivation does not move custody (§9.3).
 
 ### 6.5 Step outcome and error policy
 
@@ -1016,7 +968,7 @@ General rules:
 - Self-transfer and duplicate split recipients are invalid;
 - Each Task contains at most two `AmountResolution` fields;
 - Every debit preserves the protected minimum (§10.4);
-- `Transfer(PercentageOfCurrent(100%))` has no close-specific privilege;
+- `Transfer(Percent(100%))` has no close-specific privilege;
 - `CloseAfterProductiveCycle` observes only committed effectful Tasks (§9.2);
 - Task effects use canonical host operations (§11.1).
 
@@ -1528,7 +1480,7 @@ spendable_balance = balance - current_action_fee_reservation
 preservable_balance = spendable_balance - protected_minimum
 ```
 
-All subtraction is saturating only where explicitly shown. Every authored debit, including `PercentageOfCurrent(100%)`, uses preservable capacity. No lifecycle branch grants source-exhaustion privilege.
+All subtraction is saturating only where explicitly shown. Every authored debit, including `Percent(100%)`, uses preservable capacity. No lifecycle branch grants source-exhaustion privilege.
 
 ---
 
@@ -1652,7 +1604,7 @@ For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)`. Ze
 
 #### Staking
 
-Staking-share identity is admitted and stable. `Unstake(PercentageOfCurrent(100%))` resolves to the full current share balance. Transferable staking receipts/NFTs, when provided by the host, remain ordinary custody (§10.3).
+Staking-share identity is admitted and stable. `Unstake(Percent(100%))` resolves to the full current share balance. Transferable staking receipts/NFTs, when provided by the host, remain ordinary custody (§10.3).
 
 #### Certified AddressEvent ingress
 
@@ -1982,7 +1934,7 @@ Required relations:
 2. `0 < MaxOwnerSlots <= 255`; reference is 255.
 3. `MaxRetryAttempts >= 2`; reference is 10.
 4. `MaxContractSteps * MaxRetryAttempts` fits outcome counters.
-5. Opening snapshot/result bounds cover every admitted Contract.
+5. Current-Step predicate and amount-read bounds cover every admitted Contract.
 6. `MaxCrossingMembersPerFeed` covers the configured User membership allowance plus every separately bounded host-owned membership reserved for the feed; the reference split is 9,000 User and 1,000 System positions within 10,000 total.
 7. Every queue, wakeup, detector, cohort, sweep, and worker bound is nonzero and owns one complete worst-case unit.
 8. One maximum current-Step control/effect transition fits the guaranteed base pass (§7.6, §8.3).
@@ -2006,8 +1958,6 @@ MaxContractSteps = 12
 MaxRetryAttempts = 10
 MaxConsecutiveFailures = 10
 MaxFundingTrackedAssets = 40
-MaxOpeningSnapshotEntries = 24
-MaxOpeningPredicateResults = 48
 MaxPreconditionClauses = 4
 MaxPredicatesPerClause = 4
 MaxPredicatesPerStep = 4

@@ -25,7 +25,7 @@ fn control_invocation_receipts_are_independent_of_actor_fee_exemption() {
             steps.push(make_step(Task::Transfer {
               to: BOB,
               asset: TestAsset::Local(1),
-              amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+              amount: AmountResolution::Percent(Perbill::one()),
             }));
           }
           steps.push(step.clone());
@@ -297,7 +297,6 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         state.identity,
         state.hot,
         state.run_state,
-        state.funding,
         admission,
         ticket,
         loaded_step,
@@ -495,42 +494,22 @@ fn current_step_execution_weight(actor_id: ActorId) -> Weight {
 }
 
 #[test]
-fn frozen_cycle_snapshot_dependency_is_closed_over_amounts_tasks_and_preconditions() {
-  assert!(!AmountResolution::Fixed(1u64).requires_frozen_cycle_snapshot());
-  assert!(
-    !AmountResolution::<u64>::PercentageOfCurrent(Perbill::one()).requires_frozen_cycle_snapshot()
-  );
-  assert!(
-    AmountResolution::<u64>::PercentageAtOpening(Perbill::one()).requires_frozen_cycle_snapshot()
-  );
+fn current_predicates_and_amounts_require_no_frozen_cycle_snapshot() {
   let mut step = make_step(Task::StopCycle);
   assert!(!step.requires_frozen_cycle_snapshot());
-  step.precondition = timed_all_conditions(
-    ObservationTiming::Opening,
-    vec![Predicate::BlockNumberAbove { threshold: 0 }],
-  );
-  assert!(step.requires_frozen_cycle_snapshot());
+  step.precondition = all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]);
+  assert!(!step.requires_frozen_cycle_snapshot());
 
   let current = StepOf::<Test> {
-    precondition: timed_all_conditions(
-      ObservationTiming::Current,
-      vec![Predicate::BlockNumberAbove { threshold: 0 }],
-    ),
+    precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]),
     task: Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     },
     on_error: StepErrorPolicy::AbortCycle,
   };
   assert!(!current.requires_frozen_cycle_snapshot());
-
-  let opening_amount = make_step(Task::Transfer {
-    to: BOB,
-    asset: TestAsset::Native,
-    amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-  });
-  assert!(opening_amount.requires_frozen_cycle_snapshot());
 }
 
 #[test]
@@ -595,7 +574,6 @@ fn every_trigger_family_round_trips_dormant_and_active_lifecycle() {
       ));
       assert!(Actors::actor_hot(actor_id).is_none());
       assert!(Actors::load_actor_contract(actor_id).is_none());
-      assert!(ActorFunding::<Test>::get(actor_id).is_none());
       assert!(Actors::crossing_membership(actor_id).is_none());
       assert!(Actors::actor_observation_feeds(actor_id).is_none());
     }
@@ -643,14 +621,21 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
   new_test_ext().execute_with(|| {
     let mut contract_steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageAtOpening(Perbill::one()),
-      }),
+      StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
+          asset: TestAsset::Native,
+          threshold: 50,
+        }]),
+        task: Task::Transfer {
+          to: BOB,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Percent(Perbill::one()),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      },
       make_step(Task::Unstake {
         asset: TestAsset::Local(1),
-        shares: AmountResolution::PercentageAtOpening(Perbill::one()),
+        shares: AmountResolution::Percent(Perbill::one()),
       }),
     ])
     .expect("two-step plan fits");
@@ -664,20 +649,15 @@ fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
     opening_snapshot
       .try_insert(OpeningSurface::PreservableAsset(TestAsset::Native), 100)
       .expect("asset snapshot fits");
-    opening_snapshot
-      .try_insert(OpeningSurface::StakingShares(TestAsset::Local(1)), 40)
-      .expect("staking snapshot fits");
     let run_state = RuntimeActorRunState {
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 0,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
       last_committed_step_block: None,
       eligible_at: 2,
       opening_snapshot,
-      opening_predicate_results: Default::default(),
       cumulative_outcomes: OutcomeTotals::default(),
       last_step_outcome: Some(StepOutcome::FundingUnavailable),
       suspension: Some(SuspensionReason::FundingUnavailable),
@@ -689,7 +669,7 @@ fn actor_run_schema_round_trips_retry_position_and_typed_snapshot_surfaces() {
     assert_eq!(decoded.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(decoded.last_attempt_block, 1);
     assert_eq!(decoded.eligible_at, 2);
-    assert_eq!(decoded.opening_snapshot.len(), 2);
+    assert_eq!(decoded.opening_snapshot.len(), 1);
     assert_eq!(
       decoded.last_step_outcome,
       Some(StepOutcome::FundingUnavailable)
@@ -765,13 +745,11 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_servi
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 1,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 0,
       last_attempt_block: 1,
       last_committed_step_block: Some(1),
       eligible_at: 2,
       opening_snapshot: Default::default(),
-      opening_predicate_results: Default::default(),
       cumulative_outcomes: OutcomeTotals {
         executed_steps: 1,
         committed_effectful_tasks: 0,
@@ -817,7 +795,7 @@ fn normal_running_progress_persists_one_causal_successor_and_rejects_stale_servi
 }
 
 #[test]
-fn running_state_carries_the_exact_opening_predicate_cursor() {
+fn running_state_rechecks_current_predicates_after_progress() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -826,18 +804,12 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
       None,
       BoundedVec::try_from(vec![
         StepOf::<Test> {
-          precondition: timed_all_conditions(
-            ObservationTiming::Opening,
-            vec![Predicate::BlockNumberAbove { threshold: 10 }],
-          ),
+          precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 10 }]),
           task: Task::StopCycle,
           on_error: StepErrorPolicy::AbortCycle,
         },
         StepOf::<Test> {
-          precondition: timed_all_conditions(
-            ObservationTiming::Opening,
-            vec![Predicate::BlockNumberAbove { threshold: 0 }],
-          ),
+          precondition: all_conditions(vec![Predicate::BlockNumberAbove { threshold: 0 }]),
           task: Task::Transfer {
             to: BOB,
             asset: TestAsset::Native,
@@ -857,34 +829,8 @@ fn running_state_carries_the_exact_opening_predicate_cursor() {
     Actors::on_idle(1, Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("Running state persists");
     assert_eq!(run.cursor, 1);
-    assert_eq!(run.opening_predicate_cursor, 1);
-    assert_eq!(
-      run.opening_predicate_results.as_slice(),
-      [Ok(false), Ok(true)]
-    );
     #[cfg(feature = "try-runtime")]
-    {
-      assert_ok!(Actors::do_try_state());
-      for shifted_cursor in [0, 2] {
-        ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("Running authority")
-            .opening_predicate_cursor = shifted_cursor;
-        });
-        assert!(
-          Actors::do_try_state().is_err(),
-          "shifted Opening cursor {shifted_cursor} was accepted"
-        );
-      }
-      ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("Running authority")
-          .opening_predicate_cursor = 1;
-      });
-      assert_ok!(Actors::do_try_state());
-    }
+    assert_ok!(Actors::do_try_state());
 
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::on_initialize(2);
@@ -979,13 +925,11 @@ fn actor_run_try_state_rejects_marker_and_cursor_drift() {
         contract_authority: run_contract_authority(actor_id),
         cycle_nonce: 1,
         cursor: 0,
-        opening_predicate_cursor: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
         last_committed_step_block: None,
         eligible_at: 2,
         opening_snapshot: Default::default(),
-        opening_predicate_results: Default::default(),
         cumulative_outcomes: Default::default(),
         last_step_outcome: Some(StepOutcome::FundingUnavailable),
         suspension: Some(SuspensionReason::FundingUnavailable),
@@ -3641,7 +3585,6 @@ fn frame_only_user_window_expiry_releases_hold_from_consumed_waiting_authority()
     assert!(!Actors::active_actor_exists(actor_id));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!crate::ActorStateHolds::<Test>::contains_key(actor_id));
-    assert!(!crate::ActorFunding::<Test>::contains_key(actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
@@ -3974,7 +3917,7 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
 }
 
 #[test]
-fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
+fn retried_percentage_steps_resolve_against_current_attempt_balances() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_a = TestAsset::Local(1);
@@ -3987,14 +3930,14 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
       make_step(Task::Transfer {
         to: BOB,
         asset: asset_a,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+        amount: AmountResolution::Percent(Perbill::from_percent(10)),
       }),
       StepOf::<Test> {
         precondition: None,
         task: Task::SwapIn {
           asset_in: asset_b,
           asset_out,
-          amount_in: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+          amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -4002,7 +3945,7 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
       make_step(Task::Transfer {
         to: CHARLIE,
         asset: asset_c,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+        amount: AmountResolution::Percent(Perbill::from_percent(10)),
       }),
     ])
     .expect("three-step plan fits");
@@ -4017,32 +3960,7 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
 
     let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert_eq!(continuation.cursor, 1);
-    assert_eq!(continuation.opening_snapshot.len(), 3);
-    assert_eq!(
-      continuation
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_a)),
-      Some(&99)
-    );
-    assert_eq!(
-      continuation
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_b)),
-      Some(&99)
-    );
-    let mut mutated_snapshot = continuation.clone();
-    *mutated_snapshot
-      .opening_snapshot
-      .get_mut(&OpeningSurface::PreservableAsset(asset_a))
-      .expect("Opening asset remains present") = 98;
-    assert_noop!(
-      Actors::write_run_state(actor_id, Some(mutated_snapshot)),
-      Error::<Test>::ActorRunInvariant
-    );
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|state| state.encode()),
-      Some(continuation.encode())
-    );
+    assert!(continuation.opening_snapshot.is_empty());
     assert_eq!(asset_balance(&BOB, asset_a), 9);
 
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, asset_b, 20));
@@ -4050,31 +3968,16 @@ fn run_opening_snapshot_is_complete_frozen_and_capacity_checked_live() {
     frame_system::Pallet::<Test>::set_block_number(continuation.eligible_at);
     run_idle(Weight::MAX);
     run_next_idle(Weight::MAX);
-    let after_capacity_failure = Actors::actor_run_state(actor_id).expect("still suspended");
-    assert_eq!(after_capacity_failure.cursor, 1);
-    assert_eq!(after_capacity_failure.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(
-      after_capacity_failure
-        .opening_snapshot
-        .get(&OpeningSurface::PreservableAsset(asset_b)),
-      Some(&99)
-    );
 
-    set_asset_balance(&actor, asset_b, 100);
-    frame_system::Pallet::<Test>::set_block_number(after_capacity_failure.eligible_at);
-    Actors::on_initialize(after_capacity_failure.eligible_at);
-    run_prepass();
-    run_idle(Weight::MAX);
-    run_next_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(asset_balance(&actor, asset_b), 82);
+    assert_eq!(asset_balance(&actor, asset_b), 16);
     assert_eq!(asset_balance(&CHARLIE, asset_c), 9);
     assert_eq!(asset_balance(&BOB, asset_a), 9);
   });
 }
 
 #[test]
-fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
+fn maximal_current_amount_contract_needs_no_opening_snapshot() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut steps = Vec::new();
@@ -4085,8 +3988,8 @@ fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(100 + index * 2),
           asset_b: TestAsset::Local(101 + index * 2),
-          amount_a: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
-          amount_b: AmountResolution::PercentageAtOpening(Perbill::from_percent(10)),
+          amount_a: AmountResolution::Percent(Perbill::from_percent(10)),
+          amount_b: AmountResolution::Percent(Perbill::from_percent(10)),
           min_lp_out: 1,
         },
         on_error: if index == 0 {
@@ -4108,10 +4011,7 @@ fn maximal_run_opening_snapshot_stays_bounded_to_full_contract_surfaces() {
 
     let continuation = Actors::actor_run_state(actor_id).expect("maximal Actor run");
     assert_eq!(continuation.cursor, 0);
-    assert_eq!(
-      continuation.opening_snapshot.len() as u32,
-      <<Test as crate::Config>::MaxOpeningSnapshotEntries as Get<u32>>::get()
-    );
+    assert!(continuation.opening_snapshot.is_empty());
 
     set_temporary_add_liquidity_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -4289,7 +4189,7 @@ fn tiny_percentage_amount_is_skipped_without_contract_steps_failure() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+      amount: AmountResolution::Percent(Perbill::from_parts(1)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
@@ -4353,7 +4253,7 @@ fn cycle_summary_tracks_step_outcomes() {
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+        amount: AmountResolution::Percent(Perbill::from_parts(1)),
       }),
       make_step(Task::Transfer {
         to: BOB,
@@ -4586,7 +4486,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
 }
 
 #[test]
-fn percentage_at_opening_uses_cycle_start_snapshot() {
+fn percentage_of_current_uses_each_steps_available_balance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = BoundedVec::try_from(vec![
@@ -4598,7 +4498,7 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
       make_step(Task::Transfer {
         to: CHARLIE,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageAtOpening(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
     ])
     .expect("contract_steps fits");
@@ -4611,8 +4511,8 @@ fn percentage_at_opening_uses_cycle_start_snapshot() {
     signal_percentage_trigger(actor_id, TestAsset::Native);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(50));
-    assert_eq!(native_balance(&actor), actor_before.saturating_sub(100));
+    assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(25));
+    assert_eq!(native_balance(&actor), actor_before.saturating_sub(75));
   });
 }
 
@@ -4839,13 +4739,11 @@ fn retry_target_uses_only_cursor_local_count_and_last_attempt_block() {
       contract_authority: run_contract_authority(actor_id),
       cycle_nonce: 1,
       cursor: 0,
-      opening_predicate_cursor: 0,
       unsuccessful_attempts_at_cursor: 1,
       last_attempt_block,
       last_committed_step_block: None,
       eligible_at,
       opening_snapshot: Default::default(),
-      opening_predicate_results: Default::default(),
       cumulative_outcomes: Default::default(),
       last_step_outcome: Some(StepOutcome::FundingUnavailable),
       suspension: Some(SuspensionReason::FundingUnavailable),
@@ -4882,77 +4780,60 @@ fn predicate_evaluator_visits_every_atom_and_preserves_first_error() {
 }
 
 #[test]
-fn opening_and_current_predicates_observe_distinct_step_state() {
-  for (timing, second_step_executes) in [
-    (ObservationTiming::Opening, true),
-    (ObservationTiming::Current, false),
-  ] {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let plan = BoundedVec::try_from(vec![
-        make_step(Task::Transfer {
-          to: BOB,
+fn predicates_observe_current_step_state() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(60),
+      }),
+      StepOf::<Test> {
+        precondition: all_conditions(vec![Predicate::BalanceAbove {
           asset: TestAsset::Native,
-          amount: AmountResolution::Fixed(60),
-        }),
-        StepOf::<Test> {
-          precondition: timed_all_conditions(
-            timing,
-            vec![Predicate::BalanceAbove {
-              asset: TestAsset::Native,
-              threshold: 50,
-            }],
-          ),
-          task: Task::Transfer {
-            to: CHARLIE,
-            asset: TestAsset::Native,
-            amount: AmountResolution::Fixed(10),
-          },
-          on_error: StepErrorPolicy::AbortCycle,
+          threshold: 50,
+        }]),
+        task: Task::Transfer {
+          to: CHARLIE,
+          asset: TestAsset::Native,
+          amount: AmountResolution::Fixed(10),
         },
-      ])
-      .expect("two-step plan fits");
-      let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
-      fund_native(actor_id, 100);
-      let charlie_before = native_balance(&CHARLIE);
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      run_idle(Weight::MAX);
-      assert_eq!(
-        native_balance(&CHARLIE) > charlie_before,
-        second_step_executes
-      );
-      assert_eq!(
-        has_actor_event(|event| matches!(
-          event,
-          Event::StepSkipped {
-            actor_id: id,
-            step_index: 1,
-            reason: StepSkippedReason::PreconditionFalse,
-            ..
-          } if *id == actor_id
-        )),
-        !second_step_executes
-      );
-    });
-  }
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+    ])
+    .expect("two-step plan fits");
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    fund_native(actor_id, 100);
+    let charlie_before = native_balance(&CHARLIE);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        step_index: 1,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+  });
 }
 
 #[test]
-fn opening_predicate_result_is_reused_by_run_state() {
+fn predicate_is_rechecked_from_current_state_after_retry() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let plan = contract_steps_with_step(StepOf::<Test> {
-      precondition: timed_all_conditions(
-        ObservationTiming::Opening,
-        vec![Predicate::BalanceAbove {
-          asset: TestAsset::Native,
-          threshold: 50,
-        }],
-      ),
+      precondition: all_conditions(vec![Predicate::BalanceAbove {
+        asset: TestAsset::Native,
+        threshold: 50,
+      }]),
       task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4970,17 +4851,21 @@ fn opening_predicate_result_is_reused_by_run_state() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    let continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
-    assert_eq!(
-      continuation.opening_predicate_results.as_slice(),
-      &[Ok(true)]
-    );
+    assert!(Actors::actor_run_state(actor_id).is_some());
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, TestAsset::Native, 60));
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
+      event,
+      Event::StepSkipped {
+        actor_id: id,
+        reason: StepSkippedReason::PreconditionFalse,
+        ..
+      } if *id == actor_id
+    )));
+    assert!(!has_actor_event(|event| matches!(
       event,
       Event::SwapExecuted { actor_id: id, .. } if *id == actor_id
     )));
@@ -6358,7 +6243,7 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
 
     let contract = Actors::load_actor_contract(actor_id).expect("Contract exists");
     let admission = cell.admission.clone();
-    for remove_partition in 0u8..4 {
+    for remove_partition in 0u8..3 {
       match remove_partition {
         0 => {
           crate::ActorControlLocators::<Test>::remove(actor_id);
@@ -6408,14 +6293,6 @@ fn canonical_loader_requires_run_state_exactly_for_suspended_state() {
           assert!(Actors::insert_admitted_contract_geometry(
             actor_id, &contract, &admission
           ));
-        }
-        3 => {
-          let funding = ActorFunding::<Test>::take(actor_id).expect("funding exists");
-          assert!(matches!(
-            Actors::load_actor_state(actor_id),
-            LoadedActorStateOf::Corrupt
-          ));
-          ActorFunding::<Test>::insert(actor_id, funding);
         }
         _ => unreachable!(),
       }

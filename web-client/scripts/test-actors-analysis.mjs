@@ -74,7 +74,7 @@ const conditionNames = [
   'ObservationEquals',
   'ObservationNotEquals',
 ];
-const amountNames = ['Fixed', 'PercentageOfCurrent', 'PercentageAtOpening'];
+const amountNames = ['Fixed', 'Percent'];
 const errorPolicies = ['AbortCycle', 'ContinueNextStep', 'RetryLater'];
 
 const weightModel = {
@@ -176,10 +176,6 @@ function taskValue(name, amount = fixed()) {
   }
 }
 
-function timed(predicate, timing = 'Current') {
-  return { timing: variant(timing), predicate };
-}
-
 function step({
   task = 'Transfer',
   amount = fixed(),
@@ -189,8 +185,8 @@ function step({
 } = {}) {
   const clauses =
     preconditionMode === 'Any'
-      ? predicates.map((predicate) => [timed(predicate)])
-      : [predicates.map((predicate) => timed(predicate))];
+      ? predicates.map((predicate) => [predicate])
+      : [predicates];
   return {
     precondition: predicates.length === 0 ? undefined : clauses,
     task: { type: task, value: taskValue(task, amount) },
@@ -281,7 +277,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
       step({ task: 'SwapIn' }),
       step({
         task: 'Transfer',
-        amount: { type: 'PercentageOfCurrent', value: 1_000_000_000 },
+        amount: { type: 'Percent', value: 1_000_000_000 },
         predicates: [condition('BalanceAbove')],
         onError: 'RetryLater',
       }),
@@ -778,7 +774,6 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
           ({
             ArtifactValue: 'artifact-value',
             CurrentBalanceOrShares: 'current-balance-or-shares',
-            OpeningSnapshot: 'opening-snapshot',
             TaskPolicyCapacity: 'task-policy-capacity',
           })[dependency],
       ),
@@ -789,7 +784,6 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
       projected.valueObservation,
       {
         ArtifactTime: 'artifact-time',
-        LogicalCycleStart: 'logical-cycle-start',
         StepAttemptTime: 'step-attempt-time',
       }[contract.valueObservationWindow],
     );
@@ -927,26 +921,6 @@ test('trigger analysis projects one exact scalar trigger without runtime proof',
     () => analyze(artifactFor({ contract: malformedCrossing })),
     /invalid hysteresis/,
   );
-  const triggerAmountContract = contractWithTrigger({
-    type: 'ObservationChange',
-    value: { feed: observationFeed },
-  });
-  triggerAmountContract.steps = [
-    step({ amount: { type: 'PercentageAtOpening', value: 500_000_000 } }),
-  ];
-  const triggerAmountAnalysis = analyze(
-    artifactFor({ contract: triggerAmountContract }),
-  );
-  assert(
-    triggerAmountAnalysis.findings.some(
-      (finding) =>
-        finding.kind === 'TriggerAmountCompatibilityViolation' &&
-        finding.reason === 'AddressEventOnlyRequired' &&
-        finding.steps[0] === 0 &&
-        finding.sourceKinds[0] === 'ObservationChange',
-    ),
-  );
-
   const oneShot = analyze(
     artifactFor({
       contract: contractWithTrigger({

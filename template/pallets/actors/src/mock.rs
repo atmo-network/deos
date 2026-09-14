@@ -564,6 +564,7 @@ pub fn set_fail_staking_after_burn(value: bool) {
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = value);
 }
 
+#[cfg(feature = "runtime-benchmarks")]
 pub fn set_staking_share_asset_available(value: bool) {
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = value);
 }
@@ -1373,9 +1374,7 @@ impl crate::StepControlWeightProvider<crate::StepOf<Test>> for MockStepControlWe
         .saturating_add(u64::from(context.cursor))
         .saturating_add(u64::from(context.opening_tail_chunks))
         .saturating_add(u64::from(context.predicate_evaluation_units))
-        .saturating_add(u64::from(context.opening_snapshot_entries))
-        .saturating_add(u64::from(context.opening_predicate_results))
-        .saturating_add(u64::from(context.funding_snapshot_entries)),
+        .saturating_add(u64::from(context.opening_snapshot_entries)),
       100_022u64.saturating_add(u64::from(context.steps_in_fragment)),
     ))
   }
@@ -1467,7 +1466,6 @@ impl pallet_deos_actors::Config for Test {
   type MaxContractSteps = ConstU32<12>;
   type MaxFundingTrackedAssets = ConstU32<10>;
   type MaxOpeningSnapshotEntries = ConstU32<24>;
-  type MaxOpeningPredicateResults = ConstU32<48>;
   type MaxPreconditionClauses = ConstU32<4>;
   type MaxPredicatesPerClause = ConstU32<4>;
   type MaxPredicatesPerStep = ConstU32<4>;

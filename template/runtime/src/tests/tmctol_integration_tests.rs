@@ -46,10 +46,6 @@ fn all_preconditions(
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clause = predicates
     .into_iter()
-    .map(|predicate| pallet_deos_actors::TimedPredicate {
-      timing: pallet_deos_actors::ObservationTiming::Current,
-      predicate,
-    })
     .collect::<alloc::vec::Vec<_>>()
     .try_into()
     .expect("runtime predicates fit");
@@ -263,8 +259,8 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -274,7 +270,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_in: AmountResolution::Percent(Perbill::one()),
           slippage_tolerance: primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -283,7 +279,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         precondition: None,
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
           legs: alloc::vec![
             pallet_deos_actors::SplitLeg {
               to: Actors::sovereign_account_id_system(actor_ids::TOL_BUCKET_A_ACTORS_ID),
@@ -656,7 +652,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_in: AmountResolution::Percent(Perbill::one()),
           slippage_tolerance: Perbill::from_percent(5),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -668,7 +664,7 @@ fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
         },]),
         task: Task::Burn {
           asset: AssetKind::Native,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -2265,7 +2261,7 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
           lp_asset,
           asset_a,
           asset_b,
-          lp_amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+          lp_amount: AmountResolution::Percent(Perbill::from_percent(10)),
           min_amount_a: 1,
           min_amount_b: 1,
         },

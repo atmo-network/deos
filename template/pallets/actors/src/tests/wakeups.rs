@@ -1398,7 +1398,6 @@ fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
     assert_eq!(native_balance(&BOB), bob_before);
     assert!(Actors::actor_identity(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
-    assert!(Actors::actor_funding(actor_id).is_none());
     assert_eq!(Actors::combined_queue_occupancy(), 0);
     assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
       WakeupKey::Block(2)
@@ -2396,7 +2395,7 @@ fn wakeup_ownership_fails_closed_for_corrupt_actor_partitions() {
     let pointer = Actors::actor_hot(actor_id)
       .and_then(|hot| hot.wakeup_pointer)
       .expect("scheduled actor owns a wakeup pointer");
-    ActorFunding::<Test>::remove(actor_id);
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     assert_eq!(
@@ -2436,7 +2435,7 @@ fn mixed_wakeup_bucket_rolls_back_valid_neighbors_around_corruption() {
           Actors::actor_control_cell(*actor_id).expect("canonical primary before corruption")
         })
         .collect::<Vec<_>>();
-      ActorFunding::<Test>::remove(actors[corrupt_index]);
+      crate::ActorContractHeads::<Test>::remove(actors[corrupt_index]);
       let pointers = actors
         .iter()
         .map(|actor_id| {

@@ -8,14 +8,7 @@ use polkadot_sdk::{sp_runtime::Perbill, sp_weights::Weight};
 )]
 pub enum AmountResolution<Balance> {
   Fixed(Balance),
-  PercentageOfCurrent(Perbill),
-  PercentageAtOpening(Perbill),
-}
-
-impl<Balance> AmountResolution<Balance> {
-  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    matches!(self, Self::PercentageAtOpening(_))
-  }
+  Percent(Perbill),
 }
 
 #[derive(
@@ -103,24 +96,6 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
 impl<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>>
   Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>
 {
-  pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    match self {
-      Self::Transfer { amount, .. }
-      | Self::SplitTransfer { amount, .. }
-      | Self::Burn { amount, .. }
-      | Self::Mint { amount, .. }
-      | Self::Stake { amount, .. } => amount.requires_frozen_cycle_snapshot(),
-      Self::SwapIn { amount_in, .. } => amount_in.requires_frozen_cycle_snapshot(),
-      Self::SwapOut { amount_out, .. } => amount_out.requires_frozen_cycle_snapshot(),
-      Self::AddLiquidity {
-        amount_a, amount_b, ..
-      } => amount_a.requires_frozen_cycle_snapshot() || amount_b.requires_frozen_cycle_snapshot(),
-      Self::RemoveLiquidity { lp_amount, .. } => lp_amount.requires_frozen_cycle_snapshot(),
-      Self::DonateLiquidity { max_amount_a, .. } => max_amount_a.requires_frozen_cycle_snapshot(),
-      Self::Unstake { shares, .. } => shares.requires_frozen_cycle_snapshot(),
-      Self::StopCycle => false,
-    }
-  }
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -1070,41 +1045,14 @@ pub enum Predicate<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> 
   TypeInfo,
   MaxEncodedLen,
 )]
-pub enum ObservationTiming {
-  Opening,
-  Current,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
 pub enum PredicateError {
   InvalidObservation,
-}
-
-#[derive(
-  Clone,
-  Copy,
-  Debug,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  Eq,
-  Ord,
-  PartialEq,
-  PartialOrd,
-  TypeInfo,
-  MaxEncodedLen,
-)]
-pub struct TimedPredicate<P> {
-  pub timing: ObservationTiming,
-  pub predicate: P,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxClauses, MaxPerClause))]
 pub struct Precondition<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> {
-  pub clauses: BoundedVec<BoundedVec<TimedPredicate<P>, MaxPerClause>, MaxClauses>,
+  pub clauses: BoundedVec<BoundedVec<P, MaxPerClause>, MaxClauses>,
 }
 
 impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Precondition<P, MaxClauses, MaxPerClause> {
@@ -1116,21 +1064,8 @@ impl<P, MaxClauses: Get<u32>, MaxPerClause: Get<u32>> Precondition<P, MaxClauses
       .sum()
   }
 
-  pub fn opening_predicate_count(&self) -> u32 {
-    self
-      .clauses
-      .iter() // deos-bypass: bounded-iter — MaxClauses bounds the outer visit.
-      .flat_map(|clause| {
-        clause.iter() // deos-bypass: bounded-iter — MaxPerClause bounds each inner visit.
-      })
-      .filter(|timed| timed.timing == ObservationTiming::Opening)
-      .count() as u32
-  }
-
   pub fn evaluation_units(&self) -> u32 {
-    self
-      .predicate_count()
-      .saturating_add(self.opening_predicate_count())
+    self.predicate_count()
   }
 }
 
@@ -1213,11 +1148,7 @@ impl<
   >
 {
   pub fn requires_frozen_cycle_snapshot(&self) -> bool {
-    self
-      .precondition
-      .as_ref()
-      .is_some_and(|precondition| precondition.opening_predicate_count() > 0)
-      || self.task.requires_frozen_cycle_snapshot()
+    false
   }
 }
 
@@ -1709,14 +1640,6 @@ impl<Trigger, BlockNumber, Steps, FundingPolicy>
       pipeline_machine_envelope,
     })
   }
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct ActorFundingState<FundingAccumulated, FundingTrackedAssets> {
-  pub funding_accumulated: FundingAccumulated,
-  pub funding_tracked_assets: FundingTrackedAssets,
 }
 
 #[derive(

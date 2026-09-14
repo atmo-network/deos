@@ -175,7 +175,6 @@ fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
           crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
           polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(actor_id)),
           [
-            crate::ActorFunding::<Test>::hashed_key_for(actor_id),
             crate::ActorRunHeads::<Test>::hashed_key_for(actor_id),
             crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
           ],
@@ -359,10 +358,7 @@ fn suspended_weight_refusal_avoids_run_payload_and_funding_reads() {
             polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(
               actor_id,
             )),
-            [
-              crate::ActorFunding::<Test>::hashed_key_for(actor_id),
-              crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-            ],
+            [crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id)],
           )
         });
         ext.commit_all().expect("commit retry fixture");
@@ -566,7 +562,6 @@ fn running_fifo_head_avoids_cold_reads_before_eligibility_and_weight_admission()
     let cold_keys = [
       crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
       crate::ActorContractTailChunks::<Test>::hashed_key_for(actor_id, 0),
-      crate::ActorFunding::<Test>::hashed_key_for(actor_id),
       crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
     ];
     (actor_id, run.eligible_at, Actors::queue_tail(), cold_keys)
@@ -916,17 +911,6 @@ fn retained_ingress_rejects_incomplete_authority_without_writes() {
           Actors::try_wakeup_substrate_schedule_inner(actor_id, 10)
         }
       };
-      let funding = crate::ActorFunding::<Test>::take(actor_id).expect("funding authority");
-      let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-      assert_eq!(
-        invoke(),
-        Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
-      );
-      assert_eq!(
-        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-        corrupt
-      );
-      crate::ActorFunding::<Test>::insert(actor_id, funding);
       let payload = crate::ActorRunPayloads::<Test>::take(actor_id).expect("Run payload authority");
       let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       assert_eq!(
@@ -981,7 +965,7 @@ fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption()
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       before
     );
-    crate::ActorFunding::<Test>::remove(actor_id);
+    let head = crate::ActorContractHeads::<Test>::take(actor_id).expect("Contract authority");
     let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(
       invoke(),
@@ -991,7 +975,7 @@ fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption()
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       corrupt
     );
-    crate::ActorFunding::<Test>::insert(actor_id, state.funding.clone());
+    crate::ActorContractHeads::<Test>::insert(actor_id, head);
     assert_eq!(invoke(), Ok((crate::StepControlPlacement::Wakeup, vec![])));
     assert_eq!(
       Actors::actor_run_state(actor_id).encode(),
@@ -2032,7 +2016,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
       actor_id
     ));
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::actor_funding(actor_id).is_none());
     assert!(Actors::actor_identity(actor_id).is_some());
     assert_eq!(Actors::actor_identity_count(), 1);
     assert_eq!(Actors::active_actor_count(), 0);
@@ -5634,7 +5617,7 @@ fn scheduler_fails_closed_without_consuming_a_corrupt_live_head() {
     let head_before = Actors::queue_head();
     let events_before = frame_system::Pallet::<Test>::events();
 
-    ActorFunding::<Test>::remove(actor_id);
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     let corrupt_root =
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(
@@ -5691,7 +5674,7 @@ fn mixed_fifo_stops_at_corrupt_actor_without_touching_valid_suffix() {
             .sovereign_account
         })
         .collect::<Vec<_>>();
-      ActorFunding::<Test>::remove(actors[corrupt_index]);
+      crate::ActorContractHeads::<Test>::remove(actors[corrupt_index]);
       let suffix_hot = actors[corrupt_index..]
         .iter()
         .map(|actor_id| Actors::actor_hot(*actor_id).expect("queued actor"))

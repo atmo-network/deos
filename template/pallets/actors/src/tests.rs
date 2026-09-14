@@ -1,21 +1,20 @@
 use crate::{
   ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
   ActorClassificationError, ActorContract, ActorControlLocators, ActorEligibility,
-  ActorExecutionPhase, ActorFunding, ActorId, ActorIdentities, ActorReadyHead, ActorReadyOccupancy,
+  ActorExecutionPhase, ActorId, ActorIdentities, ActorReadyHead, ActorReadyOccupancy,
   ActorReadyTail, ActorRunAuthority, ActorRunStateStore, ActorTriggerActivation, ActorType,
   AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition, CancellationReason,
   CloseReason, CrossingDirection, CrossingMemberPages, CrossingMemberships, CrossingPhase,
   CrossingTransition, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
   FeeEnvelopeInput, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
   IdleStarvationState, InitialLifecycle, InputLimit, LoadedActorStateOf, Mutability, NextActorId,
-  ObservationCrossing, ObservationSubscriberPageList, ObservationTiming, OpeningSurface,
-  OutcomeTotals, OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow,
-  SimulationError, SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf,
-  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome,
-  StepSkippedReason, SuspensionReason, SystemSovereignState, Task, TaskFailure, TaskOf,
-  TimedPredicate, Trigger, TriggerFamily, TriggerRuntimeState, WakeupClock, WakeupKey, WakeupPage,
-  WakeupPointer, adapters::AssetOps, compose_attempt_fee_envelope, fee_native_protected_minimum,
-  mock::*, settle_attempt_fee_step,
+  ObservationCrossing, ObservationSubscriberPageList, OpeningSurface, OutcomeTotals,
+  OwnerSlotBitmaps, Precondition, Predicate, RetryClass, ScheduleWindow, SimulationError,
+  SimulationMode, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
+  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepOutcome, StepSkippedReason, SuspensionReason,
+  SystemSovereignState, Task, TaskFailure, TaskOf, Trigger, TriggerFamily, TriggerRuntimeState,
+  WakeupClock, WakeupKey, WakeupPage, WakeupPointer, adapters::AssetOps,
+  compose_attempt_fee_envelope, fee_native_protected_minimum, mock::*, settle_attempt_fee_step,
 };
 use alloc::collections::BTreeSet;
 
@@ -495,26 +494,13 @@ fn timer_schedule(every_ticks: u32) -> RuntimeSchedule {
   }
 }
 
-fn timed_all_conditions(
-  timing: ObservationTiming,
-  predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
-) -> Option<crate::PreconditionOf<Test>> {
-  let clause = BoundedVec::try_from(
-    predicates
-      .into_iter()
-      .map(|predicate| TimedPredicate { timing, predicate })
-      .collect::<Vec<_>>(),
-  )
-  .expect("predicates fit");
-  Some(Precondition {
-    clauses: BoundedVec::try_from(vec![clause]).expect("clause fits"),
-  })
-}
-
 fn all_conditions(
   predicates: Vec<Predicate<TestAsset, Balance, u32, u32>>,
 ) -> Option<crate::PreconditionOf<Test>> {
-  timed_all_conditions(ObservationTiming::Current, predicates)
+  let clause = BoundedVec::try_from(predicates).expect("predicates fit");
+  Some(Precondition {
+    clauses: BoundedVec::try_from(vec![clause]).expect("clause fits"),
+  })
 }
 
 fn any_conditions(
@@ -522,13 +508,7 @@ fn any_conditions(
 ) -> Option<crate::PreconditionOf<Test>> {
   let clauses = predicates
     .into_iter()
-    .map(|predicate| {
-      BoundedVec::try_from(vec![TimedPredicate {
-        timing: ObservationTiming::Current,
-        predicate,
-      }])
-      .expect("predicate fits")
-    })
+    .map(|predicate| BoundedVec::try_from(vec![predicate]).expect("predicate fits"))
     .collect::<Vec<_>>();
   Some(Precondition {
     clauses: BoundedVec::try_from(clauses).expect("clauses fit"),
@@ -696,10 +676,6 @@ fn system_active_contract_with_completion(
   })
 }
 
-fn actor_funding(actor_id: u64) -> crate::ActorFundingStateOf<Test> {
-  Actors::actor_funding(actor_id).expect("active actor funding exists")
-}
-
 fn sovereign_account(actor_id: u64) -> AccountId {
   Actors::active_actor_view(actor_id)
     .map(|inst| inst.sovereign_account)
@@ -757,7 +733,6 @@ fn actor_state_hold_total(actor_id: ActorId) -> Balance {
     .saturating_add(hold.breakdown.contract_head)
     .saturating_add(hold.breakdown.contract_body)
     .saturating_add(hold.breakdown.detector)
-    .saturating_add(hold.breakdown.funding)
     .saturating_add(hold.breakdown.run)
 }
 
@@ -1172,7 +1147,7 @@ mod proptest_actor {
     run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorControlLocators, ActorFunding, ActorIdentities, ActorReadyOccupancy, ActorRunStateStore,
+    ActorControlLocators, ActorIdentities, ActorReadyOccupancy, ActorRunStateStore,
     AmountResolution, AssetFilter, CrossingDirection, CrossingPhase, CrossingTransition,
     CycleState, Event, FundingSourcePolicy, Mutability, ObservationCrossing, SourceFilter,
     StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, mock::*,
@@ -1520,7 +1495,7 @@ mod proptest_actor {
         task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+          amount_in: AmountResolution::Percent(Perbill::from_percent(10)),
           slippage_tolerance: Perbill::one(),
         },
         on_error: RETRY_LATER,
@@ -1559,14 +1534,12 @@ mod proptest_actor {
       ActorControlLocators::<Test>::iter_keys().collect();
     let contract_ids: std::collections::BTreeSet<_> =
       crate::ActorContractHeads::<Test>::iter_keys().collect();
-    let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
     let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
     assert!(hot_ids.is_disjoint(&dormant_ids));
     let identity_ids: std::collections::BTreeSet<_> =
       hot_ids.union(&dormant_ids).copied().collect();
     let run_ids: std::collections::BTreeSet<_> = ActorRunStateStore::<Test>::iter_keys().collect();
     assert_eq!(hot_ids, contract_ids);
-    assert_eq!(hot_ids, funding_ids);
     assert!(run_ids.is_subset(&hot_ids));
     assert!(hot_ids.is_subset(&identity_ids));
     assert_eq!(Actors::active_actor_count() as usize, hot_ids.len());
@@ -1617,13 +1590,6 @@ mod proptest_actor {
       assert_eq!(
         matches!(hot.cycle_state, CycleState::Running | CycleState::Suspended),
         run_ids.contains(actor_id)
-      );
-      let funding = ActorFunding::<Test>::get(actor_id).expect("funding key resolves");
-      assert!(
-        funding
-          .funding_accumulated
-          .keys()
-          .all(|asset| funding.funding_tracked_assets.contains(asset))
       );
       if let Some(run_state) = ActorRunStateStore::<Test>::get(*actor_id) {
         let contract = Actors::load_actor_contract(*actor_id).expect("contract key resolves");
@@ -2043,7 +2009,6 @@ mod proptest_actor {
             ActorIdentities::<Test>::iter().chain(ActorControlLocators::<Test>::iter_keys()
               .map(|id| (id, Actors::actor_identity(id).expect("active identity")))).collect();
           let before_continuation = ActorRunStateStore::<Test>::get(system_id);
-          let before_funding = ActorFunding::<Test>::get(system_id);
           let before_system_balance = Balances::free_balance(system_sovereign);
           let before_bob_balance = Balances::free_balance(BOB);
           let before_event_count = frame_system::Pallet::<Test>::events().len();
@@ -2328,10 +2293,6 @@ mod proptest_actor {
             } else {
               assert_eq!(Balances::free_balance(system_sovereign), before_system_balance);
               assert_eq!(Balances::free_balance(BOB), before_bob_balance);
-              assert_eq!(
-                ActorFunding::<Test>::get(system_id).as_ref().map(Encode::encode),
-                before_funding.as_ref().map(Encode::encode)
-              );
             }
           }
           if matches!(operation, ModelOp::Pause | ModelOp::Resume)
@@ -2702,9 +2663,7 @@ fn parity_target_step(case: StepParityCase) -> StepOf<Test> {
     ),
     StepParityStimulus::ResolutionSkipped => (
       None,
-      transfer(AmountResolution::PercentageOfCurrent(Perbill::from_parts(
-        1,
-      ))),
+      transfer(AmountResolution::Percent(Perbill::from_parts(1))),
     ),
     StepParityStimulus::FundingUnavailable => (None, transfer(AmountResolution::Fixed(10))),
     StepParityStimulus::SuccessfulTask => (None, transfer(AmountResolution::Fixed(5))),

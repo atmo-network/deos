@@ -1,10 +1,9 @@
-/* Generated from Actors runtime metadata 4f8e91a947e2c42196957176b935097e834c4e36c1cf321a0a6e52515337f84c; do not edit. */
+/* Generated from Actors runtime metadata cbb872e4210c95bf15423db57fe66fbb2acf2073e5d8b583f070be7ad440ba8c; do not edit. */
 export const ACTORS_MAX_CONTRACT_STEPS = 12;
 export const ACTORS_MAX_EXECUTION_DELAY_BLOCKS = 52596000;
 export const ACTORS_MAX_TEMPORAL_DELAY_TICKS = 631152000;
 export const ACTORS_MAX_RETRY_ATTEMPTS = 10;
 export const ACTORS_MAX_OPENING_SNAPSHOT_ENTRIES = 24;
-export const ACTORS_MAX_OPENING_PREDICATE_RESULTS = 48;
 export const ACTORS_MAX_PRECONDITION_CLAUSES = 4;
 export const ACTORS_MAX_PREDICATES_PER_CLAUSE = 4;
 export const ACTORS_MAX_PREDICATES_PER_STEP = 4;

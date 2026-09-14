@@ -49,7 +49,6 @@ parameter_types! {
   pub const ActorMaxContractSteps: u32 = 12;
   pub const ActorMaxFundingTrackedAssets: u32 = 40;
   pub const ActorMaxOpeningSnapshotEntries: u32 = 24;
-  pub const ActorMaxOpeningPredicateResults: u32 = 48;
   pub const ActorMaxPreconditionClauses: u32 = 4;
   pub const ActorMaxPredicatesPerClause: u32 = 4;
   pub const ActorMaxPredicatesPerStep: u32 = 4;
@@ -182,14 +181,6 @@ impl RuntimeStepControlWeight {
     )
   }
 
-  fn nonzero_parameterized(value: u32, weight: impl FnOnce(u32) -> Weight) -> Weight {
-    if value == 0 {
-      Weight::zero()
-    } else {
-      weight(value)
-    }
-  }
-
   fn current_predicate_weight(units: u32) -> Weight {
     type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let count = units.min(ActorMaxPredicatesPerStep::get());
@@ -232,27 +223,6 @@ impl RuntimeStepControlWeight {
     } else {
       Self::opening_snapshot_models(entries)
         .into_iter()
-        .fold(Weight::zero(), Self::component_max)
-    }
-  }
-
-  fn opening_predicate_models(results: u32) -> [Option<Weight>; 3] {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    [
-      Some(ControlWeights::opening_predicate_capture(results)),
-      Some(ControlWeights::opening_max_encoded_balance_capture(results)),
-      (results >= 2).then(|| ControlWeights::opening_observation_heavy_capture(results - 1)),
-    ]
-  }
-
-  fn opening_predicate_weight(results: u32) -> Weight {
-    type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
-    if results == 0 {
-      ControlWeights::opening_predicate_traversal()
-    } else {
-      Self::opening_predicate_models(results)
-        .into_iter()
-        .flatten()
         .fold(Weight::zero(), Self::component_max)
     }
   }
@@ -391,17 +361,6 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
         )
       })
       .collect::<alloc::vec::Vec<_>>();
-    let opening_predicates = (0..=ActorMaxOpeningPredicateResults::get())
-      .map(|count| {
-        (
-          Self::opening_predicate_weight(count),
-          (count > 0).then(|| Self::opening_predicate_models(count)),
-        )
-      })
-      .collect::<alloc::vec::Vec<_>>();
-    let funding = (1..=ActorMaxFundingTrackedAssets::get())
-      .map(ControlWeights::funding_snapshot_open)
-      .collect::<alloc::vec::Vec<_>>();
     let current_predicates = (1..=ActorMaxPredicatesPerStep::get())
       .map(|count| {
         (
@@ -447,8 +406,6 @@ impl StepControlWeightProvider<pallet_deos_actors::StepOf<Runtime>> for RuntimeS
         ),
         opening_tail_chunks,
         opening_snapshot,
-        opening_predicates,
-        funding,
         current_predicates,
         ControlWeights::run_progress(),
         ControlWeights::run_suspend(),
@@ -539,11 +496,6 @@ impl RuntimeStepControlWeight {
           .saturating_sub(1)
           .saturating_mul(2)
           .min(ActorMaxOpeningSnapshotEntries::get())
-      && context.opening_predicate_results
-        == steps
-          .saturating_mul(ActorMaxPredicatesPerStep::get())
-          .min(ActorMaxOpeningPredicateResults::get())
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
   }
 
   fn maximum_control_without_collection(
@@ -575,8 +527,6 @@ impl RuntimeStepControlWeight {
       || context.opening_tail_chunks > maximum_opening_tail_chunks
       || context.cursor > 0 && context.opening_tail_chunks != 0
       || context.opening_snapshot_entries > ActorMaxOpeningSnapshotEntries::get()
-      || context.opening_predicate_results > ActorMaxOpeningPredicateResults::get()
-      || context.funding_snapshot_entries > ActorMaxFundingTrackedAssets::get()
     {
       return None;
     }
@@ -584,9 +534,7 @@ impl RuntimeStepControlWeight {
       && context.steps_in_fragment == 1
       && context.opening_tail_chunks == maximum_opening_tail_chunks
       && context.predicate_evaluation_units == maximum_evaluation_units
-      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
-      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get();
     let plan = if context.cursor == 0 {
       if context.steps_in_fragment != 1 {
         return None;
@@ -612,15 +560,6 @@ impl RuntimeStepControlWeight {
     } else {
       Self::opening_snapshot_weight(context.opening_snapshot_entries)
     };
-    let opening_predicates = if context.cursor > 0 && context.opening_predicate_results == 0 {
-      Weight::zero()
-    } else {
-      Self::opening_predicate_weight(context.opening_predicate_results)
-    };
-    let funding = Self::nonzero_parameterized(
-      context.funding_snapshot_entries,
-      ControlWeights::funding_snapshot_open,
-    );
     let current_predicates = Self::current_predicate_weight(context.predicate_evaluation_units);
     let commit = Self::component_max(
       Self::component_max(
@@ -636,8 +575,6 @@ impl RuntimeStepControlWeight {
     let composed = plan
       .saturating_add(opening_tail)
       .saturating_add(opening_snapshot)
-      .saturating_add(opening_predicates)
-      .saturating_add(funding)
       .saturating_add(current_predicates)
       .saturating_add(commit)
       .saturating_add(placement);
@@ -650,20 +587,14 @@ impl RuntimeStepControlWeight {
       .min(ActorMaxContractSteps::get());
     let minimal_opening = context.cursor == 0
       && context.predicate_evaluation_units == 0
-      && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0;
+      && context.opening_snapshot_entries == 0;
     let maximal_opening = context.cursor == 0
       && context.opening_tail_chunks > 0
       && context.predicate_evaluation_units == maximum_evaluation_units
       && context.opening_snapshot_entries
         == opening_geometry_steps
           .saturating_mul(2)
-          .min(ActorMaxOpeningSnapshotEntries::get())
-      && context.opening_predicate_results
-        == opening_geometry_steps
-          .saturating_mul(ActorMaxPredicatesPerStep::get())
-          .min(ActorMaxOpeningPredicateResults::get())
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+          .min(ActorMaxOpeningSnapshotEntries::get());
     let maximal_opening_completion = Self::maximal_opening_completion(context);
     let user_completion = if context.opening_tail_chunks == 0 {
       ControlWeights::scheduler_inner_opening_user_complete_header_max()
@@ -829,16 +760,13 @@ impl RuntimeStepControlWeight {
       && context.steps_in_fragment == 1
       && context.opening_tail_chunks == maximum_opening_tail_chunks
       && context.predicate_evaluation_units == maximum_evaluation_units
-      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get()
-      && context.opening_predicate_results == ActorMaxOpeningPredicateResults::get()
-      && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get();
+      && context.opening_snapshot_entries == ActorMaxOpeningSnapshotEntries::get();
     if execution.phase == StepControlPhase::Opening
       && execution.outcome == StepControlOutcome::Failed
       && execution.placement == StepControlPlacement::None
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
       && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
       return separate(ControlWeights::scheduler_inner_opening_failed_min(
         context.opening_tail_chunks,
@@ -850,7 +778,6 @@ impl RuntimeStepControlWeight {
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
       && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
       return separate(ControlWeights::scheduler_inner_opening_retry_min(
         context.opening_tail_chunks,
@@ -862,7 +789,6 @@ impl RuntimeStepControlWeight {
       && context.cursor == 0
       && context.predicate_evaluation_units == 0
       && context.opening_snapshot_entries == 0
-      && context.opening_predicate_results == 0
     {
       return separate(if context.opening_tail_chunks == 0 {
         ControlWeights::scheduler_inner_opening_user_complete_header_max()
@@ -885,10 +811,7 @@ impl RuntimeStepControlWeight {
             .saturating_mul(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK),
         )
         .min(ActorMaxContractSteps::get());
-      if context.predicate_evaluation_units == 0
-        && context.opening_snapshot_entries == 0
-        && context.opening_predicate_results == 0
-      {
+      if context.predicate_evaluation_units == 0 && context.opening_snapshot_entries == 0 {
         return separate(ControlWeights::scheduler_inner_opening_progress_min(
           context.opening_tail_chunks,
         ));
@@ -898,11 +821,6 @@ impl RuntimeStepControlWeight {
           == opening_geometry_steps
             .saturating_mul(2)
             .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
       {
         // The direct profile does not bound independent amount/predicate sources.
         // Retain the admitted composed envelope until complete-path coverage is regenerated.
@@ -927,11 +845,6 @@ impl RuntimeStepControlWeight {
           .saturating_sub(1)
           .saturating_mul(2)
           .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
       {
         return separate(ControlWeights::scheduler_inner_opening_failed_max(
           context.opening_tail_chunks,
@@ -956,11 +869,6 @@ impl RuntimeStepControlWeight {
           .saturating_sub(1)
           .saturating_mul(2)
           .min(ActorMaxOpeningSnapshotEntries::get())
-        && context.opening_predicate_results
-          == opening_geometry_steps
-            .saturating_mul(ActorMaxPredicatesPerStep::get())
-            .min(ActorMaxOpeningPredicateResults::get())
-        && context.funding_snapshot_entries == ActorMaxFundingTrackedAssets::get()
       {
         return separate(ControlWeights::scheduler_inner_opening_retry_max(
           context.opening_tail_chunks,
@@ -1065,19 +973,6 @@ impl RuntimeStepControlWeight {
     } else {
       Weight::zero()
     };
-    let opening_predicates = if execution.phase == StepControlPhase::Opening {
-      Self::opening_predicate_weight(context.opening_predicate_results)
-    } else {
-      Weight::zero()
-    };
-    let funding = if execution.phase == StepControlPhase::Opening {
-      Self::nonzero_parameterized(
-        context.funding_snapshot_entries,
-        ControlWeights::funding_snapshot_open,
-      )
-    } else {
-      Weight::zero()
-    };
     let current_predicates = Self::current_predicate_weight(context.predicate_evaluation_units);
     let commit = match execution.outcome {
       StepControlOutcome::Continued => ControlWeights::run_progress(),
@@ -1093,8 +988,6 @@ impl RuntimeStepControlWeight {
       plan
         .saturating_add(opening_tail)
         .saturating_add(opening_snapshot)
-        .saturating_add(opening_predicates)
-        .saturating_add(funding)
         .saturating_add(current_predicates)
         .saturating_add(commit)
         .saturating_add(placement),
@@ -1187,7 +1080,6 @@ impl AdmissionCertificateAuthorityProvider for RuntimeAdmissionCertificateAuthor
         ActorMaxContractSteps::get(),
         ActorMaxFundingTrackedAssets::get(),
         ActorMaxOpeningSnapshotEntries::get(),
-        ActorMaxOpeningPredicateResults::get(),
         ActorMaxPreconditionClauses::get(),
         ActorMaxPredicatesPerClause::get(),
         ActorMaxPredicatesPerStep::get(),
@@ -2626,7 +2518,7 @@ impl
     );
     assert_eq!(
       *amount,
-      AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT),
+      AmountResolution::Percent(ecosystem::params::FEE_SINK_BUFFER_PCT),
       "Fee Sink must process the canonical buffer share",
     );
     let actual_legs = legs
@@ -2687,10 +2579,6 @@ impl TmctolGenesisSystemActors {
   ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
     let clause = predicates
       .into_iter()
-      .map(|predicate| pallet_deos_actors::TimedPredicate {
-        timing: pallet_deos_actors::ObservationTiming::Current,
-        predicate,
-      })
       .collect::<alloc::vec::Vec<_>>()
       .try_into()
       .expect("runtime predicate clause fits MaxPredicatesPerClause");
@@ -2774,7 +2662,7 @@ impl TmctolGenesisSystemActors {
       ]),
       task: Task::SplitTransfer {
         asset: AssetKind::Native,
-        amount: AmountResolution::PercentageOfCurrent(ecosystem::params::FEE_SINK_BUFFER_PCT,),
+        amount: AmountResolution::Percent(ecosystem::params::FEE_SINK_BUFFER_PCT,),
         legs: legs
           .try_into()
           .expect("phase-aware fee-sink split legs fit"),
@@ -2804,7 +2692,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_in: AmountResolution::Percent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance: ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
         },
@@ -2816,7 +2704,7 @@ impl TmctolGenesisSystemActors {
       precondition: dust_guard(AssetKind::Native),
       task: Task::Burn {
         asset: AssetKind::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -2867,8 +2755,8 @@ impl TmctolGenesisSystemActors {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -2878,7 +2766,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_in: AmountResolution::Percent(Perbill::one()),
           asset_out: AssetKind::Native,
           slippage_tolerance,
         },
@@ -2889,7 +2777,7 @@ impl TmctolGenesisSystemActors {
         precondition: dust_guard(lp_asset),
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
           legs: alloc::vec![
             SplitLeg {
               to: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
@@ -2948,7 +2836,7 @@ impl TmctolGenesisSystemActors {
       task: Task::Transfer {
         to: treasury_account,
         asset: lp_asset,
-        amount: AmountResolution::PercentageOfCurrent(unwind_pct),
+        amount: AmountResolution::Percent(unwind_pct),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }]
@@ -2979,7 +2867,7 @@ impl TmctolGenesisSystemActors {
         lp_asset,
         asset_a,
         asset_b,
-        lp_amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        lp_amount: AmountResolution::Percent(Perbill::one()),
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -3015,7 +2903,7 @@ impl TmctolGenesisSystemActors {
       precondition: dust_guard(bldr_asset),
       task: Task::SplitTransfer {
         asset: bldr_asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
         legs: alloc::vec![
           SplitLeg {
             to: bldr_liquidity_account,
@@ -3074,8 +2962,8 @@ impl TmctolGenesisSystemActors {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: bldr_asset,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -3085,7 +2973,7 @@ impl TmctolGenesisSystemActors {
         task: Task::Transfer {
           to: bldr_anchor,
           asset: lp_asset,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -3166,7 +3054,7 @@ impl TmctolGenesisSystemActors {
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
-        max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        max_amount_a: AmountResolution::Percent(Perbill::one()),
         max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -3204,7 +3092,7 @@ impl TmctolGenesisSystemActors {
         precondition: native_dust,
         task: Task::SwapIn {
           asset_in: AssetKind::Native,
-          amount_in: AmountResolution::PercentageOfCurrent(buyback_pct),
+          amount_in: AmountResolution::Percent(buyback_pct),
           asset_out: target_asset,
           slippage_tolerance: slippage,
         },
@@ -3215,7 +3103,7 @@ impl TmctolGenesisSystemActors {
         precondition: target_dust,
         task: Task::Burn {
           asset: target_asset,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -3413,7 +3301,6 @@ impl pallet_deos_actors::Config for Runtime {
   type MaxActiveActors = ActorMaxActiveActors;
   type MaxActorIdentities = ActorMaxActiveActors;
   type MaxSystemSovereigns = ActorMaxActiveActors;
-  type MaxOpeningPredicateResults = ActorMaxOpeningPredicateResults;
   type MaxPreconditionClauses = ActorMaxPreconditionClauses;
   type MaxPredicatesPerClause = ActorMaxPredicatesPerClause;
   type MaxPredicatesPerStep = ActorMaxPredicatesPerStep;

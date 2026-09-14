@@ -1,7 +1,6 @@
 use super::{
   contract::{
-    CrossingDirection, CrossingPhase, OpeningSurface, PredicateError, ScheduleWindow, Trigger,
-    TriggerFamily,
+    CrossingDirection, CrossingPhase, OpeningSurface, ScheduleWindow, Trigger, TriggerFamily,
   },
   scheduler::{TriggerWakeupPointer, WakeupKey, WakeupPointer},
 };
@@ -430,8 +429,6 @@ pub struct ActorRunHead<BlockNumber> {
   pub payload_commitment: [u8; 32],
   pub cycle_nonce: u64,
   pub cursor: u32,
-  pub opening_predicate_cursor: u32,
-  pub opening_predicate_result_count: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub last_committed_step_block: Option<BlockNumber>,
@@ -457,16 +454,11 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
       }
   }
 
-  fn opening_predicate_cursor_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor <= self.opening_predicate_result_count
-  }
-
   pub fn running_is_coherent(&self) -> bool
   where
     BlockNumber: PartialOrd,
   {
-    self.opening_predicate_cursor_is_coherent()
-      && self.suspension.is_none()
+    self.suspension.is_none()
       && self
         .last_committed_step_block
         .as_ref()
@@ -474,82 +466,57 @@ impl<BlockNumber> ActorRunHead<BlockNumber> {
   }
 
   pub fn suspension_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor_is_coherent()
-      && matches!(
-        (&self.last_step_outcome, self.suspension),
-        (
-          Some(StepOutcome::FundingUnavailable),
-          Some(SuspensionReason::FundingUnavailable)
-        ) | (
-          Some(StepOutcome::Failed(crate::TaskFailure {
-            retry: crate::RetryClass::Temporary,
-            ..
-          })),
-          Some(SuspensionReason::Temporary)
-        )
+    matches!(
+      (&self.last_step_outcome, self.suspension),
+      (
+        Some(StepOutcome::FundingUnavailable),
+        Some(SuspensionReason::FundingUnavailable)
+      ) | (
+        Some(StepOutcome::Failed(crate::TaskFailure {
+          retry: crate::RetryClass::Temporary,
+          ..
+        })),
+        Some(SuspensionReason::Temporary)
       )
+    )
   }
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries, MaxOpeningPredicateResults))]
-pub struct ActorRunPayload<
-  AssetId,
-  Balance,
-  MaxSnapshotEntries: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> {
+#[scale_info(skip_type_params(MaxSnapshotEntries))]
+pub struct ActorRunPayload<AssetId, Balance, MaxSnapshotEntries: Get<u32>> {
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-  pub opening_predicate_results:
-    BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
 }
 
 #[derive(Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries, MaxOpeningPredicateResults))]
-pub struct ActorRunState<
-  AssetId,
-  Balance,
-  BlockNumber,
-  MaxSnapshotEntries: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> {
+#[scale_info(skip_type_params(MaxSnapshotEntries))]
+pub struct ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
   pub contract_authority: ActorRunAuthority<[u8; 32]>,
   pub cycle_nonce: u64,
   pub cursor: u32,
-  pub opening_predicate_cursor: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub last_committed_step_block: Option<BlockNumber>,
   pub eligible_at: BlockNumber,
   pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
-  pub opening_predicate_results:
-    BoundedVec<Result<bool, PredicateError>, MaxOpeningPredicateResults>,
   pub cumulative_outcomes: OutcomeTotals,
   pub last_step_outcome: Option<StepOutcome>,
   pub suspension: Option<SuspensionReason>,
 }
 
-impl<
-  AssetId: Clone + Ord,
-  Balance: Clone,
-  BlockNumber: Clone,
-  MaxSnapshotEntries: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> Clone
-  for ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries, MaxOpeningPredicateResults>
+impl<AssetId: Clone + Ord, Balance: Clone, BlockNumber: Clone, MaxSnapshotEntries: Get<u32>> Clone
+  for ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
 {
   fn clone(&self) -> Self {
     Self {
       contract_authority: self.contract_authority,
       cycle_nonce: self.cycle_nonce,
       cursor: self.cursor,
-      opening_predicate_cursor: self.opening_predicate_cursor,
       unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
       last_attempt_block: self.last_attempt_block.clone(),
       last_committed_step_block: self.last_committed_step_block.clone(),
       eligible_at: self.eligible_at.clone(),
       opening_snapshot: self.opening_snapshot.clone(),
-      opening_predicate_results: self.opening_predicate_results.clone(),
       cumulative_outcomes: self.cumulative_outcomes,
       last_step_outcome: self.last_step_outcome.clone(),
       suspension: self.suspension,
@@ -557,25 +524,17 @@ impl<
   }
 }
 
-impl<
-  AssetId: Encode,
-  Balance: Encode,
-  BlockNumber,
-  MaxSnapshotEntries: Get<u32>,
-  MaxOpeningPredicateResults: Get<u32>,
-> ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries, MaxOpeningPredicateResults>
+impl<AssetId: Encode, Balance: Encode, BlockNumber, MaxSnapshotEntries: Get<u32>>
+  ActorRunState<AssetId, Balance, BlockNumber, MaxSnapshotEntries>
 {
   pub fn into_tiers(
     self,
   ) -> (
     ActorRunHead<BlockNumber>,
-    ActorRunPayload<AssetId, Balance, MaxSnapshotEntries, MaxOpeningPredicateResults>,
+    ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
   ) {
-    let opening_predicate_result_count =
-      u32::try_from(self.opening_predicate_results.len()).unwrap_or(u32::MAX);
     let payload = ActorRunPayload {
       opening_snapshot: self.opening_snapshot,
-      opening_predicate_results: self.opening_predicate_results,
     };
     let payload_commitment =
       (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256);
@@ -585,8 +544,6 @@ impl<
         payload_commitment,
         cycle_nonce: self.cycle_nonce,
         cursor: self.cursor,
-        opening_predicate_cursor: self.opening_predicate_cursor,
-        opening_predicate_result_count,
         unsuccessful_attempts_at_cursor: self.unsuccessful_attempts_at_cursor,
         last_attempt_block: self.last_attempt_block,
         last_committed_step_block: self.last_committed_step_block,
@@ -601,12 +558,10 @@ impl<
 
   pub fn from_tiers(
     head: ActorRunHead<BlockNumber>,
-    payload: ActorRunPayload<AssetId, Balance, MaxSnapshotEntries, MaxOpeningPredicateResults>,
+    payload: ActorRunPayload<AssetId, Balance, MaxSnapshotEntries>,
   ) -> Option<Self> {
     if (ACTOR_RUN_PAYLOAD_HASH_DOMAIN, &payload).using_encoded(frame::hashing::blake2_256)
       != head.payload_commitment
-      || usize::try_from(head.opening_predicate_result_count).ok()
-        != Some(payload.opening_predicate_results.len())
     {
       return None;
     }
@@ -614,13 +569,11 @@ impl<
       contract_authority: head.contract_authority,
       cycle_nonce: head.cycle_nonce,
       cursor: head.cursor,
-      opening_predicate_cursor: head.opening_predicate_cursor,
       unsuccessful_attempts_at_cursor: head.unsuccessful_attempts_at_cursor,
       last_attempt_block: head.last_attempt_block,
       last_committed_step_block: head.last_committed_step_block,
       eligible_at: head.eligible_at,
       opening_snapshot: payload.opening_snapshot,
-      opening_predicate_results: payload.opening_predicate_results,
       cumulative_outcomes: head.cumulative_outcomes,
       last_step_outcome: head.last_step_outcome,
       suspension: head.suspension,
@@ -642,16 +595,11 @@ impl<
       }
   }
 
-  fn opening_predicate_cursor_is_coherent(&self) -> bool {
-    (self.opening_predicate_cursor as usize) <= self.opening_predicate_results.len()
-  }
-
   pub(crate) fn running_is_coherent(&self) -> bool
   where
     BlockNumber: PartialOrd,
   {
-    self.opening_predicate_cursor_is_coherent()
-      && self.suspension.is_none()
+    self.suspension.is_none()
       && self
         .last_committed_step_block
         .as_ref()
@@ -659,20 +607,19 @@ impl<
   }
 
   pub(crate) fn suspension_is_coherent(&self) -> bool {
-    self.opening_predicate_cursor_is_coherent()
-      && matches!(
-        (&self.last_step_outcome, self.suspension),
-        (
-          Some(StepOutcome::FundingUnavailable),
-          Some(SuspensionReason::FundingUnavailable)
-        ) | (
-          Some(StepOutcome::Failed(crate::TaskFailure {
-            retry: crate::RetryClass::Temporary,
-            ..
-          })),
-          Some(SuspensionReason::Temporary)
-        )
+    matches!(
+      (&self.last_step_outcome, self.suspension),
+      (
+        Some(StepOutcome::FundingUnavailable),
+        Some(SuspensionReason::FundingUnavailable)
+      ) | (
+        Some(StepOutcome::Failed(crate::TaskFailure {
+          retry: crate::RetryClass::Temporary,
+          ..
+        })),
+        Some(SuspensionReason::Temporary)
       )
+    )
   }
 }
 
@@ -697,7 +644,6 @@ pub struct ActorStateHoldBreakdown<Balance> {
   pub contract_head: Balance,
   pub contract_body: Balance,
   pub detector: Balance,
-  pub funding: Balance,
   pub run: Balance,
 }
 
@@ -852,11 +798,10 @@ pub struct ActorHotState<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveActorState<Identity, Hot, Contract, Funding, RunState> {
+pub struct ActiveActorState<Identity, Hot, Contract, RunState> {
   pub identity: Identity,
   pub hot: Hot,
   pub contract: Contract,
-  pub funding: Funding,
   pub run_state: Option<RunState>,
 }
 

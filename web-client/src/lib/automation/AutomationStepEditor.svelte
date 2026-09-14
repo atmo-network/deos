@@ -57,14 +57,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       ...step,
       precondition: enabled
         ? (step.precondition ?? {
-            clauses: [
-              [
-                {
-                  timing: 'Current',
-                  predicate: createActorAuthoringPredicate('BalanceAbove'),
-                },
-              ],
-            ],
+            clauses: [[createActorAuthoringPredicate('BalanceAbove')]],
           })
         : null,
     };
@@ -106,12 +99,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       precondition: {
         clauses: [
           ...step.precondition.clauses,
-          [
-            {
-              timing: 'Current',
-              predicate: createActorAuthoringPredicate('BalanceAbove'),
-            },
-          ],
+          [createActorAuthoringPredicate('BalanceAbove')],
         ],
       },
     };
@@ -124,38 +112,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
       precondition: {
         clauses: step.precondition.clauses.map((clause, candidate) =>
           candidate === clauseIndex
-            ? [
-                ...clause,
-                {
-                  timing: 'Current',
-                  predicate: createActorAuthoringPredicate('BalanceAbove'),
-                },
-              ]
-            : clause,
-        ),
-      },
-    };
-  }
-
-  function setTiming(
-    clauseIndex: number,
-    predicateIndex: number,
-    event: Event,
-  ) {
-    if (step.precondition === null) return;
-    const timing = (event.currentTarget as HTMLSelectElement).value as
-      | 'Opening'
-      | 'Current';
-    step = {
-      ...step,
-      precondition: {
-        clauses: step.precondition.clauses.map((clause, candidateClause) =>
-          candidateClause === clauseIndex
-            ? clause.map((timed, candidatePredicate) =>
-                candidatePredicate === predicateIndex
-                  ? { ...timed, timing }
-                  : timed,
-              )
+            ? [...clause, createActorAuthoringPredicate('BalanceAbove')]
             : clause,
         ),
       },
@@ -205,7 +162,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         <div class="text-[10px] text-(--mono-muted)">
           {step.precondition === null
             ? 'Unconditional when reached'
-            : `${step.precondition.clauses.length} clause${step.precondition.clauses.length === 1 ? '' : 's'} · ${predicateCount()} timed predicate${predicateCount() === 1 ? '' : 's'}`}
+            : `${step.precondition.clauses.length} clause${step.precondition.clauses.length === 1 ? '' : 's'} · ${predicateCount()} current predicate${predicateCount() === 1 ? '' : 's'}`}
         </div>
       </div>
     </div>
@@ -287,24 +244,11 @@ Zone: Automation presentation helper; composes typed authoring fields without su
               <Plus size={12} /> Add AND predicate
             </Button>
           </div>
-          {#each clause as timed, predicateIndex}
+          {#each clause as predicate, predicateIndex}
             <div class="grid gap-2">
-              <SelectField
-                label="Observation timing"
-                value={timed.timing}
-                onchange={(event) =>
-                  setTiming(clauseIndex, predicateIndex, event)}
-                selectClass="h-9 py-1.5 text-xs"
-              >
-                <option value="Opening">Opening — frozen for cycle</option>
-                <option value="Current"
-                  >Current — immediately before step</option
-                >
-              </SelectField>
               <AutomationPredicateEditor
                 bind:predicate={
                   step.precondition.clauses[clauseIndex][predicateIndex]
-                    .predicate
                 }
                 {compact}
                 onRemove={() => removePredicate(clauseIndex, predicateIndex)}

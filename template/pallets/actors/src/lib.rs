@@ -495,7 +495,7 @@ pub mod pallet {
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
     SystemActorContractValidator as _,
   };
-  use alloc::{collections::BTreeSet, vec::Vec};
+  use alloc::vec::Vec;
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{
@@ -583,8 +583,6 @@ pub mod pallet {
     type MaxFundingTrackedAssets: Get<u32>;
     #[pallet::constant]
     type MaxOpeningSnapshotEntries: Get<u32>;
-    #[pallet::constant]
-    type MaxOpeningPredicateResults: Get<u32>;
     #[pallet::constant]
     type MaxPreconditionClauses: Get<u32>;
     #[pallet::constant]
@@ -852,7 +850,6 @@ pub mod pallet {
     ActorIdentityOf<T>,
     ActorHotStateOf<T>,
     ActorRunStateOf<T>,
-    ActorFundingStateOf<T>,
     ActorAdmissionCertificateOf<T>,
     ActorStepTicketOf<T>,
     LoadedActorStepOf<T>,
@@ -876,16 +873,12 @@ pub mod pallet {
     <T as Config>::MaxOpeningSnapshotEntries,
   >;
 
-  pub type OpeningPredicateResultsOf<T> =
-    BoundedVec<Result<bool, PredicateError>, <T as Config>::MaxOpeningPredicateResults>;
-
   pub type ActorRunHeadOf<T> = ActorRunHead<BlockNumberFor<T>>;
 
   pub type ActorRunPayloadOf<T> = ActorRunPayload<
     <T as Config>::AssetId,
     <T as Config>::Balance,
     <T as Config>::MaxOpeningSnapshotEntries,
-    <T as Config>::MaxOpeningPredicateResults,
   >;
 
   pub type ActorRunStateOf<T> = ActorRunState<
@@ -893,7 +886,6 @@ pub mod pallet {
     <T as Config>::Balance,
     BlockNumberFor<T>,
     <T as Config>::MaxOpeningSnapshotEntries,
-    <T as Config>::MaxOpeningPredicateResults,
   >;
 
   pub type QueuePageOf<T> = BoundedVec<QueueEntry<BlockNumberFor<T>>, <T as Config>::QueuePageSize>;
@@ -1038,9 +1030,6 @@ pub mod pallet {
 
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
 
-  pub type ActorFundingStateOf<T> =
-    ActorFundingState<FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
-
   pub type ActorIdentityOf<T> =
     ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
 
@@ -1052,7 +1041,6 @@ pub mod pallet {
     ActorIdentityOf<T>,
     ActorHotStateOf<T>,
     ActorContractOf<T>,
-    ActorFundingStateOf<T>,
     ActorRunStateOf<T>,
   >;
 
@@ -1104,11 +1092,6 @@ pub mod pallet {
     ActorStepChunkOf<T>,
     OptionQuery,
   >;
-
-  #[pallet::storage]
-  #[pallet::getter(fn actor_funding)]
-  pub type ActorFunding<T: Config> =
-    StorageMap<_, Blake2_128Concat, ActorId, ActorFundingStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::storage_prefix = "ActorRunHead"]
@@ -1751,8 +1734,6 @@ pub mod pallet {
       cursor: u32,
       predicate_evaluation_units: u32,
       opening_snapshot_entries: u32,
-      opening_predicate_results: u32,
-      funding_snapshot_entries: u32,
     ) -> Option<StepControlWeightContext> {
       if step_count == 0 || step_count > T::MaxContractSteps::get() || cursor >= step_count {
         return None;
@@ -1766,8 +1747,6 @@ pub mod pallet {
             .div_ceil(MAX_STEPS_PER_TAIL_CHUNK),
           predicate_evaluation_units,
           opening_snapshot_entries,
-          opening_predicate_results,
-          funding_snapshot_entries,
         });
       }
       let chunk_index = cursor.checked_sub(1)? / MAX_STEPS_PER_TAIL_CHUNK;
@@ -1781,30 +1760,11 @@ pub mod pallet {
         opening_tail_chunks: 0,
         predicate_evaluation_units,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       })
     }
 
-    fn opening_control_geometry(steps: &ContractSteps<T>) -> Option<(u32, u32)> {
-      let snapshot_entries = u32::try_from(
-        Self::opening_surfaces(steps, 0)
-          .into_iter()
-          .collect::<BTreeSet<_>>()
-          .len(),
-      )
-      .ok()?;
-      let predicate_results = steps
-        .iter(/* deos-bypass: bounded-iter */)
-        .try_fold(0u32, |total, step| {
-          total.checked_add(
-            step
-              .precondition
-              .as_ref()
-              .map_or(0, Precondition::opening_predicate_count),
-          )
-        })?;
-      Some((snapshot_entries, predicate_results))
+    fn opening_control_geometry(_steps: &ContractSteps<T>) -> Option<u32> {
+      Some(0)
     }
 
     pub(crate) fn execution_step_control_weight_context(
@@ -1822,29 +1782,20 @@ pub mod pallet {
         .precondition
         .as_ref()
         .map_or(0, Precondition::evaluation_units);
-      let (opening_snapshot_entries, opening_predicate_results, funding_snapshot_entries) =
-        if cursor == 0 {
-          if instance.cycle_state == CycleState::Idle {
-            let (snapshots, predicates) = Self::opening_control_geometry(&instance.steps)?;
-            (snapshots, predicates, T::MaxFundingTrackedAssets::get())
-          } else {
-            let run = run?;
-            (
-              u32::try_from(run.opening_snapshot.len()).ok()?,
-              u32::try_from(run.opening_predicate_results.len()).ok()?,
-              0,
-            )
-          }
+      let opening_snapshot_entries = if cursor == 0 {
+        if instance.cycle_state == CycleState::Idle {
+          Self::opening_control_geometry(&instance.steps)?
         } else {
-          (0, 0, 0)
-        };
+          u32::try_from(run?.opening_snapshot.len()).ok()?
+        }
+      } else {
+        0
+      };
       Self::step_control_weight_context(
         step_count,
         cursor,
         predicate_evaluation_units,
         opening_snapshot_entries,
-        opening_predicate_results,
-        funding_snapshot_entries,
       )
     }
 
@@ -1852,8 +1803,7 @@ pub mod pallet {
       contract: &ActorContractOf<T>,
     ) -> Option<ActorAdmissionResourcesOf<T>> {
       let step_count = u32::try_from(contract.steps.len()).ok()?;
-      let (opening_snapshot_entries, opening_predicate_results) =
-        Self::opening_control_geometry(&contract.steps)?;
+      let opening_snapshot_entries = Self::opening_control_geometry(&contract.steps)?;
       contract
         .steps
         .iter(/* deos-bypass: bounded-iter */)
@@ -1869,8 +1819,6 @@ pub mod pallet {
             cursor,
             predicate_evaluation_units,
             opening_snapshot_entries,
-            opening_predicate_results,
-            T::MaxFundingTrackedAssets::get(),
           )?;
           Some(ActorStepResourceEnvelope {
             control: T::StepControlWeight::maximum_control_weight(context, step)?,
@@ -1986,7 +1934,6 @@ pub mod pallet {
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
       run: Option<ActorRunStateOf<T>>,
-      funding: ActorFundingStateOf<T>,
       admission: ActorAdmissionCertificateOf<T>,
       ticket: ActorStepTicketOf<T>,
       loaded_step: LoadedActorStepOf<T>,
@@ -2042,7 +1989,6 @@ pub mod pallet {
         identity,
         hot,
         run,
-        funding,
         admission,
         ticket,
         loaded_step,
@@ -2062,7 +2008,6 @@ pub mod pallet {
       let identity = Self::load_control_identity(actor_id)?;
       let hot = Self::load_control_hot(actor_id)?;
       let run = ActorRunStateStore::<T>::get(actor_id);
-      let funding = ActorFunding::<T>::get(actor_id)?;
       let admission = Self::load_control_admission(actor_id)?;
       let loaded_step = Self::load_current_step_from_storage(actor_id, ticket.cursor)?;
       let maximum_fee =
@@ -2073,7 +2018,6 @@ pub mod pallet {
         identity,
         hot,
         run,
-        funding,
         admission,
         ticket,
         loaded_step,
@@ -3115,7 +3059,6 @@ pub mod pallet {
         || ActorActivationAuthorities::<T>::contains_key(actor_id)
         || ActorRunHeads::<T>::contains_key(actor_id)
         || ActorRunPayloads::<T>::contains_key(actor_id)
-        || ActorFunding::<T>::contains_key(actor_id)
         || <ActorContractTailChunks<T> as polkadot_sdk::frame_support::storage::StorageDoubleMap<
           ActorId,
           u32,
@@ -3128,11 +3071,10 @@ pub mod pallet {
       if identity.is_none() && ActorIdentities::<T>::contains_key(actor_id) {
         return (LoadedActorStateOf::Corrupt, None);
       }
-      let funding = ActorFunding::<T>::get(actor_id);
       let run_state = ActorRunStateStore::<T>::get(actor_id);
-      match (identity, funding, run_state) {
-        (None, None, None) => (LoadedActorStateOf::NotRegistered, None),
-        (Some(identity), None, None) => (LoadedActorStateOf::Dormant(identity), None),
+      match (identity, run_state) {
+        (None, None) => (LoadedActorStateOf::NotRegistered, None),
+        (Some(identity), None) => (LoadedActorStateOf::Dormant(identity), None),
         _ => (LoadedActorStateOf::Corrupt, None),
       }
     }
@@ -3198,9 +3140,6 @@ pub mod pallet {
       else {
         return LoadedActorStateOf::Corrupt;
       };
-      let Some(funding) = ActorFunding::<T>::get(actor_id) else {
-        return LoadedActorStateOf::Corrupt;
-      };
       let run_state = ActorRunStateStore::<T>::get(actor_id);
       let run_is_coherent = match (hot.cycle_state, run_state.as_ref()) {
         (CycleState::Idle, None) => {
@@ -3236,7 +3175,6 @@ pub mod pallet {
         identity,
         hot,
         contract,
-        funding,
         run_state,
       })
     }
@@ -3419,7 +3357,6 @@ pub mod pallet {
       ActorAdmissionCertificateOf<T>,
       Option<LoadedActorStepOf<T>>,
     )> {
-      let funding = ActorFunding::<T>::get(actor_id)?;
       let run_state = ActorRunStateStore::<T>::get(actor_id);
       let cursor = match (hot.cycle_state, run_state.as_ref()) {
         (CycleState::Idle, None) => 0,
@@ -3500,7 +3437,6 @@ pub mod pallet {
           identity,
           hot,
           contract,
-          funding,
           run_state,
         },
         admission,
@@ -4180,13 +4116,6 @@ pub mod pallet {
           .expect("opening amount-surface bound must fit u32"),
         "MaxOpeningSnapshotEntries must equal two per execution-plan step"
       );
-      assert_eq!(
-        T::MaxOpeningPredicateResults::get(),
-        T::MaxContractSteps::get()
-          .checked_mul(T::MaxPredicatesPerStep::get())
-          .expect("opening predicate-result bound must fit u32"),
-        "MaxOpeningPredicateResults must equal MaxContractSteps * MaxPredicatesPerStep"
-      );
       STORAGE_VERSION.put::<Pallet<T>>();
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
@@ -4239,8 +4168,6 @@ pub mod pallet {
           .unwrap_or_else(|_| {
             panic!("genesis System Actors {actor_id} exceeds the guaranteed on_idle budget")
           });
-        let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&contract.steps)
-          .expect("genesis contract steps must have valid funding-tracked assets");
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(contract.window, Zero::zero());
         // Genesis has no consensus timestamp. Temporal actors use `None` as a bounded bootstrap
         // marker and anchor from the first timestamp observed by ordinary wakeup service.
@@ -4297,13 +4224,6 @@ pub mod pallet {
           TriggerTransitionIntent::GenesisInstallation,
         )
         .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}")); // deos-bypass: panic-owner genesis construction fails before launch
-        ActorFunding::<T>::insert(
-          actor_id,
-          ActorFundingState {
-            funding_accumulated: Default::default(),
-            funding_tracked_assets,
-          },
-        );
         ActiveActorCount::<T>::put(
           active_count
             .checked_add(1)
@@ -4696,15 +4616,6 @@ pub mod pallet {
           .checked_mul(2)
           .expect("validated plan bound fits u32"),
         "MaxOpeningSnapshotEntries must equal twice MaxContractSteps"
-      );
-      // Genesis asserts this too, but genesis runs once. Only this gate re-checks the bound after
-      // a runtime upgrade, and `capture_opening_predicates` traps on `on_idle` if it ever breaks.
-      assert_eq!(
-        T::MaxOpeningPredicateResults::get(),
-        T::MaxContractSteps::get()
-          .checked_mul(T::MaxPredicatesPerStep::get())
-          .expect("opening predicate-result bound must fit u32"),
-        "MaxOpeningPredicateResults must equal MaxContractSteps * MaxPredicatesPerStep"
       );
       assert!(
         T::MinUserBalance::get() >= T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()),
@@ -5612,12 +5523,6 @@ pub mod pallet {
       }
       let replacement_admission =
         Self::build_admission_certificate(&contract).ok_or(Error::<T>::AdmissionBoundOverflow)?;
-      let new_tracked = Self::derive_funding_tracked_assets(&contract.steps)?;
-      let mut funding_state = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      funding_state.funding_tracked_assets = new_tracked.clone();
-      funding_state
-        .funding_accumulated
-        .retain(|asset, _| new_tracked.contains(asset));
       // Every non-no-op Contract update rotates semantic and admission authority, so an open run
       // cannot remain bound to the replaced Contract even when only completion policy changes.
       let cancellation_reason = Some(CancellationReason::ContractReplaced);
@@ -5686,7 +5591,6 @@ pub mod pallet {
         // Crossing compilation binds the newly installed runtime phase to the replacement
         // admission identity, so publish hot schedule authority before storing its Contract.
         Self::store_actor_contract(actor_id, contract.clone())?;
-        ActorFunding::<T>::insert(actor_id, funding_state);
         Self::deposit_event(Event::ContractUpdated { actor_id });
         #[cfg(test)]
         crate::mock::control_atomicity_checkpoint(actor_id)?;
@@ -6270,7 +6174,6 @@ pub mod pallet {
         breakdown.contract_head,
         breakdown.contract_body,
         breakdown.detector,
-        breakdown.funding,
         breakdown.run,
       ]
       .into_iter()
@@ -6294,7 +6197,6 @@ pub mod pallet {
           contract_head: T::Balance::zero(),
           contract_body: T::Balance::zero(),
           detector: T::Balance::zero(),
-          funding: T::Balance::zero(),
           run: T::Balance::zero(),
         }
       } else {
@@ -6344,7 +6246,6 @@ pub mod pallet {
         contract_head: T::Balance::zero(),
         contract_body: T::Balance::zero(),
         detector: T::Balance::zero(),
-        funding: T::Balance::zero(),
         run: T::Balance::zero(),
       };
       if identity.actor_class.actor_type() == ActorType::System {
@@ -6358,14 +6259,12 @@ pub mod pallet {
         ensure!(
           !ActorContractHeads::<T>::contains_key(actor_id)
             && !Self::control_admission_exists(actor_id)
-            && !ActorFunding::<T>::contains_key(actor_id)
             && !ActorRunStateStore::<T>::contains_key(actor_id),
           Error::<T>::StateHoldInvariant
         );
         return Ok(breakdown);
       };
       let head = ActorContractHeads::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
-      let funding = ActorFunding::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
 
       breakdown.contract_head =
         Self::state_hold_component(Self::control_state_hold_head_bytes(&head, admission)?)?;
@@ -6387,7 +6286,6 @@ pub mod pallet {
         actor_id,
         hot.trigger_wakeup_pointer,
       )?)?;
-      breakdown.funding = Self::state_hold_component(codec::Encode::encoded_size(&funding))?;
       breakdown.run = Self::state_hold_component(
         <ActorRunStateOf<T> as codec::MaxEncodedLen>::max_encoded_len(),
       )?;
@@ -6442,32 +6340,6 @@ pub mod pallet {
       Ok(bytes)
     }
 
-    pub(crate) fn ensure_funding_state_hold_capacity(
-      actor_id: ActorId,
-      identity: &ActorIdentityOf<T>,
-      prospective_funding: &ActorFundingStateOf<T>,
-    ) -> DispatchResult {
-      if identity.actor_class.actor_type() == ActorType::System {
-        return Ok(());
-      }
-      let existing = ActorStateHolds::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
-      ensure!(
-        existing.owner == identity.owner,
-        Error::<T>::StateHoldInvariant
-      );
-      let prospective =
-        Self::state_hold_component(codec::Encode::encoded_size(prospective_funding))?;
-      if prospective > existing.breakdown.funding {
-        let increase = prospective
-          .checked_sub(&existing.breakdown.funding)
-          .ok_or(Error::<T>::StateHoldOverflow)?;
-        let reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
-        T::StateHoldCurrency::ensure_can_hold(&reason, &identity.owner, increase)
-          .map_err(|_| Error::<T>::StateHoldUnavailable)?;
-      }
-      Ok(())
-    }
-
     pub(crate) fn reconcile_actor_state_hold_with_authority(actor_id: ActorId) -> DispatchResult {
       let existing = ActorStateHolds::<T>::get(actor_id);
       let target = if ActorControlLocators::<T>::contains_key(actor_id) {
@@ -6511,7 +6383,6 @@ pub mod pallet {
             contract_head: T::Balance::zero(),
             contract_body: T::Balance::zero(),
             detector: T::Balance::zero(),
-            funding: T::Balance::zero(),
             run: T::Balance::zero(),
           },
         ),
@@ -6555,88 +6426,6 @@ pub mod pallet {
           },
         );
       }
-      Ok(())
-    }
-
-    #[cfg(all(test, feature = "runtime-benchmarks"))]
-    pub(crate) fn control_reconcile_single_step_state_hold(
-      actor_id: ActorId,
-      cell: &ActorControlCellOf<T>,
-      head: &ActorContractHeadOf<T>,
-      funding: &ActorFundingStateOf<T>,
-    ) -> DispatchResult {
-      if cell.identity.actor_class.actor_type() == ActorType::System {
-        return Ok(());
-      }
-      ensure!(cell.actor_id == actor_id, Error::<T>::StateHoldInvariant);
-      let sovereign_account = match cell.identity.actor_class {
-        ActorClass::User { owner_slot } => {
-          Self::sovereign_account_id(&cell.identity.owner, owner_slot)
-        }
-        ActorClass::System { sovereign_id } => Self::sovereign_account_id_system(sovereign_id),
-      };
-      let mut identity_bytes = 0usize;
-      Self::add_state_hold_encoded_size(&mut identity_bytes, &actor_id)?;
-      Self::add_state_hold_encoded_size(&mut identity_bytes, &cell.identity)?;
-      Self::add_state_hold_encoded_size(&mut identity_bytes, &sovereign_account)?;
-      let head_bytes = Self::control_state_hold_head_bytes(head, &cell.admission)?;
-      let chunk_count = head
-        .header
-        .step_count
-        .saturating_sub(1)
-        .div_ceil(MAX_STEPS_PER_TAIL_CHUNK);
-      let mut body_bytes = 0usize;
-      for chunk_index in 0..chunk_count {
-        let chunk = ActorContractTailChunks::<T>::get(actor_id, chunk_index)
-          .ok_or(Error::<T>::StateHoldInvariant)?;
-        Self::add_state_hold_encoded_size(&mut body_bytes, &chunk)?;
-      }
-      let target_breakdown = ActorStateHoldBreakdown {
-        identity: Self::state_hold_component(identity_bytes)?,
-        contract_head: Self::state_hold_component(head_bytes)?,
-        contract_body: Self::state_hold_component(body_bytes)?,
-        detector: Self::state_hold_component(Self::state_hold_detector_bytes(
-          actor_id,
-          cell.hot.trigger_wakeup_pointer,
-        )?)?,
-        funding: Self::state_hold_component(codec::Encode::encoded_size(funding))?,
-        run: Self::state_hold_component(
-          <ActorRunStateOf<T> as codec::MaxEncodedLen>::max_encoded_len(),
-        )?,
-      };
-      let existing = ActorStateHolds::<T>::get(actor_id).ok_or(Error::<T>::StateHoldInvariant)?;
-      ensure!(
-        existing.owner == cell.identity.owner,
-        Error::<T>::StateHoldInvariant
-      );
-      if existing.breakdown == target_breakdown {
-        return Ok(());
-      }
-      let old_total = Self::state_hold_total(&existing.breakdown)?;
-      let target_total = Self::state_hold_total(&target_breakdown)?;
-      let reason: T::RuntimeHoldReason = HoldReason::ActorState.into();
-      if target_total > old_total {
-        let increase = target_total
-          .checked_sub(&old_total)
-          .ok_or(Error::<T>::StateHoldOverflow)?;
-        T::StateHoldCurrency::hold(&reason, &existing.owner, increase)
-          .map_err(|_| Error::<T>::StateHoldUnavailable)?;
-      } else if old_total > target_total {
-        let decrease = old_total
-          .checked_sub(&target_total)
-          .ok_or(Error::<T>::StateHoldOverflow)?;
-        let released =
-          T::StateHoldCurrency::release(&reason, &existing.owner, decrease, Precision::Exact)
-            .map_err(|_| Error::<T>::StateHoldInvariant)?;
-        ensure!(released == decrease, Error::<T>::StateHoldInvariant);
-      }
-      ActorStateHolds::<T>::insert(
-        actor_id,
-        ActorStateHoldRecord {
-          owner: existing.owner,
-          breakdown: target_breakdown,
-        },
-      );
       Ok(())
     }
 
@@ -7262,7 +7051,6 @@ pub mod pallet {
         Error::<T>::ActorIdentityCapacityExceeded
       );
       Self::ensure_contract_steps_fits_idle_budget(actor_type, &contract.steps)?;
-      let funding_tracked_assets = Self::derive_funding_tracked_assets(&contract.steps)?;
       let actor_id = NextActorId::<T>::get();
       ensure!(
         matches!(
@@ -7384,13 +7172,6 @@ pub mod pallet {
         ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        ActorFunding::<T>::insert(
-          actor_id,
-          ActorFundingState {
-            funding_accumulated: Default::default(),
-            funding_tracked_assets,
-          },
-        );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_add(1)
@@ -7495,7 +7276,6 @@ pub mod pallet {
         Self::ensure_auto_close_target(identity.cycle_nonce, target_nonce)?;
       }
       Self::ensure_contract_steps_fits_idle_budget(actor_type, &contract.steps)?;
-      let funding_tracked_assets = Self::derive_funding_tracked_assets(&contract.steps)?;
       ensure!(
         Self::active_instance_count() < Self::effective_active_actor_limit(),
         Error::<T>::ActiveActorCapacityExceeded
@@ -7544,13 +7324,6 @@ pub mod pallet {
         ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        ActorFunding::<T>::insert(
-          actor_id,
-          ActorFundingState {
-            funding_accumulated: Default::default(),
-            funding_tracked_assets,
-          },
-        );
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_add(1)
@@ -7625,7 +7398,6 @@ pub mod pallet {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorIdentities::<T>::insert(actor_id, state.identity.clone());
-        ActorFunding::<T>::remove(actor_id);
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_sub(1)
@@ -7802,7 +7574,6 @@ pub mod pallet {
     }
 
     fn canonicalize_preconditions(contract_steps: &mut ContractSteps<T>) -> DispatchResult {
-      let mut opening_predicate_count = 0u32;
       for step in contract_steps.iter_mut() {
         let Some(precondition) = &mut step.precondition else {
           continue;
@@ -7853,21 +7624,9 @@ pub mod pallet {
           predicate_count <= T::MaxPredicatesPerStep::get(),
           Error::<T>::AdmissionBoundOverflow
         );
-        let step_opening_count = canonical_clauses
-          .iter() // deos-bypass: bounded-iter -- MaxPredicateClauses bounds canonical DNF.
-          .flat_map(|clause| clause.iter())
-          .filter(|timed| timed.timing == ObservationTiming::Opening)
-          .count() as u32;
-        opening_predicate_count = opening_predicate_count
-          .checked_add(step_opening_count)
-          .ok_or(Error::<T>::AdmissionBoundOverflow)?;
         *clauses = BoundedVec::try_from(canonical_clauses)
           .map_err(|_| Error::<T>::AdmissionBoundOverflow)?;
       }
-      ensure!(
-        opening_predicate_count <= T::MaxOpeningPredicateResults::get(),
-        Error::<T>::AdmissionBoundOverflow
-      );
       Ok(())
     }
 
@@ -7899,8 +7658,8 @@ pub mod pallet {
             precondition.predicate_count() <= T::MaxPredicatesPerStep::get(),
             Error::<T>::AdmissionBoundOverflow
           );
-          for timed in precondition.clauses.iter().flat_map(|clause| clause.iter()) {
-            let max_age_blocks = match &timed.predicate {
+          for predicate in precondition.clauses.iter().flat_map(|clause| clause.iter()) {
+            let max_age_blocks = match predicate {
               Predicate::ObservationAbove { max_age_blocks, .. }
               | Predicate::ObservationBelow { max_age_blocks, .. }
               | Predicate::ObservationEquals { max_age_blocks, .. }
@@ -8009,9 +7768,7 @@ pub mod pallet {
         !matches!(amount, AmountResolution::Fixed(value) if value.is_zero())
           && !matches!(
             amount,
-            AmountResolution::PercentageOfCurrent(value)
-              | AmountResolution::PercentageAtOpening(value)
-              if value.is_zero()
+            AmountResolution::Percent(value) if value.is_zero()
           ),
         Error::<T>::InvalidAmountResolution
       );
@@ -8028,12 +7785,6 @@ pub mod pallet {
         }
       }
       Ok(())
-    }
-
-    fn derive_funding_tracked_assets(
-      _contract_steps: &ContractSteps<T>,
-    ) -> Result<BoundedBTreeSet<T::AssetId, T::MaxFundingTrackedAssets>, DispatchError> {
-      Ok(Default::default())
     }
 
     pub(crate) fn validate_split_transfer_legs(legs: &SplitTransferLegsOf<T>) -> DispatchResult {
@@ -8234,10 +7985,6 @@ pub mod pallet {
     ) -> DispatchResult {
       let admission = cancellation_context.admission().clone();
       ensure!(
-        ActorFunding::<T>::contains_key(actor_id),
-        Error::<T>::ActorNotFound
-      );
-      ensure!(
         ActiveActorCount::<T>::get() > 0,
         Error::<T>::ActiveActorCountInvariant
       );
@@ -8320,7 +8067,6 @@ pub mod pallet {
             Some(&admission),
             instance.actor_class.actor_type(),
           )?;
-          ActorFunding::<T>::remove(actor_id);
           ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
             *count = count
               .checked_sub(1)
@@ -8599,16 +8345,6 @@ pub mod pallet {
         }
         let hot = state.hot;
         let contract = state.contract;
-        let funding = state.funding;
-        let expected_tracked =
-          Self::derive_funding_tracked_assets(&contract.steps).map_err(|_| {
-            TryRuntimeError::Other("Actor Contract funding sources cannot be rederived")
-          })?;
-        if funding.funding_tracked_assets != expected_tracked {
-          return Err(TryRuntimeError::Other(
-            "ActorFunding tracked assets disagree with the Actor Contract",
-          ));
-        }
         let head = ActorContractHeads::<T>::get(actor_id).ok_or(TryRuntimeError::Other(
           "Active actor has no C6 Contract head",
         ))?;
@@ -8751,13 +8487,6 @@ pub mod pallet {
           ));
         }
         max_id = Some(max_id.map_or(actor_id, |prev| prev.max(actor_id)));
-        for (asset, amount) in &funding.funding_accumulated {
-          if !funding.funding_tracked_assets.contains(asset) || amount.is_zero() {
-            return Err(TryRuntimeError::Other(
-              "ActorFunding accumulator contains an untracked asset or zero amount",
-            ));
-          }
-        }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {
           Some(mapped_id) if mapped_id == actor_id => {}
           _ => {
@@ -8791,16 +8520,6 @@ pub mod pallet {
             ));
           }
           ActorClass::System { .. } => {}
-        }
-      }
-      for actor_id in ActorFunding::<T>::iter_keys() {
-        if !matches!(
-          Self::load_actor_state_for_frame_control(actor_id),
-          LoadedActorStateOf::Active(_)
-        ) {
-          return Err(TryRuntimeError::Other(
-            "ActorFunding entry belongs to a corrupt actor partition set",
-          ));
         }
       }
       for actor_id in ActorRunHeads::<T>::iter_keys() {
@@ -8877,47 +8596,9 @@ pub mod pallet {
             ));
           }
         }
-        let expected_surfaces = Self::opening_surfaces(&contract.steps, 0);
-        let mut surfaces_match = expected_surfaces.len() == run_state.opening_snapshot.len();
-        for surface in &expected_surfaces {
-          if !run_state.opening_snapshot.contains_key(surface) {
-            surfaces_match = false;
-            break;
-          }
-        }
-        if !surfaces_match {
+        if !run_state.opening_snapshot.is_empty() {
           return Err(TryRuntimeError::Other(
-            "ActorRunState opening snapshot disagrees with the complete Contract",
-          ));
-        }
-        let mut expected_opening_predicates = 0usize;
-        let mut expected_opening_predicate_cursor = 0usize;
-        for (index, step) in contract
-          .steps
-          .iter() // deos-bypass: bounded-iter -- MaxSteps bounds the Contract.
-          .enumerate()
-        {
-          let count = step.precondition.as_ref().map_or(0, |precondition| {
-            precondition.opening_predicate_count() as usize
-          });
-          expected_opening_predicates =
-            expected_opening_predicates
-              .checked_add(count)
-              .ok_or(TryRuntimeError::Other(
-                "Actor Contract Opening-predicate count overflows",
-              ))?;
-          if index < run_state.cursor as usize {
-            expected_opening_predicate_cursor = expected_opening_predicates;
-          }
-        }
-        if run_state.opening_predicate_results.len() != expected_opening_predicates {
-          return Err(TryRuntimeError::Other(
-            "ActorRunState opening predicate results disagree with the Actor Contract",
-          ));
-        }
-        if run_state.opening_predicate_cursor as usize != expected_opening_predicate_cursor {
-          return Err(TryRuntimeError::Other(
-            "ActorRunState opening predicate cursor disagrees with the committed Step prefix",
+            "ActorRunState retains removed Opening state",
           ));
         }
       }
@@ -8938,8 +8619,7 @@ pub mod pallet {
           ));
         }
         max_id = Some(max_id.map_or(*actor_id, |prev| prev.max(*actor_id)));
-        if ActorFunding::<T>::contains_key(actor_id)
-          || ActorRunHeads::<T>::contains_key(actor_id)
+        if ActorRunHeads::<T>::contains_key(actor_id)
           || ActorRunPayloads::<T>::contains_key(actor_id)
         {
           return Err(TryRuntimeError::Other(

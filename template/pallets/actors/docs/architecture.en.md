@@ -22,7 +22,7 @@ The crate assigns no economic roles, assets, recipients, routes, actor IDs, or c
 4. `Adapter isolation`: pallet never embeds DEX pricing logic or asset implementation specifics
 5. `Hot-state decomposition`: the primary control cell carries bounded scheduler/admission facts; certified Contract, funding, and run payloads remain separate cold owners.
 
-Canonical writes target one locator-resolved `ActorControlCell`, certified Contract geometry, and bounded `ActorFunding`. Funding retains tracked-asset state without Trigger-family amounts or fee reserves. `ActorStateHolds` records a refundable User geometry quote: its run component reserves installed-lifetime capacity, so autonomous Opening requires no new owner hold. Dormant Actors release that component; System Actors remain host-capacity-backed and hold-exempt.
+Canonical writes target one locator-resolved `ActorControlCell` and certified Contract geometry. Funding authorization remains in Contract policy, while dynamic amounts read current sovereign Available balance at each execution attempt. `ActorStateHolds` records a refundable User geometry quote for installed-lifetime capacity; Dormant Actors release that component, while System Actors remain host-capacity-backed and hold-exempt.
 
 `TriggerTransitionPlan` is the shared read-only preflight owner for Crossing membership and broad observation subscriptions; it distinguishes genesis installation, Active creation, Dormant activation, Active replacement, deactivation, and close. `crossing.rs` and `subscriptions.rs` return bounded commit inputs, while lifecycle code commits both inside the enclosing control transaction before canonical Contract/Hot replacement. Schedule and placement planning remain separate implementation work.
 
@@ -74,19 +74,18 @@ The package stores each actor identity once and decomposes each active epoch int
 - `ActorControlCell.admission`: compact runtime semantics/layout/Weight and lifecycle identity, independent of the configured Step/resource ceiling
 - `ActorContractTailChunks`: authority-bound gap-free Steps 1..N in chunks of at most four, with one aligned control/effect envelope per Step
 - `ActorActivationAuthorities`: fixed ObservationChange activation projections bound to feed, semantic/body/admission identity, cooldown, window, and auto-close nonce
-- `ActorFunding`: canonical funding-source policy, bounded tracked assets, and bounded `funding_accumulated[asset]` checked deltas
-- `ActorRunHeads`: mutable semantic/body/admission authority, current Step and Opening-predicate cursors, cumulative outcomes, causal commit block, eligibility, suspension facts, and immutable-payload commitment/count
-- `ActorRunPayloads`: immutable Opening snapshots retained only while a multi-block Cycle is open
+- `ActorRunHeads`: mutable semantic/body/admission authority, current Step cursor, cumulative outcomes, eligibility, retry, and suspension facts
+- `ActorRunPayloads`: bounded run-local payload retained only while a multi-block Cycle is open
 
 `ActorCreated` carries `actor_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `actor_id` identifies the primary and its locator; dormant identity retains its last control-mutation block. Public creation admits Dormant only as Mutable, while host genesis may install a sealed Immutable Dormant System identity that generic activation and owner-close control reject. Activation or schedule replacement derives block eligibility from `schedule_anchor` and window start, while `ActorControlCell.hot.trigger_runtime_state::Cadenced` owns the optional timestamp-ceiled anchor tick. The typed lifecycle forbids contradictory pause state.
 
-Package internals reconstruct execution state from the locator-resolved primary, certified Contract geometry, `ActorFunding`, and optional `ActorRunHeads`/`ActorRunPayloads`. Observation fanout uses fixed activation authority and the mutable run head without decoding generic funding, immutable run payload, or unreached Steps. `active_actor_state` exposes canonical semantic partitions without synchronized mirrors.
+Package internals reconstruct execution state from the locator-resolved primary, certified Contract geometry, current sovereign ledger state, and optional `ActorRunHeads`/`ActorRunPayloads`. Observation fanout uses fixed activation authority and mutable run state without decoding unreached Steps. `active_actor_state` exposes canonical semantic partitions without synchronized mirrors.
 
 This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current package storage realization.
 
 ### Contract Steps Structure
 
-Each actor admits `0..=MaxContractSteps` ordered Steps and stores them as C6 geometry: optional Step 0 and its optional resource envelope live in the head, while Steps 1..N and aligned envelopes occupy gap-free authority-bound chunks of at most four. A zero-Step Contract has neither inline body nor tail fragments and reconstructs from its certified header alone. One host-configured `MaxContractSteps` in `1..=255` applies identically to User and System actors across creation, activation, replacement, simulation, genesis, and benchmark construction. For a nonempty N-Step Contract, the Step-0 control context charges exactly `ceil((N - 1) / 4)` authored Opening tail chunks; later cursors charge no Opening reconstruction. Mutable `RetryLater` admits only `2..=MaxRetryAttempts`, with the protocol-fixed metadata constant set to 10.
+Each actor admits `0..=MaxContractSteps` ordered Steps and stores them as C6 geometry: optional Step 0 and its optional resource envelope live in the head, while Steps 1..N and aligned envelopes occupy gap-free authority-bound chunks of at most four. A zero-Step Contract has neither inline body nor tail fragments and reconstructs from its certified header alone. One host-configured `MaxContractSteps` in `1..=255` applies identically to User and System actors across creation, activation, replacement, simulation, genesis, and benchmark construction. For a nonempty N-Step Contract, execution loads only the current Step head or one exact tail chunk; unreached tail fragments remain cold. Mutable `RetryLater` admits only `2..=MaxRetryAttempts`, with the protocol-fixed metadata constant set to 10.
 
 - `precondition: Option<Precondition<Predicate, MaxPreconditionClauses, MaxPredicatesPerClause>>`
 - `task: Task`
@@ -94,11 +93,11 @@ Each actor admits `0..=MaxContractSteps` ordered Steps and stores them as C6 geo
 
 `None` is the sole unconditional Step form. `Some(Precondition { clauses })` stores one bounded DNF: outer clauses are OR and each inner clause is AND. Admission rejects empty outer and inner vectors and enforces the configured `MaxPreconditionClauses`, `MaxPredicatesPerClause` and total `MaxPredicatesPerStep` bounds. Evaluation visits every admitted predicate without short-circuit and executes or skips the Step exactly once.
 
-Each `TimedPredicate` names `ObservationTiming::Opening` or `Current`. Fresh-cycle opening evaluates and stores one `Result<bool, PredicateError>` per Opening predicate before any task; ActorRunState retains the full bounded result vector and reuses it by canonical linear position. Current predicates evaluate immediately before their Step and therefore observe committed earlier-Step effects from the same logical multi-block cycle.
+Each admitted predicate is current-state only. The evaluator reads it immediately before its Step, so it observes committed earlier-Step effects from the same logical multi-block cycle plus intervening authoritative state. No predicate result is captured at cycle admission or retained in `ActorRunState`.
 
 Admission sorts predicates and clauses by canonical typed SCALE, removes repeated predicates within a clause, rejects clauses that become semantically identical, absorbs exact predicate-superset clauses, and stores only the canonical form. `update_contract` canonicalizes before equality and returns an exact no-op before rate limiting, cancellation, writes, placement reconstruction, or events when the resulting contract is unchanged.
 
-`Precondition::evaluation_units` supplies `total predicates + Opening predicates` to the host's `StepControlWeight` resource-envelope provider. It is a pricing hint, not a count of current host reads. `evaluate_step_precondition` visits each predicate once: Current evaluates the atomic predicate, while Opening reads its saved result and advances the result cursor. Opening capture has a separate control-context count. The prepaid Pipeline Machine envelope sums admitted Step control bounds and cleanup; the package does not split this hint into repeated predicate-component charges.
+`Precondition::evaluation_units` supplies the total predicate count to the host's `StepControlWeight` resource-envelope provider. It is a pricing hint and equals the bounded count of current predicate evaluations. `evaluate_step_precondition` visits each predicate once. The prepaid Pipeline Machine envelope sums admitted Step control bounds and cleanup without a separate predicate-capture component.
 
 A false DNF expression emits `StepSkipped(PreconditionFalse)` and advances one fixed cursor; evaluation errors remain task-independent failures routed through the authored Step policy.
 
@@ -131,7 +130,7 @@ Task set in implementation:
 | --- | --- | --- |
 | Predicate | `BalanceAbove`, `BalanceBelow`, `BalanceEquals`, `BalanceNotEquals`, `BlockNumberAbove`, `BlockNumberBelow`, `ObservationAbove`, `ObservationBelow`, `ObservationEquals`, `ObservationNotEquals` | Active contract calls; `every_predicate_is_pure_and_bounded`, predicate evaluator and observation tests |
 | Task | `Transfer`, `SplitTransfer`, `SwapIn`, `SwapOut`, `AddLiquidity`, `RemoveLiquidity`, `Burn`, `Mint`, `Stake`, `DonateLiquidity`, `Unstake`, `StopCycle` | Active contract calls; `every_task_has_one_exhaustive_semantic_contract`, task tests, and independent runtime profiles |
-| Amount and exact-output bound | `Fixed`, `PercentageOfCurrent`, `PercentageAtOpening`, `PercentageOfLastFunding`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests, removed-form decoding tests and independent exact-output evidence |
+| Amount and exact-output bound | `Fixed`, `Percent`; `LiveQuote`, `Absolute` | Task constructors; amount classifier/resolution tests, removed-form decoding tests and independent exact-output evidence |
 | Trigger | Exactly one of `Manual`, `AddressEvent`, `ObservationChange`, `ObservationCrossing`, `AtTime`, or `Cadenced`; source `Any`, `OwnerOnly`, `Whitelist`; asset `Any`, `Whitelist` | Actor Contract constructors plus raw typed calls; exhaustive Active replacement and Dormant lifecycle matrices; manual, certified-ingress, observation, timestamp-cadence, and embedding tests |
 | Funding | `OwnerOnly`, `SignedAllowlist`, `RuntimePolicy`, `AnyVerifiedIngress`; provenance `Signed`, `InternalProtocol`, `Xcm` | Active contract and certified producer constructors; funding-policy package tests and DEOS producer inventory |
 | Completion and step policy | `Persistent`, `CloseAfterProductiveCycle`; `AbortCycle`, `ContinueNextStep`, `RetryLater` | Active contract constructors; productive-close and exhaustive transition-matrix tests |
@@ -159,12 +158,10 @@ The instruction does not resolve an amount, invoke a runtime adapter, select a s
 
 ### Amount Resolution
 
-The pallet resolves dynamic amounts through `AmountResolution`:
+The pallet resolves amounts through `AmountResolution`:
 
 - `Fixed`
-- `PercentageOfCurrent`
-- `PercentageAtOpening`
-- `PercentageOfLastFunding`
+- `Percent`
 
 Resolution policy is task-bound in code:
 
@@ -172,7 +169,7 @@ Resolution policy is task-bound in code:
 - `DonateLiquidity` resolves only declared `asset_a` as `max_amount_a` and passes the current preservable `asset_b` balance as `max_amount_b`; the host adapter must keep the paired debit within both caps and report exact used amounts. `Fixed`, every percentage basis, and `SplitTransfer` total must stay within that ceiling.
 - `ExpendableSpend`: consume available amount where task allows
 - `Mint`: amount interpreted in mint context
-- `Unstake share spend`: `Fixed`, `PercentageOfCurrent`, and `PercentageAtOpening` resolve against `StakingOps::share_balance(position_asset)`; 100% of current shares permits full withdrawal. `PercentageOfLastFunding` reads the snapshot keyed by `StakingOps::share_asset(position_asset)`.
+- `Unstake share spend`: `Fixed` and `Percent` resolve against `StakingOps::share_balance(position_asset)`; 100% of current shares permits full withdrawal.
 
 Resolution outcomes are deterministic:
 
@@ -198,7 +195,7 @@ EXP-0043 accepts the unsignaled Immutable zero-Step Manual User singleton-Block 
 
 EXP-0044 accepts post-publication User hold reconciliation only inside its matching complete transition owner. The attained maximum-Step User Opening owner is `536,459,000 / 14,158` before database additions, with 24 reads and 13 writes. It publishes Running state, preserves identity/Contract/detector/active-lifetime Run hold components, decreases consumed funding geometry, and reads/writes both `ActorStateHolds` and the host hold ledger once. No standalone hold coefficient may be added or derived by subtraction; EXP-0065 owns exact regeneration.
 
-EXP-0047 accepts the nonzero funding-consumption component across the complete reference authored-source domain `1..24`: `14,154,244 + 288,800a` pre-database RefTime, fixed `4,531` estimated ProofSize and one `ActorFunding` read/write. Zero selects no component. The 40-entry configured capacity remains a conservative storage/admission input rather than a reachable actual snapshot; complete configured-capacity composition and generated-file regeneration remain EXP-0064/EXP-0065 work.
+EXP-0047 measured the removed funding-snapshot lineage and does not contribute to current production Weight composition. Current dynamic amounts instead charge their typed current-Available read and resolution owner at each execution attempt.
 
 Nonempty geometry checked-sums each Step's generated maximum control owner across its authored total attempt count; `StopCycle` folds its control-only effect into machine work and remains Action-fee-free. The cleanup component uses generated `close_actor`, not the broader certificate lifecycle maximum. The production Weight identity commits zero-Step, Opening, retry/error, continuation/RunFrame, completion, placement, and cleanup owners.
 
@@ -212,9 +209,8 @@ Resolution and charging follow these rules:
 
 - A User run releases the skipped step's unused execution-fee reservation before resolving later steps, matching every non-executable cycle path.
 - A multi-amount task resolves every field before dispatch and selects `FundingUnavailable > Skipped > Executable` independently of field order.
-- An Unstake last-funding plan fails validation when the runtime adapter cannot expose a transferable share asset.
 
-Pallet boundary tests cover fixed and current/trigger/last-funding percentages across native, sufficient-asset, split-total, and staking-share surfaces. A decoding regression rejects the retired `AllAvailable` discriminant. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
+Pallet boundary tests cover fixed and current percentages across native, sufficient-asset, split-total, and staking-share surfaces. Decoding regressions reject retired amount discriminants rather than reinterpreting them. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
 
 Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier Steps in the same Actor Contract remain committed.
 
@@ -246,7 +242,7 @@ Activation preflight and commit are synchronous, with no intervening Actor mutat
 
 Retained enqueue and wakeup ingress pass their first loaded service tuple into canonical preparation instead of discarding its certificate/current Step and loading them again. Prospective-hot callers retain their separate supplied-state path because their intended hot state may differ from the stored primary.
 
-Fresh multi-Step Opening reconstructs the full body only after admission because immutable Opening snapshots require every authored dependency; one-Step Opening and Running/Suspended service remain head/current-fragment only. Post-placement, enqueue/invalidation, tombstone drain, and wakeup schedule/drain also use the current service state, so unreached-tail corruption cannot block an otherwise authoritative running prefix. General activation, eligibility, detector, funding, and liveness helpers remain separate hot-header conversion work.
+Fresh multi-Step Opening loads only Step 0 after admission; one-Step Opening and Running/Suspended service likewise remain head/current-fragment only. Post-placement, enqueue/invalidation, tombstone drain, and wakeup schedule/drain also use the current service state, so unreached-tail corruption cannot block an otherwise authoritative running prefix. General activation, eligibility, detector, funding-policy, and liveness helpers remain separate hot-header conversion work.
 
 The execution kernel visits at most one current Step per actor per block after exact ticket, admission-certificate, resource, fee, and same-block revalidation. A non-terminal commit persists `CycleState::Running`, cumulative outcomes, `last_committed_step_block`, and `eligible_at >= now + 1`; scheduler placement emits one exact successor ticket, while final, abort, suspension, and close branches commit atomically without replaying the prefix.
 
@@ -302,7 +298,7 @@ A cycle is admitted only when all checks pass:
 
 The certified Contract head stores the complete bounded `PipelineMachineEnvelope`; Idle admission reads that authority without rescanning the full Contract. Opening captures only declared Opening dependencies. Running/Suspended service reuses paid machine authority, loads the current Step, and independently admits its control, Task effect, and current Action liability.
 
-Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, cursor, funding snapshot, or task effect changes. Unavailable or uninitialized canonical observation during Crossing rearm atomically refuses Opening, retaining the paid latch and live FIFO head without Pipeline collection. Persistent live-head Weight blockage, fee-collection failure, or invariant refusal becomes observable through sparse starvation transition events; starvation does not by itself identify Weight exhaustion.
+Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, cursor, run state, or task effect changes. Unavailable or uninitialized canonical observation during Crossing rearm atomically refuses Opening, retaining the paid latch and live FIFO head without Pipeline collection. Persistent live-head Weight blockage, fee-collection failure, or invariant refusal becomes observable through sparse starvation transition events; starvation does not by itself identify Weight exhaustion.
 
 `src/crossing.rs::prepare_crossing_rearm_hot` owns the required current value/revision check; `src/scheduler.rs::execute_cycle` stops at the refused head. Native `crossing_rearm_unavailability_` tests prove exact state and balance preservation, service after host recovery, and independent insolvency cleanup without rearm. The runtime benchmark `scheduler_paged_zero_step_user_crossing_unavailable` verifies the unavailable branch and authorized Mutable owner close followed by FIFO progress.
 
@@ -344,9 +340,9 @@ EXP-0057 accepts the current reference-Wasm useful-occurrence matrix: Manual `20
 - An invoked adapter failure reports `Invoked` effect evidence and retains its valid actual effect fee when the enclosing attempt and collection commit; `ContinueNextStep` and `AbortCycle` never alter that charge or trigger another collection. Zero actual total fee produces no collector call.
 - `TaskEffectWeightProvider` owns maximum admission and one closed post-dispatch branch: `NotInvoked` returns zero, while `Invoked` returns the canonical generated Task-family Weight whether the operation commits or returns typed failure. Scheduler service rejects absent or component-wise greater-than-reserved evidence and rolls back the complete queue/Step/effect transaction. Successful non-invocation consumes control only and releases the effect reservation inside the pass budget.
 - `StepControlWeightProvider` receives the starting phase, committed outcome, canonical post-placement class (`None`, `Queue`, or `Wakeup`), typed Task invocation evidence, and independently whether nonzero Action fee collection is required for the attempt to commit. The runtime keeps invocation-receipt Control separate from fee collection. A receipt-free estimate adds the generated receipt owner for general-path invocation, including System zero-fee attempts; a direct estimate already containing receipt deposition adds nothing. Maximum composition compares complete envelopes, and conservative maximum fallback retains its included receipt allowance. Specialized unpredicated `StopCycle` reports invocation without that receipt; predicated `StopCycle` uses the general path and emits a zero-fee receipt. These additions are staged components; complete generated Weight rebinding remains required.
-- Missing or component-wise greater-than-reserved actual control evidence rolls back the shared Step/placement transaction. The host binds generated owners to the admitted Contract geometry; independent storage maxima do not prove a jointly reachable context. Opening and last-funding amount sources occupy mutually exclusive authored fields, so benchmark coverage must preserve their tradeoffs. Independently estimated ProofSize cannot be subtracted soundly to remove overlapping owners.
+- Missing or component-wise greater-than-reserved actual control evidence rolls back the shared Step/placement transaction. The host binds generated owners to the admitted Contract geometry; independent storage maxima do not prove a jointly reachable context. Independently estimated ProofSize cannot be subtracted soundly to remove overlapping owners.
 
-Admission and Opening control contexts use the configured funding capacity as a conservative model input, not physical snapshot cardinality. A resumed head supplies the retained funding count from its already-loaded Run; tail contexts normalize payload counts to zero. This distinction adds no storage or adapter read, but changes resumed actual Weight evaluation and therefore requires regenerated production evidence before numeric acceptance.
+Admission and resumed control contexts price only reachable current-state work. They carry no funding or Opening-snapshot cardinality, and generated production evidence binds that reduced domain.
 
 Running, Suspended, and fresh-Opening progress select direct inner owners. Fresh-Opening progress has separate minimal and maximum geometry owners at each authored tail-chunk count. Execution reuses the transaction-prevalidated Contract, hot state, Run and admission identity for persistence and FIFO successor placement without reloading the next tail fragment. Suspended-head fixtures now reach their source through real Opening, failure and due wakeup: terminal heads have one Step; other profiles couple tail Opening and funding sources, with Current-only or one-Opening plus variable Current predicates. These lawful profiles do not establish dominance over every runtime-selected composition; their changed benchmark parameter signatures still require production Weight regeneration and envelope reconciliation. Fresh-Opening completion selects separate minimal and maximum direct owners; ordinary completion no longer reconstructs cold tails merely to prove that no terminal close condition applies.
 
@@ -359,7 +355,7 @@ Pallet regressions cover one useful charge and no redundant latched charge for e
 
 ### Progress-Preserving Continuation
 
-`ActorControlCell.hot.cycle_state` selects sparse run state. Idle has no Run; Running and Suspended retain matching `ActorRunHeads`/`ActorRunPayloads`. The mutable head carries cursor, retry count, causal commit block, eligibility, and cumulative outcomes; the payload holds immutable Opening snapshots. A nonterminal Step persists Running with eligibility at least `now + 1`, preserving Q1 and the committed prefix. Suspended service retries only its current cursor under the authored Mutable-only bounded policy. Try-state checks marker/store equivalence, cursor/retry bounds, admission identity, and payload validity.
+`ActorControlCell.hot.cycle_state` selects sparse run state. Idle has no Run; Running and Suspended retain matching `ActorRunHeads`/`ActorRunPayloads`. The mutable head carries cursor, retry count, causal commit block, eligibility, and cumulative outcomes; the payload carries bounded run-local authority without historical amount or predicate snapshots. A nonterminal Step persists Running with eligibility at least `now + 1`, preserving Q1 and the committed prefix. Suspended service retries only its current cursor under the authored Mutable-only bounded policy. Try-state checks marker/store equivalence, cursor/retry bounds, admission identity, and payload validity.
 
 Attempt `0` opens one logical cycle and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater { max_attempts }` increments both global failure state and the cursor-local count. The first suspension stores `1`; same-cursor suspension uses checked increment after admission proves both retry bounds, while a later cursor resets to `1`.
 
@@ -571,7 +567,7 @@ The Router-backed `SwapOut` matrix uses the same settled infrastructure baseline
 | Retry | 2 | `5,778,173,654 / 73,880` | `3,242,396,000 / 19,253` |
 | Retry | 4 | `5,731,684,946 / 69,176` | `3,242,396,000 / 19,253` |
 
-A native Transfer rejected before invocation for `FundingUnavailable` consumes zero Task effect. Its Opening suspension is `6,380,116,188 / 92,536` control and its next-block Suspended retry is `5,544,105,092 / 63,104`, matching the zero-predicate Temporary/Retry control branches above while removing the Router effect. Resumed values use the empty retained funding snapshot, not the configured admission cap. A matched two-Step fixture with equal custody and zero/one retained funding entry preserves Opening charge and isolates exactly the generated retry entry contribution. These are native charged-model results, not regenerated C1 production evidence or measured proof savings.
+A native Transfer rejected before invocation for `FundingUnavailable` consumes zero Task effect. Its Opening suspension is `6,380,116,188 / 92,536` control and its next-block Suspended retry is `5,544,105,092 / 63,104`, matching the zero-predicate Temporary/Retry control branches above while removing the Router effect. These retained charged-model results predate the current-state cutover and are not regenerated production evidence or measured proof savings.
 
 `BlockResourceState::reserve_actor_step` atomically reserves one Step's Actor Control and phase-specific Actor Base/Drain effect maxima; a failed second reservation restores the complete prior state. `settle_actor_step` similarly commits both valid actual values or restores state and both one-shot reservation authorities.
 
@@ -773,17 +769,15 @@ Terminal classification persists `TerminalDeferred`; a later scalar terminal tur
 
 Fanout first pays a branch probe, then admits the component-wise maximum of generated disabled-skip, queue, and wakeup page owners plus separately reserved fault-record Weight. Base, ordinary branches, scalar terminal cleanup, fault record, and fault clear retain disjoint owners. Exact fault identity is loaded only after transactional rollback and binds feed, revision, page, subscriber position, actor, semantic/body/admission authority, branch, and class. Host bounds set the independent page ceiling and Weight limit.
 
-The typed `AddressEventIngress::preflight`/`notify` boundary owns signal, filtering, and funding-accumulator effects. Producers perform literal read-only preflight and invoke exactly one consequence under their declared post-movement or transactional-precommit atomicity protocol. They propagate rejection and never mutate control or funding storage directly; the host integration owns protocol inventory and rollback evidence. The private transition has one full-ingress contract; dead `apply_trigger` and `apply_funding` switches are removed, so a caller cannot partially apply one admitted event.
+The typed `AddressEventIngress::preflight`/`notify` boundary owns signal filtering and funding-policy authorization. Producers perform literal read-only preflight and invoke exactly one consequence under their declared post-movement or transactional-precommit atomicity protocol. They propagate rejection and never mutate control or funding storage directly; the host integration owns protocol inventory and rollback evidence. The private transition has one full-ingress contract; dead `apply_trigger` and `apply_funding` switches are removed, so a caller cannot partially apply one admitted event.
 
 `IngressFailure { error, retry }` classifies recoverable queue/wakeup capacity or placement unavailability as Temporary. Monotonic ticket/index exhaustion, topology corruption, invalid provenance, and invariant failure are Permanent. Actor tasks preserve the classification through `TaskFailure`; non-Actor producers map it to their outer dispatch error.
 
 The package never scans host events, fingerprints value transfers, or defers ingress correctness to `on_idle`. Trigger filtering consumes only the independently supplied source; funding authorization consumes source and typed provenance without inferring either from the other. `OwnerOnly` and signed allowlists require Signed provenance plus a matching source, `AnyVerifiedIngress` requires at least one verified field, and all-None context remains funding-ineligible.
 
-Host-decided `RuntimePolicy` receives both optional fields unchanged. Every accepted tracked transfer checked-adds into `funding_accumulated`; preflight rejects overflow before supported movement. Fresh-run opening reads and clears the accumulator atomically only after all fallible admission checks. The Run payload retains no funding snapshot; later ingress accumulates independently until the next opening clears it.
+Host-decided `RuntimePolicy` receives both optional fields unchanged. Accepted funding changes ordinary sovereign custody after bounded policy authorization; Actors stores no tracked-asset set, accumulator, or funding-history basis.
 
-TryRuntime reuses admission derivation to check the exact tracked-asset set when all funding references name assets directly, before checking accumulator and Run-snapshot membership. `Unstake` receipt identities are fixed at admission and their host mapping may subsequently become unavailable; current host lookup cannot prove historical identity. For these Contracts, the audit requires every directly named source, a nonempty tracked set, and at most one additional source per distinct staking position. This qualified check cannot detect every substitution of a historical receipt; it adds no production service read or duplicate mapping state.
-
-Funding accumulators contain positive amounts only and remain bounded by the tracked-asset set. TryRuntime checks their value and membership constraints independently from the coherent Run payload commitment. Opening balance snapshots may retain zero balances for admitted surfaces.
+TryRuntime checks current run payload and cursor coherence independently from Contract funding authorization. No Actor-only funding accumulator or opening balance snapshot exists.
 
 ### Manual
 
@@ -802,8 +796,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `ActorControlLocators`: exact active primary location; active identity, hot state, and admission have no duplicate scalar stores
 - `ActorContractTailChunks`: gap-free authority-bound Steps 1..N plus aligned envelopes in chunks of at most four; generated descriptor maximum is 4,070 bytes per chunk
 - `ActorActivationAuthorities`: ObservationChange-only compact placement authority; generated descriptor maximum is 159 bytes
-- `ActorFunding`: active-only canonical funding-source policy, bounded tracked-asset set, and `funding_accumulated[asset] = amount`; authorized ingress adds checked deltas, fresh cycle opening atomically takes the map as its frozen snapshot, and later ingress remains accumulated for the next cycle
-- `ActorRunHeads` / `ActorRunPayloads`: mutable cursor/outcome/authority state separated from immutable Opening snapshots; payload commitment and predicate-result count bind the pair. TryRuntime additionally requires the Opening-result cursor to equal the sum of authored Opening-predicate counts before the current Step, rejecting in-range shifts that would select another Step's frozen facts.
+- `ActorRunHeads` / `ActorRunPayloads`: bounded mutable cursor, outcome, retry, and authority state for one open multi-block Cycle. TryRuntime binds run state to the admitted Contract generation and rejects incoherent cursor or payload geometry.
 - `ActorIdentityCount`: O(1) total of active primary identities plus dormant registry identities, bounded by `MaxActorIdentities`
 - `ActiveActorCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against hot state, certified C6 geometry, compact activation authority, funding, and optional split run state
 - `ActorReadyTail`: shared monotonic ticket allocator and block-start cutoff source; empty-queue cleanup never resets chronology
@@ -946,13 +939,13 @@ Calls `4`, `5`, `6`, `8`, `9`, `21`, and `22` use the class-specific control aut
 
 Package validation lives in the `src/tests.rs` fixture/module root, domain suites under `src/tests/`, `src/benchmarking.rs`, the independent `embedding-runtime`, and compile-time exhaustive semantic contracts. Tests pin SCALE indices, storage names and types, actor-state decomposition, scheduler/trigger/lifecycle invariants, task atomicity, retry transitions, funding conservation, subscription topology, and try-state reconciliation.
 
-Replayable state-machine traces cover suspend, continuation, cancellation, queue/wakeup uniqueness, owner slots, funding snapshot opening, balances, and observation churn. The seeded transition model drives create/activate/deactivate/fund/signal/trigger/pause/resume/contract-update/enqueue/wakeup/execute/close/slot-round-trip/suspend/continue/cancel sequences, installs Crossing contracts, publishes alternating observations, and materializes ordered Crossing work against conservation, cross-store invariants, and try-state after every operation. Temporary DEX failure and recovery exercise randomized fault suspension and repair. Each control operation admits only its typed lifecycle event family, including ordered cancellation and summary events when replacing, deactivating, or closing a suspended cycle; observation ingress and deferred Crossing materialization remain event-silent.
+Replayable state-machine traces cover suspend, continuation, cancellation, queue/wakeup uniqueness, owner slots, current balances, and observation churn. The seeded transition model drives create/activate/deactivate/fund/signal/trigger/pause/resume/contract-update/enqueue/wakeup/execute/close/slot-round-trip/suspend/continue/cancel sequences, installs Crossing contracts, publishes alternating observations, and materializes ordered Crossing work against conservation, cross-store invariants, and try-state after every operation. Temporary DEX failure and recovery exercise randomized fault suspension and repair. Each control operation admits only its typed lifecycle event family, including ordered cancellation and summary events when replacing, deactivating, or closing a suspended cycle; observation ingress and deferred Crossing materialization remain event-silent.
 
 The ignored release profiles add 10,000-scale zero-match and homogeneous-herd evidence, maximum mixed wakeup/Crossing/broad-fanout materialization under the breaker, and a mixed Crossing branch profile. The mixed profile combines dense and sparse thresholds, distinct rearm values, both directions, paused and already-latched Actors, and an insolvent User Actor; it proves bounded multi-pass drain and canonical pending placement before permissionless insolvency cleanup.
 
 Mandatory reactive falsifiers cover partial fanout followed by subscriber deactivation, subscriber removal and late re-addition during fanout, stale close entries draining as tombstones before a recreated slot runs, newer revision during page progress, queue saturation, protected User fee-native floor, fee-collector failure after admission, invalid `Fresh`, and nonce exhaustion for both classes, all ending in try-state.
 
-FRAME benchmarks isolate bounded package branches; every production host must prove fixture reachability and envelope coverage before generating and binding runtime-specific weights. A Fixed-Transfer Suspended-head assurance matrix uses authored maximum-length Contracts, real funding ingress, Opening, due promotion and a second retry across host-feasible Opening/funding allocations and Opening/Current predicate counts. It checks immutable snapshots, custody and canonical reconciliation; it does not establish a Weight envelope for other head Tasks or all host configurations.
+FRAME benchmarks isolate bounded package branches; every production host must prove fixture reachability and envelope coverage before generating and binding runtime-specific weights. A Fixed-Transfer Suspended-head assurance matrix uses authored maximum-length Contracts, real funding ingress, Opening, due promotion and a second retry across host-feasible current-predicate counts. It checks current-state reevaluation, custody, and canonical reconciliation; it does not establish a Weight envelope for other head Tasks or all host configurations.
 
 External-consumer profiles prove that the crate composes without DEOS types. Concrete runtime adapters, generated artifacts, stress SLOs, and operational gates belong to the integration architecture.
 

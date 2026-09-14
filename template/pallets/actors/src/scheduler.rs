@@ -1,9 +1,9 @@
 use super::pallet::*;
 use super::{
   AddressEvent, AssetOps, BlockResourceDomain, BlockResourceLimits, BlockResourceState,
-  CanonicalObservationState, FundingAuthority, IngressFailure, ObservationProvider,
-  StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
-  StepControlWeightProvider as _, TaskEffectWeightProvider as _, weights::WeightInfo,
+  CanonicalObservationState, IngressFailure, ObservationProvider, StepControlExecution,
+  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightProvider as _,
+  TaskEffectWeightProvider as _, weights::WeightInfo,
 };
 #[cfg(test)]
 use alloc::vec;
@@ -796,8 +796,6 @@ impl<T: Config> Pallet<T> {
     state.hot.pending_signal = false;
     state.hot.last_cycle_block = Some(now);
     state.hot.unsuccessful_attempt_streak = 0;
-    state.funding.funding_accumulated.clear();
-    ActorFunding::<T>::insert(actor_id, &state.funding);
     Self::deposit_event(Event::CycleStarted {
       actor_id,
       cycle_nonce,
@@ -915,7 +913,6 @@ impl<T: Config> Pallet<T> {
       || state.contract.steps.first() != Some(&step)
       || commit_plan.identity != state.identity
       || commit_plan.hot != state.hot
-      || commit_plan.funding != state.funding
       || commit_plan.admission != *admission
     {
       return Err(AttemptTransactionError::Invariant);
@@ -947,18 +944,10 @@ impl<T: Config> Pallet<T> {
     }
     state.hot = Self::prepare_opening_rearm_hot(actor_id, &instance, admission, state.hot, None)?;
     Self::charge_pipeline_opening(actor_id, &instance)?;
-    let opening_predicate_results = Self::capture_opening_predicate_results(
-      &instance.sovereign_account,
-      &instance.steps,
-      commit_plan.maximum_fee.total_fee,
-    );
-    let mut opening_predicate_index = 0usize;
     let predicate_matches = Self::evaluate_step_precondition(
       step.precondition.as_ref(),
       &instance.sovereign_account,
       commit_plan.maximum_fee.total_fee,
-      &opening_predicate_results,
-      &mut opening_predicate_index,
     )
     .map_err(|_| AttemptTransactionError::Invariant)?;
     let cycle_nonce = commit_plan.ticket.cycle_nonce;
@@ -967,8 +956,6 @@ impl<T: Config> Pallet<T> {
     state.hot.pending_signal = false;
     state.hot.last_cycle_block = Some(now);
     state.hot.unsuccessful_attempt_streak = 0;
-    state.funding.funding_accumulated.clear();
-    ActorFunding::<T>::insert(actor_id, &state.funding);
     Self::deposit_event(Event::CycleStarted {
       actor_id,
       cycle_nonce,
@@ -1150,7 +1137,6 @@ impl<T: Config> Pallet<T> {
       || !matches!(step.task, super::types::Task::StopCycle)
       || commit_plan.identity != state.identity
       || commit_plan.hot != state.hot
-      || commit_plan.funding != state.funding
       || commit_plan.admission != *admission
     {
       return Err(AttemptTransactionError::Invariant);
@@ -1174,13 +1160,10 @@ impl<T: Config> Pallet<T> {
     if commit_plan.maximum_fee != expected_fee {
       return Err(AttemptTransactionError::Invariant);
     }
-    let mut predicate_index = run.opening_predicate_cursor as usize;
     let predicate_matches = Self::evaluate_step_precondition(
       step.precondition.as_ref(),
       &instance.sovereign_account,
       commit_plan.maximum_fee.total_fee,
-      &run.opening_predicate_results,
-      &mut predicate_index,
     )
     .map_err(|_| AttemptTransactionError::Invariant)?;
     let cycle_nonce = run.cycle_nonce;
@@ -1377,7 +1360,6 @@ impl<T: Config> Pallet<T> {
     if ActorControlLocators::<T>::contains_key(actor_id)
       || plan.identity != state.identity
       || plan.hot != state.hot
-      || plan.funding != state.funding
       || plan.admission != *admission
       || !direct_task_policy
     {
@@ -1474,7 +1456,6 @@ impl<T: Config> Pallet<T> {
       state.identity = plan.identity.clone();
       state.hot = plan.hot.clone();
       state.run_state = placement_run;
-      state.funding = plan.funding.clone();
       Self::finalize_actor_from_consumed_state(actor_id, state, admission, close_reason)
         .map_err(|_| AttemptTransactionError::Invariant)?;
       attempt.status = AttemptDisposition::Closed(close_reason);
@@ -1514,7 +1495,6 @@ impl<T: Config> Pallet<T> {
           state.identity = plan.identity.clone();
           state.hot = plan.hot.clone();
           state.run_state = placement_run;
-          state.funding = plan.funding.clone();
           Self::finalize_actor_from_consumed_state(
             actor_id,
             state,
@@ -2819,7 +2799,6 @@ impl<T: Config> Pallet<T> {
         state.identity.clone(),
         state.hot.clone(),
         state.run_state.clone(),
-        state.funding.clone(),
         admission.clone(),
         ticket,
         loaded_step.clone(),
@@ -5460,7 +5439,6 @@ impl<T: Config> Pallet<T> {
       || cell.hot.wakeup_pointer.is_some()
       || cell.hot.trigger_wakeup_pointer.is_some()
       || ActorIdentities::<T>::contains_key(actor_id)
-      || !ActorFunding::<T>::contains_key(actor_id)
       || ActiveActorCount::<T>::get() == 0
       || ActorIdentityCount::<T>::get() == 0
       || SovereignIndex::<T>::get(&identity.sovereign_account) != Some(actor_id)
@@ -5474,7 +5452,6 @@ impl<T: Config> Pallet<T> {
       return Err(ActorControlTransitionError::Invariant);
     }
     ActorRunStateStore::<T>::remove(actor_id);
-    ActorFunding::<T>::remove(actor_id);
     let active_count = ActiveActorCount::<T>::get()
       .checked_sub(1)
       .ok_or(ActorControlTransitionError::Invariant)?;
@@ -5610,43 +5587,9 @@ impl<T: Config> Pallet<T> {
         let (location, mut cell) = Self::load_primary_control_cell(actor_id)?;
         let (identity, _, admission) = Self::project_control_cell(&cell, location)
           .ok_or(ActorControlTransitionError::Invariant)?;
-        let (contract, _, contract_head) =
-          Self::control_load_current_step_contract(actor_id, &admission, 0)
-            .ok_or(ActorControlTransitionError::Invariant)?;
-        let mut funding =
-          ActorFunding::<T>::get(actor_id).ok_or(ActorControlTransitionError::Invariant)?;
-        let funding_authorized = Self::funding_event_authorized(
-          actor_id,
-          &identity.owner,
-          &contract.funding,
-          source,
-          provenance,
-        );
-        if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
-          let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-            *accumulated = accumulated
-              .checked_add(&amount)
-              .ok_or(ActorControlTransitionError::Invariant)?;
-            *accumulated
-          } else {
-            funding
-              .funding_accumulated
-              .try_insert(asset, amount)
-              .map_err(|_| ActorControlTransitionError::Invariant)?;
-            amount
-          };
-          Self::ensure_funding_state_hold_capacity(actor_id, &identity, &funding)
-            .map_err(|_| ActorControlTransitionError::Invariant)?;
-          ActorFunding::<T>::insert(actor_id, &funding);
-          Self::control_reconcile_single_step_state_hold(actor_id, &cell, &contract_head, &funding)
-            .map_err(|_| ActorControlTransitionError::Invariant)?;
-          Self::deposit_event(Event::FundingAccumulated {
-            actor_id,
-            asset,
-            added: amount,
-            accumulated,
-          });
-        }
+        let (contract, _, _) = Self::control_load_current_step_contract(actor_id, &admission, 0)
+          .ok_or(ActorControlTransitionError::Invariant)?;
+        let _ = provenance;
         let signal_matched = if !cell.hot.pending_signal
           && let Trigger::AddressEvent {
             source_filter,
@@ -7029,12 +6972,9 @@ impl<T: Config> Pallet<T> {
         Self::control_hot_exists(actor_id),
         ActorContractHeads::<T>::contains_key(actor_id),
         Self::control_admission_exists(actor_id),
-        ActorFunding::<T>::contains_key(actor_id),
         ActorRunStateStore::<T>::contains_key(actor_id),
       ) {
-        (false, false, false, false, false, false) | (true, false, false, false, false, false) => {
-          Ok(())
-        }
+        (false, false, false, false, false) | (true, false, false, false, false) => Ok(()),
         _ => Err(EnqueueOutcome::CorruptedTopology),
       };
     };
@@ -8948,70 +8888,26 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  fn funding_event_authorized(
-    actor_id: ActorId,
-    owner: &T::AccountId,
-    policy: &FundingSourcePolicyOf<T>,
-    source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
-  ) -> bool {
-    match policy {
-      FundingSourcePolicy::OwnerOnly => {
-        provenance == Some(&FundingProvenance::Signed) && source == Some(owner)
-      }
-      FundingSourcePolicy::SignedAllowlist(allowed) => {
-        provenance == Some(&FundingProvenance::Signed)
-          && source.is_some_and(|source| allowed.contains(source))
-      }
-      FundingSourcePolicy::RuntimePolicy => {
-        T::FundingAuthority::permits(actor_id, owner, source, provenance)
-      }
-      FundingSourcePolicy::AnyVerifiedIngress => source.is_some() || provenance.is_some(),
-    }
-  }
-
   pub fn preflight_funding_event(
     actor_id: ActorId,
-    asset: T::AssetId,
+    _asset: T::AssetId,
     amount: T::Balance,
-    source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
+    _source: Option<&T::AccountId>,
+    _provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
     let state = match Self::load_actor_state_for_frame_control(actor_id) {
       LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => return Ok(()),
       LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
-    let authorized = Self::funding_event_authorized(
-      actor_id,
-      &state.identity.owner,
-      &state.contract.funding,
-      source,
-      provenance,
-    );
-    let mut funding = state.funding;
     let run_state = state.run_state;
-    let identity = state.identity.clone();
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification = Self::classify_actor_loaded(&instance, run_state.as_ref())
       .map_err(Self::classification_dispatch_error)?;
     if classification.terminal_reason == Some(CloseReason::WindowExpired) || amount.is_zero() {
       return Ok(());
     }
-    if !authorized || !funding.funding_tracked_assets.contains(&asset) {
-      return Ok(());
-    }
-    if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-      *accumulated = accumulated
-        .checked_add(&amount)
-        .ok_or(Error::<T>::FundingAccumulatorOverflow)?;
-    } else {
-      funding
-        .funding_accumulated
-        .try_insert(asset, amount)
-        .map_err(|_| Error::<T>::FundingAccumulatorOverflow)?;
-    }
-    Self::ensure_funding_state_hold_capacity(actor_id, &identity, &funding)
+    Ok(())
   }
 
   /// Typed certified-ingress preflight (spec 5.3, 6.2). Read-only and covers
@@ -9124,9 +9020,9 @@ impl<T: Config> Pallet<T> {
   fn apply_address_event_parts(
     actor_id: ActorId,
     asset: T::AssetId,
-    amount: T::Balance,
+    _amount: T::Balance,
     source: Option<&T::AccountId>,
-    provenance: Option<&FundingProvenance>,
+    _provenance: Option<&FundingProvenance>,
     cause_provenance: TriggerCauseProvenance,
   ) -> DispatchResult {
     let state = match Self::load_actor_state_for_frame_control(actor_id) {
@@ -9134,14 +9030,6 @@ impl<T: Config> Pallet<T> {
       LoadedActorStateOf::Active(state) => state,
       LoadedActorStateOf::Corrupt => return Err(Error::<T>::ActorInvariant.into()),
     };
-    let funding_authorized = Self::funding_event_authorized(
-      actor_id,
-      &state.identity.owner,
-      &state.contract.funding,
-      source,
-      provenance,
-    );
-    let mut funding = state.funding;
     let run_state = state.run_state;
     let instance = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
     let classification = Self::classify_actor_loaded(&instance, run_state.as_ref())
@@ -9163,30 +9051,6 @@ impl<T: Config> Pallet<T> {
     } else {
       false
     };
-    if amount > Zero::zero() {
-      if funding_authorized && funding.funding_tracked_assets.contains(&asset) {
-        let accumulated = if let Some(accumulated) = funding.funding_accumulated.get_mut(&asset) {
-          *accumulated = accumulated
-            .checked_add(&amount)
-            .ok_or(Error::<T>::FundingAccumulatorOverflow)?;
-          *accumulated
-        } else {
-          funding
-            .funding_accumulated
-            .try_insert(asset, amount)
-            .map_err(|_| Error::<T>::FundingAccumulatorOverflow)?;
-          amount
-        };
-        ActorFunding::<T>::insert(actor_id, funding);
-        Self::reconcile_actor_state_hold_with_authority(actor_id)?;
-        Self::deposit_event(Event::FundingAccumulated {
-          actor_id,
-          asset,
-          added: amount,
-          accumulated,
-        });
-      }
-    }
     if signal_matched {
       let actor_type = instance.actor_class.actor_type();
       let breakdown = Self::trigger_fee_for_weight(

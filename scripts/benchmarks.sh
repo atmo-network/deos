@@ -9,7 +9,7 @@ PRODUCTION_RUNTIME_WASM="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_r
 STEPS=50
 REPEAT=20
 MIN_DURATION=""
-HEAP_PAGES=4096
+HEAP_PAGES=8192
 CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
 PALLETS=(
@@ -427,10 +427,6 @@ verify_weight_file_contract() {
         "predicate_set_evaluation"
         "predicate_asset_evaluation"
         "predicate_observation_heavy_evaluation"
-        "opening_predicate_traversal"
-        "opening_predicate_capture"
-        "opening_max_encoded_balance_capture"
-        "opening_observation_heavy_capture"
         "opening_snapshot_traversal"
         "opening_snapshot_capture"
         "opening_target_snapshot_capture"

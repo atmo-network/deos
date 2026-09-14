@@ -296,20 +296,13 @@ fn encoded_control_resource_boundary() {
       for opening_snapshot_entries in
         0..=<Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get()
       {
-        for opening_predicate_results in
-          0..=<Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get()
-        {
-          inspect(StepControlWeightContext {
-            cursor: 0,
-            steps_in_fragment: 1,
-            opening_tail_chunks,
-            predicate_evaluation_units,
-            opening_snapshot_entries,
-            opening_predicate_results,
-            funding_snapshot_entries:
-              <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
-          });
-        }
+        inspect(StepControlWeightContext {
+          cursor: 0,
+          steps_in_fragment: 1,
+          opening_tail_chunks,
+          predicate_evaluation_units,
+          opening_snapshot_entries,
+        });
       }
     }
   }
@@ -321,13 +314,11 @@ fn encoded_control_resource_boundary() {
         opening_tail_chunks: 0,
         predicate_evaluation_units,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       });
     }
   }
   assert_eq!(
-    widest, 20,
+    widest, 19,
     "requalify the stored resource encoding bound when production Weight changes"
   );
   assert!(witness.is_some());
@@ -361,8 +352,6 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
       opening_tail_chunks: 0,
       predicate_evaluation_units: 0,
       opening_snapshot_entries: 0,
-      opening_predicate_results: 0,
-      funding_snapshot_entries: 0,
     };
     let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
     let stop_maximum = RuntimeStepControlWeight::maximum_control_weight(context, &stop).unwrap();
@@ -405,10 +394,7 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
     ).unwrap(), stop_without);
     // A predicated StopCycle uses the general execution path and emits the zero-fee receipt.
     let predicated_stop = RuntimeStep {
-      precondition: all_preconditions_at(
-        transfer_matrix_predicates(2),
-        pallet_deos_actors::ObservationTiming::Opening,
-      ),
+      precondition: all_preconditions(transfer_matrix_predicates(2)),
       ..stop.clone()
     };
     let predicated_maximum =
@@ -482,15 +468,11 @@ fn action_collection_control_is_reserved_and_settled_once_in_each_phase() {
 #[test]
 fn opening_completion_direct_weight_already_owns_invocation_receipt() {
   use crate::configs::actor_config::{
-    ActorMaxContractSteps, ActorMaxFundingTrackedAssets, ActorMaxOpeningPredicateResults,
-    ActorMaxOpeningSnapshotEntries, ActorMaxPredicatesPerStep,
+    ActorMaxContractSteps, ActorMaxOpeningSnapshotEntries, ActorMaxPredicatesPerStep,
   };
   type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
   let step = RuntimeStep {
-    precondition: all_preconditions_at(
-      transfer_matrix_predicates(4),
-      pallet_deos_actors::ObservationTiming::Opening,
-    ),
+    precondition: all_preconditions(transfer_matrix_predicates(4)),
     ..make_step(Task::StopCycle)
   };
   for tails in 0..=ActorMaxContractSteps::get()
@@ -505,9 +487,6 @@ fn opening_completion_direct_weight_already_owns_invocation_receipt() {
       opening_tail_chunks: tails,
       predicate_evaluation_units: ActorMaxPredicatesPerStep::get() * 2,
       opening_snapshot_entries: ((count - 1) * 2).min(ActorMaxOpeningSnapshotEntries::get()),
-      opening_predicate_results: (count * ActorMaxPredicatesPerStep::get())
-        .min(ActorMaxOpeningPredicateResults::get()),
-      funding_snapshot_entries: ActorMaxFundingTrackedAssets::get(),
     };
     let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
     let execution = StepControlExecution {
@@ -562,8 +541,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     opening_tail_chunks: 0,
     predicate_evaluation_units: 0,
     opening_snapshot_entries: 0,
-    opening_predicate_results: 0,
-    funding_snapshot_entries: 0,
   };
   let simple = RuntimeStepControlWeight::maximum_control_weight(simple_context, &step)
     .expect("the production head branch is bounded");
@@ -599,7 +576,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
   assert!(suspended_head_retry.all_lte(simple));
   let opening_heavy_retry_context = StepControlWeightContext {
     predicate_evaluation_units: 5,
-    opening_predicate_results: 1,
     ..simple_context
   };
   let opening_heavy_retry_maximum =
@@ -701,8 +677,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
       opening_tail_chunks: 2,
       predicate_evaluation_units: 0,
       opening_snapshot_entries: 0,
-      opening_predicate_results: 0,
-      funding_snapshot_entries: 0,
     },
     &step,
   )
@@ -720,10 +694,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
         <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
       opening_snapshot_entries:
         <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
-      opening_predicate_results:
-        <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
-      funding_snapshot_entries:
-        <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
     },
     &step,
   )
@@ -758,10 +728,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
         <Runtime as pallet_deos_actors::Config>::MaxPredicatesPerStep::get().saturating_mul(2),
       opening_snapshot_entries:
         <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
-      opening_predicate_results:
-        <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
-      funding_snapshot_entries:
-        <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
     },
     &step,
     authored,
@@ -775,12 +741,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
   )
   .expect("maximum Opening progress actual evidence exists");
   assert_eq!(authored_progress_actual, authored);
-  // Independent sources in the measured 12-Step Opening point expose the old direct shortcut.
-  // This is a counterexample floor, not a generated model for the full parameter domain.
-  let opening_point = Weight::from_parts(706_981_633, 196_777)
-    .saturating_add(<Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().reads(155))
-    .saturating_add(<Runtime as polkadot_sdk::frame_system::Config>::DbWeight::get().writes(7));
-  assert!(opening_point.all_lte(authored_progress_actual));
   assert!(authored_progress_actual.all_lte(authored));
   let minimal_opening_context = StepControlWeightContext {
     cursor: 0,
@@ -788,9 +748,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     opening_tail_chunks: maximum_opening_tail_chunks,
     predicate_evaluation_units: 0,
     opening_snapshot_entries: 0,
-    opening_predicate_results: 0,
-    funding_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(
-    ),
   };
   let minimal_opening_maximum =
     RuntimeStepControlWeight::maximum_control_weight(minimal_opening_context, &step)
@@ -909,10 +866,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     opening_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxContractSteps::get()
       .saturating_sub(1)
       .saturating_mul(2),
-    opening_predicate_results:
-      <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
-    funding_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(
-    ),
   };
   let maximal_completion_maximum =
     RuntimeStepControlWeight::maximum_control_weight(maximal_completion_context, &step)
@@ -992,8 +945,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
         opening_tail_chunks: 0,
         predicate_evaluation_units: 0,
         opening_snapshot_entries: 0,
-        opening_predicate_results: 0,
-        funding_snapshot_entries: 0,
       },
       &step,
     ),
@@ -1005,8 +956,6 @@ fn runtime_step_control_weight_identity_commits_every_staged_production_branch()
     opening_tail_chunks: 0,
     predicate_evaluation_units: 0,
     opening_snapshot_entries: 0,
-    opening_predicate_results: 0,
-    funding_snapshot_entries: 0,
   };
   let tail_maximum = RuntimeStepControlWeight::maximum_control_weight(tail_context, &step)
     .expect("tail control maximum exists");
@@ -1126,8 +1075,6 @@ fn composed_current_weight_covers_host_models_without_opening_double_charge() {
     opening_tail_chunks: 1,
     predicate_evaluation_units: 0,
     opening_snapshot_entries: 1,
-    opening_predicate_results: 0,
-    funding_snapshot_entries: 0,
   };
   let actual = |units, phase, cursor| {
     let context = StepControlWeightContext {
@@ -1155,10 +1102,10 @@ fn composed_current_weight_covers_host_models_without_opening_double_charge() {
   };
   // Generated host models: total counts 1..4; the Oracle-heavy axis counts only observations.
   let expected = [
-    Weight::from_parts(68_093_955, 5_579),
-    Weight::from_parts(130_596_880, 7_319),
-    Weight::from_parts(190_854_004, 9_858),
-    Weight::from_parts(251_656_545, 12_696),
+    Weight::from_parts(67_658_702, 5_526),
+    Weight::from_parts(129_419_760, 7_212),
+    Weight::from_parts(189_094_890, 9_859),
+    Weight::from_parts(249_754_550, 12_697),
   ];
   for (phase, cursor) in [
     (StepControlPhase::Opening, 0),
@@ -1177,10 +1124,8 @@ fn composed_current_weight_covers_host_models_without_opening_double_charge() {
 }
 
 #[test]
-fn composed_opening_capture_models_replace_traversal_without_double_charge() {
-  use crate::configs::actor_config::{
-    ActorMaxContractSteps, ActorMaxOpeningPredicateResults, ActorMaxOpeningSnapshotEntries,
-  };
+fn composed_opening_snapshot_models_replace_traversal_without_double_charge() {
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxOpeningSnapshotEntries};
   type ControlWeights = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
   let step = StepOf::<Runtime> {
     precondition: all_preconditions(vec![pallet_deos_actors::Predicate::BlockNumberAbove {
@@ -1189,15 +1134,13 @@ fn composed_opening_capture_models_replace_traversal_without_double_charge() {
     task: TaskOf::<Runtime>::StopCycle,
     on_error: StepErrorPolicy::AbortCycle,
   };
-  let actual = |amounts, results| {
+  let actual = |entries| {
     let context = StepControlWeightContext {
       cursor: 0,
       steps_in_fragment: 1,
       opening_tail_chunks: 1,
       predicate_evaluation_units: 1,
-      opening_snapshot_entries: if amounts { results } else { 1 },
-      opening_predicate_results: if amounts { 1 } else { results },
-      funding_snapshot_entries: 0,
+      opening_snapshot_entries: entries,
     };
     let maximum = RuntimeStepControlWeight::maximum_control_weight(context, &step).unwrap();
     let actual = RuntimeStepControlWeight::actual_control_weight(
@@ -1216,53 +1159,22 @@ fn composed_opening_capture_models_replace_traversal_without_double_charge() {
     assert!(actual.all_lte(maximum));
     actual
   };
-  for amounts in [false, true] {
-    let maximum = if amounts {
-      ActorMaxOpeningSnapshotEntries::get()
-    } else {
-      ActorMaxOpeningPredicateResults::get()
-    };
-    for count in 1..=maximum {
-      let (traversal, capture) = if amounts {
-        let models = [
-          ControlWeights::opening_snapshot_capture(count),
-          ControlWeights::opening_target_snapshot_capture(count.min(ActorMaxContractSteps::get())),
-          ControlWeights::opening_share_mixed_capture(
-            count.min(2 * ActorMaxContractSteps::get() - 1),
-          ),
-        ];
-        (
-          ControlWeights::opening_snapshot_traversal(),
-          Weight::from_parts(
-            models.iter().map(Weight::ref_time).max().unwrap(),
-            models.iter().map(Weight::proof_size).max().unwrap(),
-          ),
-        )
-      } else {
-        let models = [
-          Some(ControlWeights::opening_predicate_capture(count)),
-          Some(ControlWeights::opening_max_encoded_balance_capture(count)),
-          (count >= 2).then(|| ControlWeights::opening_observation_heavy_capture(count - 1)),
-        ];
-        (
-          ControlWeights::opening_predicate_traversal(),
-          Weight::from_parts(
-            models.iter().flatten().map(Weight::ref_time).max().unwrap(),
-            models
-              .iter()
-              .flatten()
-              .map(Weight::proof_size)
-              .max()
-              .unwrap(),
-          ),
-        )
-      };
-      assert!(traversal.ref_time() > 0);
-      assert_eq!(
-        actual(amounts, count).checked_sub(&actual(amounts, 0)),
-        capture.checked_sub(&traversal),
-      );
-    }
+  for count in 1..=ActorMaxOpeningSnapshotEntries::get() {
+    let models = [
+      ControlWeights::opening_snapshot_capture(count),
+      ControlWeights::opening_target_snapshot_capture(count.min(ActorMaxContractSteps::get())),
+      ControlWeights::opening_share_mixed_capture(count.min(2 * ActorMaxContractSteps::get() - 1)),
+    ];
+    let traversal = ControlWeights::opening_snapshot_traversal();
+    let capture = Weight::from_parts(
+      models.iter().map(Weight::ref_time).max().unwrap(),
+      models.iter().map(Weight::proof_size).max().unwrap(),
+    );
+    assert!(traversal.ref_time() > 0);
+    assert_eq!(
+      actual(count).checked_sub(&actual(0)),
+      capture.checked_sub(&traversal),
+    );
   }
 }
 
@@ -1282,13 +1194,10 @@ fn system_transfer_steps(target_actor_id: ActorId) -> pallet_deos_actors::Contra
 
 #[test]
 fn deos_reference_actor_contract_bounds_are_structural_and_genesis_is_resource_admitted() {
-  use crate::configs::actor_config::{
-    ActorMaxContractSteps, ActorMaxOpeningPredicateResults, ActorMaxOpeningSnapshotEntries,
-  };
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxOpeningSnapshotEntries};
 
   assert_eq!(ActorMaxContractSteps::get(), 12);
   assert_eq!(ActorMaxOpeningSnapshotEntries::get(), 24);
-  assert_eq!(ActorMaxOpeningPredicateResults::get(), 48);
   seeded_test_ext().execute_with(|| {
     let service = Actors::guaranteed_actor_service_weight().expect("reference service exists");
     let mut system_contracts = 0u32;
@@ -1312,11 +1221,8 @@ fn deos_reference_actor_contract_bounds_are_structural_and_genesis_is_resource_a
 }
 
 #[test]
-fn twelve_twenty_four_forty_eight_product_is_selected_by_complete_contract_weight() {
-  use crate::configs::actor_config::{
-    ActorMaxContractSteps, ActorMaxOpeningPredicateResults, ActorMaxOpeningSnapshotEntries,
-    ActorMaxPredicatesPerStep,
-  };
+fn maximum_current_state_contract_is_selected_by_complete_contract_weight() {
+  use crate::configs::actor_config::{ActorMaxContractSteps, ActorMaxPredicatesPerStep};
 
   let steps = ActorMaxContractSteps::get();
   let sparse: RuntimeContractSteps = (0..steps)
@@ -1334,20 +1240,19 @@ fn twelve_twenty_four_forty_eight_product_is_selected_by_complete_contract_weigh
       let asset_a = AssetKind::Local(40_000 + index * 2);
       let asset_b = AssetKind::Local(40_001 + index * 2);
       RuntimeStep {
-        precondition: all_preconditions_at(
+        precondition: all_preconditions(
           (0..ActorMaxPredicatesPerStep::get())
             .map(|predicate| pallet_deos_actors::Predicate::BalanceAbove {
               asset: if predicate % 2 == 0 { asset_a } else { asset_b },
               threshold: u128::from(predicate + 1),
             })
             .collect(),
-          pallet_deos_actors::ObservationTiming::Opening,
         ),
         task: Task::AddLiquidity {
           asset_a,
           asset_b,
-          amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
-          amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+          amount_a: AmountResolution::Percent(Perbill::one()),
+          amount_b: AmountResolution::Percent(Perbill::one()),
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::AbortCycle,
@@ -1355,27 +1260,18 @@ fn twelve_twenty_four_forty_eight_product_is_selected_by_complete_contract_weigh
     })
     .collect::<Vec<_>>()
     .try_into()
-    .expect("structural 12/24/48 product fits");
+    .expect("maximum current-state Contract geometry fits");
   let service = Actors::guaranteed_actor_service_weight().expect("reference service exists");
   let sparse_required = Actors::contract_steps_admission_weight_upper(ActorType::System, &sparse);
   let dense_required = Actors::contract_steps_admission_weight_upper(ActorType::System, &dense);
 
-  assert_eq!(dense.len() as u32, ActorMaxContractSteps::get());
-  assert_eq!(
-    dense.len() as u32 * 2,
-    ActorMaxOpeningSnapshotEntries::get()
-  );
-  assert_eq!(
-    dense.len() as u32 * ActorMaxPredicatesPerStep::get(),
-    ActorMaxOpeningPredicateResults::get(),
-  );
-  assert!(sparse_required.all_lte(service));
-  assert!(dense_required.ref_time() <= service.ref_time());
-  assert!(dense_required.proof_size() > service.proof_size());
-  assert!(!dense_required.all_lte(service));
   println!(
-    "ACTOR_PRODUCT_ADMISSION_V1 sparse={sparse_required:?} dense={dense_required:?} service={service:?}"
+    "ACTOR_CURRENT_STATE_ADMISSION_V1 sparse={sparse_required:?} dense={dense_required:?} service={service:?}"
   );
+  assert_eq!(dense.len() as u32, ActorMaxContractSteps::get());
+  assert!(sparse_required.all_lte(dense_required));
+  assert!(sparse_required != dense_required);
+  assert!(dense_required.all_lte(service));
 }
 
 #[test]
@@ -1538,11 +1434,11 @@ fn pre_g5_waiting_selector_is_finite_contained_and_genesis_fit() {
     assert!(system_contracts > 0);
     assert_eq!(
       current_genesis_maximum,
-      Weight::from_parts(18_490_261_174, 223_822),
+      Weight::from_parts(17_557_144_256, 224_049),
     );
     assert_eq!(
       selected_genesis_maximum,
-      Weight::from_parts(22_961_831_174, 283_994),
+      Weight::from_parts(22_043_308_256, 283_197),
     );
     assert!(selected_genesis_maximum.all_lte(service));
     println!(
@@ -2529,29 +2425,16 @@ fn make_step(task: RuntimeTask) -> RuntimeStep {
   }
 }
 
-fn all_preconditions_at(
+fn all_preconditions(
   predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
-  timing: pallet_deos_actors::ObservationTiming,
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   if predicates.is_empty() {
     return None;
   }
-  let clause = BoundedVec::try_from(
-    predicates
-      .into_iter()
-      .map(|predicate| pallet_deos_actors::TimedPredicate { timing, predicate })
-      .collect::<Vec<_>>(),
-  )
-  .expect("runtime predicates fit");
+  let clause = BoundedVec::try_from(predicates).expect("runtime predicates fit");
   Some(pallet_deos_actors::Precondition {
     clauses: BoundedVec::try_from(vec![clause]).expect("runtime clause fits"),
   })
-}
-
-fn all_preconditions(
-  predicates: Vec<pallet_deos_actors::Predicate<AssetKind, u128, u32, primitives::OracleFeedId>>,
-) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
-  all_preconditions_at(predicates, pallet_deos_actors::ObservationTiming::Current)
 }
 
 fn any_preconditions(
@@ -2559,13 +2442,7 @@ fn any_preconditions(
 ) -> Option<pallet_deos_actors::PreconditionOf<Runtime>> {
   let clauses = predicates
     .into_iter()
-    .map(|predicate| {
-      BoundedVec::try_from(vec![pallet_deos_actors::TimedPredicate {
-        timing: pallet_deos_actors::ObservationTiming::Current,
-        predicate,
-      }])
-      .expect("runtime predicate fits")
-    })
+    .map(|predicate| BoundedVec::try_from(vec![predicate]).expect("runtime predicate fits"))
     .collect::<Vec<_>>();
   Some(pallet_deos_actors::Precondition {
     clauses: BoundedVec::try_from(clauses).expect("runtime clauses fit"),
@@ -2660,7 +2537,7 @@ pub(super) fn transfer_contract_steps_with_opening_predicates(
   assert!(step_count > 0, "W3 Contract must contain a Step");
   let steps = (0..step_count)
     .map(|step_index| RuntimeStep {
-      precondition: all_preconditions_at(
+      precondition: all_preconditions(
         (0..predicates_per_step)
           .map(
             |predicate_index| pallet_deos_actors::Predicate::BalanceNotEquals {
@@ -2676,7 +2553,6 @@ pub(super) fn transfer_contract_steps_with_opening_predicates(
             },
           )
           .collect(),
-        pallet_deos_actors::ObservationTiming::Opening,
       ),
       task: Task::Transfer {
         to: to.clone(),
@@ -2700,9 +2576,6 @@ pub(super) fn one_step_fifo_attempt_maxima(steps: &RuntimeContractSteps) -> (Wei
     opening_tail_chunks: 0,
     predicate_evaluation_units: 0,
     opening_snapshot_entries: 0,
-    opening_predicate_results: 0,
-    funding_snapshot_entries: <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(
-    ),
   };
   let step_control = RuntimeStepControlWeight::maximum_control_weight(context, step)
     .expect("one-Step profile has a production control envelope");
@@ -2842,10 +2715,6 @@ fn age_fixture_control_clock(actor_id: ActorId) {
       });
     }
   }
-}
-
-fn actor_funding(actor_id: ActorId) -> pallet_deos_actors::ActorFundingStateOf<Runtime> {
-  Actors::actor_funding(actor_id).expect("active actor funding exists")
 }
 
 fn actor_account(actor_id: ActorId) -> crate::AccountId {
@@ -3167,7 +3036,6 @@ fn actor_state_hold_total(actor_id: ActorId) -> Balance {
     .saturating_add(record.breakdown.contract_head)
     .saturating_add(record.breakdown.contract_body)
     .saturating_add(record.breakdown.detector)
-    .saturating_add(record.breakdown.funding)
     .saturating_add(record.breakdown.run)
 }
 
@@ -3549,11 +3417,10 @@ fn profile_contract_storage_footprint() {
         .div_ceil(pallet_deos_actors::MAX_STEPS_PER_TAIL_CHUNK) as usize
     );
     println!(
-      "CONTRACT_GEOMETRY_PROFILE steps={} funding={} opening={} opening_predicates={} short_head={} short_certificate={} short_tail_chunks={} short_tail_bytes={} max_head={} max_certificate={} max_tail_chunks={} max_tail_bytes={}",
+      "CONTRACT_GEOMETRY_PROFILE steps={} funding={} opening={} short_head={} short_certificate={} short_tail_chunks={} short_tail_bytes={} max_head={} max_certificate={} max_tail_chunks={} max_tail_bytes={}",
       step_count,
       <Runtime as pallet_deos_actors::Config>::MaxFundingTrackedAssets::get(),
       <Runtime as pallet_deos_actors::Config>::MaxOpeningSnapshotEntries::get(),
-      <Runtime as pallet_deos_actors::Config>::MaxOpeningPredicateResults::get(),
       short.0,
       short.1,
       short.2,
@@ -3982,8 +3849,8 @@ fn system_actor_executes_native_staking_lp_donation_task() {
         usage.user_dispatch_used()
       ),
       (
-        Weight::from_parts(14_152_748_935, 155_278),
-        Weight::from_parts(1_206_242_000, 14_035),
+        Weight::from_parts(13_661_215_588, 151_307),
+        Weight::from_parts(1_202_399_000, 14_035),
         Weight::zero()
       ),
       "the successful donation keeps Control and liquidity effect ownership separate"
@@ -4021,8 +3888,8 @@ fn system_actor_executes_native_staking_lp_donation_task() {
     assert_eq!(
       cohort_maxima,
       (
-        Weight::from_parts(12_924_472_858, 127_063),
-        Weight::from_parts(1_206_242_000, 14_035)
+        Weight::from_parts(12_410_055_000, 123_247),
+        Weight::from_parts(1_202_399_000, 14_035)
       )
     );
     let cohort = (0..100)
@@ -4038,8 +3905,8 @@ fn system_actor_executes_native_staking_lp_donation_task() {
     assert_eq!(
       cohort_cell.resources,
       pallet_deos_actors::ActorStepResourceEnvelope {
-        control: Weight::from_parts(3_271_396_813, 45_638),
-        effect: Weight::from_parts(1_206_242_000, 14_035),
+        control: Weight::from_parts(3_032_195_702, 41_705),
+        effect: Weight::from_parts(1_202_399_000, 14_035),
       }
     );
     let cutoff = pallet_deos_actors::ActorReadyTail::<Runtime>::get();
@@ -4063,7 +3930,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
       .usage();
     assert_eq!(
       progressed,
-      cohort[..12],
+      cohort[..13],
       "the first actual admission stop must preserve the homogeneous FIFO prefix"
     );
     assert_eq!(
@@ -4072,18 +3939,18 @@ fn system_actor_executes_native_staking_lp_donation_task() {
         frontier_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(33_660_842_618, 577_863),
-        Weight::from_parts(14_474_904_000, 168_420)
+        Weight::from_parts(32_727_565_594, 574_852),
+        Weight::from_parts(15_631_187_000, 182_455)
       )
     );
-    assert!(cohort[..12].iter().all(|id| {
+    assert!(cohort[..13].iter().all(|id| {
       Actors::active_actor_state(*id).is_some_and(|state| !state.hot.pending_signal)
     }));
-    assert!(cohort[12..].iter().all(|id| {
+    assert!(cohort[13..].iter().all(|id| {
       Actors::active_actor_state(*id)
         .is_some_and(|state| state.hot.pending_signal && state.hot.queue_ticket.is_some())
     }));
-    let next_ticket = Actors::actor_hot(cohort[12])
+    let next_ticket = Actors::actor_hot(cohort[13])
       .and_then(|hot| hot.queue_ticket)
       .expect("first deferred Actor retains its ticket");
     assert_eq!(Actors::prepass_execution_cutoff(), Some((2, cutoff)));
@@ -4175,9 +4042,7 @@ fn actor_fee_collector_routes_the_full_amount_to_fee_sink() {
         .cycle_nonce,
       0
     );
-    // The default-deny RuntimePolicy accumulates no authoritative funding from fees.
-    let funding = Actors::actor_funding(fee_sink_id).expect("Fee Sink funding state");
-    assert!(funding.funding_accumulated.is_empty());
+    // The default-deny RuntimePolicy does not turn fee ingress into a signal.
   });
 }
 
@@ -4192,7 +4057,6 @@ fn actor_fee_collector_ignores_malformed_actor_and_scheduler_state() {
     let payer_before = native_balance(&payer);
     let sink_before = native_balance(&fee_sink);
     let control_before = Actors::actor_control_cell(fee_sink_id).expect("Fee Sink control cell");
-    pallet_deos_actors::ActorFunding::<Runtime>::remove(fee_sink_id);
     pallet_deos_actors::ActorReadyTail::<Runtime>::put(1);
     pallet_deos_actors::ActorReadyOccupancy::<Runtime>::put(0);
     let wakeup_len = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
@@ -4211,7 +4075,6 @@ fn actor_fee_collector_ignores_malformed_actor_and_scheduler_state() {
 
     assert_eq!(native_balance(&payer), payer_before - amount);
     assert_eq!(native_balance(&fee_sink), sink_before + amount);
-    assert_eq!(Actors::actor_funding(fee_sink_id), None);
     assert_eq!(
       Actors::actor_control_cell(fee_sink_id),
       Some(control_before)
@@ -4581,7 +4444,7 @@ fn observation_change_single_user_binds_fanout_and_scheduled_service() {
         .saturating_add(Actors::observation_fanout_ordinary_weight_upper()),
       "one ordinary page owns base, branch selection and exactly one admitted branch unit"
     );
-    assert_eq!(fanout, Weight::from_parts(174_670_577_000, 309_950));
+    assert_eq!(fanout, Weight::from_parts(203_867_198_000, 309_950));
     let state = Actors::active_actor_state(actor_id).expect("ObservationChange Actor remains");
     assert!(state.hot.pending_signal);
     assert!(state.hot.queue_ticket.is_some());
@@ -4600,8 +4463,8 @@ fn observation_change_single_user_binds_fanout_and_scheduled_service() {
         usage.user_dispatch_used()
       ),
       (
-        Weight::from_parts(12_954_769_748, 141_918),
-        Weight::from_parts(2_293_433_000, 29_222),
+        Weight::from_parts(12_546_891_924, 142_764),
+        Weight::from_parts(2_099_991_000, 31_270),
         Weight::zero()
       )
     );
@@ -4680,7 +4543,7 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
     use pallet_deos_actors::WeightInfo as _;
     assert_eq!(
       consumed,
-      Weight::from_parts(14_876_034_000, 386_687)
+      Weight::from_parts(14_806_051_000, 389_759)
         .saturating_add(W::crossing_selection_probe().saturating_mul(3)),
       "the generated Crossing worker owners must settle the complete one-Actor detector/latch path"
     );
@@ -4712,12 +4575,12 @@ fn crossing_single_user_fire_binds_executed_detector_latch_control() {
       .usage();
     assert_eq!(
       usage.actor_control_used(),
-      Weight::from_parts(12_954_769_748, 141_918),
+      Weight::from_parts(12_546_891_924, 142_764),
       "the next-block prepass and one funded User service own the complete Control charge"
     );
     assert_eq!(
       usage.actor_effect_used(),
-      Weight::from_parts(2_293_433_000, 29_222),
+      Weight::from_parts(2_099_991_000, 31_270),
       "the Transfer effect remains separate from detector and service Control"
     );
     assert_eq!(Balances::free_balance(BOB), recipient_before + 1);
@@ -4885,7 +4748,7 @@ fn crossing_prepass_materialization_rate_follows_the_materialization_family_rota
         && materialization_budget
           .proof_size()
           .saturating_sub(minima_sum.proof_size())
-          < 2_000,
+          < <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as WeightInfo>::crossing_work_probe().proof_size(),
       "the three family minimum quanta must nearly exhaust the materialization budget so that the reservation set depends on family service order: {minima_sum:?} vs {materialization_budget:?}"
     );
   });
@@ -4913,6 +4776,7 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
 
   let base = ActorsWeight::crossing_worker_base();
   let probe = ActorsWeight::crossing_work_probe();
+  let fire_probe = ActorsWeight::crossing_fire_probe();
   let placed = ActorsWeight::crossing_placed_unit();
   let placed_pair = ActorsWeight::crossing_placed_pair_unit();
   let placed_maximum = ActorsWeight::crossing_placed_maximum_unit();
@@ -5134,8 +4998,8 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
     phase_c_increment,
     placed_maximum
       .proof_size()
-      .saturating_add(probe.proof_size() * 2),
-    "the aggregate owner and two classification probes own the executed eight-candidate yield"
+      .saturating_add(probe.proof_size() * 3),
+    "the aggregate owner and three bounded classification probes own the executed eight-candidate yield"
   );
   assert!(
     phase_c_residue < probe.proof_size(),
@@ -5168,18 +5032,6 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
       && phase_b_increment < placed_pair.proof_size().saturating_mul(4),
     "three executed pair-owner admissions settle six branch candidates"
   );
-  const RELEASED_ROTATED_FIRST_REF_TIME: u64 = 40_415_301_374;
-  assert_eq!(
-    work_rows[1].1.ref_time(),
-    RELEASED_ROTATED_FIRST_REF_TIME
-      .saturating_add(pair_premium.ref_time().saturating_mul(3))
-      .saturating_add(
-        ActorsWeight::crossing_selection_probe()
-          .ref_time()
-          .saturating_mul(4)
-      ),
-    "the executed six-candidate phase must charge exactly three generated pair premiums and four selection owners over the released three-candidate phase"
-  );
   seeded_test_ext().execute_with(|| {
     let _feed = install_fixture(8_107, 48, true);
     let (materialized, consumed) = sweep("phase_b_grant", phase_b_grant);
@@ -5191,9 +5043,10 @@ fn crossing_materialization_reservation_boundaries_reconcile_executed_yield() {
       consumed.proof_size(),
       base
         .saturating_add(probe.saturating_mul(2))
+        .saturating_add(fire_probe)
         .saturating_add(leaf_owner)
         .proof_size(),
-      "the fresh grant charges its common probe, the ordinary leaf owner and one further work probe"
+      "the fresh grant charges its common and fire probes, the ordinary leaf owner and one further work probe"
     );
   });
 
@@ -5351,13 +5204,13 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
   println!(
     "ACTOR_REACTIVE_ENVELOPES_V1 base={base:?} branch_probe={branch_probe:?} unit={unit:?} fault={fault:?} units_per_block={units_per_block}"
   );
-  assert_eq!(base, Weight::from_parts(56_775_000, 1_629));
-  assert_eq!(branch_probe, Weight::from_parts(64_247_000, 3_587));
-  assert_eq!(unit, Weight::from_parts(174_549_555_000, 304_734));
-  assert_eq!(fault, Weight::from_parts(209_851_000, 4_106));
+  assert_eq!(base, Weight::from_parts(56_565_000, 1_629));
+  assert_eq!(branch_probe, Weight::from_parts(63_480_000, 3_587));
+  assert_eq!(unit, Weight::from_parts(203_747_153_000, 304_734));
+  assert_eq!(fault, Weight::from_parts(198_397_000, 4_106));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
-    units_per_block, 2,
+    units_per_block, 1,
     "fee-charged blocked-fallback RefTime is the active ordinary fanout service limit"
   );
 
@@ -5372,10 +5225,10 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
 
   assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 1));
   assert_eq!(subscription_pages, 157);
-  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 79);
+  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 157);
   assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
-  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 79);
-  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 157);
+  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 157);
+  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 314);
 }
 
 #[test]
@@ -5534,13 +5387,13 @@ fn close_actor_emits_owner_initiated_reason() {
 // --- Actors Platform: Amount Resolution ---
 
 #[test]
-fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
+fn current_available_percent_keeps_system_actor_active_on_exhaustion() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     })])
     .expect("steps fits");
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
@@ -5572,24 +5425,23 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
       instance.hot.lifecycle,
       pallet_deos_actors::ActiveLifecycle::Active
     );
+    let available_before = native_balance(&actor_account(actor_id));
     fund_native_via_call(CHARLIE, actor_id, 8_000_000_000_000);
     assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&AssetKind::Native),
-      Some(&8_000_000_000_000)
+      native_balance(&actor_account(actor_id)),
+      available_before.saturating_add(8_000_000_000_000)
     );
   });
 }
 
 #[test]
-fn cycle_summary_reports_funding_unavailable_skip() {
+fn cycle_summary_reports_zero_current_balance_resolution_skip() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     })])
     .expect("steps fits");
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
@@ -5609,8 +5461,8 @@ fn cycle_summary_reports_funding_unavailable_skip() {
             executed_steps: 0,
             committed_effectful_tasks: 0,
             precondition_skips: 0,
-            skipped_resolution: 0,
-            skipped_funding_unavailable: 1,
+            skipped_resolution: 1,
+            skipped_funding_unavailable: 0,
             failed_steps: 0,
           },
         } if *id == actor_id
@@ -5620,13 +5472,13 @@ fn cycle_summary_reports_funding_unavailable_skip() {
 }
 
 #[test]
-fn percentage_of_last_funding_keeps_user_actor_active_on_exhaustion() {
+fn current_available_percent_executes_and_keeps_user_actor_active() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
+      amount: AmountResolution::Percent(Perbill::from_percent(100)),
     })])
     .expect("steps fits");
     let prefunded = user_prefunding_requirement(&steps);
@@ -5642,12 +5494,12 @@ fn percentage_of_last_funding_keeps_user_actor_active_on_exhaustion() {
     assert!(has_actor_event(|event| {
       matches!(
         event,
-        Event::StepSkipped {
+        Event::TransferExecuted {
           actor_id: id,
           step_index: 0,
-          reason: StepSkippedReason::FundingUnavailable,
+          amount,
           ..
-        } if *id == actor_id
+        } if *id == actor_id && *amount > 0
       )
     }));
   });
@@ -5756,7 +5608,7 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
       }),
       make_step(Task::Stake {
         asset: AssetKind::Local(999),
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
     ])
     .expect("steps fits");
@@ -6654,8 +6506,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         first_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(15_253_398_980, 165_779),
-        Weight::from_parts(3_443_678_000, 19_253)
+        Weight::from_parts(14_710_126_886, 162_807),
+        Weight::from_parts(3_385_574_000, 19_253)
       )
     );
     let continuation = Actors::actor_run_state(actor_id).expect("deviation suspends");
@@ -6677,8 +6529,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         second_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(6_526_601_980, 90_386),
-        Weight::from_parts(3_443_678_000, 19_253)
+        Weight::from_parts(6_220_089_886, 87_594),
+        Weight::from_parts(3_385_574_000, 19_253)
       ),
       "the second failure owns long-Wakeup placement rather than another Ready ticket"
     );
@@ -6711,7 +6563,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         return_usage.actor_control_used(),
         return_usage.actor_effect_used()
       ),
-      (Weight::from_parts(8_506_170_748, 95_611), Weight::zero()),
+      (Weight::from_parts(8_378_337_924, 95_506), Weight::zero()),
       "Wakeup return is Control-only and cannot execute the retry in the same block"
     );
     System::set_block_number(5);
@@ -6725,8 +6577,8 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         resumed_usage.actor_effect_used()
       ),
       (
-        Weight::from_parts(15_650_484_980, 172_272),
-        Weight::from_parts(3_443_678_000, 19_253)
+        Weight::from_parts(15_073_489_886, 169_480),
+        Weight::from_parts(3_385_574_000, 19_253)
       ),
       "returned service owns the third failed effect separately from Wakeup return"
     );
@@ -7153,15 +7005,15 @@ fn actor_liquidity_retry_skips_frozen_current_balance_without_moving_custody() {
       make_step(Task::Transfer {
         to: BOB,
         asset: AssetKind::Local(ASSET_A),
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       }),
       StepOf::<Runtime> {
         precondition: None,
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: local,
-          amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
-          amount_b: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount_a: AmountResolution::Percent(Perbill::from_percent(50)),
+          amount_b: AmountResolution::Percent(Perbill::from_percent(50)),
           min_lp_out: Balance::MAX,
         },
         on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
@@ -7369,7 +7221,7 @@ fn actor_liquidity_retry_skips_frozen_current_balance_without_moving_custody() {
 }
 
 #[test]
-fn actor_unstake_last_funding_fails_before_effect_after_empty_receipt_destruction() {
+fn actor_unstake_percentage_current_fails_before_effect_after_empty_receipt_destruction() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     assert_ok!(create_test_asset(0, &ALICE));
@@ -7378,7 +7230,7 @@ fn actor_unstake_last_funding_fails_before_effect_after_empty_receipt_destructio
     assert_eq!(Assets::total_supply(receipt), 0);
     let steps = BoundedVec::try_from(vec![make_step(Task::Unstake {
       asset: AssetKind::Native,
-      shares: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      shares: AmountResolution::Percent(Perbill::from_percent(50)),
     })])
     .expect("one admitted Step fits");
     let mut contract =
@@ -7392,12 +7244,6 @@ fn actor_unstake_last_funding_fails_before_effect_after_empty_receipt_destructio
       Some(contract),
     ));
     let actor = actor_account(actor_id);
-    assert!(
-      actor_funding(actor_id)
-        .funding_tracked_assets
-        .contains(&AssetKind::Local(receipt))
-    );
-    assert!(actor_funding(actor_id).funding_accumulated.is_empty());
 
     // Destroy the empty class through its authorized lifecycle, not Actor storage mutation.
     #[cfg(feature = "runtime-benchmarks")]
@@ -7501,7 +7347,7 @@ fn actor_unstake_percentage_current_resolves_live_staking_shares() {
     ));
     let steps = BoundedVec::try_from(vec![make_step(Task::Unstake {
       asset: AssetKind::Native,
-      shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      shares: AmountResolution::Percent(Perbill::from_percent(50)),
     })])
     .expect("steps fits");
     let actor_id = create_user(BOB, manual_schedule(), None, steps);
@@ -8127,49 +7973,6 @@ fn on_address_event_without_source_is_ignored_for_filtered_trigger() {
 }
 
 #[test]
-fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("execution plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
-    assert_ok!(update_actor_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      FundingSourcePolicy::AnyVerifiedIngress
-    ));
-    let sovereign = actor_account(actor_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("system actor funding")
-        .funding_accumulated
-        .try_insert(AssetKind::Native, u128::MAX)
-        .expect("funding accumulator fits");
-    });
-    let alice_before = native_balance(&ALICE);
-    let sovereign_before = native_balance(&sovereign);
-    assert_eq!(
-      <TmctolAssetOps as AssetOps<AccountId, AssetKind, Balance>>::transfer(
-        &ALICE,
-        &sovereign,
-        AssetKind::Native,
-        1,
-      ),
-      Err(pallet_deos_actors::TaskFailure::permanent(
-        Error::<Runtime>::FundingAccumulatorOverflow,
-      ))
-    );
-    assert_eq!(native_balance(&ALICE), alice_before);
-    assert_eq!(native_balance(&sovereign), sovereign_before);
-  });
-}
-
-#[test]
 fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -8547,56 +8350,6 @@ fn router_fee_routing_notifies_burn_actor_via_runtime_ingress_adapter() {
 }
 
 #[test]
-fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
-    let funding_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("execution plan fits");
-    assert_ok!(update_actor_contract_partial!(
-      RuntimeOrigin::root(),
-      burn_actor_id,
-      (funding_plan, CompletionPolicy::Persistent,)
-    ));
-    System::set_block_number(2);
-    assert_ok!(update_actor_contract_partial!(
-      RuntimeOrigin::root(),
-      burn_actor_id,
-      FundingSourcePolicy::AnyVerifiedIngress
-    ));
-    let sovereign = actor_account(burn_actor_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(burn_actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("Burn Actor funding")
-        .funding_accumulated
-        .try_insert(AssetKind::Native, u128::MAX)
-        .expect("funding accumulator fits");
-    });
-    let alice_before = native_balance(&ALICE);
-    let sovereign_before = native_balance(&sovereign);
-    assert_noop!(
-      crate::configs::deos_router_config::FeeManagerImpl::<Runtime>::route_fee(
-        &ALICE,
-        AssetKind::Native,
-        10_000,
-      ),
-      pallet_deos_router::AdapterFailure::new(
-        Error::<Runtime>::FundingAccumulatorOverflow.into(),
-        pallet_deos_router::RouterFailureClass::IngressRejected,
-        pallet_deos_router::RetryDisposition::Permanent,
-      )
-    );
-    assert_eq!(native_balance(&ALICE), alice_before);
-    assert_eq!(native_balance(&sovereign), sovereign_before);
-  });
-}
-
-#[test]
 fn deos_sovereign_account_policy_reserves_genesis_custody_accounts() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -8765,13 +8518,13 @@ fn ingress_adapter_without_source_is_ignored_by_owner_only_filter() {
 }
 
 #[test]
-fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
+fn transfer_ingress_updates_live_system_balance_without_pause_resume() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     })])
     .expect("steps fits");
     let target_id = create_system(ALICE, manual_schedule(), None, steps);
@@ -8804,6 +8557,7 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       pallet_deos_actors::ActiveLifecycle::Active
     );
     let target_sovereign = actor_account(target_id);
+    let balance_before_refill = native_balance(&target_sovereign);
     let refill_amount = 8_000_000_000_000u128;
     let sender_id = create_user(
       CHARLIE,
@@ -8820,10 +8574,8 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
     System::set_block_number(System::block_number().saturating_add(1));
     run_idle(Weight::MAX);
     assert_eq!(
-      actor_funding(target_id)
-        .funding_accumulated
-        .get(&AssetKind::Native),
-      Some(&refill_amount)
+      native_balance(&actor_account(target_id)),
+      balance_before_refill.saturating_add(refill_amount)
     );
     assert!(!has_actor_event(|event| {
       matches!(event, Event::ActorResumed { actor_id: id } if *id == target_id)
@@ -8867,13 +8619,13 @@ fn xcm_ingress_with_source_triggers_owner_only_on_address_event() {
 }
 
 #[test]
-fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() {
+fn system_runtime_policy_defaults_deny_signals_for_signed_internal_and_xcm_provenance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     })])
     .expect("execution plan fits");
     let actor_id = create_system(ALICE, manual_schedule(), None, steps);
@@ -8918,58 +8670,7 @@ fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() 
       native_balance(&sovereign),
       sourced_amount.saturating_add(source_less_amount)
     );
-    let funding = actor_funding(actor_id);
-    assert!(
-      funding
-        .funding_accumulated
-        .get(&AssetKind::Native)
-        .is_none()
-    );
-  });
-}
-
-#[test]
-fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("execution plan fits");
-    let actor_id = create_system(ALICE, manual_schedule(), None, steps);
-    assert_ok!(update_actor_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      FundingSourcePolicy::AnyVerifiedIngress
-    ));
-    let sovereign = actor_account(actor_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("system actor funding")
-        .funding_accumulated
-        .try_insert(AssetKind::Native, u128::MAX)
-        .expect("funding accumulator fits");
-    });
-    let recipient = account_location(sovereign.clone());
-    let context = xcm::latest::XcmContext {
-      origin: Some(account_location(ALICE)),
-      message_id: [8u8; 32],
-      topic: None,
-    };
-    let sovereign_before = native_balance(&sovereign);
-    let result = <crate::configs::ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
-      asset_to_holding(native_xcm_asset(5_000)),
-      &recipient,
-      Some(&context),
-    );
-    assert!(matches!(
-      result,
-      Err((_, xcm::latest::Error::FailedToTransactAsset(_)))
-    ));
-    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert!(!Actors::pending_signal(actor_id));
   });
 }
 
@@ -9720,7 +9421,7 @@ fn asset_ops_native_mint_ledger_failure_precedes_notification() {
 }
 
 #[test]
-fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_funding() {
+fn signed_balance_deposits_accumulate_in_live_available_balance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let owner_pair = sr25519::Pair::from_seed(&[45u8; 32]);
@@ -9736,7 +9437,7 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     })])
     .expect("execution plan fits");
     let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
@@ -9767,7 +9468,6 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
         .saturating_add(donor_amount)
         .saturating_add(1)
     );
-    assert!(actor_funding(actor_id).funding_accumulated.is_empty());
     let owner_amount = 11_000_000_000_000;
     let owner_call =
       RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -9779,16 +9479,17 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
       Ok(Ok(_))
     ));
     assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&AssetKind::Native),
-      Some(&owner_amount)
+      native_balance(&sovereign),
+      sovereign_before
+        .saturating_add(donor_amount)
+        .saturating_add(1)
+        .saturating_add(owner_amount)
     );
   });
 }
 
 #[test]
-fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritative() {
+fn signed_asset_deposits_accumulate_in_live_available_balance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let owner_pair = sr25519::Pair::from_seed(&[47u8; 32]);
@@ -9809,7 +9510,7 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: tracked_asset,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     })])
     .expect("execution plan fits");
     let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
@@ -9825,7 +9526,6 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
       Ok(Ok(_))
     ));
     assert_eq!(Assets::balance(asset_id, sovereign.clone()), donor_amount);
-    assert!(actor_funding(actor_id).funding_accumulated.is_empty());
     let owner_amount = 11_000;
     let owner_call = RuntimeCall::Assets(polkadot_sdk::pallet_assets::Call::transfer {
       id: asset_id,
@@ -9839,12 +9539,6 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
     assert_eq!(
       Assets::balance(asset_id, sovereign),
       donor_amount.saturating_add(owner_amount)
-    );
-    assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&tracked_asset),
-      Some(&owner_amount)
     );
   });
 }
@@ -9877,7 +9571,7 @@ fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
         BoundedVec::try_from(vec![make_step(Task::Transfer {
           to: BOB,
           asset: tracked_asset,
-          amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+          amount: AmountResolution::Percent(Perbill::one()),
         })])
         .expect("execution plan fits"),
       )
@@ -9900,7 +9594,6 @@ fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
         .expect("mint actor")
         .pending_signal
     );
-    assert!(actor_funding(mint_actor).funding_accumulated.is_empty());
 
     let force_actor = make_actor();
     let force_sovereign = actor_account(force_actor);
@@ -9920,7 +9613,6 @@ fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
         .expect("force actor")
         .pending_signal
     );
-    assert!(actor_funding(force_actor).funding_accumulated.is_empty());
 
     let approved_actor = make_actor();
     let approved_sovereign = actor_account(approved_actor);
@@ -9949,84 +9641,11 @@ fn dynamic_asset_producers_notify_directly_with_balance_only_provenance() {
         .expect("approved actor")
         .pending_signal
     );
-    assert!(actor_funding(approved_actor).funding_accumulated.is_empty());
   });
 }
 
 #[test]
-fn signed_fixed_transfer_is_rejected_before_dispatch_when_funding_pending_overflows() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let signer = sr25519::Pair::from_seed(&[43u8; 32]);
-    let signer_account = crate::AccountId::from(signer.public());
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-      &signer_account,
-      1_000_000_000_000_000_000_000_000,
-    );
-    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("execution plan fits");
-    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
-    let sovereign = actor_account(actor_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("user actor funding")
-        .funding_accumulated
-        .try_insert(AssetKind::Native, u128::MAX)
-        .expect("funding accumulator fits");
-    });
-    let sovereign_before = native_balance(&sovereign);
-    let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
-      dest: Address::Id(sovereign.clone()),
-      value: 1,
-    });
-    assert!(Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call)).is_err());
-    assert_eq!(native_balance(&sovereign), sovereign_before);
-  });
-}
-
-#[test]
-fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflows() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let signer = sr25519::Pair::from_seed(&[44u8; 32]);
-    let signer_account = crate::AccountId::from(signer.public());
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
-      &signer_account,
-      1_000_000_000_000_000,
-    );
-    let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
-      to: BOB,
-      asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-    })])
-    .expect("execution plan fits");
-    let actor_id = create_user(signer_account.clone(), manual_schedule(), None, steps);
-    let sovereign = actor_account(actor_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(actor_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("user actor funding")
-        .funding_accumulated
-        .try_insert(AssetKind::Native, u128::MAX)
-        .expect("funding accumulator fits");
-    });
-    let sovereign_before = native_balance(&sovereign);
-    let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_all {
-      dest: Address::Id(sovereign.clone()),
-      keep_alive: true,
-    });
-    assert!(Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call)).is_err());
-    assert_eq!(native_balance(&sovereign), sovereign_before);
-  });
-}
-
-#[test]
-fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
+fn signed_transfer_all_records_actual_post_fee_live_balance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     let owner_signer = sr25519::Pair::from_seed(&[49u8; 32]);
@@ -10040,7 +9659,7 @@ fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
     let steps = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     })])
     .expect("execution plan fits");
     let actor_id = create_user(owner.clone(), manual_schedule(), None, steps);
@@ -10064,10 +9683,8 @@ fn signed_transfer_all_records_actual_post_fee_movement_without_event_scan() {
     let actual = native_balance(&sovereign).saturating_sub(sovereign_before);
     assert!(actual > 0);
     assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&AssetKind::Native),
-      Some(&actual)
+      native_balance(&sovereign),
+      sovereign_before.saturating_add(actual)
     );
   });
 }
@@ -10092,11 +9709,12 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       BoundedVec::try_from(vec![make_step(Task::Transfer {
         to: BOB,
         asset: AssetKind::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       })])
       .expect("execution plan fits"),
     );
     let sovereign = actor_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
     let notify_weight =
       <<Runtime as pallet_deos_actors::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_notify();
     let base_weight =
@@ -10114,10 +9732,10 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       .saturating_sub(transfer_amount);
     assert!(Actors::pending_signal(actor_id));
     assert_eq!(
-      actor_funding(actor_id)
-        .funding_accumulated
-        .get(&AssetKind::Native),
-      Some(&transfer_amount)
+      native_balance(&sovereign),
+      sovereign_before
+        .saturating_add(transfer_amount)
+        .saturating_sub(address_event_trigger_fee())
     );
     let unmatched = RuntimeCall::Balances(
       polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -10321,17 +9939,17 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
             let a = if index == 0 { AssetKind::Native } else { AssetKind::Local(10_000 + index * 2) };
             let b = AssetKind::Local(10_001 + index * 2);
             RuntimeStep {
-              precondition: all_preconditions_at((0..predicates).map(|p| {
+              precondition: all_preconditions((0..predicates).map(|p| {
                 let asset = if p % 2 == 0 { a } else { b };
                 pallet_deos_actors::Predicate::BalanceAbove {
                   asset,
                   threshold: if asset == AssetKind::Native { u128::MAX - u128::from(p + 1) } else { u128::from(p + 1) },
                 }
-              }).collect(), pallet_deos_actors::ObservationTiming::Opening),
+              }).collect()),
               task: Task::AddLiquidity {
                 asset_a: a, asset_b: b,
-                amount_a: AmountResolution::PercentageAtOpening(Perbill::one()),
-                amount_b: AmountResolution::PercentageAtOpening(Perbill::one()),
+                amount_a: AmountResolution::Percent(Perbill::one()),
+                amount_b: AmountResolution::Percent(Perbill::one()),
                 min_lp_out: 1,
               },
               on_error: StepErrorPolicy::AbortCycle,
@@ -10346,7 +9964,7 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
             }).collect()),
             task: if complete { Task::StopCycle } else {
               Task::Transfer { to: BOB, asset: AssetKind::Local(30_000),
-                amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)) }
+                amount: AmountResolution::Percent(Perbill::from_percent(50)) }
             },
             on_error: StepErrorPolicy::AbortCycle,
           };
@@ -10366,9 +9984,7 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
               },
               opening_tail_chunks: if cursor == 0 { (count - 1).div_ceil(chunk) } else { 0 },
               predicate_evaluation_units: step.precondition.as_ref().map_or(0, |p| p.evaluation_units()),
-              opening_snapshot_entries: if cursor == 0 { 2 * (count - 1) } else { 0 },
-              opening_predicate_results: if cursor == 0 { predicates * (count - 1) } else { 0 },
-              funding_snapshot_entries: if cursor == 0 { funding } else { 0 },
+              opening_snapshot_entries: 0,
             };
             let control = RuntimeStepControlWeight::maximum_control_weight(context, step)
               .expect("authored context has a control owner");
@@ -10384,7 +10000,7 @@ fn running_inner_fixture_admission_frontier_is_class_neutral() {
             maximum_step = Weight::from_parts(maximum_step.ref_time().max(total.ref_time()), maximum_step.proof_size().max(total.proof_size()));
           }
           assert_eq!(required, overhead.checked_add(&maximum_step).and_then(|w| w.checked_add(&cleanup)).expect("admission sum fits"));
-          println!("ACTOR_RUNNING_ADMISSION_V1 complete={complete} fragment={fragment} predicates={current_predicates} steps={count} target={target} opening_entries={} opening_results={} funding_bound={funding} required={required:?} service={service:?} fits={} overhead={overhead:?} cleanup={cleanup:?} maximum_step={maximum_step:?} ref_cursor={ref_cursor} proof_cursor={proof_cursor} opening_control={opening_control:?} opening_effect={opening_effect:?} full_geometry={full_geometry:?}", 2 * (count - 1), predicates * (count - 1), required.all_lte(service));
+          println!("ACTOR_RUNNING_ADMISSION_V1 complete={complete} fragment={fragment} predicates={current_predicates} steps={count} target={target} opening_entries=0 funding_bound={funding} required={required:?} service={service:?} fits={} overhead={overhead:?} cleanup={cleanup:?} maximum_step={maximum_step:?} ref_cursor={ref_cursor} proof_cursor={proof_cursor} opening_control={opening_control:?} opening_effect={opening_effect:?} full_geometry={full_geometry:?}", required.all_lte(service));
         }
       }
     }
@@ -11631,7 +11247,7 @@ fn setup_circular_chain(
       task: Task::Transfer {
         to: next_sov,
         asset: primitives::AssetKind::Native,
-        amount: AmountResolution::PercentageOfCurrent(transfer_pct),
+        amount: AmountResolution::Percent(transfer_pct),
       },
       on_error: StepErrorPolicy::AbortCycle,
     }]
@@ -12725,7 +12341,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
       precondition: None,
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
-        amount: AmountResolution::PercentageOfCurrent(pct),
+        amount: AmountResolution::Percent(pct),
         to: sov_b.clone(),
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -12742,7 +12358,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
       precondition: None,
       task: Task::Transfer {
         asset: AssetKind::Native.into(),
-        amount: AmountResolution::PercentageOfCurrent(pct),
+        amount: AmountResolution::Percent(pct),
         to: CHARLIE,
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -13278,12 +12894,8 @@ fn measure_transfer_matrix_cell(
     System::set_block_number(1);
     assert_synthetic_actor_genesis();
     let initial_balance = 1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT);
-    let timing = match phase {
-      TransferMatrixPhase::FreshOpening => pallet_deos_actors::ObservationTiming::Opening,
-      TransferMatrixPhase::Running => pallet_deos_actors::ObservationTiming::Current,
-    };
     let measured_step = RuntimeStep {
-      precondition: all_preconditions_at(transfer_matrix_predicates(predicate_count), timing),
+      precondition: all_preconditions(transfer_matrix_predicates(predicate_count)),
       task: Task::Transfer {
         to: BOB,
         asset: AssetKind::Native,
@@ -13448,23 +13060,23 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
     assert_eq!(
       block_usage,
       vec![
-        (2, false, Weight::from_parts(11_491_516_748, 110_628), Weight::zero()),
+        (2, false, Weight::from_parts(11_272_053_924, 110_402), Weight::zero()),
         (
           3,
           true,
-          Weight::from_parts(4_528_011_122, 64_513),
-          Weight::from_parts(2_293_433_000, 29_222),
+          Weight::from_parts(4_327_578_886, 65_585),
+          Weight::from_parts(2_099_991_000, 31_270),
         ),
-        (4, false, Weight::from_parts(11_491_516_748, 110_628), Weight::zero()),
+        (4, false, Weight::from_parts(11_272_053_924, 110_402), Weight::zero()),
         (
           5,
           true,
-          Weight::from_parts(4_528_011_122, 64_513),
-          Weight::from_parts(2_293_433_000, 29_222),
+          Weight::from_parts(4_327_578_886, 65_585),
+          Weight::from_parts(2_099_991_000, 31_270),
         ),
       ]
     );
-    assert_eq!(empty_control, Weight::from_parts(2_400_465_748, 33_188));
+    assert_eq!(empty_control, Weight::from_parts(2_390_871_924, 33_188));
     type W = crate::weights::pallet_deos_actors::SubstrateWeight<Runtime>;
     let physical_remove = <W as WeightInfo>::scheduler_wakeup_cursor_worker_remove();
     let at_time = <W as WeightInfo>::at_time_trigger_occurrence();
@@ -13475,22 +13087,22 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
     );
     let materialization_actual = physical_remove.saturating_add(occurrence);
     let materialization_increment = block_usage[0].2.saturating_sub(empty_control);
-    assert_eq!(physical_remove, Weight::from_parts(5_931_400_000, 55_857));
-    assert_eq!(occurrence, Weight::from_parts(2_811_041_000, 8_451));
+    assert_eq!(physical_remove, Weight::from_parts(5_813_999_000, 55_752));
+    assert_eq!(occurrence, Weight::from_parts(2_720_249_000, 8_330));
     assert_eq!(
       materialization_actual,
-      Weight::from_parts(8_742_441_000, 64_308)
+      Weight::from_parts(8_534_248_000, 64_082)
     );
     let rotated_baseline_delta = materialization_increment
       .checked_sub(&materialization_actual)
       .expect("due occurrence fits measured materialization increment");
-    assert_eq!(rotated_baseline_delta, Weight::from_parts(348_610_000, 13_132));
+    assert_eq!(rotated_baseline_delta, Weight::from_parts(346_934_000, 13_132));
     let materialization_admission = Actors::wakeup_cursor_drain_unit_weight_upper(
       pallet_deos_actors::WakeupBucketDisposition::Remove,
     );
     assert_eq!(
       materialization_admission,
-      Weight::from_parts(18_001_241_000, 147_697)
+      Weight::from_parts(17_522_216_000, 147_471)
     );
     assert_eq!(
       paused_controls[paused_controls.len() - 2].1,
@@ -13530,8 +13142,8 @@ fn cadenced_complete_path_isolates_reactive_control_delta() {
         control.proof_size(),
       );
     }
-    let manual_control = Weight::from_parts(4_528_011_122, 64_513);
-    let transfer_effect = Weight::from_parts(2_293_433_000, 29_222);
+    let manual_control = Weight::from_parts(4_327_578_886, 65_585);
+    let transfer_effect = Weight::from_parts(2_099_991_000, 31_270);
     for (index, (block, control, effect)) in measured.into_iter().enumerate() {
       assert_eq!(effect, transfer_effect);
       assert!(manual_control.all_lte(control));
@@ -13627,13 +13239,13 @@ fn zero_step_and_productive_cleanup_complete_path_matrix_is_exact() {
   let productive_cleanup = measure_manual_control_branch(true);
   assert_eq!(
     zero_step,
-    (Weight::from_parts(16_116_690_870, 200_381), Weight::zero())
+    (Weight::from_parts(15_586_182_810, 203_581), Weight::zero())
   );
   assert_eq!(
     productive_cleanup,
     (
-      Weight::from_parts(13_651_894_122, 146_399),
-      Weight::from_parts(2_293_433_000, 29_222),
+      Weight::from_parts(13_180_978_886, 147_471),
+      Weight::from_parts(2_099_991_000, 31_270),
     )
   );
   println!(
@@ -13665,14 +13277,14 @@ fn cleanup_reservation_counterfactual_is_bounded_by_actual_proof_frontier() {
     .expect("cleanup is part of FIFO attempt reservation");
   assert_eq!(
     fifo_attempt_control,
-    Weight::from_parts(12_619_785_858, 120_867)
+    Weight::from_parts(12_106_904_000, 117_051)
       .saturating_add(collection)
       .saturating_add(receipt)
   );
-  assert_eq!(cleanup, Weight::from_parts(9_123_883_000, 81_886));
+  assert_eq!(cleanup, Weight::from_parts(8_853_400_000, 81_886));
   assert_eq!(
     without_cleanup.proof_size(),
-    38_981 + collection.proof_size()
+    35_165 + collection.proof_size()
   );
 
   let control_proof = BlockResourceBudgetValue::get()
@@ -13683,10 +13295,10 @@ fn cleanup_reservation_counterfactual_is_bounded_by_actual_proof_frontier() {
   let actual_increment_proof = 24_685u64;
   let available_proof = control_proof.saturating_sub(empty_proof);
   let actual_frontier = available_proof / actual_increment_proof;
-  assert_eq!(actual_frontier, 25);
+  assert_eq!(actual_frontier, 26);
   assert_eq!(available_proof / fifo_attempt_control.proof_size(), 5);
-  assert_eq!(available_proof / without_cleanup.proof_size(), 14);
-  assert_eq!(actual_frontier.saturating_sub(21), 4);
+  assert_eq!(available_proof / without_cleanup.proof_size(), 15);
+  assert_eq!(actual_frontier.saturating_sub(21), 5);
   assert!(
     available_proof.saturating_sub(21 * actual_increment_proof) >= without_cleanup.proof_size()
   );
@@ -13723,13 +13335,13 @@ fn one_step_admission_envelope_identifies_control_fragmentation_owner() {
     .min(control_limit.proof_size() / fifo_attempt_control.proof_size());
   assert_eq!(
     fifo_attempt_control,
-    Weight::from_parts(12_619_785_858, 120_867)
+    Weight::from_parts(12_106_904_000, 117_051)
       .saturating_add(collection)
       .saturating_add(receipt)
   );
   assert_eq!(
     lifecycle_control,
-    Weight::from_parts(14_983_891_606, 173_333)
+    Weight::from_parts(14_397_448_924, 171_565)
       .saturating_add(collection)
       .saturating_add(receipt)
   );
@@ -13745,13 +13357,13 @@ fn one_step_admission_envelope_identifies_control_fragmentation_owner() {
     .saturating_add(queue_consume)
     .saturating_add(opening_complete)
     .saturating_add(receipt);
-  assert_eq!(queue_scan, Weight::from_parts(335_663_374, 3_111));
-  assert_eq!(actor_probe, Weight::from_parts(289_890_000, 15_106));
-  assert_eq!(queue_consume, Weight::from_parts(597_287_000, 5_118));
-  assert_eq!(opening_complete, Weight::from_parts(418_359_831, 4_398));
+  assert_eq!(queue_scan, Weight::from_parts(333_101_962, 3_111));
+  assert_eq!(actor_probe, Weight::from_parts(238_351_000, 16_130));
+  assert_eq!(queue_consume, Weight::from_parts(592_118_000, 5_182));
+  assert_eq!(opening_complete, Weight::from_parts(313_881_655, 4_398));
   assert_eq!(
     actual_increment,
-    Weight::from_parts(1_641_200_205, 27_733).saturating_add(receipt)
+    Weight::from_parts(1_477_452_617, 28_821).saturating_add(receipt)
   );
   let empty_control = Weight::from_parts(2_954_966_226, 39_980);
   let actual_capacity = control_limit
@@ -13803,20 +13415,19 @@ fn transfer_complete_path_matrix_reports_opening_running_and_predicate_cost() {
       cells.push((phase, predicate_count, control, effect));
     }
   }
-  // Four Opening predicates select CompleteMax, whose direct owner includes the receipt.
   let expected_control = [
-    Weight::from_parts(4_528_011_122, 64_513),
-    Weight::from_parts(5_369_464_661, 94_485),
-    Weight::from_parts(4_351_534_677, 66_501),
-    Weight::from_parts(4_438_966_462, 67_486),
-    Weight::from_parts(4_580_408_852, 73_314),
-    Weight::from_parts(4_721_851_242, 79_142),
+    Weight::from_parts(4_327_578_886, 65_585),
+    Weight::from_parts(4_841_794_646, 75_779),
+    Weight::from_parts(4_962_129_436, 81_264),
+    Weight::from_parts(4_348_187_551, 68_402),
+    Weight::from_parts(4_493_500_905, 74_236),
+    Weight::from_parts(4_638_814_259, 80_070),
   ];
   for ((phase, predicates, control, effect), expected_control) in
     cells.into_iter().zip(expected_control)
   {
     assert_eq!(control, expected_control);
-    assert_eq!(effect, Weight::from_parts(2_293_433_000, 29_222));
+    assert_eq!(effect, Weight::from_parts(2_099_991_000, 31_270));
     println!(
       "ACTOR_TRANSFER_MATRIX_V1 phase={phase:?} predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -13881,8 +13492,8 @@ fn running_middle_complete_path_is_exact() {
     assert_eq!(
       measured,
       (
-        Weight::from_parts(4_862_289_366, 69_069),
-        Weight::from_parts(2_293_433_000, 29_222),
+        Weight::from_parts(4_685_316_290, 70_020),
+        Weight::from_parts(2_099_991_000, 31_270),
       )
     );
     println!(
@@ -13912,10 +13523,7 @@ fn measure_swapout_success_cell(predicate_count: u32) -> (Weight, Weight) {
     Actors::on_finalize(2);
     let initial_balance = 100_000_000_000_000u128;
     let step = RuntimeStep {
-      precondition: all_preconditions_at(
-        transfer_matrix_predicates(predicate_count),
-        pallet_deos_actors::ObservationTiming::Opening,
-      ),
+      precondition: all_preconditions(transfer_matrix_predicates(predicate_count)),
       task: Task::SwapOut {
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
@@ -13983,15 +13591,14 @@ fn swapout_success_complete_path_matrix_reports_predicate_cost() {
     assert!(effect.all_lte(BlockResourceBudgetValue::get().limits().actor_base_turn()));
     cells.push((predicate_count, control, effect));
   }
-  // Four Opening predicates select CompleteMax, whose direct owner includes the receipt.
   let expected_control = [
-    Weight::from_parts(4_528_011_122, 64_513),
-    Weight::from_parts(5_369_464_661, 94_485),
-    Weight::from_parts(4_351_534_677, 66_501),
+    Weight::from_parts(4_327_578_886, 65_585),
+    Weight::from_parts(4_841_794_646, 75_779),
+    Weight::from_parts(4_962_129_436, 81_264),
   ];
   for ((predicates, control, effect), expected_control) in cells.into_iter().zip(expected_control) {
     assert_eq!(control, expected_control);
-    assert_eq!(effect, Weight::from_parts(3_414_697_000, 19_253));
+    assert_eq!(effect, Weight::from_parts(3_348_630_000, 19_253));
     println!(
       "ACTOR_SWAPOUT_MATRIX_V1 outcome=Success predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -14024,10 +13631,7 @@ fn measure_swapout_retry_cell(
     Actors::on_finalize(2);
 
     let step = RuntimeStep {
-      precondition: all_preconditions_at(
-        transfer_matrix_predicates(predicate_count),
-        pallet_deos_actors::ObservationTiming::Opening,
-      ),
+      precondition: all_preconditions(transfer_matrix_predicates(predicate_count)),
       task: Task::SwapOut {
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
@@ -14141,16 +13745,10 @@ fn measure_swapout_retry_cell(
       assert!(!telemetry.optional_actor_work_halted());
       let continuation = Actors::actor_run_state(actor_id).expect("Temporary failure suspends");
       assert_eq!(continuation.cursor, 0);
-      assert!(continuation.funding_snapshot.is_empty());
       assert_eq!(continuation.unsuccessful_attempts_at_cursor, block - 2);
       if let Some(prior) = prior_run {
         assert_eq!(continuation.cycle_nonce, prior.cycle_nonce);
         assert_eq!(continuation.opening_snapshot, prior.opening_snapshot);
-        assert_eq!(
-          continuation.opening_predicate_results,
-          prior.opening_predicate_results
-        );
-        assert_eq!(continuation.funding_snapshot, prior.funding_snapshot);
       }
       if actor_type == ActorType::System || block == 4 {
         let fee = if actor_type == ActorType::User && !funding_unavailable {
@@ -14304,18 +13902,18 @@ fn swapout_temporary_failure_and_retry_matrix_reports_predicate_cost() {
     }
   }
   let expected_control = [
-    Weight::from_parts(6_157_667_980, 88_339),
-    Weight::from_parts(6_521_921_980, 90_386),
-    Weight::from_parts(6_533_528_661, 110_565),
-    Weight::from_parts(6_897_782_661, 112_612),
-    Weight::from_parts(6_652_093_584, 115_911),
-    Weight::from_parts(7_016_347_584, 117_958),
+    Weight::from_parts(5_824_683_886, 85_593),
+    Weight::from_parts(6_215_828_886, 87_594),
+    Weight::from_parts(5_954_103_646, 92_805),
+    Weight::from_parts(6_345_248_646, 94_806),
+    Weight::from_parts(6_074_438_436, 98_290),
+    Weight::from_parts(6_465_583_436, 100_291),
   ];
   for ((outcome, predicates, control, effect), expected_control) in
     cells.into_iter().zip(expected_control)
   {
     assert_eq!(control, expected_control.saturating_add(receipt));
-    assert_eq!(effect, Weight::from_parts(3_414_697_000, 19_253));
+    assert_eq!(effect, Weight::from_parts(3_348_630_000, 19_253));
     println!(
       "ACTOR_SWAPOUT_MATRIX_V1 outcome={outcome} predicates={predicates} control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
       control.ref_time(),
@@ -14344,7 +13942,7 @@ fn measure_funding_unavailable_retry(funding_tail: Option<u128>) -> [(Weight, We
       steps.push(make_step(Task::Transfer {
         asset: AssetKind::Native,
         to: BOB,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }));
     }
     let actor_id = Actors::next_actor_id();
@@ -14367,12 +13965,6 @@ fn measure_funding_unavailable_retry(funding_tail: Option<u128>) -> [(Weight, We
     fund_native(actor_id, custody - ingress);
     if ingress > 0 {
       fund_native_via_call(ALICE, actor_id, ingress);
-      assert_eq!(
-        actor_funding(actor_id)
-          .funding_accumulated
-          .get(&AssetKind::Native),
-        Some(&ingress)
-      );
     }
     let sovereign = actor_account(actor_id);
     let before = (
@@ -14398,16 +13990,7 @@ fn measure_funding_unavailable_retry(funding_tail: Option<u128>) -> [(Weight, We
       assert!(!telemetry.optional_actor_work_halted());
       let continuation = Actors::actor_run_state(actor_id).expect("funding failure suspends");
       assert_eq!(continuation.cursor, 0);
-      if ingress == 0 {
-        assert!(continuation.funding_snapshot.is_empty());
-      } else {
-        assert_eq!(continuation.funding_snapshot.len(), 1);
-        assert_eq!(
-          continuation.funding_snapshot.get(&AssetKind::Native),
-          Some(&ingress)
-        );
-      }
-      assert!(actor_funding(actor_id).funding_accumulated.is_empty());
+      assert_eq!(Balances::free_balance(&sovereign), before.0);
       assert_eq!(
         (
           Balances::free_balance(&sovereign),
@@ -14437,11 +14020,11 @@ fn funding_unavailable_and_retry_complete_paths_are_exact() {
   let [first, retry] = measure_funding_unavailable_retry(None);
   assert_eq!(
     first,
-    (Weight::from_parts(6_157_667_980, 88_339), Weight::zero())
+    (Weight::from_parts(5_824_683_886, 85_593), Weight::zero())
   );
   assert_eq!(
     retry,
-    (Weight::from_parts(6_526_601_980, 90_386), Weight::zero())
+    (Weight::from_parts(6_220_089_886, 87_594), Weight::zero())
   );
   println!(
     "ACTOR_FUNDING_RETRY_V1 phase=Opening control_ref_time={} control_proof_size={} effect_ref_time={} effect_proof_size={}",
@@ -14518,7 +14101,7 @@ fn minimal_pipeline_admission_apoptosis_complete_path_is_exact() {
     let measured = (usage.actor_control_used(), usage.actor_effect_used());
     assert_eq!(
       measured,
-      (Weight::from_parts(4_862_811_748, 48_294), Weight::zero()),
+      (Weight::from_parts(4_551_865_924, 49_318), Weight::zero()),
       "the complete apoptosis owner replaces provisional FIFO discovery, actor probe, and Ready consumption accounting"
     );
     println!(
@@ -14790,10 +14373,7 @@ fn run_transfer_predicate_population_profile(predicate_count: u32) {
     let actor_count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get();
     let initial_balance = 1_000u128.saturating_mul(crate::EXISTENTIAL_DEPOSIT);
     let contract_steps = BoundedVec::try_from(vec![RuntimeStep {
-      precondition: all_preconditions_at(
-        transfer_matrix_predicates(predicate_count),
-        pallet_deos_actors::ObservationTiming::Opening,
-      ),
+      precondition: all_preconditions(transfer_matrix_predicates(predicate_count)),
       task: Task::Transfer {
         asset: AssetKind::Native,
         to: BOB,
@@ -15532,7 +15112,7 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
 }
 
 #[test]
-fn fee_ingress_accumulates_exactly_amount_never_double() {
+fn fee_ingress_updates_live_available_balance_exactly_once() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     // A Mutable System actor with an accepting funding policy and a
@@ -15545,7 +15125,7 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
         task: pallet_deos_actors::Task::Transfer {
           to: BOB,
           asset: AssetKind::Native,
-          amount: pallet_deos_actors::AmountResolution::PercentageOfLastFunding(
+          amount: pallet_deos_actors::AmountResolution::Percent(
             polkadot_sdk::sp_runtime::Perbill::from_percent(100),
           ),
         },
@@ -15574,16 +15154,10 @@ fn fee_ingress_accumulates_exactly_amount_never_double() {
       amount,
       &payer,
     ));
-    let funding = actor_funding(actor_id);
-    let accumulated = funding
-      .funding_accumulated
-      .iter()
-      .find(|(asset, _)| **asset == AssetKind::Native)
-      .map(|(_, v)| *v)
-      .unwrap_or(0);
     assert_eq!(
-      accumulated, amount,
-      "one certified ingress must accumulate exactly amount, never 2 * amount"
+      native_balance(&instance.identity.sovereign_account),
+      amount,
+      "one certified ingress must credit exactly amount, never 2 * amount"
     );
   });
 }
@@ -15659,7 +15233,6 @@ fn user_actor_state_uses_the_dedicated_runtime_hold_reason_and_releases_exactly(
       .saturating_add(record.breakdown.contract_head)
       .saturating_add(record.breakdown.contract_body)
       .saturating_add(record.breakdown.detector)
-      .saturating_add(record.breakdown.funding)
       .saturating_add(record.breakdown.run);
     let reason = RuntimeHoldReason::Actors(pallet_deos_actors::HoldReason::ActorState);
     assert_eq!(Balances::balance_on_hold(&reason, &ALICE), expected);

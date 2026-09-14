@@ -16,7 +16,6 @@ fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
     assert_eq!(dormant.breakdown.contract_head, 0);
     assert_eq!(dormant.breakdown.contract_body, 0);
     assert_eq!(dormant.breakdown.detector, 0);
-    assert_eq!(dormant.breakdown.funding, 0);
     assert_eq!(dormant.breakdown.run, 0);
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), 0));
     assert!(Actors::actor_state_hold(0).is_none());
@@ -59,7 +58,6 @@ fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
     assert_eq!(chunked.breakdown.run, compact.breakdown.run);
     assert!(chunked.breakdown.contract_body > 0);
     assert!(chunked.breakdown.contract_head > 0);
-    assert!(chunked.breakdown.funding > 0);
     let temporal = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -165,7 +163,6 @@ fn actor_state_hold_failure_and_lifecycle_deltas_are_atomic() {
     assert_eq!(dormant_hold.breakdown.contract_head, 0);
     assert_eq!(dormant_hold.breakdown.contract_body, 0);
     assert_eq!(dormant_hold.breakdown.detector, 0);
-    assert_eq!(dormant_hold.breakdown.funding, 0);
     assert_eq!(dormant_hold.breakdown.run, 0);
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(owner), actor_id));
     assert!(Actors::actor_state_hold(actor_id).is_none());
@@ -914,7 +911,6 @@ fn address_event_preflight_and_commit_fail_closed_without_primary_authority() {
       transfer_contract_steps(BOB, 1),
     );
     Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
-    let funding_before = Actors::actor_funding(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
 
@@ -932,7 +928,6 @@ fn address_event_preflight_and_commit_fail_closed_without_primary_authority() {
       Actors::notify_address_event(actor_id, TestAsset::Native, 1, &ALICE),
       Error::<Test>::ActorInvariant
     );
-    assert_eq!(Actors::actor_funding(actor_id), funding_before);
     assert_eq!(Actors::actor_hot(actor_id), hot_before);
     assert_eq!(System::events(), events_before);
   });
@@ -1583,7 +1578,7 @@ fn failed_pre_opening_weight_admission_preserves_latch() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       })),
     );
     assert_ok!(Actors::notify_address_event(
@@ -2182,7 +2177,7 @@ fn expired_ingress_remains_balance_only_and_closes_inline() {
       contract_steps_with_step(make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       })),
     );
     let actor = sovereign_account(actor_id);
@@ -2196,7 +2191,6 @@ fn expired_ingress_remains_balance_only_and_closes_inline() {
     ));
     assert_eq!(native_balance(&actor), balance_before.saturating_add(1_000));
     assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(Actors::actor_funding(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2499,7 +2493,7 @@ fn suspended_cycle_reloads_current_available_on_each_retry() {
       task: Task::SwapIn {
         asset_in,
         asset_out,
-        amount_in: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
         slippage_tolerance: Perbill::one(),
       },
       on_error: RETRY_LATER,
@@ -2577,7 +2571,7 @@ fn user_resolution_skip_charges_pipeline_but_no_action_fee() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_parts(1)),
+      amount: AmountResolution::Percent(Perbill::from_parts(1)),
     }));
     let actor_id = create_user_with(
       ALICE,
@@ -2840,7 +2834,7 @@ fn cycle_summary_fee_fairness_property_matrix() {
       let task = Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(pct),
+        amount: AmountResolution::Percent(pct),
       };
       let contract_steps = contract_steps_with_step(make_step(task.clone()));
       let pipeline_fee = pipeline_opening_fee(&contract_steps);
@@ -2908,7 +2902,7 @@ fn percentage_of_current_reloads_available_at_each_cycle() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let bob_before = native_balance(&BOB);
@@ -2945,7 +2939,7 @@ fn percentage_of_current_reloads_after_prior_step_mutation() {
       task: Task::Transfer {
         to,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+        amount: AmountResolution::Percent(Perbill::from_percent(50)),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -3571,7 +3565,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_and_split_tasks()
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
       make_step(Task::SplitTransfer {
         asset: TestAsset::Native,
@@ -3581,7 +3575,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_and_split_tasks()
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+        amount: AmountResolution::Percent(Perbill::one()),
       }),
     ])
     .expect("system execution plan fits");
@@ -3631,7 +3625,7 @@ fn percentage_of_current_uses_native_preservable_balance_as_its_base() {
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 100);
@@ -3664,7 +3658,7 @@ fn user_all_available_preserves_floor_and_underfunded_future_trigger_keeps_proce
     let task = Task::Transfer {
       to: BOB,
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     };
     let contract_steps = contract_steps_with_step(make_step(task));
     let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
@@ -3860,7 +3854,7 @@ fn percentage_of_current_uses_sufficient_asset_preservable_balance_as_its_base()
     let contract_steps = contract_steps_with_step(make_step(Task::Transfer {
       to: BOB,
       asset,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
@@ -3881,7 +3875,7 @@ fn burn_all_balance_preserves_the_asset_minimum() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let contract_steps = contract_steps_with_step(make_step(Task::Burn {
       asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      amount: AmountResolution::Percent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     fund_native(actor_id, 500);
@@ -3932,7 +3926,7 @@ fn add_liquidity_uses_funding_unavailable_precedence_across_amount_fields() {
     let contract_steps = contract_steps_with_step(make_step(Task::AddLiquidity {
       asset_a,
       asset_b,
-      amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(1)),
+      amount_a: AmountResolution::Percent(Perbill::from_percent(1)),
       amount_b: AmountResolution::Fixed(50),
       min_lp_out: 1,
     }));
@@ -3967,7 +3961,7 @@ fn unstake_all_balance_withdraws_all_staking_shares() {
     let asset = TestAsset::Local(8);
     let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
-      shares: AmountResolution::PercentageOfCurrent(Perbill::one()),
+      shares: AmountResolution::Percent(Perbill::one()),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     let actor = sovereign_account(actor_id);
@@ -3989,7 +3983,7 @@ fn unstake_percent_reads_the_current_transferable_share_surface() {
     let asset = TestAsset::Local(8);
     let contract_steps = contract_steps_with_step(make_step(Task::Unstake {
       asset,
-      shares: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+      shares: AmountResolution::Percent(Perbill::from_percent(50)),
     }));
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract_steps);
     set_asset_balance(&ALICE, asset, 100);
@@ -4022,7 +4016,7 @@ fn donate_liquidity_user_fee_native_b_side_preserves_protected_floor() {
     let contract_steps = contract_steps_with_step(make_step(Task::DonateLiquidity {
       asset_a,
       asset_b,
-      max_amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(100)),
+      max_amount_a: AmountResolution::Percent(Perbill::from_percent(100)),
       max_ratio_error: Perbill::from_percent(1),
     }));
     let fee = Actors::attempt_fee_envelope(ActorType::User, &contract_steps, 0)
@@ -4404,7 +4398,7 @@ fn user_portfolio_rebalancer_both_directions() {
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(20)),
+          amount: AmountResolution::Percent(Perbill::from_percent(20)),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },
@@ -4422,7 +4416,7 @@ fn user_portfolio_rebalancer_both_directions() {
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign,
-          amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          amount: AmountResolution::Percent(Perbill::from_percent(50)),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },

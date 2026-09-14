@@ -69,7 +69,6 @@ fn hold_breakdown_value(breakdown: pallet_deos_actors::ActorStateHoldBreakdown<B
     "contractHead": breakdown.contract_head.to_string(),
     "contractBody": breakdown.contract_body.to_string(),
     "detector": breakdown.detector.to_string(),
-    "funding": breakdown.funding.to_string(),
     "run": breakdown.run.to_string(),
   })
 }
