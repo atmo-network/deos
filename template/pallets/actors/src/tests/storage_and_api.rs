@@ -796,6 +796,80 @@ fn admission_certificate_builder_composes_compact_host_authority() {
 }
 
 #[test]
+fn production_contract_load_requires_its_certified_wake_qualification() {
+  new_test_ext().execute_with(|| {
+    let contract = system_active_contract(
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![make_step(Task::StopCycle)]).expect("one Step fits"),
+    )
+    .expect("active Contract");
+    let matching = Actors::build_admission_certificate(&contract).expect("host authority exists");
+    assert!(Actors::admission_authorizes_contract_wake(
+      &matching, &contract
+    ));
+
+    let temporal_contract = system_active_contract(
+      at_time_schedule(10),
+      None,
+      BoundedVec::try_from(vec![make_step(Task::StopCycle)]).expect("one Step fits"),
+    )
+    .expect("temporal Contract");
+    assert!(
+      !Actors::admission_authorizes_contract_wake(&matching, &temporal_contract),
+      "a valid Manual certificate cannot authorize a temporal production Contract load",
+    );
+
+    let windowed_contract = system_active_contract(
+      manual_schedule(),
+      Some(crate::ScheduleWindow { start: 2, end: 20 }),
+      BoundedVec::try_from(vec![make_step(Task::StopCycle)]).expect("one Step fits"),
+    )
+    .expect("windowed Contract");
+    assert!(
+      !Actors::admission_authorizes_contract_wake(&matching, &windowed_contract),
+      "a valid unwindowed certificate cannot authorize different schedule boundaries",
+    );
+
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
+      let cell = stored.as_mut().expect("Unsignaled authority exists");
+      let old = &cell.admission;
+      let replacement = crate::ActorAdmissionCertificate::new(
+        old.semantic_contract_id,
+        old.body_commitment,
+        temporal_contract
+          .trigger
+          .wake_qualification(&temporal_contract.window),
+        old.runtime_actor_semantics_version,
+        old.production_weight_identity,
+        old.body_geometry_version,
+        old.configured_bounds_commitment,
+        old.maximum_lifecycle_weight,
+      );
+      cell.pipeline_service_identity =
+        crate::pipeline_service_identity(replacement.admission_identity);
+      cell.admission = replacement;
+    });
+    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      .expect("mutated authority exists")
+      .admission
+      .admission_identity;
+    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
+      stored
+        .as_mut()
+        .expect("Contract head exists")
+        .header
+        .admission_identity = replacement_identity;
+    });
+    assert!(matches!(
+      Actors::load_actor_state_for_frame_control(actor_id),
+      crate::LoadedActorStateOf::Corrupt
+    ));
+  });
+}
+
+#[test]
 fn step_resource_derivation_binds_current_predicate_and_amount_geometry() {
   let steps = BoundedVec::try_from(vec![StepOf::<Test> {
     precondition: all_conditions(vec![Predicate::BalanceAbove {

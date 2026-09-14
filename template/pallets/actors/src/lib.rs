@@ -3172,6 +3172,9 @@ pub mod pallet {
       else {
         return LoadedActorStateOf::Corrupt;
       };
+      if !Self::admission_authorizes_contract_wake(&frame_admission, &contract) {
+        return LoadedActorStateOf::Corrupt;
+      }
       let run_state = ActorRunStateStore::<T>::get(actor_id);
       let run_is_coherent = match (hot.cycle_state, run_state.as_ref()) {
         (CycleState::Idle, None) => {
@@ -3209,6 +3212,13 @@ pub mod pallet {
         contract,
         run_state,
       })
+    }
+
+    pub(crate) fn admission_authorizes_contract_wake(
+      admission: &ActorAdmissionCertificateOf<T>,
+      contract: &ActorContractOf<T>,
+    ) -> bool {
+      admission.authorizes_wake(contract.trigger.wake_qualification(&contract.window))
     }
 
     pub(crate) fn load_crossing_idle_activation_state_with_authority(
