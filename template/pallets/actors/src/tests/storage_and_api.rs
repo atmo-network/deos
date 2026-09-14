@@ -312,115 +312,199 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
     InPlaceAtomicWrite,
   }
   type RequiredProcessTransition = ProcessTransitionObligation;
+  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+  enum PlannerIntent {
+    Publish,
+    Preserve,
+    Replace,
+    RetireOrDisable,
+    CarrierOnly,
+  }
+  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+  enum AtomicPublicationSite {
+    MutationOwner,
+    EveryDirectCaller,
+    CarrierNoProcessPublication,
+  }
+  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+  enum AtomicOutcome {
+    SuccessorOrRollback,
+    PreservedOrRollback,
+    TerminalOrRollback,
+    CarrierOnlyOrRollback,
+  }
+  type InventoryRow = (
+    &'static str,
+    &'static str,
+    TransactionBoundary,
+    RequiredProcessTransition,
+    PlannerIntent,
+    AtomicPublicationSite,
+    AtomicOutcome,
+  );
 
-  const INVENTORY: &[(&str, &str, TransactionBoundary, RequiredProcessTransition)] = &[
+  const INVENTORY: &[InventoryRow] = &[
     (
       "execution.rs",
       "write_run_state",
       TransactionBoundary::FunctionTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::MutationOwner,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "lib.rs",
       "insert_unsignaled_control_authority",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "lib.rs",
       "replace_control_admission_for_transition",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PreserveProcess,
+      PlannerIntent::Preserve,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::PreservedOrRollback,
     ),
     (
       "scheduler.rs",
       "append_waiting_entry",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::CarrierOnly,
+      PlannerIntent::CarrierOnly,
+      AtomicPublicationSite::CarrierNoProcessPublication,
+      AtomicOutcome::CarrierOnlyOrRollback,
     ),
     (
       "scheduler.rs",
       "consume_waiting_from_supplied_authority",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "control_append_ready",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "control_append_waiting",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "control_finalize_underfunded_at_time",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::RetireOrDisable,
+      PlannerIntent::RetireOrDisable,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::TerminalOrRollback,
     ),
     (
       "scheduler.rs",
       "control_normalize_ready_head",
       TransactionBoundary::FunctionTransactional,
       RequiredProcessTransition::CarrierOnly,
+      PlannerIntent::CarrierOnly,
+      AtomicPublicationSite::CarrierNoProcessPublication,
+      AtomicOutcome::CarrierOnlyOrRollback,
     ),
     (
       "scheduler.rs",
       "control_remove_ready_primary",
-      TransactionBoundary::CallerTransactional,
+      TransactionBoundary::FunctionTransactional,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::MutationOwner,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "demote_ready_frame_to_unsignaled",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "detach_primary_for_successor",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "paged_consume_head_at_inner",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "remove_primary_control_cell_inner",
       TransactionBoundary::InPlaceAtomicWrite,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "remove_waiting_entry",
       TransactionBoundary::InPlaceAtomicWrite,
       RequiredProcessTransition::CarrierOnly,
+      PlannerIntent::CarrierOnly,
+      AtomicPublicationSite::CarrierNoProcessPublication,
+      AtomicOutcome::CarrierOnlyOrRollback,
     ),
     (
       "scheduler.rs",
       "restore_unsignaled_from_authority",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::PublishTypedResidence,
+      PlannerIntent::Publish,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
     (
       "scheduler.rs",
       "store_primary_control_cell",
       TransactionBoundary::InPlaceAtomicWrite,
       RequiredProcessTransition::PreserveProcess,
+      PlannerIntent::Preserve,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::PreservedOrRollback,
     ),
     (
       "scheduler.rs",
       "wakeup_substrate_drain_block_inner",
       TransactionBoundary::CallerTransactional,
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      PlannerIntent::Replace,
+      AtomicPublicationSite::EveryDirectCaller,
+      AtomicOutcome::SuccessorOrRollback,
     ),
   ];
 
@@ -473,7 +557,7 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
     .collect::<BTreeSet<_>>();
   let expected = INVENTORY
     .iter()
-    .map(|(file, owner, _, _)| (*file, (*owner).to_owned()))
+    .map(|(file, owner, ..)| (*file, (*owner).to_owned()))
     .collect::<BTreeSet<_>>();
   assert_eq!(
     actual, expected,
@@ -482,7 +566,7 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
   assert_eq!(
     INVENTORY
       .iter()
-      .map(|(_, _, boundary, _)| *boundary)
+      .map(|(_, _, boundary, ..)| *boundary)
       .collect::<BTreeSet<_>>(),
     BTreeSet::from([
       TransactionBoundary::CallerTransactional,
@@ -493,7 +577,7 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
   assert_eq!(
     INVENTORY
       .iter()
-      .map(|(_, _, _, transition)| *transition)
+      .map(|(_, _, _, transition, ..)| *transition)
       .collect::<BTreeSet<_>>(),
     BTreeSet::from([
       RequiredProcessTransition::PublishTypedResidence,
@@ -503,6 +587,80 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
       RequiredProcessTransition::CarrierOnly,
     ])
   );
+
+  fn direct_callers(source: &str, callee: &str) -> BTreeSet<String> {
+    let mut owner = None;
+    let mut callers = BTreeSet::new();
+    for line in source.lines() {
+      let trimmed = line.trim_start();
+      if let Some(rest) = trimmed
+        .strip_prefix("fn ")
+        .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
+      {
+        owner = rest.split('(').next();
+      }
+      if line.contains(&format!("Self::{callee}("))
+        && let Some(caller) = owner
+        && caller != callee
+      {
+        callers.insert(caller.to_owned());
+      }
+    }
+    callers
+  }
+
+  for (file, owner, boundary, obligation, intent, site, outcome) in INVENTORY {
+    let expected_intent = match obligation {
+      RequiredProcessTransition::PublishTypedResidence => PlannerIntent::Publish,
+      RequiredProcessTransition::PreserveProcess => PlannerIntent::Preserve,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval => PlannerIntent::Replace,
+      RequiredProcessTransition::RetireOrDisable => PlannerIntent::RetireOrDisable,
+      RequiredProcessTransition::CarrierOnly => PlannerIntent::CarrierOnly,
+    };
+    assert_eq!(
+      *intent, expected_intent,
+      "planner intent drift for {file}::{owner}"
+    );
+    let expected_outcome = match obligation {
+      RequiredProcessTransition::PublishTypedResidence
+      | RequiredProcessTransition::AtomicSuccessorOrRemoval => AtomicOutcome::SuccessorOrRollback,
+      RequiredProcessTransition::PreserveProcess => AtomicOutcome::PreservedOrRollback,
+      RequiredProcessTransition::RetireOrDisable => AtomicOutcome::TerminalOrRollback,
+      RequiredProcessTransition::CarrierOnly => AtomicOutcome::CarrierOnlyOrRollback,
+    };
+    assert_eq!(
+      *outcome, expected_outcome,
+      "atomic outcome drift for {file}::{owner}"
+    );
+
+    match site {
+      AtomicPublicationSite::MutationOwner => {
+        assert_eq!(*boundary, TransactionBoundary::FunctionTransactional);
+        let source = sources
+          .iter()
+          .find_map(|(candidate, source)| (*candidate == *file).then_some(*source))
+          .expect("inventory source exists");
+        assert!(
+          source.contains(&format!("fn {owner}(")) && source.contains("storage::with_transaction"),
+          "mutation owner must retain its explicit transaction: {file}::{owner}"
+        );
+      }
+      AtomicPublicationSite::EveryDirectCaller => {
+        let callers = sources
+          .iter()
+          .flat_map(|(_, source)| direct_callers(source, owner))
+          .collect::<BTreeSet<_>>();
+        assert!(
+          !callers.is_empty(),
+          "caller-transactional owner must have a source-backed publication cohort: {file}::{owner}"
+        );
+      }
+      AtomicPublicationSite::CarrierNoProcessPublication => {
+        assert_eq!(*intent, PlannerIntent::CarrierOnly);
+        assert_eq!(*outcome, AtomicOutcome::CarrierOnlyOrRollback);
+      }
+    }
+  }
 }
 
 #[test]
