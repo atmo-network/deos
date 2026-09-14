@@ -988,6 +988,7 @@ pub mod pallet {
     BoundedVec<Option<ActorWaitingEntry<ActorControlCellOf<T>>>, ConstU32<32>>;
   pub type ActorWaitingPageOf<T> = WakeupPage<ActorWaitingChunkOf<T>>;
   pub type DeadlineHandleOf<T> = DeadlineHandle<BlockNumberFor<T>>;
+  pub type DeadlineIndexPageOf<T> = BoundedVec<WakeupKey<BlockNumberFor<T>>, ConstU32<32>>;
 
   /// External-boundary location; execution writes but never reads this index.
   #[derive(
@@ -2888,6 +2889,285 @@ pub mod pallet {
       })
     }
 
+    fn deadline_index_page_and_slot(index: u32) -> (u64, usize) {
+      (u64::from(index / 32), (index % 32) as usize)
+    }
+
+    fn deadline_index_get(clock: WakeupClock, index: u32) -> Option<WakeupKey<BlockNumberFor<T>>> {
+      let (page, slot) = Self::deadline_index_page_and_slot(index);
+      DeadlineIndexPages::<T>::get(clock, page).and_then(|page| page.get(slot).copied())
+    }
+
+    fn deadline_index_set(
+      clock: WakeupClock,
+      index: u32,
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      if key.clock() != clock {
+        return Err(DeadlineIndexMutationError::CorruptHeap);
+      }
+      let (page_id, slot) = Self::deadline_index_page_and_slot(index);
+      let mut page = DeadlineIndexPages::<T>::get(clock, page_id).unwrap_or_default();
+      if slot < page.len() {
+        page[slot] = key;
+      } else if slot == page.len() {
+        page
+          .try_push(key)
+          .map_err(|_| DeadlineIndexMutationError::CapacityExceeded)?;
+      } else {
+        return Err(DeadlineIndexMutationError::CorruptHeap);
+      }
+      DeadlineIndexPages::<T>::insert(clock, page_id, page);
+      Ok(())
+    }
+
+    fn deadline_index_swap(
+      clock: WakeupClock,
+      left: u32,
+      right: u32,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      let left_key =
+        Self::deadline_index_get(clock, left).ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+      let right_key =
+        Self::deadline_index_get(clock, right).ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+      if DeadlineIndexPositions::<T>::get(left_key) != Some(left)
+        || DeadlineIndexPositions::<T>::get(right_key) != Some(right)
+      {
+        return Err(DeadlineIndexMutationError::StaleIndex);
+      }
+      Self::deadline_index_set(clock, left, right_key)?;
+      Self::deadline_index_set(clock, right, left_key)?;
+      DeadlineIndexPositions::<T>::insert(right_key, left);
+      DeadlineIndexPositions::<T>::insert(left_key, right);
+      Ok(())
+    }
+
+    fn deadline_index_height_bound() -> u32 {
+      u32::BITS.saturating_sub(T::MaxActiveActors::get().max(1).leading_zeros())
+    }
+
+    fn validate_deadline_index_header(
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      if ActorWaitingOccupancies::<T>::get(key) > 0
+        || ActorWaitingCursorIndices::<T>::contains_key(key)
+      {
+        return Err(DeadlineIndexMutationError::LegacyAuthorityPresent);
+      }
+      let header =
+        DeadlineHeaders::<T>::get(key).ok_or(DeadlineIndexMutationError::HeaderMissing)?;
+      if header.count == 0
+        || header.page_count == 0
+        || header.count > header.page_count.saturating_mul(32)
+        || header.first_page > header.last_page
+        || !DeadlinePages::<T>::contains_key(key, header.first_page)
+        || !DeadlinePages::<T>::contains_key(key, header.last_page)
+      {
+        return Err(DeadlineIndexMutationError::CorruptHeader);
+      }
+      Ok(())
+    }
+
+    /// Inserts one nonempty canonical deadline bucket into its clock-local inert min-heap.
+    #[allow(
+      dead_code,
+      reason = "deadline index remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn insert_deadline_index(
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DeadlineIndexMutationError::TransactionRequired);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let outcome = (|| {
+          Self::validate_deadline_index_header(key)?;
+          if DeadlineIndexPositions::<T>::contains_key(key) {
+            return Err(DeadlineIndexMutationError::KeyAlreadyExists);
+          }
+          let clock = key.clock();
+          let len = DeadlineIndexLen::<T>::get(clock);
+          let next_len = len
+            .checked_add(1)
+            .ok_or(DeadlineIndexMutationError::CapacityExceeded)?;
+          if len >= T::MaxActiveActors::get() {
+            return Err(DeadlineIndexMutationError::CapacityExceeded);
+          }
+          Self::deadline_index_set(clock, len, key)?;
+          DeadlineIndexPositions::<T>::insert(key, len);
+          DeadlineIndexLen::<T>::insert(clock, next_len);
+          let mut current = len;
+          for _ in 0..Self::deadline_index_height_bound() {
+            if current == 0 {
+              break;
+            }
+            let parent = (current - 1) / 2;
+            let parent_key = Self::deadline_index_get(clock, parent)
+              .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+            let current_key = Self::deadline_index_get(clock, current)
+              .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+            if parent_key <= current_key {
+              break;
+            }
+            Self::deadline_index_swap(clock, parent, current)?;
+            current = parent;
+          }
+          Ok(())
+        })();
+        match outcome {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Revalidates and repairs one indexed nonempty bucket within the bounded heap height.
+    #[allow(
+      dead_code,
+      reason = "deadline index remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn update_deadline_index(
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DeadlineIndexMutationError::TransactionRequired);
+      }
+      Self::validate_deadline_index_header(key)?;
+      let clock = key.clock();
+      let index =
+        DeadlineIndexPositions::<T>::get(key).ok_or(DeadlineIndexMutationError::KeyMissing)?;
+      let len = DeadlineIndexLen::<T>::get(clock);
+      if index >= len || Self::deadline_index_get(clock, index) != Some(key) {
+        return Err(DeadlineIndexMutationError::StaleIndex);
+      }
+      if index > 0 {
+        let parent = (index - 1) / 2;
+        if Self::deadline_index_get(clock, parent).ok_or(DeadlineIndexMutationError::CorruptHeap)?
+          > key
+        {
+          return Err(DeadlineIndexMutationError::CorruptHeap);
+        }
+      }
+      let left = index.saturating_mul(2).saturating_add(1);
+      for child in [left, left.saturating_add(1)] {
+        if child < len
+          && Self::deadline_index_get(clock, child)
+            .ok_or(DeadlineIndexMutationError::CorruptHeap)?
+            < key
+        {
+          return Err(DeadlineIndexMutationError::CorruptHeap);
+        }
+      }
+      Ok(())
+    }
+
+    /// Removes one exact bucket only after its canonical deadline header has been deleted.
+    #[allow(
+      dead_code,
+      reason = "deadline index remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn remove_deadline_index(
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<(), DeadlineIndexMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DeadlineIndexMutationError::TransactionRequired);
+      }
+      if ActorWaitingOccupancies::<T>::get(key) > 0
+        || ActorWaitingCursorIndices::<T>::contains_key(key)
+      {
+        return Err(DeadlineIndexMutationError::LegacyAuthorityPresent);
+      }
+      if DeadlineHeaders::<T>::contains_key(key) {
+        return Err(DeadlineIndexMutationError::CorruptHeader);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let outcome = (|| {
+          let clock = key.clock();
+          let index =
+            DeadlineIndexPositions::<T>::get(key).ok_or(DeadlineIndexMutationError::KeyMissing)?;
+          let len = DeadlineIndexLen::<T>::get(clock);
+          if index >= len || Self::deadline_index_get(clock, index) != Some(key) {
+            return Err(DeadlineIndexMutationError::StaleIndex);
+          }
+          let last = len
+            .checked_sub(1)
+            .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+          let last_key =
+            Self::deadline_index_get(clock, last).ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+          if DeadlineIndexPositions::<T>::get(last_key) != Some(last) {
+            return Err(DeadlineIndexMutationError::StaleIndex);
+          }
+          let (page_id, slot) = Self::deadline_index_page_and_slot(last);
+          let mut page = DeadlineIndexPages::<T>::get(clock, page_id)
+            .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+          if slot + 1 != page.len() {
+            return Err(DeadlineIndexMutationError::CorruptHeap);
+          }
+          page.pop();
+          if page.is_empty() {
+            DeadlineIndexPages::<T>::remove(clock, page_id);
+          } else {
+            DeadlineIndexPages::<T>::insert(clock, page_id, page);
+          }
+          DeadlineIndexPositions::<T>::remove(key);
+          DeadlineIndexLen::<T>::insert(clock, last);
+          if index == last {
+            return Ok(());
+          }
+          Self::deadline_index_set(clock, index, last_key)?;
+          DeadlineIndexPositions::<T>::insert(last_key, index);
+          let mut current = index;
+          for _ in 0..Self::deadline_index_height_bound() {
+            if current > 0 {
+              let parent = (current - 1) / 2;
+              let parent_key = Self::deadline_index_get(clock, parent)
+                .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+              let current_key = Self::deadline_index_get(clock, current)
+                .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+              if parent_key > current_key {
+                Self::deadline_index_swap(clock, parent, current)?;
+                current = parent;
+                continue;
+              }
+            }
+            let left = current.saturating_mul(2).saturating_add(1);
+            if left >= last {
+              break;
+            }
+            let right = left.saturating_add(1);
+            let left_key = Self::deadline_index_get(clock, left)
+              .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+            let mut smallest = left;
+            if right < last
+              && Self::deadline_index_get(clock, right)
+                .ok_or(DeadlineIndexMutationError::CorruptHeap)?
+                < left_key
+            {
+              smallest = right;
+            }
+            let current_key = Self::deadline_index_get(clock, current)
+              .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+            let smallest_key = Self::deadline_index_get(clock, smallest)
+              .ok_or(DeadlineIndexMutationError::CorruptHeap)?;
+            if current_key <= smallest_key {
+              break;
+            }
+            Self::deadline_index_swap(clock, current, smallest)?;
+            current = smallest;
+          }
+          Ok(())
+        })();
+        match outcome {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     pub(crate) fn insert_unsignaled_control_authority(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
@@ -4350,6 +4630,30 @@ pub mod pallet {
   #[pallet::getter(fn deadline_handles)]
   pub type DeadlineHandles<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
+
+  /// Inert C32 pages of the clock-local min-heaps over nonempty canonical deadline buckets.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_index_pages)]
+  pub type DeadlineIndexPages<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    WakeupClock,
+    Blake2_128Concat,
+    u64,
+    DeadlineIndexPageOf<T>,
+    OptionQuery,
+  >;
+
+  /// Exact reverse position for every key in the inert canonical deadline min-heaps.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_index_positions)]
+  pub type DeadlineIndexPositions<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, u32, OptionQuery>;
+
+  /// Logical length of each inert clock-local canonical deadline min-heap.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_index_len)]
+  pub type DeadlineIndexLen<T> = StorageMap<_, Blake2_128Concat, WakeupClock, u32, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_identity_count)]

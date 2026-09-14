@@ -1,13 +1,15 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
-  ActorRef, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders, DeadlineMutationError,
-  DeadlinePages, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence, ParkNegativeReason,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
-  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
+  ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
+  DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
+  DeadlineMutationError, DeadlinePages, LegacyProcessPlacement, LegacyProcessTransition,
+  ParkEvidence, ParkNegativeReason, PipelineMachineFeeStrategy, ProcessCompileError,
+  ProcessDisableCause, ProcessDisablement, ProcessPublicationError, ProcessResidence,
+  ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError, ProcessTransitionObligation,
+  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind,
+  ServiceRingMutationError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1158,6 +1160,176 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
     assert_eq!(DeadlineHandles::<Test>::get(first.actor.actor_id), before);
+  });
+}
+
+fn install_indexed_deadline_bucket(key: WakeupKey<u64>, actor_id: u64) -> DeadlineHandle<u64> {
+  let handle = DeadlineHandle {
+    actor: actor_ref(actor_id, 1),
+    key,
+    page: 0,
+    slot: 0,
+  };
+  ActorProcesses::<Test>::insert(actor_id, deadline_process(handle));
+  polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+    Actors::insert_deadline_member(handle).expect("deadline bucket insertion succeeds");
+    Actors::insert_deadline_index(key).expect("deadline index insertion succeeds");
+    polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+  });
+  handle
+}
+
+#[test]
+fn canonical_deadline_index_covers_order_pages_stale_state_and_rollback() {
+  new_test_ext().execute_with(|| {
+    let mut handles = BTreeMap::new();
+    for deadline in (1..=65u64).rev() {
+      let key = WakeupKey::Block(deadline);
+      handles.insert(key, install_indexed_deadline_bucket(key, 1_000 + deadline));
+    }
+    for deadline in [9, 3, 12] {
+      let key = WakeupKey::Tick(deadline);
+      handles.insert(key, install_indexed_deadline_bucket(key, 2_000 + deadline));
+    }
+
+    assert_eq!(DeadlineIndexLen::<Test>::get(WakeupClock::Block), 65);
+    assert_eq!(DeadlineIndexLen::<Test>::get(WakeupClock::Tick), 3);
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 0)
+        .unwrap()
+        .len(),
+      32
+    );
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 1)
+        .unwrap()
+        .len(),
+      32
+    );
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 2)
+        .unwrap()
+        .len(),
+      1
+    );
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 0).unwrap()[0],
+      WakeupKey::Block(1)
+    );
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Tick, 0).unwrap()[0],
+      WakeupKey::Tick(3)
+    );
+
+    for (key, index) in DeadlineIndexPositions::<Test>::iter() {
+      let page = DeadlineIndexPages::<Test>::get(key.clock(), u64::from(index / 32)).unwrap();
+      assert_eq!(page[(index % 32) as usize], key);
+      if index > 0 {
+        let parent = (index - 1) / 2;
+        let parent_page =
+          DeadlineIndexPages::<Test>::get(key.clock(), u64::from(parent / 32)).unwrap();
+        assert!(parent_page[(parent % 32) as usize] <= key);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::update_deadline_index(key),
+        )
+      })
+      .expect("clustered and overdue key remains structurally valid");
+    }
+
+    let removed_key = WakeupKey::Block(1);
+    let removed = handles[&removed_key];
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::remove_deadline_member(removed.actor).expect("bucket becomes empty");
+      Actors::remove_deadline_index(removed_key).expect("minimum removal repairs heap");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(DeadlineIndexLen::<Test>::get(WakeupClock::Block), 64);
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 0).unwrap()[0],
+      WakeupKey::Block(2)
+    );
+    assert!(!DeadlineIndexPages::<Test>::contains_key(
+      WakeupClock::Block,
+      2
+    ));
+
+    let stale_key = WakeupKey::Block(10);
+    let original = DeadlineIndexPositions::<Test>::get(stale_key).unwrap();
+    DeadlineIndexPositions::<Test>::insert(stale_key, 999);
+    let stale = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::update_deadline_index(stale_key),
+      )
+    });
+    assert_eq!(stale, Err(DeadlineIndexMutationError::StaleIndex));
+    DeadlineIndexPositions::<Test>::insert(stale_key, original);
+
+    let rollback_key = WakeupKey::Block(0);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      install_indexed_deadline_bucket(rollback_key, 3_000);
+      assert_eq!(DeadlineIndexPositions::<Test>::get(rollback_key), Some(0));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert!(!DeadlineHeaders::<Test>::contains_key(rollback_key));
+    assert!(!DeadlineIndexPositions::<Test>::contains_key(rollback_key));
+    assert_eq!(
+      DeadlineIndexPages::<Test>::get(WakeupClock::Block, 0).unwrap()[0],
+      WakeupKey::Block(2)
+    );
+  });
+}
+
+#[test]
+fn canonical_deadline_index_rejects_missing_headers_legacy_authority_and_early_remove() {
+  new_test_ext().execute_with(|| {
+    let missing = WakeupKey::Block(40);
+    assert_eq!(
+      Actors::insert_deadline_index(missing),
+      Err(DeadlineIndexMutationError::TransactionRequired)
+    );
+    let missing_result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::insert_deadline_index(missing),
+      )
+    });
+    assert_eq!(
+      missing_result,
+      Err(DeadlineIndexMutationError::HeaderMissing)
+    );
+
+    let key = WakeupKey::Block(41);
+    let handle = install_indexed_deadline_bucket(key, 4_000);
+    let header = DeadlineHeaders::<Test>::get(key).unwrap();
+    DeadlineHeaders::<Test>::mutate(key, |stored| stored.as_mut().unwrap().count = 0);
+    let corrupt = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::update_deadline_index(key),
+      )
+    });
+    assert_eq!(corrupt, Err(DeadlineIndexMutationError::CorruptHeader));
+    DeadlineHeaders::<Test>::insert(key, header);
+
+    let early_remove = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::remove_deadline_index(key),
+      )
+    });
+    assert_eq!(early_remove, Err(DeadlineIndexMutationError::CorruptHeader));
+
+    ActorWaitingOccupancies::<Test>::insert(key, 1);
+    let legacy = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::remove_deadline_member(handle.actor).expect("canonical header is removed");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::remove_deadline_index(key),
+      )
+    });
+    assert_eq!(
+      legacy,
+      Err(DeadlineIndexMutationError::LegacyAuthorityPresent)
+    );
+    assert!(DeadlineIndexPositions::<Test>::contains_key(key));
   });
 }
 
@@ -3087,6 +3259,9 @@ fn actor_storage_schema_is_explicit() {
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),
+      ("DeadlineIndexPages", true, true),
+      ("DeadlineIndexPositions", true, true),
+      ("DeadlineIndexLen", false, true),
       ("ActorIdentityCount", false, false),
       ("ActorStateHolds", true, true),
       ("ActiveActorCount", false, false),

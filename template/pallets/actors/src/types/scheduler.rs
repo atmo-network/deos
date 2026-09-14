@@ -112,6 +112,20 @@ pub enum DeadlineMutationError {
   CapacityExceeded,
 }
 
+/// Rejected transaction-local mutations of the inert deadline-key min-heaps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineIndexMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  HeaderMissing,
+  KeyAlreadyExists,
+  KeyMissing,
+  StaleIndex,
+  CorruptHeader,
+  CorruptHeap,
+  CapacityExceeded,
+}
+
 #[derive(
   Clone,
   Copy,
