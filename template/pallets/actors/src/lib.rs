@@ -2844,6 +2844,9 @@ pub mod pallet {
             return Err(DependencyScanError::PendingAuthorityMismatch);
           }
           if handle.acknowledged_revision < expected_target {
+            if PendingDependencyReviews::<T>::contains_key(handle.actor.actor_id) {
+              return Err(DependencyScanError::PendingDestinationMismatch);
+            }
             let destination = PendingDependencyEvent {
               owner: pending,
               source,
@@ -3295,6 +3298,9 @@ pub mod pallet {
       };
       if !due {
         return Err(DependencyDueReviewError::NotDue);
+      }
+      if PendingDependencyEvents::<T>::contains_key(expected.owner.actor.actor_id) {
+        return Err(DependencyDueReviewError::DestinationOccupied);
       }
       match PendingDependencyReviews::<T>::get(expected.owner.actor.actor_id) {
         Some(current) if current == expected => {

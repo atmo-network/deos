@@ -2377,6 +2377,158 @@ fn due_dependency_review_publishes_exact_pending_authority_atomically() {
 }
 
 #[test]
+fn dependency_pending_causes_share_one_actor_destination() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(10);
+    let owner = PendingCheckOwner {
+      actor: actor_ref(244, 3),
+      plan_revision: 7,
+    };
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    let review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(10),
+    };
+    DependencyTimedReviews::<Test>::insert(owner.actor.actor_id, review);
+    let event = PendingDependencyEvent {
+      owner,
+      source: 57,
+      revision: 2,
+    };
+    PendingDependencyEvents::<Test>::insert(owner.actor.actor_id, event);
+
+    let blocked_review = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(review),
+      )
+    });
+    assert_eq!(
+      blocked_review,
+      Err(DependencyDueReviewError::DestinationOccupied)
+    );
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(owner.actor.actor_id),
+      Some(review)
+    );
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(owner.actor.actor_id),
+      Some(event)
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+
+    PendingDependencyEvents::<Test>::remove(owner.actor.actor_id);
+    let published_review = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(review),
+      )
+    });
+    assert_eq!(published_review, Ok(DependencyDueReviewMutation::Published));
+
+    DependencyRevisions::<Test>::insert(
+      57,
+      DependencyRevisionState {
+        revision: 1,
+        scan_target: None,
+        scan_cursor: 0,
+        scan_end: 0,
+        exhausted: false,
+      },
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::commit_negative_dependency_plan(
+          owner,
+          &[DependencyPlanSource {
+            source: 57,
+            observed_revision: 1,
+          }],
+          None,
+        ),
+        Ok(DependencyPlanMutation {
+          installed: 1,
+          ..Default::default()
+        })
+      );
+      assert_eq!(
+        Actors::publish_dependency_event(57),
+        Ok(DependencyPublicationMutation::Begun(2))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let blocked_event = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::process_dependency_scan_member(57, 2, 0),
+      )
+    });
+    assert_eq!(
+      blocked_event,
+      Err(DependencyScanError::PendingDestinationMismatch)
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(57).scan_cursor, 0);
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(57, owner.actor.actor_id)
+        .unwrap()
+        .acknowledged_revision,
+      1
+    );
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+      Some(review)
+    );
+    assert!(!PendingDependencyEvents::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+
+    let consumed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::consume_pending_dependency_review(
+          review,
+          &[DependencyPlanSource {
+            source: 57,
+            observed_revision: 2,
+          }],
+          None,
+        ),
+      )
+    });
+    assert_eq!(
+      consumed,
+      Ok(DependencyPlanMutation {
+        replaced: 1,
+        ..Default::default()
+      })
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(57, 2, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(57, 2, 1),
+        Ok(DependencyScanMutation::Completed)
+      );
+      assert_eq!(
+        Actors::publish_dependency_event(57),
+        Ok(DependencyPublicationMutation::Begun(3))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(57, 3, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert!(PendingDependencyEvents::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+  });
+}
+
+#[test]
 fn pending_dependency_event_installs_complete_successor_before_consumption() {
   new_test_ext().execute_with(|| {
     System::set_block_number(10);
