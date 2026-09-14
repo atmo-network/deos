@@ -6474,12 +6474,9 @@ mod benches {
         | ReachableOpeningProfile::CompleteMax
         | ReachableOpeningProfile::UserCompleteMin
         | ReachableOpeningProfile::UserCompleteHeaderMax
-    ) || (count == 1
-      && matches!(
-        profile,
-        ReachableOpeningProfile::FailedMin | ReachableOpeningProfile::FailedMax
-      ))
-    {
+        | ReachableOpeningProfile::FailedMin
+        | ReachableOpeningProfile::FailedMax
+    ) {
       assert_reachable_terminal_opening::<T>(actor_id, count, profile);
       return;
     }
@@ -6531,7 +6528,7 @@ mod benches {
     if failed {
       assert_eq!(state.hot.cycle_state, CycleState::Idle);
       assert_eq!(state.identity.cycle_nonce, 1);
-      assert_eq!(state.hot.unsuccessful_attempt_streak, 0);
+      assert_eq!(state.hot.unsuccessful_attempt_streak, 1);
       assert!(state.run_state.is_none());
       assert!(state.hot.queue_ticket.is_none() && state.hot.wakeup_pointer.is_none());
       assert!(matches!(

@@ -230,8 +230,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 		// Proof Size summary in bytes:
 		//  Measured:  `2373`
 		//  Estimated: `81886`
-		// Minimum execution time: 505_240_000 picoseconds.
-		Weight::from_parts(572_847_000, 0)
+		// Minimum execution time: 573_127_000 picoseconds.
+		Weight::from_parts(616_290_000, 0)
 			.saturating_add(Weight::from_parts(0, 81886))
 			.saturating_add(T::DbWeight::get().reads(62))
 			.saturating_add(T::DbWeight::get().writes(54))
@@ -298,8 +298,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 		// Proof Size summary in bytes:
 		//  Measured:  `2271`
 		//  Estimated: `81886`
-		// Minimum execution time: 504_542_000 picoseconds.
-		Weight::from_parts(597_990_000, 0)
+		// Minimum execution time: 563_279_000 picoseconds.
+		Weight::from_parts(581_228_000, 0)
 			.saturating_add(Weight::from_parts(0, 81886))
 			.saturating_add(T::DbWeight::get().reads(62))
 			.saturating_add(T::DbWeight::get().writes(54))
@@ -362,8 +362,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 		// Proof Size summary in bytes:
 		//  Measured:  `2158`
 		//  Estimated: `81886`
-		// Minimum execution time: 459_005_000 picoseconds.
-		Weight::from_parts(529_615_000, 0)
+		// Minimum execution time: 544_911_000 picoseconds.
+		Weight::from_parts(578_225_000, 0)
 			.saturating_add(Weight::from_parts(0, 81886))
 			.saturating_add(T::DbWeight::get().reads(60))
 			.saturating_add(T::DbWeight::get().writes(52))
@@ -422,8 +422,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 		// Proof Size summary in bytes:
 		//  Measured:  `2155`
 		//  Estimated: `81886`
-		// Minimum execution time: 443_359_000 picoseconds.
-		Weight::from_parts(492_109_000, 0)
+		// Minimum execution time: 504_542_000 picoseconds.
+		Weight::from_parts(520_675_000, 0)
 			.saturating_add(Weight::from_parts(0, 81886))
 			.saturating_add(T::DbWeight::get().reads(58))
 			.saturating_add(T::DbWeight::get().writes(50))
@@ -966,10 +966,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 	/// Proof: `Actors::IndexedTriggerDetectionDisabled` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
 	fn update_contract() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `7070`
+		//  Measured:  `7778`
 		//  Estimated: `160254`
-		// Minimum execution time: 1_059_300_000 picoseconds.
-		Weight::from_parts(1_188_299_000, 0)
+		// Minimum execution time: 1_272_389_000 picoseconds.
+		Weight::from_parts(1_400_829_000, 0)
 			.saturating_add(Weight::from_parts(0, 160254))
 			.saturating_add(T::DbWeight::get().reads(95))
 			.saturating_add(T::DbWeight::get().writes(90))

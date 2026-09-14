@@ -2503,7 +2503,10 @@ impl<T: Config> Pallet<T> {
               max_amount_b,
               max_ratio_error,
             )?;
-            if amount_a > amount || amount_b > max_amount_b {
+            // `max_amount_b` bounds pre-existing asset-B debit, while `amount_b` reports the
+            // total donated B side and may include receipts acquired during the operation. The
+            // host adapter owns the debit bound; generic Actors can only verify asset-A spend.
+            if amount_a > amount {
               return Err(TaskFailure::permanent(DispatchError::Other(
                 "InvalidLiquidityOutcome",
               )));

@@ -166,7 +166,7 @@ The pallet resolves amounts through `AmountResolution`:
 Resolution policy is task-bound in code:
 
 - `PreserveSpend`: applies to Transfer, SplitTransfer, Burn, exact-input swap, liquidity add/remove, Stake, and DonateLiquidity; computes one spend ceiling as adapter-visible balance minus reserved future User fees for the native fee asset and, for User fee-native direct debits, `max(MinUserBalance, asset minimum)`; other assets retain their adapter minimum.
-- `DonateLiquidity` resolves only declared `asset_a` as `max_amount_a` and passes the current preservable `asset_b` balance as `max_amount_b`; the host adapter must keep the paired debit within both caps and report exact used amounts. `Fixed`, every percentage basis, and `SplitTransfer` total must stay within that ceiling.
+- `DonateLiquidity` resolves only declared `asset_a` as `max_amount_a` and passes the current preservable `asset_b` balance as the cap on pre-existing B debit; the host adapter must enforce both debit caps and report total donated amounts. An adapter may atomically acquire and donate new B above that debit cap, so generic Actors verifies returned A spend while adapter tests falsify B-cap violations. `Fixed`, every percentage basis, and `SplitTransfer` total must stay within their applicable ceiling.
 - `ExpendableSpend`: consume available amount where task allows
 - `Mint`: amount interpreted in mint context
 - `Unstake share spend`: `Fixed` and `Percent` resolve against `StakingOps::share_balance(position_asset)`; 100% of current shares permits full withdrawal.

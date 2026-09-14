@@ -976,7 +976,7 @@ General rules:
 
 `SwapIn` and `SwapOut` use current executable quotes inside the adapter boundary (§11.4). `InputLimit::Absolute` is a cap, not an admission gate.
 
-`AddLiquidity` amounts are debit caps; actual used amounts and LP output are returned. `RemoveLiquidity` debits the exact resolved LP amount. `DonateLiquidity` uses one authored cap plus one current derived preservable cap (§11.4).
+`AddLiquidity` amounts are debit caps; actual used amounts and LP output are returned. `RemoveLiquidity` debits the exact resolved LP amount. `DonateLiquidity` uses one authored asset-A cap plus one current derived cap on pre-existing asset-B debit (§11.4); the adapter may acquire asset B during the atomic operation, and its returned donated-B amount may therefore exceed that debit cap.
 
 ---
 
@@ -1600,7 +1600,7 @@ All products use widened checked arithmetic. Missing/stale/zero reference or exc
 
 Ordered LP identity is validated at admission and execution. Add/Donate actual debits MUST remain within supplied caps. RemoveLiquidity MUST debit the exact resolved LP amount.
 
-For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)`. Zero `max_b` is `FundingUnavailable`; the adapter MUST NOT invent a larger cap.
+For `DonateLiquidity`, Actors derives `max_b = preservable_balance(asset_b)` as the cap on pre-existing asset-B debit. Zero `max_b` forbids debiting pre-existing asset B but does not forbid an atomic adapter from acquiring and donating new asset B; the adapter MUST enforce the debit cap, and Actors independently verifies the returned asset-A spend.
 
 #### Staking
 
