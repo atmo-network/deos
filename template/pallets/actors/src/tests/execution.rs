@@ -4159,6 +4159,78 @@ fn completion_policy_only_replacement_cancels_contract_bound_run() {
 }
 
 #[test]
+fn step_replacement_cancels_retry_and_resets_bounds_before_fresh_execution() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended retry exists");
+    let sovereign = sovereign_account(actor_id);
+    let bob_before = native_balance(&BOB);
+    let custody_before = native_balance(&sovereign);
+    assert_eq!(suspended.cycle_nonce, 1);
+    assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("suspended actor")
+        .unsuccessful_attempt_streak,
+      1
+    );
+
+    let replacement = transfer_contract_steps(BOB, 7);
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::root(),
+      actor_id,
+      replacement,
+      crate::CompletionPolicy::Persistent,
+    ));
+
+    let replaced = Actors::active_actor_view(actor_id).expect("replacement remains active");
+    assert_eq!(replaced.cycle_state, CycleState::Idle);
+    assert_eq!(replaced.cycle_nonce, suspended.cycle_nonce);
+    assert_eq!(replaced.unsuccessful_attempt_streak, 0);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(native_balance(&sovereign), custody_before);
+    assert_eq!(native_balance(&BOB), bob_before);
+
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+
+    let completed = Actors::active_actor_view(actor_id).expect("replacement completed");
+    assert_eq!(completed.cycle_state, CycleState::Idle);
+    assert_eq!(completed.cycle_nonce, 2);
+    assert_eq!(completed.unsuccessful_attempt_streak, 0);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(native_balance(&sovereign), custody_before - 7);
+    assert_eq!(native_balance(&BOB), bob_before + 7);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::CycleCancelled {
+        actor_id: id,
+        cycle_nonce: 1,
+        reason: CancellationReason::ContractReplaced,
+      } if *id == actor_id
+    )));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        actor_id: id,
+        cycle_nonce: 2,
+        result: CycleResult::Completed,
+        outcomes: OutcomeTotals {
+          executed_steps: 1,
+          committed_effectful_tasks: 1,
+          ..
+        },
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
 fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
