@@ -3007,6 +3007,7 @@ pub mod pallet {
     pub(crate) fn commit_negative_dependency_plan(
       owner: PendingCheckOwner,
       desired: &[DependencyPlanSource],
+      timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(DependencyRegistrationError::TransactionRequired);
@@ -3049,6 +3050,23 @@ pub mod pallet {
           owner.actor.actor_id,
           registration.handle,
         )?;
+      }
+      let old_timed_review = DependencyTimedReviews::<T>::get(owner.actor.actor_id);
+      if old_timed_review.is_some_and(|value| value.owner.actor != owner.actor) {
+        return Err(DependencyRegistrationError::StoredPlanMismatch);
+      }
+      if let Some(deadline) = timed_review {
+        let future = match deadline {
+          WakeupKey::Block(block) => block > frame_system::Pallet::<T>::block_number(),
+          WakeupKey::Tick(tick) => {
+            tick
+              > Self::current_scheduler_tick()
+                .map_err(|_| DependencyRegistrationError::ClockUnavailable)?
+          }
+        };
+        if !future {
+          return Err(DependencyRegistrationError::DeadlineNotFuture);
+        }
       }
       for entry in desired {
         let current = DependencyRegistrations::<T>::get(entry.source, owner.actor.actor_id);
@@ -3120,6 +3138,32 @@ pub mod pallet {
             .ok_or(DependencyRegistrationError::CapacityExceeded)?;
         }
       }
+      mutation.timed_review = match (old_timed_review, timed_review) {
+        (None, None) => DependencyTimedReviewMutation::None,
+        (None, Some(deadline)) => {
+          DependencyTimedReviews::<T>::insert(
+            owner.actor.actor_id,
+            DependencyTimedReview { owner, deadline },
+          );
+          DependencyTimedReviewMutation::Installed
+        }
+        (Some(current), Some(deadline))
+          if current == (DependencyTimedReview { owner, deadline }) =>
+        {
+          DependencyTimedReviewMutation::Retained
+        }
+        (Some(_), Some(deadline)) => {
+          DependencyTimedReviews::<T>::insert(
+            owner.actor.actor_id,
+            DependencyTimedReview { owner, deadline },
+          );
+          DependencyTimedReviewMutation::Replaced
+        }
+        (Some(_), None) => {
+          DependencyTimedReviews::<T>::remove(owner.actor.actor_id);
+          DependencyTimedReviewMutation::Removed
+        }
+      };
       DependencyPlans::<T>::insert(owner.actor.actor_id, next);
       Ok(mutation)
     }
@@ -5417,6 +5461,12 @@ pub mod pallet {
     BoundedVec<DependencyPlanRegistration, T::MaxContractSteps>,
     ValueQuery,
   >;
+
+  /// Inert Actor-owned optional timed review retained with the complete dependency plan.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_timed_reviews)]
+  pub type DependencyTimedReviews<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
 
   /// Inert bucket ownership for the future retained C32 deadline carrier.
   #[pallet::storage]

@@ -156,6 +156,26 @@ pub struct DependencyPlanRegistration {
   pub handle: DependencyRegistrationHandle,
 }
 
+/// Exact optional timed-review authority retained with one complete dependency plan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyTimedReview<BlockNumber> {
+  pub owner: PendingCheckOwner,
+  pub deadline: WakeupKey<BlockNumber>,
+}
+
+/// Timed-review part of one complete dependency-plan replacement.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DependencyTimedReviewMutation {
+  #[default]
+  None,
+  Installed,
+  Retained,
+  Replaced,
+  Removed,
+}
+
 /// Bounded result of replacing one complete dependency plan.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DependencyPlanMutation {
@@ -163,6 +183,7 @@ pub struct DependencyPlanMutation {
   pub retained: u32,
   pub replaced: u32,
   pub removed: u32,
+  pub timed_review: DependencyTimedReviewMutation,
 }
 
 /// Bounded topology owner for one source's retained registration pages.
@@ -219,6 +240,8 @@ pub enum DependencyRegistrationError {
   PlanTooLarge,
   DuplicateSource,
   StoredPlanMismatch,
+  DeadlineNotFuture,
+  ClockUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
