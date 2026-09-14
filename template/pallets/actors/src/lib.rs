@@ -987,6 +987,7 @@ pub mod pallet {
   pub type ActorWaitingChunkOf<T> =
     BoundedVec<Option<ActorWaitingEntry<ActorControlCellOf<T>>>, ConstU32<32>>;
   pub type ActorWaitingPageOf<T> = WakeupPage<ActorWaitingChunkOf<T>>;
+  pub type DeadlineHandleOf<T> = DeadlineHandle<BlockNumberFor<T>>;
 
   /// External-boundary location; execution writes but never reads this index.
   #[derive(
@@ -2626,6 +2627,267 @@ pub mod pallet {
       Ok(node)
     }
 
+    /// Inserts one generation-bound process into an exact retained deadline slot.
+    #[allow(
+      dead_code,
+      reason = "deadline carrier remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn insert_deadline_member(
+      handle: DeadlineHandleOf<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DeadlineMutationError::TransactionRequired);
+      }
+      if ActorControlLocators::<T>::contains_key(handle.actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(handle.actor.actor_id)
+      {
+        return Err(DeadlineMutationError::LegacyAuthorityPresent);
+      }
+      let process = ActorProcesses::<T>::get(handle.actor.actor_id)
+        .ok_or(DeadlineMutationError::ProcessMissing)?;
+      if process.generation != handle.actor.generation
+        || process.status != ProcessStatus::Serving
+        || process.residence
+          != Some(ProcessResidence::Deadline {
+            key: handle.key,
+            page: handle.page,
+            slot: handle.slot,
+          })
+      {
+        return Err(DeadlineMutationError::ProcessResidenceMismatch);
+      }
+      if DeadlineHandles::<T>::contains_key(handle.actor.actor_id) {
+        return Err(DeadlineMutationError::MemberAlreadyExists);
+      }
+      let slot = usize::from(handle.slot);
+      if slot >= 32 {
+        return Err(DeadlineMutationError::InvalidDestination);
+      }
+      let mut header = DeadlineHeaders::<T>::get(handle.key);
+      let mut page = DeadlinePages::<T>::get(handle.key, handle.page);
+      match (&header, &page) {
+        (None, None) if handle.page == 0 => {}
+        (Some(header), None) if handle.page == header.next_page => {}
+        (Some(_), Some(_)) => {}
+        _ => return Err(DeadlineMutationError::InvalidDestination),
+      }
+      if page
+        .as_ref()
+        .is_some_and(|page| page.entries[slot].is_some())
+      {
+        return Err(DeadlineMutationError::InvalidDestination);
+      }
+      let next_count = header.as_ref().map_or(Ok(1), |value| {
+        value
+          .count
+          .checked_add(1)
+          .ok_or(DeadlineMutationError::CapacityExceeded)
+      })?;
+      if next_count > T::MaxActiveActors::get() {
+        return Err(DeadlineMutationError::CapacityExceeded);
+      }
+      if page.is_none() {
+        let previous_page = header.as_ref().map(|value| value.last_page);
+        page = Some(DeadlinePage {
+          previous_page,
+          next_page: None,
+          live_entries: 0,
+          entries: BoundedVec::try_from(alloc::vec![None; 32])
+            .map_err(|_| DeadlineMutationError::CorruptCarrier)?,
+        });
+        if let Some(previous_page) = previous_page {
+          let mut previous = DeadlinePages::<T>::get(handle.key, previous_page)
+            .ok_or(DeadlineMutationError::CorruptCarrier)?;
+          if previous.next_page.is_some() {
+            return Err(DeadlineMutationError::CorruptCarrier);
+          }
+          previous.next_page = Some(handle.page);
+          DeadlinePages::<T>::insert(handle.key, previous_page, previous);
+        }
+      }
+      let mut page = page.ok_or(DeadlineMutationError::CorruptCarrier)?;
+      if page.live_entries >= 32 || page.entries.len() != 32 {
+        return Err(DeadlineMutationError::PageFull);
+      }
+      page.entries[slot] = Some(handle.actor);
+      page.live_entries = page
+        .live_entries
+        .checked_add(1)
+        .ok_or(DeadlineMutationError::CapacityExceeded)?;
+      DeadlinePages::<T>::insert(handle.key, handle.page, page);
+      match header.as_mut() {
+        Some(header) => {
+          if handle.page == header.next_page {
+            header.last_page = handle.page;
+            header.next_page = header
+              .next_page
+              .checked_add(1)
+              .ok_or(DeadlineMutationError::CapacityExceeded)?;
+            header.page_count = header
+              .page_count
+              .checked_add(1)
+              .ok_or(DeadlineMutationError::CapacityExceeded)?;
+          }
+          header.count = next_count;
+        }
+        None => {
+          header = Some(DeadlineHeader {
+            first_page: 0,
+            last_page: 0,
+            next_page: 1,
+            page_count: 1,
+            count: 1,
+          });
+        }
+      }
+      let header = header.ok_or(DeadlineMutationError::CorruptCarrier)?;
+      DeadlineHeaders::<T>::insert(handle.key, header);
+      DeadlineHandles::<T>::insert(handle.actor.actor_id, handle);
+      Ok(())
+    }
+
+    /// Removes exactly one generation-bound deadline member and unlinks an empty retained page.
+    #[allow(
+      dead_code,
+      reason = "deadline carrier remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn remove_deadline_member(
+      actor: ActorRef,
+    ) -> Result<DeadlineHandleOf<T>, DeadlineMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DeadlineMutationError::TransactionRequired);
+      }
+      if ActorControlLocators::<T>::contains_key(actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+      {
+        return Err(DeadlineMutationError::LegacyAuthorityPresent);
+      }
+      let process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
+      let handle =
+        DeadlineHandles::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::MemberMissing)?;
+      if process.generation != actor.generation || handle.actor != actor {
+        return Err(DeadlineMutationError::StaleGeneration);
+      }
+      if process.status != ProcessStatus::Serving
+        || process.residence
+          != Some(ProcessResidence::Deadline {
+            key: handle.key,
+            page: handle.page,
+            slot: handle.slot,
+          })
+      {
+        return Err(DeadlineMutationError::ProcessResidenceMismatch);
+      }
+      let mut header =
+        DeadlineHeaders::<T>::get(handle.key).ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let mut page = DeadlinePages::<T>::get(handle.key, handle.page)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let slot = usize::from(handle.slot);
+      if page.entries.get(slot) != Some(&Some(actor)) || page.live_entries == 0 || header.count == 0
+      {
+        return Err(DeadlineMutationError::CorruptCarrier);
+      }
+      page.entries[slot] = None;
+      page.live_entries = page
+        .live_entries
+        .checked_sub(1)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      header.count = header
+        .count
+        .checked_sub(1)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      DeadlineHandles::<T>::remove(actor.actor_id);
+      if page.live_entries > 0 {
+        DeadlinePages::<T>::insert(handle.key, handle.page, page);
+        DeadlineHeaders::<T>::insert(handle.key, header);
+        return Ok(handle);
+      }
+      if let Some(previous_id) = page.previous_page {
+        let mut previous = DeadlinePages::<T>::get(handle.key, previous_id)
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        if previous.next_page != Some(handle.page) {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        previous.next_page = page.next_page;
+        DeadlinePages::<T>::insert(handle.key, previous_id, previous);
+      }
+      if let Some(next_id) = page.next_page {
+        let mut next = DeadlinePages::<T>::get(handle.key, next_id)
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        if next.previous_page != Some(handle.page) {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        next.previous_page = page.previous_page;
+        DeadlinePages::<T>::insert(handle.key, next_id, next);
+      }
+      DeadlinePages::<T>::remove(handle.key, handle.page);
+      header.page_count = header
+        .page_count
+        .checked_sub(1)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      if header.page_count == 0 {
+        if header.count != 0 {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        DeadlineHeaders::<T>::remove(handle.key);
+      } else {
+        if header.first_page == handle.page {
+          header.first_page = page
+            .next_page
+            .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        }
+        if header.last_page == handle.page {
+          header.last_page = page
+            .previous_page
+            .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        }
+        DeadlineHeaders::<T>::insert(handle.key, header);
+      }
+      Ok(handle)
+    }
+
+    /// Moves one deadline member atomically after preflighting the exact destination slot.
+    #[allow(
+      dead_code,
+      reason = "deadline carrier remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn move_deadline_member(
+      actor: ActorRef,
+      destination: DeadlineHandleOf<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      if destination.actor != actor {
+        return Err(DeadlineMutationError::StaleGeneration);
+      }
+      let slot = usize::from(destination.slot);
+      if slot >= 32
+        || DeadlinePages::<T>::get(destination.key, destination.page)
+          .is_some_and(|page| page.entries[slot].is_some())
+      {
+        return Err(DeadlineMutationError::InvalidDestination);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let outcome = (|| {
+          Self::remove_deadline_member(actor)?;
+          let mut process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DeadlineMutationError::ProcessMissing)?;
+          process.residence = Some(ProcessResidence::Deadline {
+            key: destination.key,
+            page: destination.page,
+            slot: destination.slot,
+          });
+          ActorProcesses::<T>::insert(actor.actor_id, process);
+          Self::insert_deadline_member(destination)
+        })();
+        match outcome {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     pub(crate) fn insert_unsignaled_control_authority(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
@@ -4063,6 +4325,31 @@ pub mod pallet {
   #[pallet::getter(fn service_nodes)]
   pub type ServiceNodes<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ServiceNode<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Inert bucket ownership for the future retained C32 deadline carrier.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_headers)]
+  pub type DeadlineHeaders<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupKey<BlockNumberFor<T>>, DeadlineHeader, OptionQuery>;
+
+  /// Inert retained C32 pages for the future deadline carrier.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_pages)]
+  pub type DeadlinePages<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    WakeupKey<BlockNumberFor<T>>,
+    Blake2_128Concat,
+    u64,
+    DeadlinePage,
+    OptionQuery,
+  >;
+
+  /// Inert generation-bound reverse handles for exact deadline removal.
+  #[pallet::storage]
+  #[pallet::getter(fn deadline_handles)]
+  pub type DeadlineHandles<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_identity_count)]

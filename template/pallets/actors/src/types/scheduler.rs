@@ -62,6 +62,56 @@ pub enum ServiceRingMutationError {
   CapacityExceeded,
 }
 
+/// Bucket-level ownership for retained fixed-width deadline pages.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlineHeader {
+  pub first_page: u64,
+  pub last_page: u64,
+  pub next_page: u64,
+  pub page_count: u32,
+  pub count: u32,
+}
+
+/// One retained C32 deadline page. Empty interior slots are reusable without moving members.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlinePage {
+  pub previous_page: Option<u64>,
+  pub next_page: Option<u64>,
+  pub live_entries: u8,
+  pub entries: BoundedVec<Option<ActorRef>, ConstU32<32>>,
+}
+
+/// Generation-bound reverse index for exact arbitrary deadline removal.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DeadlineHandle<BlockNumber> {
+  pub actor: ActorRef,
+  pub key: WakeupKey<BlockNumber>,
+  pub page: u64,
+  pub slot: u8,
+}
+
+/// Rejected transaction-local mutations of the inert canonical deadline carrier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeadlineMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  MemberAlreadyExists,
+  MemberMissing,
+  StaleGeneration,
+  InvalidDestination,
+  PageFull,
+  CorruptCarrier,
+  CapacityExceeded,
+}
+
 #[derive(
   Clone,
   Copy,

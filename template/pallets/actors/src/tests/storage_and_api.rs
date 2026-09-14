@@ -1,13 +1,13 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
-  ActorRef, CloseReason, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence,
-  ParkNegativeReason, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
-  plan_legacy_process_transition,
+  ActorRef, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders, DeadlineMutationError,
+  DeadlinePages, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence, ParkNegativeReason,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1035,6 +1035,129 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
     });
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
     assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+  });
+}
+
+fn deadline_process(handle: DeadlineHandle<u64>) -> ActorProcess<u64> {
+  ActorProcess {
+    generation: handle.actor.generation,
+    status: ProcessStatus::Serving,
+    residence: Some(ProcessResidence::Deadline {
+      key: handle.key,
+      page: handle.page,
+      slot: handle.slot,
+    }),
+  }
+}
+
+#[test]
+fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback() {
+  new_test_ext().execute_with(|| {
+    let key = WakeupKey::Block(20);
+    let first = DeadlineHandle {
+      actor: actor_ref(200, 3),
+      key,
+      page: 0,
+      slot: 0,
+    };
+    ActorProcesses::<Test>::insert(first.actor.actor_id, deadline_process(first));
+    assert_eq!(
+      Actors::insert_deadline_member(first),
+      Err(DeadlineMutationError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::insert_deadline_member(first),
+      )
+    })
+    .expect("first deadline insertion succeeds");
+
+    for slot in 1..32u8 {
+      let handle = DeadlineHandle {
+        actor: actor_ref(200 + u64::from(slot), 3),
+        key,
+        page: 0,
+        slot,
+      };
+      ActorProcesses::<Test>::insert(handle.actor.actor_id, deadline_process(handle));
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::insert_deadline_member(handle),
+        )
+      })
+      .expect("page fill succeeds");
+    }
+    assert_eq!(
+      DeadlinePages::<Test>::get(key, 0)
+        .expect("page")
+        .live_entries,
+      32
+    );
+
+    let removed = DeadlineHandle {
+      actor: actor_ref(207, 3),
+      key,
+      page: 0,
+      slot: 7,
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::remove_deadline_member(removed.actor),
+      )
+    })
+    .expect("interior removal succeeds");
+    let replacement = DeadlineHandle {
+      actor: actor_ref(240, 4),
+      key,
+      page: 0,
+      slot: 7,
+    };
+    ActorProcesses::<Test>::insert(replacement.actor.actor_id, deadline_process(replacement));
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::insert_deadline_member(replacement),
+      )
+    })
+    .expect("fragmented slot is reusable");
+
+    let destination = DeadlineHandle {
+      actor: first.actor,
+      key: WakeupKey::Tick(30),
+      page: 0,
+      slot: 4,
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::move_deadline_member(first.actor, destination),
+      )
+    })
+    .expect("cross-bucket move succeeds");
+    assert_eq!(
+      DeadlineHandles::<Test>::get(first.actor.actor_id),
+      Some(destination)
+    );
+    assert_eq!(
+      DeadlineHeaders::<Test>::get(key)
+        .expect("source header")
+        .count,
+      31
+    );
+
+    let before = DeadlineHandles::<Test>::get(first.actor.actor_id);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let invalid = DeadlineHandle {
+        actor: first.actor,
+        key: WakeupKey::Tick(40),
+        page: 9,
+        slot: 0,
+      };
+      assert_eq!(
+        Actors::move_deadline_member(first.actor, invalid),
+        Err(DeadlineMutationError::InvalidDestination)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(DeadlineHandles::<Test>::get(first.actor.actor_id), before);
   });
 }
 
@@ -2961,6 +3084,9 @@ fn actor_storage_schema_is_explicit() {
       ("ActorProcesses", true, true),
       ("ServiceHeader", false, false),
       ("ServiceNodes", true, true),
+      ("DeadlineHeaders", true, true),
+      ("DeadlinePages", true, true),
+      ("DeadlineHandles", true, true),
       ("ActorIdentityCount", false, false),
       ("ActorStateHolds", true, true),
       ("ActiveActorCount", false, false),
