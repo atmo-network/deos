@@ -269,6 +269,8 @@ pub enum DependencyRegistrationError {
   PlanTooLarge,
   DuplicateSource,
   StoredPlanMismatch,
+  PendingEventMissing,
+  PendingEventMismatch,
   PendingReviewMissing,
   PendingReviewMismatch,
   DeadlineNotFuture,

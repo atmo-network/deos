@@ -2858,6 +2858,18 @@ pub mod pallet {
               acknowledged_revision: expected_target,
               ..handle
             };
+            let mut plan = DependencyPlans::<T>::get(handle.actor.actor_id);
+            if !plan.is_empty() {
+              let registration = plan
+                .iter_mut(/* deos-bypass: bounded-iter -- complete plan is MaxContractSteps-bounded. */)
+                .find(|registration| registration.source == source)
+                .ok_or(DependencyScanError::CorruptTopology)?;
+              if registration.handle != handle {
+                return Err(DependencyScanError::CorruptTopology);
+              }
+              registration.handle = acknowledged;
+              DependencyPlans::<T>::insert(handle.actor.actor_id, plan);
+            }
             page.entries[slot] = Some(acknowledged);
             DependencyRegistrationPages::<T>::insert(source, page_id, page);
             DependencyRegistrations::<T>::insert(source, acknowledged.actor.actor_id, acknowledged);
@@ -3175,6 +3187,54 @@ pub mod pallet {
         }
       };
       DependencyPlans::<T>::insert(owner.actor.actor_id, next);
+      Ok(mutation)
+    }
+
+    /// Consumes one exact Pending event only after its complete successor plan is durable.
+    #[allow(
+      dead_code,
+      reason = "Pending-event consumption remains inert until parking authority cutover"
+    )]
+    pub(crate) fn consume_pending_dependency_event(
+      expected: PendingDependencyEvent,
+      desired: &[DependencyPlanSource],
+      timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      match PendingDependencyEvents::<T>::get(expected.owner.actor.actor_id) {
+        None => return Err(DependencyRegistrationError::PendingEventMissing),
+        Some(current) if current != expected => {
+          return Err(DependencyRegistrationError::PendingEventMismatch);
+        }
+        Some(_) => {}
+      }
+      if PendingCheckOwners::<T>::get(expected.owner.actor.actor_id) != Some(expected.owner) {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      let source_state = DependencyRevisions::<T>::get(expected.source);
+      if source_state.exhausted {
+        return Err(DependencyRegistrationError::SourceExhausted);
+      }
+      if source_state.revision < expected.revision {
+        return Err(DependencyRegistrationError::RevisionMismatch);
+      }
+      let registration =
+        DependencyRegistrations::<T>::get(expected.source, expected.owner.actor.actor_id)
+          .ok_or(DependencyRegistrationError::RegistrationMissing)?;
+      if registration.actor != expected.owner.actor
+        || registration.plan_revision != expected.owner.plan_revision
+        || registration.acknowledged_revision < expected.revision
+      {
+        return Err(DependencyRegistrationError::CurrentRegistrationMismatch);
+      }
+      let mutation = Self::commit_negative_dependency_plan(expected.owner, desired, timed_review)?;
+      match PendingDependencyEvents::<T>::get(expected.owner.actor.actor_id) {
+        Some(current) if current == expected => {}
+        _ => return Err(DependencyRegistrationError::PendingEventMismatch),
+      }
+      PendingDependencyEvents::<T>::remove(expected.owner.actor.actor_id);
       Ok(mutation)
     }
 
