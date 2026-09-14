@@ -3,21 +3,21 @@ use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyPlanMutation, DependencyPlanSource,
-  DependencyPlans, DependencyPublicationMutation, DependencyRegistrationError,
-  DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
-  DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
-  DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
-  DependencyScanMutation, DependencyTimedReview, DependencyTimedReviewMutation,
-  DependencyTimedReviews, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
-  ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
-  plan_legacy_process_transition,
+  DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
+  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationMutation,
+  DependencyRegistrationError, DependencyRegistrationFreePositions, DependencyRegistrationHandle,
+  DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
+  DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
+  DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
+  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyTimedReview,
+  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
+  LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
+  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
+  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -2169,6 +2169,157 @@ fn complete_negative_dependency_plan_replaces_block_and_tick_review_atomically()
     assert_eq!(
       DependencyTimedReviews::<Test>::get(owner.actor.actor_id),
       Some(replacement)
+    );
+  });
+}
+
+#[test]
+fn due_dependency_review_publishes_exact_pending_authority_atomically() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(10);
+    let owner = PendingCheckOwner {
+      actor: actor_ref(240, 4),
+      plan_revision: 6,
+    };
+    let block_review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(20),
+    };
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    DependencyTimedReviews::<Test>::insert(owner.actor.actor_id, block_review);
+
+    assert_eq!(
+      Actors::publish_due_dependency_review(block_review),
+      Err(DependencyDueReviewError::TransactionRequired)
+    );
+    let early = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(block_review),
+      )
+    });
+    assert_eq!(early, Err(DependencyDueReviewError::NotDue));
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(owner.actor.actor_id),
+      Some(block_review)
+    );
+
+    System::set_block_number(20);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_due_dependency_review(block_review),
+        Ok(DependencyDueReviewMutation::Published)
+      );
+      assert!(!DependencyTimedReviews::<Test>::contains_key(
+        owner.actor.actor_id
+      ));
+      assert_eq!(
+        PendingDependencyReviews::<Test>::get(owner.actor.actor_id),
+        Some(block_review)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(owner.actor.actor_id),
+      Some(block_review)
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(
+      owner.actor.actor_id
+    ));
+
+    let published = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(block_review),
+      )
+    });
+    assert_eq!(published, Ok(DependencyDueReviewMutation::Published));
+    let duplicate = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(block_review),
+      )
+    });
+    assert_eq!(duplicate, Ok(DependencyDueReviewMutation::AlreadyPending));
+
+    let tick_owner = PendingCheckOwner {
+      actor: actor_ref(241, 2),
+      plan_revision: 3,
+    };
+    let tick_review = DependencyTimedReview {
+      owner: tick_owner,
+      deadline: WakeupKey::Tick(10),
+    };
+    PendingCheckOwners::<Test>::insert(tick_owner.actor.actor_id, tick_owner);
+    DependencyTimedReviews::<Test>::insert(tick_owner.actor.actor_id, tick_review);
+    let tick_published = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(tick_review),
+      )
+    });
+    assert_eq!(tick_published, Ok(DependencyDueReviewMutation::Published));
+
+    let raced_owner = PendingCheckOwner {
+      actor: actor_ref(242, 1),
+      plan_revision: 1,
+    };
+    let stale = DependencyTimedReview {
+      owner: raced_owner,
+      deadline: WakeupKey::Block(19),
+    };
+    let replacement = DependencyTimedReview {
+      owner: PendingCheckOwner {
+        plan_revision: 2,
+        ..raced_owner
+      },
+      deadline: WakeupKey::Block(20),
+    };
+    PendingCheckOwners::<Test>::insert(raced_owner.actor.actor_id, replacement.owner);
+    DependencyTimedReviews::<Test>::insert(raced_owner.actor.actor_id, replacement);
+    let stale_deadline = DependencyTimedReview {
+      owner: replacement.owner,
+      deadline: stale.deadline,
+    };
+    let replaced = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(stale_deadline),
+      )
+    });
+    assert_eq!(replaced, Err(DependencyDueReviewError::ReviewMismatch));
+    let raced = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(stale),
+      )
+    });
+    assert_eq!(raced, Err(DependencyDueReviewError::PendingOwnerMismatch));
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(raced_owner.actor.actor_id),
+      Some(replacement)
+    );
+
+    let occupied_owner = PendingCheckOwner {
+      actor: actor_ref(243, 1),
+      plan_revision: 1,
+    };
+    let occupied = DependencyTimedReview {
+      owner: occupied_owner,
+      deadline: WakeupKey::Block(20),
+    };
+    PendingCheckOwners::<Test>::insert(occupied_owner.actor.actor_id, occupied_owner);
+    DependencyTimedReviews::<Test>::insert(occupied_owner.actor.actor_id, occupied);
+    PendingDependencyReviews::<Test>::insert(
+      occupied_owner.actor.actor_id,
+      DependencyTimedReview {
+        deadline: WakeupKey::Block(19),
+        ..occupied
+      },
+    );
+    let refused = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::publish_due_dependency_review(occupied),
+      )
+    });
+    assert_eq!(refused, Err(DependencyDueReviewError::DestinationOccupied));
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(occupied_owner.actor.actor_id),
+      Some(occupied)
     );
   });
 }
@@ -4743,6 +4894,7 @@ fn actor_storage_schema_is_explicit() {
       ("DependencyRegistrations", true, true),
       ("DependencyPlans", false, true),
       ("DependencyTimedReviews", true, true),
+      ("PendingDependencyReviews", true, true),
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),

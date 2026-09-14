@@ -3168,6 +3168,57 @@ pub mod pallet {
       Ok(mutation)
     }
 
+    /// Publishes one exact due review into durable Pending authority before releasing its deadline.
+    #[allow(
+      dead_code,
+      reason = "due-review publication remains inert until deadline traversal cutover"
+    )]
+    pub(crate) fn publish_due_dependency_review(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+    ) -> Result<DependencyDueReviewMutation, DependencyDueReviewError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyDueReviewError::TransactionRequired);
+      }
+      match PendingCheckOwners::<T>::get(expected.owner.actor.actor_id) {
+        None => return Err(DependencyDueReviewError::PendingOwnerMissing),
+        Some(owner) if owner != expected.owner => {
+          return Err(DependencyDueReviewError::PendingOwnerMismatch);
+        }
+        Some(_) => {}
+      }
+      let due = match expected.deadline {
+        WakeupKey::Block(block) => block <= frame_system::Pallet::<T>::block_number(),
+        WakeupKey::Tick(tick) => {
+          tick
+            <= Self::current_scheduler_tick()
+              .map_err(|_| DependencyDueReviewError::ClockUnavailable)?
+        }
+      };
+      if !due {
+        return Err(DependencyDueReviewError::NotDue);
+      }
+      match PendingDependencyReviews::<T>::get(expected.owner.actor.actor_id) {
+        Some(current) if current == expected => {
+          if DependencyTimedReviews::<T>::contains_key(expected.owner.actor.actor_id) {
+            return Err(DependencyDueReviewError::DestinationOccupied);
+          }
+          return Ok(DependencyDueReviewMutation::AlreadyPending);
+        }
+        Some(_) => return Err(DependencyDueReviewError::DestinationOccupied),
+        None => {}
+      }
+      match DependencyTimedReviews::<T>::get(expected.owner.actor.actor_id) {
+        None => return Err(DependencyDueReviewError::ReviewMissing),
+        Some(current) if current != expected => {
+          return Err(DependencyDueReviewError::ReviewMismatch);
+        }
+        Some(_) => {}
+      }
+      PendingDependencyReviews::<T>::insert(expected.owner.actor.actor_id, expected);
+      DependencyTimedReviews::<T>::remove(expected.owner.actor.actor_id);
+      Ok(DependencyDueReviewMutation::Published)
+    }
+
     /// Installs or validates one exact dependency registration without releasing old authority.
     #[allow(
       dead_code,
@@ -5466,6 +5517,12 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn dependency_timed_reviews)]
   pub type DependencyTimedReviews<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Inert durable Pending destination for one due dependency review.
+  #[pallet::storage]
+  #[pallet::getter(fn pending_dependency_reviews)]
+  pub type PendingDependencyReviews<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
 
   /// Inert bucket ownership for the future retained C32 deadline carrier.

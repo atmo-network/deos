@@ -165,6 +165,25 @@ pub struct DependencyTimedReview<BlockNumber> {
   pub deadline: WakeupKey<BlockNumber>,
 }
 
+/// Bounded result of publishing one due timed review into durable Pending authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyDueReviewMutation {
+  Published,
+  AlreadyPending,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyDueReviewError {
+  TransactionRequired,
+  PendingOwnerMissing,
+  PendingOwnerMismatch,
+  ReviewMissing,
+  ReviewMismatch,
+  DestinationOccupied,
+  NotDue,
+  ClockUnavailable,
+}
+
 /// Timed-review part of one complete dependency-plan replacement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DependencyTimedReviewMutation {
