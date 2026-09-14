@@ -146,6 +146,49 @@ pub struct DependencyRevisionState {
   pub exhausted: bool,
 }
 
+/// Bounded occupancy and fair next-source cursor for active dependency scans.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyScanSourceList {
+  pub cursor: Option<DependencySourceId>,
+  pub count: u32,
+}
+
+impl Default for DependencyScanSourceList {
+  fn default() -> Self {
+    Self {
+      cursor: None,
+      count: 0,
+    }
+  }
+}
+
+/// Exact intrusive links retained only while one source owns an active scan.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyScanSourceNode {
+  pub previous: DependencySourceId,
+  pub next: DependencySourceId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanSourceMutation {
+  Inserted,
+  AlreadyActive,
+  Removed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanSourceError {
+  TransactionRequired,
+  CapacityExceeded,
+  Missing,
+  ScanInactive,
+  CorruptTopology,
+}
+
 /// One coalesced activation-check obligation bound to exact semantic authority.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,

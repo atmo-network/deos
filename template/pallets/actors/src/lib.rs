@@ -2832,6 +2832,154 @@ pub mod pallet {
       Ok(outcome)
     }
 
+    fn dependency_scan_source_capacity() -> u32 {
+      T::MaxActiveActors::get().saturating_mul(T::MaxContractSteps::get())
+    }
+
+    /// Inserts one active source into the exact fair scan selector.
+    #[allow(
+      dead_code,
+      reason = "dependency scan carrier remains inert until weighted cutover"
+    )]
+    pub(crate) fn insert_dependency_scan_source(
+      source: DependencySourceId,
+    ) -> Result<DependencyScanSourceMutation, DependencyScanSourceError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyScanSourceError::TransactionRequired);
+      }
+      if DependencyRevisions::<T>::get(source).scan_target.is_none() {
+        return Err(DependencyScanSourceError::ScanInactive);
+      }
+      if DependencyScanSourceNodes::<T>::contains_key(source) {
+        return Ok(DependencyScanSourceMutation::AlreadyActive);
+      }
+      let mut list = DependencyScanSourceListState::<T>::get();
+      if list.count >= Self::dependency_scan_source_capacity() {
+        return Err(DependencyScanSourceError::CapacityExceeded);
+      }
+      match list.cursor {
+        None => {
+          if list.count != 0 {
+            return Err(DependencyScanSourceError::CorruptTopology);
+          }
+          DependencyScanSourceNodes::<T>::insert(
+            source,
+            DependencyScanSourceNode {
+              previous: source,
+              next: source,
+            },
+          );
+          list.cursor = Some(source);
+        }
+        Some(cursor) => {
+          let mut cursor_node = DependencyScanSourceNodes::<T>::get(cursor)
+            .ok_or(DependencyScanSourceError::CorruptTopology)?;
+          let tail = cursor_node.previous;
+          if list.count == 1 {
+            if tail != cursor || cursor_node.next != cursor {
+              return Err(DependencyScanSourceError::CorruptTopology);
+            }
+            cursor_node.previous = source;
+            cursor_node.next = source;
+            DependencyScanSourceNodes::<T>::insert(cursor, cursor_node);
+          } else {
+            let mut tail_node = DependencyScanSourceNodes::<T>::get(tail)
+              .ok_or(DependencyScanSourceError::CorruptTopology)?;
+            if tail_node.next != cursor {
+              return Err(DependencyScanSourceError::CorruptTopology);
+            }
+            tail_node.next = source;
+            cursor_node.previous = source;
+            DependencyScanSourceNodes::<T>::insert(tail, tail_node);
+            DependencyScanSourceNodes::<T>::insert(cursor, cursor_node);
+          }
+          DependencyScanSourceNodes::<T>::insert(
+            source,
+            DependencyScanSourceNode {
+              previous: tail,
+              next: cursor,
+            },
+          );
+        }
+      }
+      list.count = list
+        .count
+        .checked_add(1)
+        .ok_or(DependencyScanSourceError::CapacityExceeded)?;
+      DependencyScanSourceListState::<T>::put(list);
+      Ok(DependencyScanSourceMutation::Inserted)
+    }
+
+    /// Removes one completed source while preserving a fair successor cursor.
+    #[allow(
+      dead_code,
+      reason = "dependency scan carrier remains inert until weighted cutover"
+    )]
+    pub(crate) fn remove_dependency_scan_source(
+      source: DependencySourceId,
+    ) -> Result<DependencyScanSourceMutation, DependencyScanSourceError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyScanSourceError::TransactionRequired);
+      }
+      if DependencyRevisions::<T>::get(source).scan_target.is_some() {
+        return Err(DependencyScanSourceError::ScanInactive);
+      }
+      let node =
+        DependencyScanSourceNodes::<T>::get(source).ok_or(DependencyScanSourceError::Missing)?;
+      let mut list = DependencyScanSourceListState::<T>::get();
+      if list.count == 0 || list.cursor.is_none() {
+        return Err(DependencyScanSourceError::CorruptTopology);
+      }
+      if list.count == 1 {
+        if list.cursor != Some(source) || node.previous != source || node.next != source {
+          return Err(DependencyScanSourceError::CorruptTopology);
+        }
+        list.cursor = None;
+      } else if list.count == 2 {
+        if node.previous != node.next {
+          return Err(DependencyScanSourceError::CorruptTopology);
+        }
+        let survivor = node.next;
+        let survivor_node = DependencyScanSourceNodes::<T>::get(survivor)
+          .ok_or(DependencyScanSourceError::CorruptTopology)?;
+        if survivor_node.previous != source || survivor_node.next != source {
+          return Err(DependencyScanSourceError::CorruptTopology);
+        }
+        DependencyScanSourceNodes::<T>::insert(
+          survivor,
+          DependencyScanSourceNode {
+            previous: survivor,
+            next: survivor,
+          },
+        );
+        if list.cursor == Some(source) {
+          list.cursor = Some(survivor);
+        }
+      } else {
+        let mut previous = DependencyScanSourceNodes::<T>::get(node.previous)
+          .ok_or(DependencyScanSourceError::CorruptTopology)?;
+        let mut next = DependencyScanSourceNodes::<T>::get(node.next)
+          .ok_or(DependencyScanSourceError::CorruptTopology)?;
+        if previous.next != source || next.previous != source {
+          return Err(DependencyScanSourceError::CorruptTopology);
+        }
+        previous.next = node.next;
+        next.previous = node.previous;
+        DependencyScanSourceNodes::<T>::insert(node.previous, previous);
+        DependencyScanSourceNodes::<T>::insert(node.next, next);
+        if list.cursor == Some(source) {
+          list.cursor = Some(node.next);
+        }
+      }
+      list.count = list
+        .count
+        .checked_sub(1)
+        .ok_or(DependencyScanSourceError::CorruptTopology)?;
+      DependencyScanSourceNodes::<T>::remove(source);
+      DependencyScanSourceListState::<T>::put(list);
+      Ok(DependencyScanSourceMutation::Removed)
+    }
+
     /// Starts one fixed-revision source scan without disturbing an already-active target.
     #[allow(
       dead_code,
@@ -5632,6 +5780,17 @@ pub mod pallet {
   #[pallet::getter(fn dependency_revisions)]
   pub type DependencyRevisions<T: Config> =
     StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyRevisionState, ValueQuery>;
+
+  /// Inert fair selector for sources that retain active dependency scans.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_scan_source_list)]
+  pub type DependencyScanSourceListState<T> = StorageValue<_, DependencyScanSourceList, ValueQuery>;
+
+  /// Inert exact circular-list membership for one active dependency source.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_scan_source_node)]
+  pub type DependencyScanSourceNodes<T> =
+    StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyScanSourceNode, OptionQuery>;
 
   /// Inert one-per-Actor activation-check ownership, bound to generation and plan revision.
   #[pallet::storage]

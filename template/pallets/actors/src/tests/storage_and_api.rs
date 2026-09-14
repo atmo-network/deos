@@ -9,7 +9,9 @@ use crate::{
   DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
   DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
   DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
-  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencySourceAllocator,
+  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
+  DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
+  DependencyScanSourceNode, DependencyScanSourceNodes, DependencySourceAllocator,
   DependencySourceAllocatorState, DependencySourceError, DependencySourceMutation,
   DependencySourceObservations, DependencyTimedReview, DependencyTimedReviewMutation,
   DependencyTimedReviews, LegacyProcessPlacement, LegacyProcessTransition,
@@ -1379,6 +1381,84 @@ fn dependency_event_publication_coalesces_behind_one_fixed_scan() {
         }
       );
     }
+  });
+}
+
+#[test]
+fn dependency_scan_source_carrier_preserves_exact_fair_membership_and_rollback() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      Actors::insert_dependency_scan_source(18),
+      Err(DependencyScanSourceError::TransactionRequired)
+    );
+
+    for source in [18, 19, 20] {
+      DependencyRevisions::<Test>::mutate(source, |state| state.scan_target = Some(1));
+    }
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      for source in [18, 19, 20] {
+        assert_eq!(
+          Actors::insert_dependency_scan_source(source),
+          Ok(DependencyScanSourceMutation::Inserted)
+        );
+      }
+      assert_eq!(
+        Actors::insert_dependency_scan_source(19),
+        Ok(DependencyScanSourceMutation::AlreadyActive)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    assert_eq!(
+      DependencyScanSourceListState::<Test>::get(),
+      DependencyScanSourceList {
+        cursor: Some(18),
+        count: 3,
+      }
+    );
+    assert_eq!(
+      DependencyScanSourceNodes::<Test>::get(18),
+      Some(DependencyScanSourceNode {
+        previous: 20,
+        next: 19,
+      })
+    );
+
+    let before = DependencyScanSourceListState::<Test>::get();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      DependencyRevisions::<Test>::mutate(18, |state| state.scan_target = None);
+      assert_eq!(
+        Actors::remove_dependency_scan_source(18),
+        Ok(DependencyScanSourceMutation::Removed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(DependencyScanSourceListState::<Test>::get(), before);
+    assert!(DependencyScanSourceNodes::<Test>::contains_key(18));
+
+    for source in [18, 20, 19] {
+      DependencyRevisions::<Test>::mutate(source, |state| state.scan_target = None);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        assert_eq!(
+          Actors::remove_dependency_scan_source(source),
+          Ok(DependencyScanSourceMutation::Removed)
+        );
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    assert_eq!(
+      DependencyScanSourceListState::<Test>::get(),
+      DependencyScanSourceList::default()
+    );
+    assert_eq!(DependencyScanSourceNodes::<Test>::iter().count(), 0);
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::insert_dependency_scan_source(21),
+        Err(DependencyScanSourceError::ScanInactive)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
   });
 }
 
@@ -5669,6 +5749,8 @@ fn actor_storage_schema_is_explicit() {
       ("ObservationDependencySources", true, true),
       ("DependencySourceObservations", true, true),
       ("DependencyRevisions", false, true),
+      ("DependencyScanSourceListState", false, false),
+      ("DependencyScanSourceNodes", true, true),
       ("PendingCheckOwners", true, true),
       ("DependencyRegistrationHeaders", false, true),
       ("DependencyRegistrationPages", true, true),
