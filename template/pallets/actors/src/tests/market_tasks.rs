@@ -831,6 +831,81 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
 }
 
 #[test]
+fn liquidity_tasks_reject_adapter_outcomes_outside_authored_bounds() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_invalid_liquidity_outcome(true);
+
+    let tasks = [
+      Task::AddLiquidity {
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        amount_a: AmountResolution::Fixed(10),
+        amount_b: AmountResolution::Fixed(10),
+        min_lp_out: 1,
+      },
+      Task::RemoveLiquidity {
+        lp_asset: TestAsset::Local(43),
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        lp_amount: AmountResolution::Fixed(10),
+        min_amount_a: 1,
+        min_amount_b: 1,
+      },
+      Task::DonateLiquidity {
+        asset_a: TestAsset::Local(41),
+        asset_b: TestAsset::Local(42),
+        max_amount_a: AmountResolution::Fixed(10),
+        max_ratio_error: Perbill::zero(),
+      },
+    ];
+    register_lp_pair(
+      TestAsset::Local(43),
+      TestAsset::Local(41),
+      TestAsset::Local(42),
+    );
+
+    for (index, task) in tasks.into_iter().enumerate() {
+      let actor_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        contract_steps_with_step(make_step(task)),
+      );
+      let actor = sovereign_account(actor_id);
+      fund_native(actor_id, 1_000);
+      for asset in [
+        TestAsset::Local(41),
+        TestAsset::Local(42),
+        TestAsset::Local(43),
+      ] {
+        set_asset_balance(&actor, asset, 100);
+      }
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      run_idle(Weight::MAX);
+      assert!(
+        has_actor_event(|event| matches!(
+          event,
+          Event::StepFailed { actor_id: id, retry_class: RetryClass::Permanent, .. }
+            if *id == actor_id
+        )),
+        "liquidity task {index} accepted an adapter outcome outside its authored bounds"
+      );
+      assert!(!has_actor_event(|event| matches!(
+        event,
+        Event::LiquidityAdded { actor_id: id, .. }
+          | Event::LiquidityRemoved { actor_id: id, .. }
+          | Event::LiquidityDonated { actor_id: id, .. }
+          if *id == actor_id
+      )));
+    }
+  });
+}
+
+#[test]
 fn market_tasks_dispatch_their_resolved_task_local_amounts_without_a_system_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

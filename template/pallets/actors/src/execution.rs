@@ -2418,6 +2418,11 @@ impl<T: Config> Pallet<T> {
             let (used_a, used_b, lp_minted) = T::LiquidityOps::add_liquidity(
               actor, asset_a, asset_b, amount_a, amount_b, min_lp_out,
             )?;
+            if used_a > amount_a || used_b > amount_b || lp_minted < min_lp_out {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "InvalidLiquidityOutcome",
+              )));
+            }
             Self::deposit_event(Event::LiquidityAdded {
               actor_id,
               cycle_nonce,
@@ -2456,6 +2461,11 @@ impl<T: Config> Pallet<T> {
               min_amount_a,
               min_amount_b,
             )?;
+            if out_a < min_amount_a || out_b < min_amount_b {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "InvalidLiquidityOutcome",
+              )));
+            }
             Self::deposit_event(Event::LiquidityRemoved {
               actor_id,
               cycle_nonce,
@@ -2493,6 +2503,11 @@ impl<T: Config> Pallet<T> {
               max_amount_b,
               max_ratio_error,
             )?;
+            if amount_a > amount || amount_b > max_amount_b {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "InvalidLiquidityOutcome",
+              )));
+            }
             Self::deposit_event(Event::LiquidityDonated {
               actor_id,
               cycle_nonce,

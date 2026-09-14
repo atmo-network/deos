@@ -169,6 +169,7 @@ thread_local! {
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
+  static INVALID_LIQUIDITY_OUTCOME: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_ACTORS_TYPE: RefCell<Option<ActorType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
@@ -255,6 +256,7 @@ pub fn reset_mock_adapters() {
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = false);
   LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
@@ -548,6 +550,10 @@ pub fn set_temporary_add_liquidity_failure(value: bool) {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_invalid_liquidity_outcome(value: bool) {
+  INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn last_dex_actor_type() -> Option<ActorType> {
   LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow())
 }
@@ -770,6 +776,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         "MinimumLpOutputNotMet",
       )));
     }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((amount_a.saturating_add(1), amount_b, lp_minted));
+    }
     Ok((amount_a, amount_b, lp_minted))
   }
 
@@ -792,6 +801,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     }
     if half < min_amount_a || half < min_amount_b {
       return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
+    }
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((min_amount_a.saturating_sub(1), half));
     }
     Ok((half, half))
   }
@@ -833,6 +845,9 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
         ),
       );
     });
+    if INVALID_LIQUIDITY_OUTCOME.with(|v| *v.borrow()) {
+      return Ok((max_amount_a.saturating_add(1), amount));
+    }
     Ok((amount, amount))
   }
 }

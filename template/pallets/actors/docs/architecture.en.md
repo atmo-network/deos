@@ -256,7 +256,7 @@ Production and simulation share current-Step transition owners, with the exhaust
 
 `DexOps` owns swap-only host execution; `LiquidityOps` owns add, remove, and donation operations. Actors supplies `ExecutionContext { actor, actor_type }`, resolved amounts, and authored spend/output bounds without knowing route topology, market identity, or price-source policy.
 
-DEX adapters return `DexSwapOutcome { total_amount_in, recipient_amount_out }`. Actors validates those committed facts against the authored exact-input or exact-output bound before emitting its task event.
+DEX adapters return `DexSwapOutcome { total_amount_in, recipient_amount_out }`. Liquidity adapters return actual add debits and LP output, remove outputs, or donation debits. Actors validates every returned committed fact against the authored input cap or output minimum before emitting its task event; an out-of-bound success is a Permanent failure inside the task-local rollback boundary.
 
 The DEOS runtime benchmark helper prepares two Local/Native pools so both DEX benchmarks execute the maximum Native-anchored Router class rather than a cheaper direct route.
 
