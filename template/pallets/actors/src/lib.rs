@@ -2832,6 +2832,24 @@ pub mod pallet {
       Ok(outcome)
     }
 
+    /// Publishes one revision and transactionally retains its active source for fair scanning.
+    #[allow(
+      dead_code,
+      reason = "combined publication remains inert until generated Weight cutover"
+    )]
+    pub(crate) fn publish_dependency_event_with_source_retention(
+      source: DependencySourceId,
+    ) -> Result<DependencyPublicationMutation, DependencyPublicationError> {
+      let publication =
+        Self::publish_dependency_event(source).map_err(DependencyPublicationError::Revision)?;
+      if matches!(publication, DependencyPublicationMutation::Exhausted) {
+        return Ok(publication);
+      }
+      Self::insert_dependency_scan_source(source)
+        .map_err(DependencyPublicationError::SourceCarrier)?;
+      Ok(publication)
+    }
+
     fn dependency_scan_source_capacity() -> u32 {
       T::MaxActiveActors::get().saturating_mul(T::MaxContractSteps::get())
     }

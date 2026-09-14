@@ -189,6 +189,12 @@ pub enum DependencyScanSourceError {
   CorruptTopology,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyPublicationError {
+  Revision(DependencyRevisionError),
+  SourceCarrier(DependencyScanSourceError),
+}
+
 /// One coalesced activation-check obligation bound to exact semantic authority.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,

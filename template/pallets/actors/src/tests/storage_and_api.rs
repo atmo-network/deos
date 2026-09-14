@@ -4,25 +4,25 @@ use crate::{
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
   DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
-  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationMutation,
-  DependencyRegistrationError, DependencyRegistrationFreePositions, DependencyRegistrationHandle,
-  DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
-  DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
-  DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
-  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
-  DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
-  DependencyScanSourceNode, DependencyScanSourceNodes, DependencySourceAllocator,
-  DependencySourceAllocatorState, DependencySourceError, DependencySourceMutation,
-  DependencySourceObservations, DependencyTimedReview, DependencyTimedReviewMutation,
-  DependencyTimedReviews, LegacyProcessPlacement, LegacyProcessTransition,
-  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
-  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
-  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter,
-  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
-  plan_legacy_process_transition,
+  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationError,
+  DependencyPublicationMutation, DependencyRegistrationError, DependencyRegistrationFreePositions,
+  DependencyRegistrationHandle, DependencyRegistrationHeaders, DependencyRegistrationMutation,
+  DependencyRegistrationPages, DependencyRegistrationPosition, DependencyRegistrationPositions,
+  DependencyRegistrations, DependencyRevisionError, DependencyRevisionMutation,
+  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
+  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
+  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
+  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
+  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
+  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
+  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
+  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
+  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
+  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1381,6 +1381,47 @@ fn dependency_event_publication_coalesces_behind_one_fixed_scan() {
         }
       );
     }
+  });
+}
+
+#[test]
+fn dependency_publication_retains_empty_scan_source_across_coalescing_and_rollback() {
+  new_test_ext().execute_with(|| {
+    let source = 18;
+    assert_eq!(
+      Actors::publish_dependency_event_with_source_retention(source),
+      Err(DependencyPublicationError::Revision(
+        DependencyRevisionError::TransactionRequired
+      ))
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_dependency_event_with_source_retention(source),
+        Ok(DependencyPublicationMutation::Begun(1))
+      );
+      assert_eq!(
+        Actors::publish_dependency_event_with_source_retention(source),
+        Ok(DependencyPublicationMutation::Coalesced {
+          revision: 2,
+          active_target: 1,
+        })
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(DependencyRevisions::<Test>::get(source).scan_end, 0);
+    assert_eq!(DependencyScanSourceListState::<Test>::get().count, 1);
+
+    let before_revision = DependencyRevisions::<Test>::get(19);
+    let before_list = DependencyScanSourceListState::<Test>::get();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome = Actors::publish_dependency_event_with_source_retention(19);
+      assert_eq!(outcome, Ok(DependencyPublicationMutation::Begun(1)));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(DependencyRevisions::<Test>::get(19), before_revision);
+    assert_eq!(DependencyScanSourceListState::<Test>::get(), before_list);
+    assert!(!DependencyScanSourceNodes::<Test>::contains_key(19));
   });
 }
 
