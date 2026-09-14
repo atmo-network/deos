@@ -1027,18 +1027,38 @@ fn wakeup_materialization_closes_when_queue_ticket_is_exhausted() {
 }
 
 #[test]
-fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption() {
+fn wakeup_materialization_fault_preserves_suspended_retry_until_repair() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert!(schedule_latched_service_wakeup(actor_id, 10));
-    ActorReadyTail::<Test>::put(1);
+    setup_temporary_retry_pool();
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 10,
+      },
+      None,
+      temporary_retry_swap_plan(),
+    );
+    fund_native(actor_id, 100);
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    let run_before = Actors::actor_run_state(actor_id).expect("suspended retry exists");
+    let hot_before = Actors::actor_hot(actor_id).expect("suspended retry remains active");
+    let actor_balance_before = native_balance(&sovereign_account(actor_id));
+    let due = run_before.eligible_at;
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(due));
+    ActorReadyTail::<Test>::put(ActorReadyHead::<Test>::get().saturating_add(1));
     ActorReadyOccupancy::<Test>::put(0);
     let events_before = System::events().len();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let mut meter = WeightMeter::with_limit(Weight::MAX);
 
-    let stats = Actors::drain_overdue_wakeups_cursor(10, &mut meter);
+    let stats = Actors::drain_overdue_wakeups_cursor(due, &mut meter);
 
     assert_eq!(stats.entries_scanned, 0);
     assert_eq!(System::events().len(), events_before + 1);
@@ -1046,9 +1066,18 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       root_before
     );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(10));
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.encode()),
+      Some(run_before.encode())
+    );
+    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before.clone()));
+    assert_eq!(
+      native_balance(&sovereign_account(actor_id)),
+      actor_balance_before
+    );
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(due));
     let fault = crate::WakeupWorkerFault {
-      key: WakeupKey::Block(10),
+      key: WakeupKey::Block(due),
       page: 0,
       class: crate::CrossingWorkerFaultClass::Invariant,
     };
@@ -1067,8 +1096,17 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
     );
     let mut halted = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
-      Actors::drain_overdue_wakeups_cursor(10, &mut halted).entries_scanned,
+      Actors::drain_overdue_wakeups_cursor(due, &mut halted).entries_scanned,
       0
+    );
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.encode()),
+      Some(run_before.encode())
+    );
+    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
+    assert_eq!(
+      native_balance(&sovereign_account(actor_id)),
+      actor_balance_before
     );
     assert_eq!(
       actor_event_count(|event| matches!(
@@ -1085,7 +1123,7 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
       Actors::clear_wakeup_worker_fault(RuntimeOrigin::signed(ALICE)),
       DispatchError::BadOrigin
     );
-    ActorReadyTail::<Test>::put(0);
+    ActorReadyTail::<Test>::put(ActorReadyHead::<Test>::get());
     assert_ok!(Actors::clear_wakeup_worker_fault(RuntimeOrigin::root()));
     let actor_events: Vec<_> = System::events()
       .into_iter()
@@ -1105,10 +1143,24 @@ fn wakeup_materialization_faults_and_requires_repair_on_fifo_topology_corruption
     assert!(recorded_index < cleared_index);
     let mut repaired = WeightMeter::with_limit(Weight::MAX);
     assert_eq!(
-      Actors::drain_overdue_wakeups_cursor(10, &mut repaired).ready_entries,
+      Actors::drain_overdue_wakeups_cursor(due, &mut repaired).ready_entries,
       1
     );
     assert!(Actors::wakeup_worker_fault().is_none());
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.encode()),
+      Some(run_before.encode())
+    );
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("repaired retry remains active")
+        .unsuccessful_attempt_streak,
+      1
+    );
+    assert_eq!(
+      native_balance(&sovereign_account(actor_id)),
+      actor_balance_before
+    );
     assert_eq!(scheduled_wakeup_block(actor_id), None);
   });
 }
