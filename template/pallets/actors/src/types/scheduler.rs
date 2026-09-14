@@ -126,6 +126,22 @@ pub enum DeadlineIndexMutationError {
   CapacityExceeded,
 }
 
+impl From<DeadlineIndexMutationError> for DeadlineMutationError {
+  fn from(error: DeadlineIndexMutationError) -> Self {
+    match error {
+      DeadlineIndexMutationError::TransactionRequired => Self::TransactionRequired,
+      DeadlineIndexMutationError::LegacyAuthorityPresent => Self::LegacyAuthorityPresent,
+      DeadlineIndexMutationError::CapacityExceeded => Self::CapacityExceeded,
+      DeadlineIndexMutationError::HeaderMissing
+      | DeadlineIndexMutationError::KeyAlreadyExists
+      | DeadlineIndexMutationError::KeyMissing
+      | DeadlineIndexMutationError::StaleIndex
+      | DeadlineIndexMutationError::CorruptHeader
+      | DeadlineIndexMutationError::CorruptHeap => Self::CorruptCarrier,
+    }
+  }
+}
+
 #[derive(
   Clone,
   Copy,

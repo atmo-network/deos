@@ -1172,8 +1172,7 @@ fn install_indexed_deadline_bucket(key: WakeupKey<u64>, actor_id: u64) -> Deadli
   };
   ActorProcesses::<Test>::insert(actor_id, deadline_process(handle));
   polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-    Actors::insert_deadline_member(handle).expect("deadline bucket insertion succeeds");
-    Actors::insert_deadline_index(key).expect("deadline index insertion succeeds");
+    Actors::insert_deadline_member(handle).expect("deadline bucket and index insertion succeeds");
     polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
   });
   handle
@@ -1241,8 +1240,8 @@ fn canonical_deadline_index_covers_order_pages_stale_state_and_rollback() {
     let removed_key = WakeupKey::Block(1);
     let removed = handles[&removed_key];
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::remove_deadline_member(removed.actor).expect("bucket becomes empty");
-      Actors::remove_deadline_index(removed_key).expect("minimum removal repairs heap");
+      Actors::remove_deadline_member(removed.actor)
+        .expect("empty bucket removal repairs the deadline index");
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
     assert_eq!(DeadlineIndexLen::<Test>::get(WakeupClock::Block), 64);
@@ -1320,7 +1319,6 @@ fn canonical_deadline_index_rejects_missing_headers_legacy_authority_and_early_r
 
     ActorWaitingOccupancies::<Test>::insert(key, 1);
     let legacy = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::remove_deadline_member(handle.actor).expect("canonical header is removed");
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
         Actors::remove_deadline_index(key),
       )
@@ -1330,6 +1328,11 @@ fn canonical_deadline_index_rejects_missing_headers_legacy_authority_and_early_r
       Err(DeadlineIndexMutationError::LegacyAuthorityPresent)
     );
     assert!(DeadlineIndexPositions::<Test>::contains_key(key));
+    ActorWaitingOccupancies::<Test>::remove(key);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::remove_deadline_member(handle.actor).expect("bucket and index remove together");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
   });
 }
 

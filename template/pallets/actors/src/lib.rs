@@ -2665,6 +2665,7 @@ pub mod pallet {
         return Err(DeadlineMutationError::InvalidDestination);
       }
       let mut header = DeadlineHeaders::<T>::get(handle.key);
+      let creates_bucket = header.is_none();
       let mut page = DeadlinePages::<T>::get(handle.key, handle.page);
       match (&header, &page) {
         (None, None) if handle.page == 0 => {}
@@ -2744,6 +2745,11 @@ pub mod pallet {
       let header = header.ok_or(DeadlineMutationError::CorruptCarrier)?;
       DeadlineHeaders::<T>::insert(handle.key, header);
       DeadlineHandles::<T>::insert(handle.actor.actor_id, handle);
+      if creates_bucket {
+        Self::insert_deadline_index(handle.key)?;
+      } else {
+        Self::update_deadline_index(handle.key)?;
+      }
       Ok(())
     }
 
@@ -2802,6 +2808,7 @@ pub mod pallet {
       if page.live_entries > 0 {
         DeadlinePages::<T>::insert(handle.key, handle.page, page);
         DeadlineHeaders::<T>::insert(handle.key, header);
+        Self::update_deadline_index(handle.key)?;
         return Ok(handle);
       }
       if let Some(previous_id) = page.previous_page {
@@ -2832,6 +2839,7 @@ pub mod pallet {
           return Err(DeadlineMutationError::CorruptCarrier);
         }
         DeadlineHeaders::<T>::remove(handle.key);
+        Self::remove_deadline_index(handle.key)?;
       } else {
         if header.first_page == handle.page {
           header.first_page = page
@@ -2844,6 +2852,7 @@ pub mod pallet {
             .ok_or(DeadlineMutationError::CorruptCarrier)?;
         }
         DeadlineHeaders::<T>::insert(handle.key, header);
+        Self::update_deadline_index(handle.key)?;
       }
       Ok(handle)
     }
