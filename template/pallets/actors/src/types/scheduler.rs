@@ -118,6 +118,36 @@ pub struct PendingCheckOwner {
   pub plan_revision: PlanRevision,
 }
 
+/// Exact reverse handle for one event-complete dependency registration.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationHandle {
+  pub actor: ActorRef,
+  pub plan_revision: PlanRevision,
+  pub acknowledged_revision: DependencyRevision,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRegistrationMutation {
+  Installed,
+  Unchanged,
+  Replaced,
+  Removed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyRegistrationError {
+  TransactionRequired,
+  PendingOwnerMissing,
+  PendingOwnerMismatch,
+  SourceExhausted,
+  RevisionFromFuture,
+  RegistrationAlreadyExists,
+  RegistrationMissing,
+  CurrentRegistrationMismatch,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyRevisionMutation {
   Advanced(DependencyRevision),

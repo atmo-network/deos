@@ -3,9 +3,10 @@ use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyRevisionError, DependencyRevisionMutation,
-  DependencyRevisionState, DependencyRevisions, LegacyProcessPlacement, LegacyProcessTransition,
-  ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
+  DeadlineMutationError, DeadlinePages, DependencyRegistrationError, DependencyRegistrationHandle,
+  DependencyRegistrationMutation, DependencyRegistrations, DependencyRevisionError,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, LegacyProcessPlacement,
+  LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
   PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
   ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
   ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
@@ -1141,6 +1142,118 @@ fn pending_check_owner_is_exactly_generation_and_plan_bound() {
       PendingCheckOwners::<Test>::get(old.actor.actor_id),
       Some(old)
     );
+  });
+}
+
+#[test]
+fn dependency_registration_boundaries_are_exact_idempotent_and_transactional() {
+  new_test_ext().execute_with(|| {
+    let source = 23;
+    let old_owner = PendingCheckOwner {
+      actor: actor_ref(123, 4),
+      plan_revision: 7,
+    };
+    let old_handle = DependencyRegistrationHandle {
+      actor: old_owner.actor,
+      plan_revision: old_owner.plan_revision,
+      acknowledged_revision: 2,
+    };
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: 3,
+        exhausted: false,
+      },
+    );
+    PendingCheckOwners::<Test>::insert(old_owner.actor.actor_id, old_owner);
+
+    assert_eq!(
+      Actors::install_dependency_registration(source, old_owner, 2),
+      Err(DependencyRegistrationError::TransactionRequired)
+    );
+    let installed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::install_dependency_registration(source, old_owner, 2),
+      )
+    });
+    assert_eq!(installed, Ok(DependencyRegistrationMutation::Installed));
+    let overlap = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::install_dependency_registration(source, old_owner, 2),
+      )
+    });
+    assert_eq!(overlap, Ok(DependencyRegistrationMutation::Unchanged));
+
+    let stale_generation = PendingCheckOwner {
+      actor: actor_ref(old_owner.actor.actor_id, 5),
+      plan_revision: old_owner.plan_revision,
+    };
+    let stale_plan = PendingCheckOwner {
+      actor: old_owner.actor,
+      plan_revision: old_owner.plan_revision + 1,
+    };
+    for owner in [stale_generation, stale_plan] {
+      let refused = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::replace_dependency_registration(source, old_handle, owner, 3),
+        )
+      });
+      assert_eq!(
+        refused,
+        Err(DependencyRegistrationError::PendingOwnerMismatch)
+      );
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, old_owner.actor.actor_id),
+        Some(old_handle)
+      );
+    }
+    let future = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::replace_dependency_registration(source, old_handle, old_owner, 4),
+      )
+    });
+    assert_eq!(future, Err(DependencyRegistrationError::RevisionFromFuture));
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, old_owner.actor.actor_id),
+      Some(old_handle)
+    );
+
+    let revised_owner = PendingCheckOwner {
+      actor: old_owner.actor,
+      plan_revision: 8,
+    };
+    PendingCheckOwners::<Test>::insert(revised_owner.actor.actor_id, revised_owner);
+    let replacement = DependencyRegistrationHandle {
+      actor: revised_owner.actor,
+      plan_revision: revised_owner.plan_revision,
+      acknowledged_revision: 3,
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::replace_dependency_registration(source, old_handle, revised_owner, 3),
+        Ok(DependencyRegistrationMutation::Replaced)
+      );
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, old_owner.actor.actor_id),
+        Some(replacement)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, old_owner.actor.actor_id),
+      Some(old_handle)
+    );
+
+    let removed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::remove_dependency_registration(source, old_handle),
+      )
+    });
+    assert_eq!(removed, Ok(DependencyRegistrationMutation::Removed));
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      source,
+      old_owner.actor.actor_id
+    ));
   });
 }
 
@@ -3576,6 +3689,7 @@ fn actor_storage_schema_is_explicit() {
       ("ServiceNodes", true, true),
       ("DependencyRevisions", false, true),
       ("PendingCheckOwners", true, true),
+      ("DependencyRegistrations", true, true),
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),

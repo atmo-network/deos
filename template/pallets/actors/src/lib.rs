@@ -2725,6 +2725,106 @@ pub mod pallet {
       Ok(DependencyRevisionMutation::Advanced(next))
     }
 
+    fn validate_dependency_registration(
+      source: DependencySourceId,
+      owner: PendingCheckOwner,
+      acknowledged_revision: DependencyRevision,
+    ) -> Result<DependencyRegistrationHandle, DependencyRegistrationError> {
+      let pending = PendingCheckOwners::<T>::get(owner.actor.actor_id)
+        .ok_or(DependencyRegistrationError::PendingOwnerMissing)?;
+      if pending != owner {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      let state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Err(DependencyRegistrationError::SourceExhausted);
+      }
+      if acknowledged_revision > state.revision {
+        return Err(DependencyRegistrationError::RevisionFromFuture);
+      }
+      Ok(DependencyRegistrationHandle {
+        actor: owner.actor,
+        plan_revision: owner.plan_revision,
+        acknowledged_revision,
+      })
+    }
+
+    /// Installs or validates one exact dependency registration without releasing old authority.
+    #[allow(
+      dead_code,
+      reason = "dependency registrations remain inert until parking authority cutover"
+    )]
+    pub(crate) fn install_dependency_registration(
+      source: DependencySourceId,
+      owner: PendingCheckOwner,
+      acknowledged_revision: DependencyRevision,
+    ) -> Result<DependencyRegistrationMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      let handle = Self::validate_dependency_registration(source, owner, acknowledged_revision)?;
+      match DependencyRegistrations::<T>::get(source, owner.actor.actor_id) {
+        Some(current) if current == handle => Ok(DependencyRegistrationMutation::Unchanged),
+        Some(_) => Err(DependencyRegistrationError::RegistrationAlreadyExists),
+        None => {
+          DependencyRegistrations::<T>::insert(source, owner.actor.actor_id, handle);
+          Ok(DependencyRegistrationMutation::Installed)
+        }
+      }
+    }
+
+    /// Replaces one exact registration only after its successor is fully validated.
+    #[allow(
+      dead_code,
+      reason = "dependency registrations remain inert until parking authority cutover"
+    )]
+    pub(crate) fn replace_dependency_registration(
+      source: DependencySourceId,
+      current: DependencyRegistrationHandle,
+      owner: PendingCheckOwner,
+      acknowledged_revision: DependencyRevision,
+    ) -> Result<DependencyRegistrationMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      let replacement =
+        Self::validate_dependency_registration(source, owner, acknowledged_revision)?;
+      let stored = DependencyRegistrations::<T>::get(source, current.actor.actor_id)
+        .ok_or(DependencyRegistrationError::RegistrationMissing)?;
+      if stored != current {
+        return Err(DependencyRegistrationError::CurrentRegistrationMismatch);
+      }
+      if current.actor.actor_id != replacement.actor.actor_id {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      if current == replacement {
+        return Ok(DependencyRegistrationMutation::Unchanged);
+      }
+      DependencyRegistrations::<T>::insert(source, replacement.actor.actor_id, replacement);
+      Ok(DependencyRegistrationMutation::Replaced)
+    }
+
+    /// Removes only the exact registration named by its generation/plan/revision handle.
+    #[allow(
+      dead_code,
+      reason = "dependency registrations remain inert until parking authority cutover"
+    )]
+    pub(crate) fn remove_dependency_registration(
+      source: DependencySourceId,
+      expected: DependencyRegistrationHandle,
+    ) -> Result<DependencyRegistrationMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      let stored = DependencyRegistrations::<T>::get(source, expected.actor.actor_id)
+        .ok_or(DependencyRegistrationError::RegistrationMissing)?;
+      if stored != expected {
+        return Err(DependencyRegistrationError::CurrentRegistrationMismatch);
+      }
+      DependencyRegistrations::<T>::remove(source, expected.actor.actor_id);
+      Ok(DependencyRegistrationMutation::Removed)
+    }
+
     /// Removes exactly one generation-bound member from the inert service ring.
     #[allow(
       dead_code,
@@ -4790,6 +4890,19 @@ pub mod pallet {
   #[pallet::getter(fn pending_check_owners)]
   pub type PendingCheckOwners<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, PendingCheckOwner, OptionQuery>;
+
+  /// Inert exact source-to-Actor reverse registrations for future dependency-keyed parking.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_registrations)]
+  pub type DependencyRegistrations<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    DependencySourceId,
+    Blake2_128Concat,
+    ActorId,
+    DependencyRegistrationHandle,
+    OptionQuery,
+  >;
 
   /// Inert bucket ownership for the future retained C32 deadline carrier.
   #[pallet::storage]
