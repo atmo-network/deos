@@ -5,7 +5,8 @@ use crate::{
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
   DeadlineMutationError, DeadlinePages, DependencyRegistrationError, DependencyRegistrationHandle,
   DependencyRegistrationMutation, DependencyRegistrations, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, LegacyProcessPlacement,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions,
+  DependencyScanAdvanceProof, DependencyScanError, DependencyScanMutation, LegacyProcessPlacement,
   LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
   PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
   ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
@@ -1094,6 +1095,8 @@ fn dependency_revision_is_nonwrapping_sticky_and_transactional() {
       source,
       DependencyRevisionState {
         revision: u64::MAX,
+        scan_target: None,
+        scan_cursor: 0,
         exhausted: false,
       },
     );
@@ -1108,10 +1111,105 @@ fn dependency_revision_is_nonwrapping_sticky_and_transactional() {
         DependencyRevisions::<Test>::get(source),
         DependencyRevisionState {
           revision: u64::MAX,
+          scan_target: None,
+          scan_cursor: 0,
           exhausted: true,
         }
       );
     }
+  });
+}
+
+#[test]
+fn dependency_scan_keeps_fixed_target_and_requires_exact_advance_authority() {
+  new_test_ext().execute_with(|| {
+    let source = 19;
+    let owner = PendingCheckOwner {
+      actor: actor_ref(121, 3),
+      plan_revision: 5,
+    };
+    let handle = DependencyRegistrationHandle {
+      actor: owner.actor,
+      plan_revision: owner.plan_revision,
+      acknowledged_revision: 1,
+    };
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: 1,
+        scan_target: None,
+        scan_cursor: 0,
+        exhausted: false,
+      },
+    );
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+    DependencyRegistrations::<Test>::insert(source, owner.actor.actor_id, handle);
+
+    assert_eq!(
+      Actors::begin_dependency_scan(source),
+      Err(DependencyScanError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::begin_dependency_scan(source),
+        Ok(DependencyScanMutation::Begun(1))
+      );
+      assert_eq!(
+        Actors::revise_dependency_source(source),
+        Ok(DependencyRevisionMutation::Advanced(2))
+      );
+      assert_eq!(
+        Actors::begin_dependency_scan(source),
+        Err(DependencyScanError::ScanAlreadyActive)
+      );
+      assert_eq!(
+        DependencyRevisions::<Test>::get(source).scan_target,
+        Some(1)
+      );
+      assert_eq!(
+        Actors::advance_dependency_scan(source, 1, 0, DependencyScanAdvanceProof::Stale(handle)),
+        Err(DependencyScanError::RegistrationStillCurrent)
+      );
+      assert_eq!(
+        Actors::advance_dependency_scan(source, 1, 0, DependencyScanAdvanceProof::Pending(handle)),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::complete_dependency_scan(source, 1, 1),
+        Ok(DependencyScanMutation::HandedOff(2))
+      );
+      let state = DependencyRevisions::<Test>::get(source);
+      assert_eq!(state.scan_target, Some(2));
+      assert_eq!(state.scan_cursor, 0);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let retained = DependencyRevisions::<Test>::get(source);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      DependencyRegistrations::<Test>::remove(source, owner.actor.actor_id);
+      assert_eq!(
+        Actors::advance_dependency_scan(source, 2, 0, DependencyScanAdvanceProof::Stale(handle)),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(DependencyRevisions::<Test>::get(source), retained);
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+      Some(handle)
+    );
+
+    let mut exhausted = retained;
+    exhausted.exhausted = true;
+    DependencyRevisions::<Test>::insert(source, exhausted);
+    let before = DependencyRevisions::<Test>::get(source);
+    let refused = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::complete_dependency_scan(source, 2, 0),
+      )
+    });
+    assert_eq!(refused, Err(DependencyScanError::SourceExhausted));
+    assert_eq!(DependencyRevisions::<Test>::get(source), before);
   });
 }
 
@@ -1162,6 +1260,8 @@ fn dependency_registration_boundaries_are_exact_idempotent_and_transactional() {
       source,
       DependencyRevisionState {
         revision: 3,
+        scan_target: None,
+        scan_cursor: 0,
         exhausted: false,
       },
     );

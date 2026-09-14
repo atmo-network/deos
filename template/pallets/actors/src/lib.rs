@@ -2725,6 +2725,118 @@ pub mod pallet {
       Ok(DependencyRevisionMutation::Advanced(next))
     }
 
+    /// Starts one fixed-revision source scan without disturbing an already-active target.
+    #[allow(
+      dead_code,
+      reason = "dependency scans remain inert until parking authority cutover"
+    )]
+    pub(crate) fn begin_dependency_scan(
+      source: DependencySourceId,
+    ) -> Result<DependencyScanMutation, DependencyScanError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyScanError::TransactionRequired);
+      }
+      let mut state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Err(DependencyScanError::SourceExhausted);
+      }
+      if state.scan_target.is_some() {
+        return Err(DependencyScanError::ScanAlreadyActive);
+      }
+      state.scan_target = Some(state.revision);
+      state.scan_cursor = 0;
+      DependencyRevisions::<T>::insert(source, state);
+      Ok(DependencyScanMutation::Begun(state.revision))
+    }
+
+    /// Advances only after exact stale proof or exact durable Pending authority is visible.
+    #[allow(
+      dead_code,
+      reason = "dependency scans remain inert until parking authority cutover"
+    )]
+    pub(crate) fn advance_dependency_scan(
+      source: DependencySourceId,
+      expected_target: DependencyRevision,
+      expected_cursor: u64,
+      proof: DependencyScanAdvanceProof,
+    ) -> Result<DependencyScanMutation, DependencyScanError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyScanError::TransactionRequired);
+      }
+      let mut state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Err(DependencyScanError::SourceExhausted);
+      }
+      if state.scan_target.ok_or(DependencyScanError::ScanMissing)? != expected_target {
+        return Err(DependencyScanError::TargetMismatch);
+      }
+      if state.scan_cursor != expected_cursor {
+        return Err(DependencyScanError::CursorMismatch);
+      }
+      match proof {
+        DependencyScanAdvanceProof::Stale(handle) => {
+          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) == Some(handle) {
+            return Err(DependencyScanError::RegistrationStillCurrent);
+          }
+        }
+        DependencyScanAdvanceProof::Pending(handle) => {
+          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) != Some(handle) {
+            return Err(DependencyScanError::RegistrationAuthorityMissing);
+          }
+          if PendingCheckOwners::<T>::get(handle.actor.actor_id)
+            != Some(PendingCheckOwner {
+              actor: handle.actor,
+              plan_revision: handle.plan_revision,
+            })
+          {
+            return Err(DependencyScanError::PendingAuthorityMismatch);
+          }
+        }
+      }
+      state.scan_cursor = state
+        .scan_cursor
+        .checked_add(1)
+        .ok_or(DependencyScanError::CursorExhausted)?;
+      DependencyRevisions::<T>::insert(source, state);
+      Ok(DependencyScanMutation::Advanced(state.scan_cursor))
+    }
+
+    /// Completes only the fixed target and immediately retains the newest revision as successor.
+    #[allow(
+      dead_code,
+      reason = "dependency scans remain inert until parking authority cutover"
+    )]
+    pub(crate) fn complete_dependency_scan(
+      source: DependencySourceId,
+      expected_target: DependencyRevision,
+      expected_cursor: u64,
+    ) -> Result<DependencyScanMutation, DependencyScanError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyScanError::TransactionRequired);
+      }
+      let mut state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Err(DependencyScanError::SourceExhausted);
+      }
+      if state.scan_target.ok_or(DependencyScanError::ScanMissing)? != expected_target {
+        return Err(DependencyScanError::TargetMismatch);
+      }
+      if state.scan_cursor != expected_cursor {
+        return Err(DependencyScanError::CursorMismatch);
+      }
+      let outcome = if state.revision > expected_target {
+        state.scan_target = Some(state.revision);
+        state.scan_cursor = 0;
+        DependencyScanMutation::HandedOff(state.revision)
+      } else {
+        state.scan_target = None;
+        state.scan_cursor = 0;
+        DependencyScanMutation::Completed
+      };
+      DependencyRevisions::<T>::insert(source, state);
+      Ok(outcome)
+    }
+
     fn validate_dependency_registration(
       source: DependencySourceId,
       owner: PendingCheckOwner,

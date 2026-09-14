@@ -106,6 +106,8 @@ pub type PlanRevision = u64;
 )]
 pub struct DependencyRevisionState {
   pub revision: DependencyRevision,
+  pub scan_target: Option<DependencyRevision>,
+  pub scan_cursor: u64,
   pub exhausted: bool,
 }
 
@@ -157,6 +159,36 @@ pub enum DependencyRevisionMutation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyRevisionError {
   TransactionRequired,
+}
+
+/// Proof that the subscriber at the active source cursor no longer owns work or has a durable
+/// generation/plan-bound Pending destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanAdvanceProof {
+  Stale(DependencyRegistrationHandle),
+  Pending(DependencyRegistrationHandle),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanMutation {
+  Begun(DependencyRevision),
+  Advanced(u64),
+  Completed,
+  HandedOff(DependencyRevision),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyScanError {
+  TransactionRequired,
+  SourceExhausted,
+  ScanAlreadyActive,
+  ScanMissing,
+  TargetMismatch,
+  CursorMismatch,
+  CursorExhausted,
+  RegistrationStillCurrent,
+  RegistrationAuthorityMissing,
+  PendingAuthorityMismatch,
 }
 
 /// Bucket-level ownership for retained fixed-width deadline pages.
