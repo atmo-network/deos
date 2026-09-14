@@ -183,6 +183,7 @@ pub enum DependencyRegistrationError {
   PendingOwnerMismatch,
   SourceExhausted,
   RevisionFromFuture,
+  RevisionMismatch,
   RegistrationAlreadyExists,
   RegistrationMissing,
   CurrentRegistrationMismatch,

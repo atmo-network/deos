@@ -2971,6 +2971,34 @@ pub mod pallet {
       })
     }
 
+    /// Commits one negative evaluation only while its exact owner and observed source remain current.
+    #[allow(
+      dead_code,
+      reason = "negative evaluation remains inert until parking authority cutover"
+    )]
+    pub(crate) fn commit_negative_dependency_evaluation(
+      source: DependencySourceId,
+      owner: PendingCheckOwner,
+      observed_revision: DependencyRevision,
+    ) -> Result<DependencyRegistrationMutation, DependencyRegistrationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencyRegistrationError::TransactionRequired);
+      }
+      let state = DependencyRevisions::<T>::get(source);
+      if state.exhausted {
+        return Err(DependencyRegistrationError::SourceExhausted);
+      }
+      if state.revision != observed_revision {
+        return Err(DependencyRegistrationError::RevisionMismatch);
+      }
+      match DependencyRegistrations::<T>::get(source, owner.actor.actor_id) {
+        Some(current) => {
+          Self::replace_dependency_registration(source, current, owner, observed_revision)
+        }
+        None => Self::install_dependency_registration(source, owner, observed_revision),
+      }
+    }
+
     /// Installs or validates one exact dependency registration without releasing old authority.
     #[allow(
       dead_code,

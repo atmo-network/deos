@@ -1671,6 +1671,129 @@ fn dependency_registration_boundaries_are_exact_idempotent_and_transactional() {
 }
 
 #[test]
+fn negative_dependency_evaluation_commits_only_exact_current_snapshot() {
+  new_test_ext().execute_with(|| {
+    let source = 37;
+    let owner = PendingCheckOwner {
+      actor: actor_ref(237, 4),
+      plan_revision: 6,
+    };
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: 2,
+        scan_target: None,
+        scan_cursor: 0,
+        scan_end: 0,
+        exhausted: false,
+      },
+    );
+    PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+
+    assert_eq!(
+      Actors::commit_negative_dependency_evaluation(source, owner, 2),
+      Err(DependencyRegistrationError::TransactionRequired)
+    );
+    let installed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_evaluation(source, owner, 2),
+      )
+    });
+    assert_eq!(installed, Ok(DependencyRegistrationMutation::Installed));
+    let original = DependencyRegistrationHandle {
+      actor: owner.actor,
+      plan_revision: owner.plan_revision,
+      acknowledged_revision: 2,
+    };
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+      Some(original)
+    );
+    let unchanged = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_evaluation(source, owner, 2),
+      )
+    });
+    assert_eq!(unchanged, Ok(DependencyRegistrationMutation::Unchanged));
+
+    for stale_owner in [
+      PendingCheckOwner {
+        actor: actor_ref(owner.actor.actor_id, owner.actor.generation + 1),
+        plan_revision: owner.plan_revision,
+      },
+      PendingCheckOwner {
+        actor: owner.actor,
+        plan_revision: owner.plan_revision + 1,
+      },
+    ] {
+      let refused = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::commit_negative_dependency_evaluation(source, stale_owner, 2),
+        )
+      });
+      assert_eq!(
+        refused,
+        Err(DependencyRegistrationError::PendingOwnerMismatch)
+      );
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+        Some(original)
+      );
+    }
+
+    DependencyRevisions::<Test>::mutate(source, |state| state.revision = 3);
+    let raced = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_evaluation(source, owner, 2),
+      )
+    });
+    assert_eq!(raced, Err(DependencyRegistrationError::RevisionMismatch));
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+      Some(original)
+    );
+
+    let revised_owner = PendingCheckOwner {
+      actor: owner.actor,
+      plan_revision: owner.plan_revision + 1,
+    };
+    PendingCheckOwners::<Test>::insert(revised_owner.actor.actor_id, revised_owner);
+    let replacement = DependencyRegistrationHandle {
+      actor: revised_owner.actor,
+      plan_revision: revised_owner.plan_revision,
+      acknowledged_revision: 3,
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::commit_negative_dependency_evaluation(source, revised_owner, 3),
+        Ok(DependencyRegistrationMutation::Replaced)
+      );
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+        Some(replacement)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+      Some(original)
+    );
+
+    DependencyRevisions::<Test>::mutate(source, |state| state.exhausted = true);
+    let exhausted = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::commit_negative_dependency_evaluation(source, revised_owner, 3),
+      )
+    });
+    assert_eq!(exhausted, Err(DependencyRegistrationError::SourceExhausted));
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+      Some(original)
+    );
+  });
+}
+
+#[test]
 fn dependency_pages_keep_fixed_cursor_authority_across_fragmentation_and_new_members() {
   new_test_ext().execute_with(|| {
     let source = 29;
