@@ -7,14 +7,14 @@ use crate::{
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
   DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions,
-  DependencyScanAdvanceProof, DependencyScanError, DependencyScanMutation, LegacyProcessPlacement,
-  LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
-  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter,
-  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
+  DependencyScanMutation, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
+  ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
   plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
@@ -1178,12 +1178,12 @@ fn dependency_scan_keeps_fixed_target_and_requires_exact_advance_authority() {
         Some(1)
       );
       assert_eq!(
-        Actors::advance_dependency_scan(source, 1, 0, DependencyScanAdvanceProof::Stale),
-        Err(DependencyScanError::RegistrationStillCurrent)
+        Actors::process_dependency_scan_member(source, 1, 0),
+        Ok(DependencyScanMutation::Advanced(1))
       );
       assert_eq!(
-        Actors::advance_dependency_scan(source, 1, 0, DependencyScanAdvanceProof::Pending),
-        Ok(DependencyScanMutation::Advanced(1))
+        DependencyRegistrations::<Test>::get(source, owner.actor.actor_id),
+        Some(handle)
       );
       assert_eq!(
         Actors::complete_dependency_scan(source, 1, 1),
@@ -1199,7 +1199,7 @@ fn dependency_scan_keeps_fixed_target_and_requires_exact_advance_authority() {
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       DependencyRegistrations::<Test>::remove(source, owner.actor.actor_id);
       assert_eq!(
-        Actors::advance_dependency_scan(source, 2, 0, DependencyScanAdvanceProof::Stale),
+        Actors::process_dependency_scan_member(source, 2, 0),
         Ok(DependencyScanMutation::Advanced(1))
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
@@ -1221,6 +1221,164 @@ fn dependency_scan_keeps_fixed_target_and_requires_exact_advance_authority() {
     });
     assert_eq!(refused, Err(DependencyScanError::SourceExhausted));
     assert_eq!(DependencyRevisions::<Test>::get(source), before);
+  });
+}
+
+#[test]
+fn dependency_scan_processes_one_destination_before_advancing() {
+  new_test_ext().execute_with(|| {
+    let source = 29;
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        revision: 3,
+        scan_target: None,
+        scan_cursor: 0,
+        scan_end: 0,
+        exhausted: false,
+      },
+    );
+    let owners: Vec<_> = (0..5)
+      .map(|offset| PendingCheckOwner {
+        actor: actor_ref(130 + offset, 2),
+        plan_revision: 7,
+      })
+      .collect();
+    for (index, owner) in owners.iter().copied().enumerate() {
+      PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        assert_eq!(
+          Actors::install_dependency_registration(source, owner, if index == 0 { 1 } else { 3 },),
+          Ok(DependencyRegistrationMutation::Installed)
+        );
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::begin_dependency_scan(source),
+        Ok(DependencyScanMutation::Begun(3))
+      );
+      assert_eq!(
+        Actors::revise_dependency_source(source),
+        Ok(DependencyRevisionMutation::Advanced(4))
+      );
+      let third = DependencyRegistrations::<Test>::get(source, owners[2].actor.actor_id).unwrap();
+      assert_eq!(
+        Actors::replace_dependency_registration(source, third, owners[2], 4),
+        Ok(DependencyRegistrationMutation::Replaced)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let before = DependencyRevisions::<Test>::get(source);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, owners[0].actor.actor_id)
+          .unwrap()
+          .acknowledged_revision,
+        3
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(DependencyRevisions::<Test>::get(source), before);
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owners[0].actor.actor_id)
+        .unwrap()
+        .acknowledged_revision,
+      1
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 1),
+        Ok(DependencyScanMutation::Advanced(2))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 2),
+        Ok(DependencyScanMutation::Advanced(3))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owners[2].actor.actor_id)
+        .unwrap()
+        .acknowledged_revision,
+      4
+    );
+
+    let wrong_generation = PendingCheckOwner {
+      actor: actor_ref(owners[3].actor.actor_id, 3),
+      ..owners[3]
+    };
+    let wrong_plan = PendingCheckOwner {
+      plan_revision: 8,
+      ..owners[3]
+    };
+    for wrong_owner in [wrong_generation, wrong_plan] {
+      PendingCheckOwners::<Test>::insert(wrong_owner.actor.actor_id, wrong_owner);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        assert_eq!(
+          Actors::process_dependency_scan_member(source, 3, 3),
+          Err(DependencyScanError::PendingAuthorityMismatch)
+        );
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+      assert_eq!(DependencyRevisions::<Test>::get(source).scan_cursor, 3);
+      assert_eq!(
+        DependencyRegistrations::<Test>::get(source, owners[3].actor.actor_id)
+          .unwrap()
+          .acknowledged_revision,
+        3
+      );
+    }
+    PendingCheckOwners::<Test>::insert(owners[3].actor.actor_id, owners[3]);
+
+    let stale_position =
+      DependencyRegistrationPositions::<Test>::get(source, owners[4].actor.actor_id).unwrap();
+    DependencyRegistrations::<Test>::remove(source, owners[4].actor.actor_id);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 3),
+        Ok(DependencyScanMutation::Advanced(4))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 3, 4),
+        Ok(DependencyScanMutation::Advanced(5))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(DependencyRegistrationHeaders::<Test>::get(source).count, 4);
+    assert_eq!(
+      DependencyRegistrationPages::<Test>::get(source, stale_position.page)
+        .unwrap()
+        .entries[stale_position.slot as usize],
+      None
+    );
+    assert!(!DependencyRegistrationPositions::<Test>::contains_key(
+      source,
+      owners[4].actor.actor_id
+    ));
+    assert_eq!(
+      Actors::complete_dependency_scan(source, 3, 5),
+      Err(DependencyScanError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::complete_dependency_scan(source, 3, 5),
+        Ok(DependencyScanMutation::HandedOff(4))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
   });
 }
 
@@ -1449,7 +1607,7 @@ fn dependency_pages_keep_fixed_cursor_authority_across_fragmentation_and_new_mem
         Ok(DependencyScanMutation::Begun(1))
       );
       assert_eq!(
-        Actors::advance_dependency_scan(source, 1, 0, DependencyScanAdvanceProof::Pending),
+        Actors::process_dependency_scan_member(source, 1, 0),
         Ok(DependencyScanMutation::Advanced(1))
       );
       assert_eq!(
@@ -1480,12 +1638,12 @@ fn dependency_pages_keep_fixed_cursor_authority_across_fragmentation_and_new_mem
 
       for cursor in 1..34 {
         assert_eq!(
-          Actors::advance_dependency_scan(source, 1, cursor, DependencyScanAdvanceProof::Pending,),
+          Actors::process_dependency_scan_member(source, 1, cursor),
           Ok(DependencyScanMutation::Advanced(cursor + 1))
         );
       }
       assert_eq!(
-        Actors::advance_dependency_scan(source, 1, 34, DependencyScanAdvanceProof::Pending),
+        Actors::process_dependency_scan_member(source, 1, 34),
         Err(DependencyScanError::ScanComplete)
       );
       assert_eq!(

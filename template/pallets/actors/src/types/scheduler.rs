@@ -203,14 +203,6 @@ pub enum DependencyRevisionError {
   TransactionRequired,
 }
 
-/// Proof that the subscriber at the active source cursor no longer owns work or has a durable
-/// generation/plan-bound Pending destination.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DependencyScanAdvanceProof {
-  Stale,
-  Pending,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyScanMutation {
   Begun(DependencyRevision),
@@ -228,9 +220,9 @@ pub enum DependencyScanError {
   TargetMismatch,
   CursorMismatch,
   CursorExhausted,
-  RegistrationStillCurrent,
-  RegistrationAuthorityMissing,
+  PendingAuthorityMissing,
   PendingAuthorityMismatch,
+  CorruptRegistrationPosition,
   ScanComplete,
   CorruptTopology,
 }

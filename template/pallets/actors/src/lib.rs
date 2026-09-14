@@ -2750,16 +2750,15 @@ pub mod pallet {
       Ok(DependencyScanMutation::Begun(state.revision))
     }
 
-    /// Advances only after exact stale proof or exact durable Pending authority is visible.
+    /// Processes one cursor-derived registration before advancing the fixed scan frontier.
     #[allow(
       dead_code,
       reason = "dependency scans remain inert until parking authority cutover"
     )]
-    pub(crate) fn advance_dependency_scan(
+    pub(crate) fn process_dependency_scan_member(
       source: DependencySourceId,
       expected_target: DependencyRevision,
       expected_cursor: u64,
-      proof: DependencyScanAdvanceProof,
     ) -> Result<DependencyScanMutation, DependencyScanError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(DependencyScanError::TransactionRequired);
@@ -2774,36 +2773,72 @@ pub mod pallet {
       if state.scan_cursor != expected_cursor {
         return Err(DependencyScanError::CursorMismatch);
       }
-      let header = DependencyRegistrationHeaders::<T>::get(source);
+      let mut header = DependencyRegistrationHeaders::<T>::get(source);
       if state.scan_cursor >= state.scan_end || state.scan_end > header.next_index {
         return Err(DependencyScanError::ScanComplete);
       }
       let page_id = state.scan_cursor / 32;
       let slot = (state.scan_cursor % 32) as usize;
-      let page = DependencyRegistrationPages::<T>::get(source, page_id)
+      let position = DependencyRegistrationPosition {
+        page: page_id,
+        slot: slot as u8,
+      };
+      let mut page = DependencyRegistrationPages::<T>::get(source, page_id)
         .ok_or(DependencyScanError::CorruptTopology)?;
-      let encountered = page
+      let encountered = *page
         .entries
         .get(slot)
         .ok_or(DependencyScanError::CorruptTopology)?;
-      match (proof, encountered) {
-        (_, None) => {}
-        (DependencyScanAdvanceProof::Stale, Some(handle)) => {
-          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) == Some(*handle) {
-            return Err(DependencyScanError::RegistrationStillCurrent);
+      if let Some(handle) = encountered {
+        let current = DependencyRegistrations::<T>::get(source, handle.actor.actor_id);
+        if current == Some(handle) {
+          if DependencyRegistrationPositions::<T>::get(source, handle.actor.actor_id)
+            != Some(position)
+          {
+            return Err(DependencyScanError::CorruptRegistrationPosition);
           }
-        }
-        (DependencyScanAdvanceProof::Pending, Some(handle)) => {
-          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) != Some(*handle) {
-            return Err(DependencyScanError::RegistrationAuthorityMissing);
-          }
-          if PendingCheckOwners::<T>::get(handle.actor.actor_id)
-            != Some(PendingCheckOwner {
+          let pending = PendingCheckOwners::<T>::get(handle.actor.actor_id)
+            .ok_or(DependencyScanError::PendingAuthorityMissing)?;
+          if pending
+            != (PendingCheckOwner {
               actor: handle.actor,
               plan_revision: handle.plan_revision,
             })
           {
             return Err(DependencyScanError::PendingAuthorityMismatch);
+          }
+          if handle.acknowledged_revision < expected_target {
+            let acknowledged = DependencyRegistrationHandle {
+              acknowledged_revision: expected_target,
+              ..handle
+            };
+            page.entries[slot] = Some(acknowledged);
+            DependencyRegistrationPages::<T>::insert(source, page_id, page);
+            DependencyRegistrations::<T>::insert(source, acknowledged.actor.actor_id, acknowledged);
+          }
+        } else {
+          let reverse_position =
+            DependencyRegistrationPositions::<T>::get(source, handle.actor.actor_id);
+          if current.is_some() && reverse_position == Some(position) {
+            return Err(DependencyScanError::CorruptRegistrationPosition);
+          }
+          page.entries[slot] = None;
+          header.count = header
+            .count
+            .checked_sub(1)
+            .ok_or(DependencyScanError::CorruptTopology)?;
+          if header.free_count >= T::MaxActiveActors::get() {
+            return Err(DependencyScanError::CorruptTopology);
+          }
+          DependencyRegistrationFreePositions::<T>::insert(source, header.free_count, position);
+          header.free_count = header
+            .free_count
+            .checked_add(1)
+            .ok_or(DependencyScanError::CorruptTopology)?;
+          DependencyRegistrationPages::<T>::insert(source, page_id, page);
+          DependencyRegistrationHeaders::<T>::insert(source, header);
+          if current.is_none() && reverse_position == Some(position) {
+            DependencyRegistrationPositions::<T>::remove(source, handle.actor.actor_id);
           }
         }
       }
