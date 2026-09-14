@@ -871,6 +871,84 @@ fn address_event_uses_canonical_pending_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
+fn address_event_ingress_requires_its_certified_selector() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      percentage_trigger_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let differently_filtered = system_active_contract(
+      on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
+      None,
+      transfer_contract_steps(BOB, 1),
+    )
+    .expect("differently filtered Contract is valid");
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
+      let cell = stored.as_mut().expect("Unsignaled authority exists");
+      let old = &cell.admission;
+      let replacement = crate::ActorAdmissionCertificate::new(
+        old.semantic_contract_id,
+        old.body_commitment,
+        differently_filtered
+          .trigger
+          .wake_qualification(&differently_filtered.window),
+        old.runtime_actor_semantics_version,
+        old.production_weight_identity,
+        old.body_geometry_version,
+        old.configured_bounds_commitment,
+        old.maximum_lifecycle_weight,
+      );
+      cell.pipeline_service_identity =
+        crate::pipeline_service_identity(replacement.admission_identity);
+      cell.admission = replacement;
+    });
+    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      .expect("mutated authority exists")
+      .admission
+      .admission_identity;
+    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
+      stored
+        .as_mut()
+        .expect("Contract head exists")
+        .header
+        .admission_identity = replacement_identity;
+    });
+    let events_before = System::events();
+
+    assert_noop!(
+      Actors::preflight_funding_event(
+        actor_id,
+        TestAsset::Native,
+        1,
+        Some(&ALICE),
+        Some(&crate::FundingProvenance::Signed),
+      ),
+      Error::<Test>::ActorInvariant
+    );
+    assert_noop!(
+      Actors::notify_address_event(actor_id, TestAsset::Native, 1, &ALICE),
+      Error::<Test>::ActorInvariant
+    );
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    assert_eq!(System::events(), events_before);
+    assert!(
+      !crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+        .expect("authority remains fail-closed")
+        .hot
+        .pending_signal
+    );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
 fn address_event_execution_preserves_canonical_control() {
   for steps in [inert_contract_steps(), BoundedVec::default()] {
     new_test_ext().execute_with(|| {
