@@ -1,4 +1,7 @@
-use super::{contract::ActorContractCommitment, lifecycle::ActorId};
+use super::{
+  contract::ActorContractCommitment,
+  lifecycle::{ActorId, ActorRef, ServiceResidenceKind},
+};
 use frame::prelude::*;
 
 pub type QueueTicket = u64;
@@ -7,6 +10,43 @@ pub type WakeupPageId = u64;
 pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 pub type SchedulerTick = u64;
+
+/// Inert storage shape for the future actor-keyed persistent service ring.
+///
+/// `cursor` is the next member to encounter; `count` is occupancy only. The
+/// historical control cells remain scheduler authority until the whole ring is
+/// populated and cut over atomically.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ServiceHeader<BlockNumber> {
+  pub round_block: Option<BlockNumber>,
+  pub cursor: Option<ActorRef>,
+  pub count: u32,
+}
+
+impl<BlockNumber> Default for ServiceHeader<BlockNumber> {
+  fn default() -> Self {
+    Self {
+      round_block: None,
+      cursor: None,
+      count: 0,
+    }
+  }
+}
+
+/// One generation-bound member of the future Live/Pending service ring.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ServiceNode<BlockNumber> {
+  pub generation: u64,
+  pub previous: ActorRef,
+  pub next: ActorRef,
+  pub kind: ServiceResidenceKind,
+  pub eligible_from: BlockNumber,
+  pub last_considered: BlockNumber,
+}
 
 #[derive(
   Clone,

@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorRef,
-  PipelineMachineFeeStrategy,
+  PipelineMachineFeeStrategy, ServiceHeader, ServiceNode, ServiceResidenceKind,
 };
 use frame::traits::ConstU32;
+use std::collections::BTreeMap;
 
 #[test]
 fn process_skeleton_uses_generation_bound_references() {
@@ -25,6 +26,128 @@ fn process_skeleton_uses_generation_bound_references() {
       generation: 12
     }
   );
+}
+
+#[derive(Default)]
+struct ServiceRingOracle {
+  header: ServiceHeader<u32>,
+  nodes: BTreeMap<u64, ServiceNode<u32>>,
+}
+
+impl ServiceRingOracle {
+  fn insert_tail(&mut self, actor: ActorRef) {
+    assert!(!self.nodes.contains_key(&actor.actor_id));
+    let cursor = self.header.cursor.unwrap_or(actor);
+    let tail = self
+      .nodes
+      .get(&cursor.actor_id)
+      .map_or(actor, |node| node.previous);
+    let node = ServiceNode {
+      generation: actor.generation,
+      previous: tail,
+      next: cursor,
+      kind: ServiceResidenceKind::Live,
+      eligible_from: 1,
+      last_considered: 0,
+    };
+    if let Some(head) = self.nodes.get_mut(&cursor.actor_id) {
+      head.previous = actor;
+      self
+        .nodes
+        .get_mut(&tail.actor_id)
+        .expect("tail exists")
+        .next = actor;
+    } else {
+      self.header.cursor = Some(actor);
+    }
+    self.nodes.insert(actor.actor_id, node);
+    self.header.count += 1;
+    self.assert_valid();
+  }
+
+  fn remove(&mut self, actor: ActorRef) -> bool {
+    let Some(node) = self.nodes.get(&actor.actor_id).copied() else {
+      return false;
+    };
+    if node.generation != actor.generation {
+      return false;
+    }
+    if self.header.count == 1 {
+      self.header.cursor = None;
+    } else {
+      self
+        .nodes
+        .get_mut(&node.previous.actor_id)
+        .expect("previous exists")
+        .next = node.next;
+      self
+        .nodes
+        .get_mut(&node.next.actor_id)
+        .expect("next exists")
+        .previous = node.previous;
+      if self.header.cursor == Some(actor) {
+        self.header.cursor = Some(node.next);
+      }
+    }
+    self.nodes.remove(&actor.actor_id);
+    self.header.count -= 1;
+    self.assert_valid();
+    true
+  }
+
+  fn assert_valid(&self) {
+    assert_eq!(self.header.count as usize, self.nodes.len());
+    let Some(start) = self.header.cursor else {
+      assert!(self.nodes.is_empty());
+      return;
+    };
+    let mut current = start;
+    for _ in 0..self.header.count {
+      let node = self.nodes.get(&current.actor_id).expect("member exists");
+      assert_eq!(node.generation, current.generation);
+      let next = self.nodes.get(&node.next.actor_id).expect("next exists");
+      let previous = self
+        .nodes
+        .get(&node.previous.actor_id)
+        .expect("previous exists");
+      assert_eq!(next.previous, current);
+      assert_eq!(previous.next, current);
+      current = node.next;
+    }
+    assert_eq!(current, start);
+  }
+}
+
+fn actor_ref(actor_id: u64, generation: u64) -> ActorRef {
+  ActorRef {
+    actor_id,
+    generation,
+  }
+}
+
+#[test]
+fn service_ring_oracle_covers_empty_singleton_interior_cursor_and_wrap() {
+  let mut ring = ServiceRingOracle::default();
+  ring.assert_valid();
+  for id in 1..=4 {
+    ring.insert_tail(actor_ref(id, 1));
+  }
+  assert_eq!(ring.nodes[&4].next, actor_ref(1, 1));
+  assert!(ring.remove(actor_ref(3, 1)));
+  assert!(ring.remove(actor_ref(1, 1)));
+  assert_eq!(ring.header.cursor, Some(actor_ref(2, 1)));
+  assert!(ring.remove(actor_ref(4, 1)));
+  assert!(ring.remove(actor_ref(2, 1)));
+  assert_eq!(ring.header, ServiceHeader::default());
+}
+
+#[test]
+fn service_ring_oracle_rejects_stale_generation_without_mutation() {
+  let mut ring = ServiceRingOracle::default();
+  ring.insert_tail(actor_ref(7, 3));
+  assert!(!ring.remove(actor_ref(7, 2)));
+  assert_eq!(ring.header.count, 1);
+  assert_eq!(ring.header.cursor, Some(actor_ref(7, 3)));
 }
 
 fn test_pipeline_machine_envelope() -> crate::PipelineMachineEnvelope<Balance> {
