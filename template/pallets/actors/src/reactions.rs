@@ -1110,6 +1110,12 @@ impl<T: Config> Pallet<T> {
   }
 }
 
+impl<T: Config> crate::DependencyEventIngress<T::ObservationFeedId> for Pallet<T> {
+  fn note_dependency_event(feed: T::ObservationFeedId) -> DispatchResult {
+    Pallet::<T>::publish_observation_dependency_event(feed)
+  }
+}
+
 impl<T: Config> crate::ObservationTransitionIngress<T::ObservationFeedId> for Pallet<T> {
   fn note_observation_transition(
     feed: T::ObservationFeedId,

@@ -1,8 +1,9 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
 use pallet_deos_actors::{
-  ObservationTransition, ObservationTransitionIngress, TriggerCauseProvenance,
+  DependencyEventIngress, ObservationTransition, ObservationTransitionIngress,
+  TriggerCauseProvenance,
 };
-use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
+use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, FeedStateChange, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional},
   frame_system::{EnsureRoot, EnsureSigned},
@@ -271,6 +272,20 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
       )?;
     }
     Ok((u64::from(capacity).saturating_add(1), current, true))
+  }
+}
+
+/// Inert O(1) bridge from the complete Oracle state hook to Actors dependency publication.
+/// Production binding remains `()` until all six Oracle paths carry generated composed weights.
+#[allow(
+  dead_code,
+  reason = "adapter is retained for transactional evidence before weighted production cutover"
+)]
+pub struct ActorFeedStateChangeIngress;
+
+impl pallet_oracle::OnFeedStateChanged<OracleFeedId> for ActorFeedStateChangeIngress {
+  fn on_feed_state_changed(feed: OracleFeedId, _: FeedStateChange) -> DispatchResult {
+    <crate::Actors as DependencyEventIngress<OracleFeedId>>::note_dependency_event(feed)
   }
 }
 

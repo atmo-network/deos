@@ -1160,6 +1160,66 @@ fn observation_dependency_sources_are_bijective_transactional_and_nonwrapping() 
 }
 
 #[test]
+fn observation_dependency_event_ingress_allocates_reuses_publishes_and_rolls_back() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51),
+      Err(DispatchError::Other(
+        "dependency event requires transaction"
+      ))
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51));
+      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(51));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(ObservationDependencySources::<Test>::get(51), Some(0));
+    assert_eq!(DependencySourceObservations::<Test>::get(0), Some(51));
+    assert_eq!(DependencyRevisions::<Test>::get(0).revision, 2);
+
+    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_ok!(<Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(52));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(rolled_back, ());
+    assert_eq!(ObservationDependencySources::<Test>::get(52), None);
+    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 1);
+
+    DependencyRevisions::<Test>::insert(
+      1,
+      DependencyRevisionState {
+        exhausted: true,
+        ..Default::default()
+      },
+    );
+    let failed = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome = <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(52);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
+    });
+    assert_eq!(
+      failed,
+      Err(DispatchError::Other("dependency revision exhausted"))
+    );
+    assert_eq!(ObservationDependencySources::<Test>::get(52), None);
+    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 1);
+
+    DependencySourceAllocatorState::<Test>::put(DependencySourceAllocator {
+      next: u64::MAX,
+      exhausted: true,
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        <Actors as crate::DependencyEventIngress<u32>>::note_dependency_event(53),
+        Err(DispatchError::Other("dependency source identity exhausted"))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(ObservationDependencySources::<Test>::get(53), None);
+  });
+}
+
+#[test]
 fn dependency_revision_is_nonwrapping_sticky_and_transactional() {
   new_test_ext().execute_with(|| {
     let source = 17;

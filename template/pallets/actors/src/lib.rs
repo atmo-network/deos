@@ -53,12 +53,12 @@ pub use scheduler::{EnqueueOutcome, WakeupBucketDisposition};
 pub mod adapters;
 pub use adapters::{
   AddressEventIngress, AdmissionCertificateAuthority, AdmissionCertificateAuthorityProvider,
-  AssetOps, CanonicalObservationState, DexOps, DexSwapOutcome, ExecutionContext, FundingAuthority,
-  IngressFailure, LiquidityOps, ObservationProvider, ObservationTransition,
-  ObservationTransitionIngress, RetryClass, ScalarObservationState, SovereignAccountDeriver,
-  StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase, StepControlPlacement,
-  StepControlWeightContext, StepControlWeightProvider, SystemActorContractValidator,
-  TaskEffectExecution, TaskEffectWeightProvider, TaskFailure,
+  AssetOps, CanonicalObservationState, DependencyEventIngress, DexOps, DexSwapOutcome,
+  ExecutionContext, FundingAuthority, IngressFailure, LiquidityOps, ObservationProvider,
+  ObservationTransition, ObservationTransitionIngress, RetryClass, ScalarObservationState,
+  SovereignAccountDeriver, StakingOps, StepControlExecution, StepControlOutcome, StepControlPhase,
+  StepControlPlacement, StepControlWeightContext, StepControlWeightProvider,
+  SystemActorContractValidator, TaskEffectExecution, TaskEffectWeightProvider, TaskFailure,
 };
 pub use types::{
   ActorStepResourceReservation, AddressEvent, BlockResourceBudget, BlockResourceDomain,
@@ -2734,6 +2734,49 @@ pub mod pallet {
       DependencySourceObservations::<T>::insert(source, feed);
       DependencySourceAllocatorState::<T>::put(allocator);
       Ok(DependencySourceMutation::Allocated(source))
+    }
+
+    /// Resolves one typed Oracle feed and publishes its event-complete dependency revision.
+    #[allow(
+      dead_code,
+      reason = "dependency publication adapter remains inert until Oracle owner cutover"
+    )]
+    pub(crate) fn publish_observation_dependency_event(
+      feed: T::ObservationFeedId,
+    ) -> DispatchResult {
+      let source = match Self::resolve_observation_dependency_source(feed) {
+        Ok(
+          DependencySourceMutation::Allocated(source) | DependencySourceMutation::Existing(source),
+        ) => source,
+        Err(DependencySourceError::TransactionRequired) => {
+          return Err(DispatchError::Other(
+            "dependency event requires transaction",
+          ));
+        }
+        Err(DependencySourceError::Exhausted) => {
+          return Err(DispatchError::Other("dependency source identity exhausted"));
+        }
+        Err(DependencySourceError::ReverseMissing) => {
+          return Err(DispatchError::Other("dependency source reverse missing"));
+        }
+        Err(DependencySourceError::ReverseMismatch) => {
+          return Err(DispatchError::Other("dependency source reverse mismatch"));
+        }
+        Err(DependencySourceError::SourceOccupied) => {
+          return Err(DispatchError::Other("dependency source identity occupied"));
+        }
+      };
+      match Self::publish_dependency_event(source) {
+        Ok(
+          DependencyPublicationMutation::Begun(_) | DependencyPublicationMutation::Coalesced { .. },
+        ) => Ok(()),
+        Ok(DependencyPublicationMutation::Exhausted) => {
+          Err(DispatchError::Other("dependency revision exhausted"))
+        }
+        Err(DependencyRevisionError::TransactionRequired) => Err(DispatchError::Other(
+          "dependency event requires transaction",
+        )),
+      }
     }
 
     /// Advances one event-complete dependency source without wrapping its causal identity.

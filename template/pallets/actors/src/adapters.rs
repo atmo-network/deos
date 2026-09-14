@@ -49,6 +49,11 @@ pub trait ObservationTransitionIngress<FeedId> {
   ) -> DispatchResult;
 }
 
+/// Bounded event-complete ingress for one externally owned dependency source.
+pub trait DependencyEventIngress<SourceId> {
+  fn note_dependency_event(source: SourceId) -> DispatchResult;
+}
+
 /// Minimal authoritative actor context for adapter operations whose policy depends on Actors type.
 pub struct ExecutionContext<'a, AccountId> {
   pub actor: &'a AccountId,

@@ -9300,6 +9300,47 @@ fn event_complete_dependency_owner_inventory_covers_every_oracle_state_writer() 
 }
 
 #[test]
+fn inert_oracle_dependency_adapter_covers_every_state_cause_without_subscriber_traversal() {
+  use crate::configs::oracle_config::{ActorFeedStateChangeIngress, deos_router_pool_feed};
+  use pallet_oracle::{FeedStateChange, OnFeedStateChanged};
+
+  seeded_test_ext().execute_with(|| {
+    let feed = deos_router_pool_feed(AssetKind::Native, AssetKind::Local(1));
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      for cause in [
+        FeedStateChange::Registered,
+        FeedStateChange::Paused,
+        FeedStateChange::Resumed,
+        FeedStateChange::Deactivated,
+        FeedStateChange::ObservationChanged,
+        FeedStateChange::ObservationRefreshed,
+      ] {
+        assert_ok!(ActorFeedStateChangeIngress::on_feed_state_changed(
+          feed, cause
+        ));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let source = pallet_deos_actors::ObservationDependencySources::<Runtime>::get(feed)
+      .expect("adapter allocates one exact source identity");
+    assert_eq!(
+      pallet_deos_actors::DependencySourceObservations::<Runtime>::get(source),
+      Some(feed)
+    );
+    assert_eq!(
+      pallet_deos_actors::DependencyRevisions::<Runtime>::get(source).revision,
+      6
+    );
+    assert_eq!(
+      pallet_deos_actors::DependencyRegistrationHeaders::<Runtime>::get(source).next_index,
+      0,
+      "publication is O(1) and does not traverse absent subscribers"
+    );
+  });
+}
+
+#[test]
 fn certified_ingress_inventory_is_closed_and_typed() {
   seeded_test_ext().execute_with(|| {
     let inventory = RuntimeAddressEventIngress::certified_producer_inventory();
