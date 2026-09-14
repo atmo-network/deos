@@ -19,13 +19,13 @@ pub type SchedulerTick = u64;
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ServiceHeader<BlockNumber> {
+pub struct ServiceHeaderRecord<BlockNumber> {
   pub round_block: Option<BlockNumber>,
   pub cursor: Option<ActorRef>,
   pub count: u32,
 }
 
-impl<BlockNumber> Default for ServiceHeader<BlockNumber> {
+impl<BlockNumber> Default for ServiceHeaderRecord<BlockNumber> {
   fn default() -> Self {
     Self {
       round_block: None,
@@ -46,6 +46,20 @@ pub struct ServiceNode<BlockNumber> {
   pub kind: ServiceResidenceKind,
   pub eligible_from: BlockNumber,
   pub last_considered: BlockNumber,
+}
+
+/// Rejected transaction-local mutations of the inert canonical service ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRingMutationError {
+  TransactionRequired,
+  LegacyAuthorityPresent,
+  ProcessMissing,
+  ProcessResidenceMismatch,
+  MemberAlreadyExists,
+  MemberMissing,
+  StaleGeneration,
+  CorruptRing,
+  CapacityExceeded,
 }
 
 #[derive(

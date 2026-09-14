@@ -2469,6 +2469,163 @@ pub mod pallet {
       Ok(next)
     }
 
+    /// Appends one generation-bound process to the inert service ring. The caller's transaction
+    /// must publish the matching process and remove legacy authority before entering this boundary.
+    #[allow(
+      dead_code,
+      reason = "service-ring mutation remains unreachable until the complete carrier cutover"
+    )]
+    pub(crate) fn insert_service_member(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      eligible_from: BlockNumberFor<T>,
+      last_considered: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRingMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(ServiceRingMutationError::TransactionRequired);
+      }
+      if ActorControlLocators::<T>::contains_key(actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+      {
+        return Err(ServiceRingMutationError::LegacyAuthorityPresent);
+      }
+      let process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(ServiceRingMutationError::ProcessMissing)?;
+      if process.generation != actor.generation
+        || process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Service(kind))
+      {
+        return Err(ServiceRingMutationError::ProcessResidenceMismatch);
+      }
+      if ServiceNodes::<T>::contains_key(actor.actor_id) {
+        return Err(ServiceRingMutationError::MemberAlreadyExists);
+      }
+
+      let mut header = ServiceHeader::<T>::get();
+      let next_count = header
+        .count
+        .checked_add(1)
+        .ok_or(ServiceRingMutationError::CapacityExceeded)?;
+      let node = ServiceNode {
+        generation: actor.generation,
+        previous: actor,
+        next: actor,
+        kind,
+        eligible_from,
+        last_considered,
+      };
+      match (header.count, header.cursor) {
+        (0, None) => header.cursor = Some(actor),
+        (0, Some(_)) | (_, None) => return Err(ServiceRingMutationError::CorruptRing),
+        (_, Some(cursor)) => {
+          let mut head = ServiceNodes::<T>::get(cursor.actor_id)
+            .filter(|node| node.generation == cursor.generation)
+            .ok_or(ServiceRingMutationError::CorruptRing)?;
+          let tail_ref = head.previous;
+          let mut tail = ServiceNodes::<T>::get(tail_ref.actor_id)
+            .filter(|node| node.generation == tail_ref.generation)
+            .ok_or(ServiceRingMutationError::CorruptRing)?;
+          if tail.next != cursor
+            || (header.count == 1
+              && (tail_ref != cursor || head.next != cursor || head.previous != cursor))
+            || (header.count > 1 && tail_ref == cursor)
+          {
+            return Err(ServiceRingMutationError::CorruptRing);
+          }
+          head.previous = actor;
+          tail.next = actor;
+          if cursor.actor_id == tail_ref.actor_id {
+            head.next = actor;
+            ServiceNodes::<T>::insert(cursor.actor_id, head);
+          } else {
+            ServiceNodes::<T>::insert(cursor.actor_id, head);
+            ServiceNodes::<T>::insert(tail_ref.actor_id, tail);
+          }
+          ServiceNodes::<T>::insert(
+            actor.actor_id,
+            ServiceNode {
+              previous: tail_ref,
+              next: cursor,
+              ..node
+            },
+          );
+        }
+      }
+      if header.count == 0 {
+        ServiceNodes::<T>::insert(actor.actor_id, node);
+      }
+      header.count = next_count;
+      ServiceHeader::<T>::put(header);
+      Ok(())
+    }
+
+    /// Removes exactly one generation-bound member from the inert service ring.
+    #[allow(
+      dead_code,
+      reason = "service-ring mutation remains unreachable until the complete carrier cutover"
+    )]
+    pub(crate) fn remove_service_member(
+      actor: ActorRef,
+    ) -> Result<ServiceNode<BlockNumberFor<T>>, ServiceRingMutationError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(ServiceRingMutationError::TransactionRequired);
+      }
+      if ActorControlLocators::<T>::contains_key(actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+      {
+        return Err(ServiceRingMutationError::LegacyAuthorityPresent);
+      }
+      let process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(ServiceRingMutationError::ProcessMissing)?;
+      let node =
+        ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRingMutationError::MemberMissing)?;
+      if node.generation != actor.generation || process.generation != actor.generation {
+        return Err(ServiceRingMutationError::StaleGeneration);
+      }
+      if process.status != ProcessStatus::Serving
+        || process.residence != Some(ProcessResidence::Service(node.kind))
+      {
+        return Err(ServiceRingMutationError::ProcessResidenceMismatch);
+      }
+
+      let mut header = ServiceHeader::<T>::get();
+      if header.count == 0 || header.cursor.is_none() {
+        return Err(ServiceRingMutationError::CorruptRing);
+      }
+      if header.count == 1 {
+        if header.cursor != Some(actor) || node.previous != actor || node.next != actor {
+          return Err(ServiceRingMutationError::CorruptRing);
+        }
+        header = ServiceHeaderRecord::default();
+      } else {
+        let mut previous = ServiceNodes::<T>::get(node.previous.actor_id)
+          .filter(|value| value.generation == node.previous.generation)
+          .ok_or(ServiceRingMutationError::CorruptRing)?;
+        let mut next = ServiceNodes::<T>::get(node.next.actor_id)
+          .filter(|value| value.generation == node.next.generation)
+          .ok_or(ServiceRingMutationError::CorruptRing)?;
+        if previous.next != actor || next.previous != actor {
+          return Err(ServiceRingMutationError::CorruptRing);
+        }
+        previous.next = node.next;
+        next.previous = node.previous;
+        if node.previous.actor_id == node.next.actor_id {
+          previous.previous = node.previous;
+          ServiceNodes::<T>::insert(node.previous.actor_id, previous);
+        } else {
+          ServiceNodes::<T>::insert(node.previous.actor_id, previous);
+          ServiceNodes::<T>::insert(node.next.actor_id, next);
+        }
+        if header.cursor == Some(actor) {
+          header.cursor = Some(node.next);
+        }
+        header.count -= 1;
+      }
+      ServiceNodes::<T>::remove(actor.actor_id);
+      ServiceHeader::<T>::put(header);
+      Ok(node)
+    }
+
     pub(crate) fn insert_unsignaled_control_authority(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
@@ -3894,6 +4051,18 @@ pub mod pallet {
   #[pallet::getter(fn actor_processes)]
   pub type ActorProcesses<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorProcessOf<T>, OptionQuery>;
+
+  /// Inert canonical header for the future actor-keyed persistent service ring.
+  #[pallet::storage]
+  #[pallet::getter(fn service_header)]
+  pub type ServiceHeader<T: Config> =
+    StorageValue<_, ServiceHeaderRecord<BlockNumberFor<T>>, ValueQuery>;
+
+  /// Inert canonical generation-bound nodes for the future persistent service ring.
+  #[pallet::storage]
+  #[pallet::getter(fn service_nodes)]
+  pub type ServiceNodes<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ServiceNode<BlockNumberFor<T>>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_identity_count)]

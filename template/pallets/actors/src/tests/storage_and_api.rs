@@ -4,8 +4,9 @@ use crate::{
   ActorRef, CloseReason, LegacyProcessPlacement, LegacyProcessTransition, ParkEvidence,
   ParkNegativeReason, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
   ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceNode,
-  ServiceResidenceKind, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
   plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
@@ -824,7 +825,7 @@ fn process_status_separates_park_from_revocation_and_retirement() {
 
 #[derive(Default)]
 struct ServiceRingOracle {
-  header: ServiceHeader<u32>,
+  header: ServiceHeaderRecord<u32>,
   nodes: BTreeMap<u64, ServiceNode<u32>>,
 }
 
@@ -932,7 +933,7 @@ fn service_ring_oracle_covers_empty_singleton_interior_cursor_and_wrap() {
   assert_eq!(ring.header.cursor, Some(actor_ref(2, 1)));
   assert!(ring.remove(actor_ref(4, 1)));
   assert!(ring.remove(actor_ref(2, 1)));
-  assert_eq!(ring.header, ServiceHeader::default());
+  assert_eq!(ring.header, ServiceHeaderRecord::default());
 }
 
 #[test]
@@ -942,6 +943,99 @@ fn service_ring_oracle_rejects_stale_generation_without_mutation() {
   assert!(!ring.remove(actor_ref(7, 2)));
   assert_eq!(ring.header.count, 1);
   assert_eq!(ring.header.cursor, Some(actor_ref(7, 3)));
+}
+
+fn serving_process(actor: ActorRef, kind: ServiceResidenceKind) -> ActorProcess<u64> {
+  ActorProcess {
+    generation: actor.generation,
+    status: ProcessStatus::Serving,
+    residence: Some(ProcessResidence::Service(kind)),
+  }
+}
+
+#[test]
+fn canonical_service_ring_is_transactional_generation_bound_and_structurally_complete() {
+  new_test_ext().execute_with(|| {
+    let first = actor_ref(100, 4);
+    ActorProcesses::<Test>::insert(
+      first.actor_id,
+      serving_process(first, ServiceResidenceKind::Live),
+    );
+    assert_eq!(
+      Actors::insert_service_member(first, ServiceResidenceKind::Live, 2, 1),
+      Err(ServiceRingMutationError::TransactionRequired)
+    );
+
+    let legacy_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let legacy_rejected = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::insert_service_member(actor_ref(legacy_id, 1), ServiceResidenceKind::Live, 2, 1),
+      )
+    });
+    assert_eq!(
+      legacy_rejected,
+      Err(ServiceRingMutationError::LegacyAuthorityPresent)
+    );
+
+    let members = [
+      first,
+      actor_ref(101, 5),
+      actor_ref(102, 6),
+      actor_ref(103, 7),
+    ];
+    for actor in members {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::insert_service_member(actor, ServiceResidenceKind::Live, 2, 1),
+        )
+      })
+      .expect("canonical insertion succeeds");
+    }
+    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(first));
+    assert_eq!(ServiceHeader::<Test>::get().count, 4);
+    assert_eq!(ServiceNodes::<Test>::get(103).expect("tail").next, first);
+
+    let stale = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+        Actors::remove_service_member(actor_ref(102, 5)),
+      )
+    });
+    assert_eq!(stale, Err(ServiceRingMutationError::StaleGeneration));
+    assert_eq!(ServiceHeader::<Test>::get().count, 4);
+
+    for actor in [members[2], members[0], members[3], members[1]] {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::remove_service_member(actor),
+        )
+      })
+      .expect("interior, cursor, pair, and singleton removal succeed");
+    }
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
+    assert!(
+      members
+        .iter()
+        .all(|actor| !ServiceNodes::<Test>::contains_key(actor.actor_id))
+    );
+
+    let rolled_back = actor_ref(110, 8);
+    ActorProcesses::<Test>::insert(
+      rolled_back.actor_id,
+      serving_process(rolled_back, ServiceResidenceKind::Pending),
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_service_member(rolled_back, ServiceResidenceKind::Pending, 3, 2)
+        .expect("staged insertion is visible");
+      assert!(ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
+    assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+  });
 }
 
 fn test_pipeline_machine_envelope() -> crate::PipelineMachineEnvelope<Balance> {
@@ -2865,6 +2959,8 @@ fn actor_storage_schema_is_explicit() {
       ("ActorRunPayload", true, true),
       ("ActorIdentities", true, true),
       ("ActorProcesses", true, true),
+      ("ServiceHeader", false, false),
+      ("ServiceNodes", true, true),
       ("ActorIdentityCount", false, false),
       ("ActorStateHolds", true, true),
       ("ActiveActorCount", false, false),
