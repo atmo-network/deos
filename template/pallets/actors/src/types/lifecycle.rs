@@ -7,6 +7,51 @@ use super::{
 use frame::prelude::*;
 
 pub type ActorId = u64;
+pub type ActorGeneration = u64;
+
+/// Generation-bound identity used by every future process-residence index.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorRef {
+  pub actor_id: ActorId,
+  pub generation: ActorGeneration,
+}
+
+/// Service-ring role. Live continuations and Pending activation checks share one carrier.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ServiceResidenceKind {
+  Live,
+  Pending,
+}
+
+/// Exact physical residence owned by one stable Actor-generation process.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessResidence<BlockNumber> {
+  Service(ServiceResidenceKind),
+  Deadline {
+    key: WakeupKey<BlockNumber>,
+    page: u64,
+    slot: u8,
+  },
+  Parked,
+  Disabled,
+  Reclaiming,
+}
+
+/// Minimal stable process owner introduced ahead of the atomic scheduler cutover.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorProcess<BlockNumber> {
+  pub generation: ActorGeneration,
+  pub residence: ProcessResidence<BlockNumber>,
+}
+
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
 pub const PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN: &[u8] = b"DEOS_PIPELINE_SERVICE_IDENTITY";
 

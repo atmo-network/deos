@@ -1350,6 +1350,7 @@ pub struct MockAdmissionCertificateAuthority;
 
 const ADMISSION_SEMANTICS_VERSION_KEY: &[u8] = b"mock-admission-semantics-version";
 
+#[cfg(feature = "runtime-benchmarks")]
 pub fn set_admission_semantics_version(version: u32) {
   polkadot_sdk::sp_io::storage::set(ADMISSION_SEMANTICS_VERSION_KEY, &version.encode());
 }

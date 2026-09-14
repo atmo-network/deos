@@ -1,8 +1,31 @@
 use super::*;
 use crate::{
-  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, PipelineMachineFeeStrategy,
+  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorRef,
+  PipelineMachineFeeStrategy,
 };
 use frame::traits::ConstU32;
+
+#[test]
+fn process_skeleton_uses_generation_bound_references() {
+  assert_eq!(
+    ActorRef {
+      actor_id: 7,
+      generation: 11
+    }
+    .encoded_size(),
+    16
+  );
+  assert_ne!(
+    ActorRef {
+      actor_id: 7,
+      generation: 11
+    },
+    ActorRef {
+      actor_id: 7,
+      generation: 12
+    }
+  );
+}
 
 fn test_pipeline_machine_envelope() -> crate::PipelineMachineEnvelope<Balance> {
   crate::PipelineMachineEnvelope {
@@ -761,38 +784,41 @@ fn admission_certificate_encoding_is_independent_of_resource_ceiling() {
 
 #[test]
 fn admission_certificate_builder_composes_compact_host_authority() {
-  let contract = system_active_contract(
-    manual_schedule(),
-    None,
-    BoundedVec::try_from(vec![make_step(Task::StopCycle), make_step(Task::StopCycle)])
-      .expect("two Steps fit"),
-  )
-  .expect("active Contract");
-  let certificate = Actors::build_admission_certificate(&contract).expect("host authority exists");
-  assert!(certificate.has_valid_identity());
-  assert_eq!(
-    certificate.semantic_contract_id,
-    contract.semantic_contract_id()
-  );
-  assert_eq!(
-    certificate.body_commitment,
-    contract.body_commitment().expect("body commitment")
-  );
-  assert_eq!(certificate.runtime_actor_semantics_version, 1);
-  assert_eq!(
-    certificate.production_weight_identity,
-    crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32])
-  );
-  assert_eq!(certificate.body_geometry_version, 1);
-  assert_eq!(certificate.configured_bounds_commitment, [6; 32]);
-  assert_eq!(
-    certificate.maximum_lifecycle_weight,
-    Weight::from_parts(77, 88)
-  );
-  assert_eq!(
-    certificate.marker,
-    std::marker::PhantomData::<crate::ActorAdmissionResourcesOf<Test>>
-  );
+  new_test_ext().execute_with(|| {
+    let contract = system_active_contract(
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![make_step(Task::StopCycle), make_step(Task::StopCycle)])
+        .expect("two Steps fit"),
+    )
+    .expect("active Contract");
+    let certificate =
+      Actors::build_admission_certificate(&contract).expect("host authority exists");
+    assert!(certificate.has_valid_identity());
+    assert_eq!(
+      certificate.semantic_contract_id,
+      contract.semantic_contract_id()
+    );
+    assert_eq!(
+      certificate.body_commitment,
+      contract.body_commitment().expect("body commitment")
+    );
+    assert_eq!(certificate.runtime_actor_semantics_version, 1);
+    assert_eq!(
+      certificate.production_weight_identity,
+      crate::AdmissionCertificateAuthority::compose_production_weight_identity([41; 32], [42; 32])
+    );
+    assert_eq!(certificate.body_geometry_version, 1);
+    assert_eq!(certificate.configured_bounds_commitment, [6; 32]);
+    assert_eq!(
+      certificate.maximum_lifecycle_weight,
+      Weight::from_parts(77, 88)
+    );
+    assert_eq!(
+      certificate.marker,
+      std::marker::PhantomData::<crate::ActorAdmissionResourcesOf<Test>>
+    );
+  });
 }
 
 #[test]
