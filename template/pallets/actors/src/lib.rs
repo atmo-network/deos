@@ -2844,6 +2844,16 @@ pub mod pallet {
             return Err(DependencyScanError::PendingAuthorityMismatch);
           }
           if handle.acknowledged_revision < expected_target {
+            let destination = PendingDependencyEvent {
+              owner: pending,
+              source,
+              revision: expected_target,
+            };
+            match PendingDependencyEvents::<T>::get(handle.actor.actor_id) {
+              None => PendingDependencyEvents::<T>::insert(handle.actor.actor_id, destination),
+              Some(current) if current.owner == pending => {}
+              Some(_) => return Err(DependencyScanError::PendingDestinationMismatch),
+            }
             let acknowledged = DependencyRegistrationHandle {
               acknowledged_revision: expected_target,
               ..handle
@@ -5547,6 +5557,12 @@ pub mod pallet {
   #[pallet::getter(fn dependency_timed_reviews)]
   pub type DependencyTimedReviews<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DependencyTimedReview<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Inert durable Pending destination for one event-complete source notification.
+  #[pallet::storage]
+  #[pallet::getter(fn pending_dependency_events)]
+  pub type PendingDependencyEvents<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, PendingDependencyEvent, OptionQuery>;
 
   /// Inert durable Pending destination for one due dependency review.
   #[pallet::storage]

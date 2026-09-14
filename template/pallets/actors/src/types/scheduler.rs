@@ -121,6 +121,16 @@ pub struct PendingCheckOwner {
   pub plan_revision: PlanRevision,
 }
 
+/// One exact event cause retained after source traversal publishes Pending authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct PendingDependencyEvent {
+  pub owner: PendingCheckOwner,
+  pub source: DependencySourceId,
+  pub revision: DependencyRevision,
+}
+
 /// Exact reverse handle for one event-complete dependency registration.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -305,6 +315,7 @@ pub enum DependencyScanError {
   CursorExhausted,
   PendingAuthorityMissing,
   PendingAuthorityMismatch,
+  PendingDestinationMismatch,
   CorruptRegistrationPosition,
   ScanComplete,
   CorruptTopology,

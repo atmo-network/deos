@@ -12,12 +12,13 @@ use crate::{
   DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyTimedReview,
   DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
   LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
-  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
-  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  compile_legacy_process, plan_legacy_process_transition,
+  PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError, ServiceRoundEncounter,
+  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1360,7 +1361,11 @@ fn dependency_scan_processes_one_destination_before_advancing() {
       PendingCheckOwners::<Test>::insert(owner.actor.actor_id, owner);
       polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         assert_eq!(
-          Actors::install_dependency_registration(source, owner, if index == 0 { 1 } else { 3 },),
+          Actors::install_dependency_registration(
+            source,
+            owner,
+            if index == 0 || index == 3 { 1 } else { 3 },
+          ),
           Ok(DependencyRegistrationMutation::Installed)
         );
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
@@ -1405,11 +1410,24 @@ fn dependency_scan_processes_one_destination_before_advancing() {
         .acknowledged_revision,
       1
     );
+    assert!(!PendingDependencyEvents::<Test>::contains_key(
+      owners[0].actor.actor_id
+    ));
 
+    let coalesced = PendingDependencyEvent {
+      owner: owners[0],
+      source: 77,
+      revision: 9,
+    };
+    PendingDependencyEvents::<Test>::insert(owners[0].actor.actor_id, coalesced);
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       assert_eq!(
         Actors::process_dependency_scan_member(source, 3, 0),
         Ok(DependencyScanMutation::Advanced(1))
+      );
+      assert_eq!(
+        PendingDependencyEvents::<Test>::get(owners[0].actor.actor_id),
+        Some(coalesced)
       );
       assert_eq!(
         Actors::process_dependency_scan_member(source, 3, 1),
@@ -1450,10 +1468,36 @@ fn dependency_scan_processes_one_destination_before_advancing() {
         DependencyRegistrations::<Test>::get(source, owners[3].actor.actor_id)
           .unwrap()
           .acknowledged_revision,
-        3
+        1
       );
     }
     PendingCheckOwners::<Test>::insert(owners[3].actor.actor_id, owners[3]);
+    PendingDependencyEvents::<Test>::insert(
+      owners[3].actor.actor_id,
+      PendingDependencyEvent {
+        owner: wrong_plan,
+        source,
+        revision: 3,
+      },
+    );
+    let destination_refused =
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::process_dependency_scan_member(source, 3, 3),
+        )
+      });
+    assert_eq!(
+      destination_refused,
+      Err(DependencyScanError::PendingDestinationMismatch)
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(source).scan_cursor, 3);
+    assert_eq!(
+      DependencyRegistrations::<Test>::get(source, owners[3].actor.actor_id)
+        .unwrap()
+        .acknowledged_revision,
+      1
+    );
+    PendingDependencyEvents::<Test>::remove(owners[3].actor.actor_id);
 
     let stale_position =
       DependencyRegistrationPositions::<Test>::get(source, owners[4].actor.actor_id).unwrap();
@@ -1470,6 +1514,14 @@ fn dependency_scan_processes_one_destination_before_advancing() {
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
     assert_eq!(DependencyRegistrationHeaders::<Test>::get(source).count, 4);
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(owners[3].actor.actor_id),
+      Some(PendingDependencyEvent {
+        owner: owners[3],
+        source,
+        revision: 3,
+      })
+    );
     assert_eq!(
       DependencyRegistrationPages::<Test>::get(source, stale_position.page)
         .unwrap()
@@ -5108,6 +5160,7 @@ fn actor_storage_schema_is_explicit() {
       ("DependencyRegistrations", true, true),
       ("DependencyPlans", false, true),
       ("DependencyTimedReviews", true, true),
+      ("PendingDependencyEvents", true, true),
       ("PendingDependencyReviews", true, true),
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
