@@ -170,6 +170,215 @@ fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_
 }
 
 #[test]
+fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
+  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+  enum TransactionBoundary {
+    CallerTransactional,
+    FunctionTransactional,
+    InPlaceAtomicWrite,
+  }
+  #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+  enum RequiredProcessTransition {
+    PublishTypedResidence,
+    PreserveProcess,
+    AtomicSuccessorOrRemoval,
+    RetireOrDisable,
+    CarrierOnly,
+  }
+
+  const INVENTORY: &[(&str, &str, TransactionBoundary, RequiredProcessTransition)] = &[
+    (
+      "execution.rs",
+      "write_run_state",
+      TransactionBoundary::FunctionTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "lib.rs",
+      "insert_unsignaled_control_authority",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "lib.rs",
+      "replace_control_admission_for_transition",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PreserveProcess,
+    ),
+    (
+      "scheduler.rs",
+      "append_waiting_entry",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::CarrierOnly,
+    ),
+    (
+      "scheduler.rs",
+      "consume_waiting_from_supplied_authority",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+    (
+      "scheduler.rs",
+      "control_append_ready",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "scheduler.rs",
+      "control_append_waiting",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "scheduler.rs",
+      "control_finalize_underfunded_at_time",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::RetireOrDisable,
+    ),
+    (
+      "scheduler.rs",
+      "control_normalize_ready_head",
+      TransactionBoundary::FunctionTransactional,
+      RequiredProcessTransition::CarrierOnly,
+    ),
+    (
+      "scheduler.rs",
+      "control_remove_ready_primary",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+    (
+      "scheduler.rs",
+      "demote_ready_frame_to_unsignaled",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "scheduler.rs",
+      "detach_primary_for_successor",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+    (
+      "scheduler.rs",
+      "paged_consume_head_at_inner",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+    (
+      "scheduler.rs",
+      "remove_primary_control_cell_inner",
+      TransactionBoundary::InPlaceAtomicWrite,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+    (
+      "scheduler.rs",
+      "remove_waiting_entry",
+      TransactionBoundary::InPlaceAtomicWrite,
+      RequiredProcessTransition::CarrierOnly,
+    ),
+    (
+      "scheduler.rs",
+      "restore_unsignaled_from_authority",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::PublishTypedResidence,
+    ),
+    (
+      "scheduler.rs",
+      "store_primary_control_cell",
+      TransactionBoundary::InPlaceAtomicWrite,
+      RequiredProcessTransition::PreserveProcess,
+    ),
+    (
+      "scheduler.rs",
+      "wakeup_substrate_drain_block_inner",
+      TransactionBoundary::CallerTransactional,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+    ),
+  ];
+
+  fn raw_mutation_owners(source: &str) -> BTreeSet<String> {
+    let mut owner = None;
+    let mut owners = BTreeSet::new();
+    for line in source.lines() {
+      let trimmed = line.trim_start();
+      if let Some(rest) = trimmed
+        .strip_prefix("fn ")
+        .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
+      {
+        owner = rest.split('(').next();
+      }
+      let mutates_control_storage = [
+        "ActorUnsignaledControlCells::<T>::insert",
+        "ActorUnsignaledControlCells::<T>::remove",
+        "ActorReadyFrameChunks::<T>::insert",
+        "ActorReadyFrameChunks::<T>::remove",
+        "ActorWaitingFrameChunks::<T>::insert",
+        "ActorWaitingFrameChunks::<T>::remove",
+        "ActorControlLocators::<T>::insert",
+        "ActorControlLocators::<T>::remove",
+      ]
+      .iter()
+      .any(|needle| line.contains(needle));
+      if mutates_control_storage {
+        owners.insert(
+          owner
+            .expect("raw control mutation must be inside a named function")
+            .into(),
+        );
+      }
+    }
+    owners
+  }
+
+  let sources = [
+    ("lib.rs", include_str!("../lib.rs")),
+    ("scheduler.rs", include_str!("../scheduler.rs")),
+    ("execution.rs", include_str!("../execution.rs")),
+  ];
+  let actual = sources
+    .into_iter()
+    .flat_map(|(file, source)| {
+      raw_mutation_owners(source)
+        .into_iter()
+        .map(move |owner| (file, owner))
+    })
+    .collect::<BTreeSet<_>>();
+  let expected = INVENTORY
+    .iter()
+    .map(|(file, owner, _, _)| (*file, (*owner).to_owned()))
+    .collect::<BTreeSet<_>>();
+  assert_eq!(
+    actual, expected,
+    "classify every new raw control mutation owner before process cutover"
+  );
+  assert_eq!(
+    INVENTORY
+      .iter()
+      .map(|(_, _, boundary, _)| *boundary)
+      .collect::<BTreeSet<_>>(),
+    BTreeSet::from([
+      TransactionBoundary::CallerTransactional,
+      TransactionBoundary::FunctionTransactional,
+      TransactionBoundary::InPlaceAtomicWrite,
+    ])
+  );
+  assert_eq!(
+    INVENTORY
+      .iter()
+      .map(|(_, _, _, transition)| *transition)
+      .collect::<BTreeSet<_>>(),
+    BTreeSet::from([
+      RequiredProcessTransition::PublishTypedResidence,
+      RequiredProcessTransition::PreserveProcess,
+      RequiredProcessTransition::AtomicSuccessorOrRemoval,
+      RequiredProcessTransition::RetireOrDisable,
+      RequiredProcessTransition::CarrierOnly,
+    ])
+  );
+}
+
+#[test]
 fn process_status_separates_park_from_revocation_and_retirement() {
   let parked: ActorProcess<u32> = ActorProcess {
     generation: 11,
