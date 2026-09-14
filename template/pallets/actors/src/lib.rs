@@ -2745,6 +2745,7 @@ pub mod pallet {
       }
       state.scan_target = Some(state.revision);
       state.scan_cursor = 0;
+      state.scan_end = DependencyRegistrationHeaders::<T>::get(source).next_index;
       DependencyRevisions::<T>::insert(source, state);
       Ok(DependencyScanMutation::Begun(state.revision))
     }
@@ -2773,14 +2774,27 @@ pub mod pallet {
       if state.scan_cursor != expected_cursor {
         return Err(DependencyScanError::CursorMismatch);
       }
-      match proof {
-        DependencyScanAdvanceProof::Stale(handle) => {
-          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) == Some(handle) {
+      let header = DependencyRegistrationHeaders::<T>::get(source);
+      if state.scan_cursor >= state.scan_end || state.scan_end > header.next_index {
+        return Err(DependencyScanError::ScanComplete);
+      }
+      let page_id = state.scan_cursor / 32;
+      let slot = (state.scan_cursor % 32) as usize;
+      let page = DependencyRegistrationPages::<T>::get(source, page_id)
+        .ok_or(DependencyScanError::CorruptTopology)?;
+      let encountered = page
+        .entries
+        .get(slot)
+        .ok_or(DependencyScanError::CorruptTopology)?;
+      match (proof, encountered) {
+        (_, None) => {}
+        (DependencyScanAdvanceProof::Stale, Some(handle)) => {
+          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) == Some(*handle) {
             return Err(DependencyScanError::RegistrationStillCurrent);
           }
         }
-        DependencyScanAdvanceProof::Pending(handle) => {
-          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) != Some(handle) {
+        (DependencyScanAdvanceProof::Pending, Some(handle)) => {
+          if DependencyRegistrations::<T>::get(source, handle.actor.actor_id) != Some(*handle) {
             return Err(DependencyScanError::RegistrationAuthorityMissing);
           }
           if PendingCheckOwners::<T>::get(handle.actor.actor_id)
@@ -2824,17 +2838,42 @@ pub mod pallet {
       if state.scan_cursor != expected_cursor {
         return Err(DependencyScanError::CursorMismatch);
       }
+      if state.scan_cursor != state.scan_end {
+        return Err(DependencyScanError::ScanComplete);
+      }
       let outcome = if state.revision > expected_target {
         state.scan_target = Some(state.revision);
         state.scan_cursor = 0;
+        state.scan_end = DependencyRegistrationHeaders::<T>::get(source).next_index;
         DependencyScanMutation::HandedOff(state.revision)
       } else {
         state.scan_target = None;
         state.scan_cursor = 0;
+        state.scan_end = 0;
         DependencyScanMutation::Completed
       };
       DependencyRevisions::<T>::insert(source, state);
       Ok(outcome)
+    }
+
+    fn dependency_registration_position(
+      source: DependencySourceId,
+      actor_id: ActorId,
+      expected: DependencyRegistrationHandle,
+    ) -> Result<DependencyRegistrationPosition, DependencyRegistrationError> {
+      let position = DependencyRegistrationPositions::<T>::get(source, actor_id)
+        .ok_or(DependencyRegistrationError::PositionMissing)?;
+      let page = DependencyRegistrationPages::<T>::get(source, position.page)
+        .ok_or(DependencyRegistrationError::CorruptTopology)?;
+      if page
+        .entries
+        .get(position.slot as usize)
+        .and_then(Option::as_ref)
+        != Some(&expected)
+      {
+        return Err(DependencyRegistrationError::PositionMismatch);
+      }
+      Ok(position)
     }
 
     fn validate_dependency_registration(
@@ -2876,9 +2915,65 @@ pub mod pallet {
       }
       let handle = Self::validate_dependency_registration(source, owner, acknowledged_revision)?;
       match DependencyRegistrations::<T>::get(source, owner.actor.actor_id) {
-        Some(current) if current == handle => Ok(DependencyRegistrationMutation::Unchanged),
+        Some(current) if current == handle => {
+          Self::dependency_registration_position(source, owner.actor.actor_id, current)?;
+          Ok(DependencyRegistrationMutation::Unchanged)
+        }
         Some(_) => Err(DependencyRegistrationError::RegistrationAlreadyExists),
         None => {
+          let mut header = DependencyRegistrationHeaders::<T>::get(source);
+          let next_count = header
+            .count
+            .checked_add(1)
+            .ok_or(DependencyRegistrationError::CapacityExceeded)?;
+          if next_count > T::MaxActiveActors::get() {
+            return Err(DependencyRegistrationError::CapacityExceeded);
+          }
+          let scan_active = DependencyRevisions::<T>::get(source).scan_target.is_some();
+          let (position, reused_free_index) = if !scan_active && header.free_count > 0 {
+            let free_index = header.free_count - 1;
+            let position = DependencyRegistrationFreePositions::<T>::get(source, free_index)
+              .ok_or(DependencyRegistrationError::CorruptTopology)?;
+            (position, Some(free_index))
+          } else {
+            if header.next_index >= u64::from(T::MaxActiveActors::get()) {
+              return Err(DependencyRegistrationError::CapacityExceeded);
+            }
+            let index = header.next_index;
+            header.next_index = index
+              .checked_add(1)
+              .ok_or(DependencyRegistrationError::CapacityExceeded)?;
+            (
+              DependencyRegistrationPosition {
+                page: index / 32,
+                slot: (index % 32) as u8,
+              },
+              None,
+            )
+          };
+          let mut page = DependencyRegistrationPages::<T>::get(source, position.page).unwrap_or(
+            DependencyRegistrationPage {
+              entries: BoundedVec::try_from(alloc::vec![None; 32])
+                .map_err(|_| DependencyRegistrationError::CorruptTopology)?,
+            },
+          );
+          if page
+            .entries
+            .get(position.slot as usize)
+            .and_then(Option::as_ref)
+            .is_some()
+          {
+            return Err(DependencyRegistrationError::CorruptTopology);
+          }
+          page.entries[position.slot as usize] = Some(handle);
+          header.count = next_count;
+          if let Some(free_index) = reused_free_index {
+            DependencyRegistrationFreePositions::<T>::remove(source, free_index);
+            header.free_count = free_index;
+          }
+          DependencyRegistrationPages::<T>::insert(source, position.page, page);
+          DependencyRegistrationHeaders::<T>::insert(source, header);
+          DependencyRegistrationPositions::<T>::insert(source, owner.actor.actor_id, position);
           DependencyRegistrations::<T>::insert(source, owner.actor.actor_id, handle);
           Ok(DependencyRegistrationMutation::Installed)
         }
@@ -2909,9 +3004,15 @@ pub mod pallet {
       if current.actor.actor_id != replacement.actor.actor_id {
         return Err(DependencyRegistrationError::PendingOwnerMismatch);
       }
+      let position =
+        Self::dependency_registration_position(source, current.actor.actor_id, current)?;
       if current == replacement {
         return Ok(DependencyRegistrationMutation::Unchanged);
       }
+      let mut page = DependencyRegistrationPages::<T>::get(source, position.page)
+        .ok_or(DependencyRegistrationError::CorruptTopology)?;
+      page.entries[position.slot as usize] = Some(replacement);
+      DependencyRegistrationPages::<T>::insert(source, position.page, page);
       DependencyRegistrations::<T>::insert(source, replacement.actor.actor_id, replacement);
       Ok(DependencyRegistrationMutation::Replaced)
     }
@@ -2933,6 +3034,28 @@ pub mod pallet {
       if stored != expected {
         return Err(DependencyRegistrationError::CurrentRegistrationMismatch);
       }
+      let position =
+        Self::dependency_registration_position(source, expected.actor.actor_id, expected)?;
+      let mut page = DependencyRegistrationPages::<T>::get(source, position.page)
+        .ok_or(DependencyRegistrationError::CorruptTopology)?;
+      page.entries[position.slot as usize] = None;
+      let mut header = DependencyRegistrationHeaders::<T>::get(source);
+      header.count = header
+        .count
+        .checked_sub(1)
+        .ok_or(DependencyRegistrationError::CorruptTopology)?;
+      if header.free_count >= T::MaxActiveActors::get() {
+        return Err(DependencyRegistrationError::CorruptTopology);
+      }
+      let next_free_count = header
+        .free_count
+        .checked_add(1)
+        .ok_or(DependencyRegistrationError::CorruptTopology)?;
+      DependencyRegistrationFreePositions::<T>::insert(source, header.free_count, position);
+      header.free_count = next_free_count;
+      DependencyRegistrationPages::<T>::insert(source, position.page, page);
+      DependencyRegistrationHeaders::<T>::insert(source, header);
+      DependencyRegistrationPositions::<T>::remove(source, expected.actor.actor_id);
       DependencyRegistrations::<T>::remove(source, expected.actor.actor_id);
       Ok(DependencyRegistrationMutation::Removed)
     }
@@ -5002,6 +5125,50 @@ pub mod pallet {
   #[pallet::getter(fn pending_check_owners)]
   pub type PendingCheckOwners<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, PendingCheckOwner, OptionQuery>;
+
+  /// Inert source-owned fixed-width registration topology.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_registration_headers)]
+  pub type DependencyRegistrationHeaders<T: Config> =
+    StorageMap<_, Blake2_128Concat, DependencySourceId, DependencyRegistrationHeader, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_registration_pages)]
+  pub type DependencyRegistrationPages<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    DependencySourceId,
+    Blake2_128Concat,
+    u64,
+    DependencyRegistrationPage,
+    OptionQuery,
+  >;
+
+  /// Inert bounded reusable holes; active scans defer reuse so their cursor cannot be retargeted.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_registration_free_positions)]
+  pub type DependencyRegistrationFreePositions<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    DependencySourceId,
+    Blake2_128Concat,
+    u32,
+    DependencyRegistrationPosition,
+    OptionQuery,
+  >;
+
+  /// Inert exact source/Actor positions into canonical registration pages.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_registration_positions)]
+  pub type DependencyRegistrationPositions<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    DependencySourceId,
+    Blake2_128Concat,
+    ActorId,
+    DependencyRegistrationPosition,
+    OptionQuery,
+  >;
 
   /// Inert exact source-to-Actor reverse registrations for future dependency-keyed parking.
   #[pallet::storage]

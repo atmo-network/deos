@@ -108,6 +108,7 @@ pub struct DependencyRevisionState {
   pub revision: DependencyRevision,
   pub scan_target: Option<DependencyRevision>,
   pub scan_cursor: u64,
+  pub scan_end: u64,
   pub exhausted: bool,
 }
 
@@ -130,6 +131,43 @@ pub struct DependencyRegistrationHandle {
   pub acknowledged_revision: DependencyRevision,
 }
 
+/// Source-owned append position for one exact registration handle.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationPosition {
+  pub page: u64,
+  pub slot: u8,
+}
+
+/// Bounded topology owner for one source's retained registration pages.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencyRegistrationHeader {
+  pub next_index: u64,
+  pub count: u32,
+  pub free_count: u32,
+}
+
+/// One fixed-width source-owned registration page. Removed entries remain stable holes.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DependencyRegistrationPage {
+  pub entries: BoundedVec<Option<DependencyRegistrationHandle>, ConstU32<32>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyRegistrationMutation {
   Installed,
@@ -148,6 +186,10 @@ pub enum DependencyRegistrationError {
   RegistrationAlreadyExists,
   RegistrationMissing,
   CurrentRegistrationMismatch,
+  PositionMissing,
+  PositionMismatch,
+  CorruptTopology,
+  CapacityExceeded,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,8 +207,8 @@ pub enum DependencyRevisionError {
 /// generation/plan-bound Pending destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyScanAdvanceProof {
-  Stale(DependencyRegistrationHandle),
-  Pending(DependencyRegistrationHandle),
+  Stale,
+  Pending,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,6 +231,8 @@ pub enum DependencyScanError {
   RegistrationStillCurrent,
   RegistrationAuthorityMissing,
   PendingAuthorityMismatch,
+  ScanComplete,
+  CorruptTopology,
 }
 
 /// Bucket-level ownership for retained fixed-width deadline pages.
