@@ -2147,6 +2147,70 @@ fn pipeline_fee_route_failure_aborts_before_task_execution() {
 }
 
 #[test]
+fn running_action_fee_failure_rolls_back_effect_and_preserves_retryable_frame() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let contract_steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(10),
+      }),
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(20),
+      }),
+    ])
+    .expect("two Steps fit");
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      contract_steps,
+    );
+    fund_native(actor_id, 1_000_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+
+    let actor = sovereign_account(actor_id);
+    let state_before = Actors::load_current_step_service_state(actor_id)
+      .expect("Running successor remains canonical");
+    let actor_balance_before = native_balance(&actor);
+    let charlie_before = native_balance(&CHARLIE);
+    let sink_before = native_balance(&TestFeeSink::get());
+    frame_system::Pallet::<Test>::set_block_number(2);
+    System::reset_events();
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    clear_fee_collections();
+    set_fail_fee_sink_transfer(true);
+
+    Actors::execute_cycle(Weight::MAX);
+
+    set_fail_fee_sink_transfer(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "the consumed source, effect, outcome, Run, and placement must roll back together"
+    );
+    assert_eq!(native_balance(&actor), actor_balance_before);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    assert_eq!(System::events(), Vec::new());
+    assert_eq!(
+      Actors::load_current_step_service_state(actor_id).map(|state| state.encode()),
+      Some(state_before.encode()),
+      "the same canonical Running frame must remain retryable"
+    );
+  });
+}
+
+#[test]
 fn typed_ingress_absent_destination_is_balance_only() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
