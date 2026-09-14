@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorRef,
-  CloseReason, ParkEvidence, ParkNegativeReason, PipelineMachineFeeStrategy, ProcessDisableCause,
-  ProcessDisablement, ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ServiceHeader,
-  ServiceNode, ServiceResidenceKind, SuspendedProcessBasis,
+  CloseReason, LegacyProcessPlacement, ParkEvidence, ParkNegativeReason,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ServiceHeader, ServiceNode,
+  ServiceResidenceKind, SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -27,6 +28,93 @@ fn process_skeleton_uses_generation_bound_references() {
       actor_id: 7,
       generation: 12
     }
+  );
+}
+
+#[test]
+fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing() {
+  let disabled = ProcessDisablement {
+    cause: ProcessDisableCause::OwnerPaused,
+    revival_authority: ProcessRevivalAuthority::Owner,
+    basis: SuspendedProcessBasis::Running { eligible_at: 9u32 },
+  };
+  let parked = ParkEvidence {
+    plan_identity: [3; 32],
+    reason: ParkNegativeReason::PredicateFalse,
+    review_at: Some(12u32),
+  };
+  let cases = [
+    (
+      LegacyProcessPlacement::Ready(ServiceResidenceKind::Live),
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Live)),
+      },
+    ),
+    (
+      LegacyProcessPlacement::Ready(ServiceResidenceKind::Pending),
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+      },
+    ),
+    (
+      LegacyProcessPlacement::Waiting {
+        key: WakeupKey::Block(9),
+        page: 2,
+        slot: 3,
+      },
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Deadline {
+          key: WakeupKey::Block(9),
+          page: 2,
+          slot: 3,
+        }),
+      },
+    ),
+    (
+      LegacyProcessPlacement::Waiting {
+        key: WakeupKey::Tick(10),
+        page: 4,
+        slot: 5,
+      },
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Deadline {
+          key: WakeupKey::Tick(10),
+          page: 4,
+          slot: 5,
+        }),
+      },
+    ),
+    (
+      LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Parked(parked))),
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Parked(parked)),
+      },
+    ),
+    (
+      LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Disabled(disabled))),
+      ActorProcess {
+        generation: 11,
+        status: ProcessStatus::Disabled(disabled),
+        residence: None,
+      },
+    ),
+  ];
+  for (placement, expected) in cases {
+    assert_eq!(compile_legacy_process(11, placement), Ok(expected));
+  }
+  assert_eq!(
+    compile_legacy_process::<u32>(11, LegacyProcessPlacement::Unsignaled(None)),
+    Err(ProcessCompileError::AmbiguousUnsignaled)
   );
 }
 

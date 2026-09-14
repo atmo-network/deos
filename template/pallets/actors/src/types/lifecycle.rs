@@ -125,6 +125,68 @@ pub struct ActorProcess<BlockNumber> {
   pub residence: Option<ProcessResidence<BlockNumber>>,
 }
 
+/// Legacy placement input for the storage-free process cutover compiler. Unsignaled intentionally
+/// retains an explicit evidence hole instead of guessing Park or lifecycle disablement.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum LegacyProcessPlacement<BlockNumber> {
+  Ready(ServiceResidenceKind),
+  Waiting {
+    key: WakeupKey<BlockNumber>,
+    page: u64,
+    slot: u8,
+  },
+  Unsignaled(Option<UnsignaledProcessEvidence<BlockNumber>>),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum UnsignaledProcessEvidence<BlockNumber> {
+  Parked(ParkEvidence<BlockNumber>),
+  Disabled(ProcessDisablement<BlockNumber>),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessCompileError {
+  AmbiguousUnsignaled,
+}
+
+/// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
+pub fn compile_legacy_process<BlockNumber>(
+  generation: ActorGeneration,
+  placement: LegacyProcessPlacement<BlockNumber>,
+) -> Result<ActorProcess<BlockNumber>, ProcessCompileError> {
+  let (status, residence) = match placement {
+    LegacyProcessPlacement::Ready(kind) => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Service(kind)),
+    ),
+    LegacyProcessPlacement::Waiting { key, page, slot } => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Deadline { key, page, slot }),
+    ),
+    LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Parked(evidence))) => (
+      ProcessStatus::Serving,
+      Some(ProcessResidence::Parked(evidence)),
+    ),
+    LegacyProcessPlacement::Unsignaled(Some(UnsignaledProcessEvidence::Disabled(disablement))) => {
+      (ProcessStatus::Disabled(disablement), None)
+    }
+    LegacyProcessPlacement::Unsignaled(None) => {
+      return Err(ProcessCompileError::AmbiguousUnsignaled);
+    }
+  };
+  Ok(ActorProcess {
+    generation,
+    status,
+    residence,
+  })
+}
+
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
 pub const PIPELINE_SERVICE_IDENTITY_HASH_DOMAIN: &[u8] = b"DEOS_PIPELINE_SERVICE_IDENTITY";
 
