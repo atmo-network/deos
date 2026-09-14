@@ -1,7 +1,9 @@
 use super::*;
 use crate::{
-  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorRef,
-  PipelineMachineFeeStrategy, ServiceHeader, ServiceNode, ServiceResidenceKind,
+  ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorRef,
+  CloseReason, ParkEvidence, ParkNegativeReason, PipelineMachineFeeStrategy, ProcessDisableCause,
+  ProcessDisablement, ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ServiceHeader,
+  ServiceNode, ServiceResidenceKind, SuspendedProcessBasis,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -26,6 +28,58 @@ fn process_skeleton_uses_generation_bound_references() {
       generation: 12
     }
   );
+}
+
+#[test]
+fn process_status_separates_park_from_revocation_and_retirement() {
+  let parked: ActorProcess<u32> = ActorProcess {
+    generation: 11,
+    status: ProcessStatus::Serving,
+    residence: Some(ProcessResidence::Parked(ParkEvidence {
+      plan_identity: [3; 32],
+      reason: ParkNegativeReason::PredicateFalse,
+      review_at: Some(9u32),
+    })),
+  };
+  let disabled: ActorProcess<u32> = ActorProcess {
+    generation: 11,
+    status: ProcessStatus::Disabled(ProcessDisablement {
+      cause: ProcessDisableCause::OwnerPaused,
+      revival_authority: ProcessRevivalAuthority::Owner,
+      basis: SuspendedProcessBasis::Running { eligible_at: 9u32 },
+    }),
+    residence: None,
+  };
+  let retired: ActorProcess<u32> = ActorProcess {
+    generation: 11,
+    status: ProcessStatus::Retired(CloseReason::OwnerInitiated),
+    residence: None,
+  };
+
+  assert!(matches!(
+    parked,
+    ActorProcess {
+      status: ProcessStatus::Serving,
+      residence: Some(ProcessResidence::Parked(_)),
+      ..
+    }
+  ));
+  assert!(matches!(
+    disabled,
+    ActorProcess {
+      status: ProcessStatus::Disabled(_),
+      residence: None,
+      ..
+    }
+  ));
+  assert!(matches!(
+    retired,
+    ActorProcess {
+      status: ProcessStatus::Retired(_),
+      residence: None,
+      ..
+    }
+  ));
 }
 
 #[derive(Default)]

@@ -27,7 +27,29 @@ pub enum ServiceResidenceKind {
   Pending,
 }
 
-/// Exact physical residence owned by one stable Actor-generation process.
+/// Why a current-state activation check may remain parked.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ParkNegativeReason {
+  PredicateFalse,
+  SourceUnavailable,
+  MonotonicBoundaryPassed,
+}
+
+/// Process-owned identity for a negative check. Dependency registrations and their revisions remain
+/// carrier-owned reverse handles; this header prevents a Park residence from being inferred from
+/// missing scheduler membership.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ParkEvidence<BlockNumber> {
+  pub plan_identity: [u8; 32],
+  pub reason: ParkNegativeReason,
+  pub review_at: Option<BlockNumber>,
+}
+
+/// Exact executable residence owned by one serving Actor-generation process.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -38,9 +60,59 @@ pub enum ProcessResidence<BlockNumber> {
     page: u64,
     slot: u8,
   },
-  Parked,
-  Disabled,
-  Reclaiming,
+  Parked(ParkEvidence<BlockNumber>),
+}
+
+/// Typed reversible reason. Park is deliberately absent because negative current-state evidence is
+/// a serving residence rather than lifecycle authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessDisableCause {
+  OwnerPaused,
+  OwnerDeactivated,
+  Protocol,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessRevivalAuthority {
+  Owner,
+  SystemOrigin,
+  Protocol,
+}
+
+/// Semantic basis retained while service authority is revoked. The canonical run record continues
+/// to own committed counters, retry history, and the exact Step cursor.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SuspendedProcessBasis<BlockNumber> {
+  Idle,
+  Running { eligible_at: BlockNumber },
+  Suspended { not_before: BlockNumber },
+  Dormant,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ProcessDisablement<BlockNumber> {
+  pub cause: ProcessDisableCause,
+  pub revival_authority: ProcessRevivalAuthority,
+  pub basis: SuspendedProcessBasis<BlockNumber>,
+}
+
+/// Sole lifecycle authority for a stable process. Only Serving may carry an executable residence;
+/// Retired is irreversible and leaves only future generation-bound cleanup authority.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProcessStatus<BlockNumber> {
+  Serving,
+  Disabled(ProcessDisablement<BlockNumber>),
+  Retired(CloseReason),
 }
 
 /// Minimal stable process owner introduced ahead of the atomic scheduler cutover.
@@ -49,7 +121,8 @@ pub enum ProcessResidence<BlockNumber> {
 )]
 pub struct ActorProcess<BlockNumber> {
   pub generation: ActorGeneration,
-  pub residence: ProcessResidence<BlockNumber>,
+  pub status: ProcessStatus<BlockNumber>,
+  pub residence: Option<ProcessResidence<BlockNumber>>,
 }
 
 pub const ACTOR_RUN_PAYLOAD_HASH_DOMAIN: &[u8] = b"DEOS_ACTOR_RUN_PAYLOAD";
