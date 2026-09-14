@@ -139,6 +139,9 @@ mod benches {
       FeedLifecycle::Active,
     );
 
+    T::BenchmarkHelper::prepare_feed_state_hook(feed)
+      .expect("existing feed-state hook topology must be prepared");
+
     #[extrinsic_call]
     pause_feed(RawOrigin::Root, feed);
 
@@ -158,6 +161,9 @@ mod benches {
       Aggregation::LastValue,
       FeedLifecycle::Paused,
     );
+
+    T::BenchmarkHelper::prepare_feed_state_hook(feed)
+      .expect("existing feed-state hook topology must be prepared");
 
     #[extrinsic_call]
     resume_feed(RawOrigin::Root, feed);
@@ -179,6 +185,9 @@ mod benches {
       FeedLifecycle::Active,
     );
 
+    T::BenchmarkHelper::prepare_feed_state_hook(feed)
+      .expect("existing feed-state hook topology must be prepared");
+
     #[extrinsic_call]
     deactivate_feed(RawOrigin::Root, feed);
 
@@ -198,6 +207,9 @@ mod benches {
       Aggregation::LastValue,
       FeedLifecycle::Active,
     );
+
+    T::BenchmarkHelper::prepare_feed_state_hook(feed)
+      .expect("existing feed-state hook topology must be prepared");
 
     #[extrinsic_call]
     publish(RawOrigin::Signed(caller), feed, 1);
@@ -468,6 +480,9 @@ mod benches {
         revision: 1,
       },
     );
+
+    T::BenchmarkHelper::prepare_feed_state_hook(feed)
+      .expect("existing feed-state hook topology must be prepared");
 
     #[extrinsic_call]
     publish(RawOrigin::Signed(caller), feed, 1_000_000_000);

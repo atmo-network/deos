@@ -2701,10 +2701,6 @@ pub mod pallet {
     }
 
     /// Resolves one typed Oracle feed to a collision-free retained scalar source identity.
-    #[allow(
-      dead_code,
-      reason = "dependency sources remain inert until Oracle owner cutover"
-    )]
     pub(crate) fn resolve_observation_dependency_source(
       feed: T::ObservationFeedId,
     ) -> Result<DependencySourceMutation, DependencySourceError> {
@@ -2737,10 +2733,6 @@ pub mod pallet {
     }
 
     /// Resolves one typed Oracle feed and publishes its event-complete dependency revision.
-    #[allow(
-      dead_code,
-      reason = "dependency publication adapter remains inert until Oracle owner cutover"
-    )]
     pub(crate) fn publish_observation_dependency_event(
       feed: T::ObservationFeedId,
     ) -> DispatchResult {

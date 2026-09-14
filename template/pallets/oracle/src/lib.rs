@@ -140,6 +140,7 @@ pub enum ChangedHookBenchmarkTopology {
 
 #[cfg(feature = "runtime-benchmarks")]
 pub trait PublicationBenchmarkHelper<FeedId> {
+  fn prepare_feed_state_hook(feed: FeedId) -> DispatchResult;
   fn prepare_changed_hook(feed: FeedId, topology: ChangedHookBenchmarkTopology) -> DispatchResult;
   fn prepare_secondary_capacity_edge(
     feed: FeedId,
@@ -148,6 +149,10 @@ pub trait PublicationBenchmarkHelper<FeedId> {
 
 #[cfg(feature = "runtime-benchmarks")]
 impl<FeedId> PublicationBenchmarkHelper<FeedId> for () {
+  fn prepare_feed_state_hook(_: FeedId) -> DispatchResult {
+    Ok(())
+  }
+
   fn prepare_changed_hook(_: FeedId, _: ChangedHookBenchmarkTopology) -> DispatchResult {
     Ok(())
   }

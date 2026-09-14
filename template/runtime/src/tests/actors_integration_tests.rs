@@ -9300,7 +9300,7 @@ fn event_complete_dependency_owner_inventory_covers_every_oracle_state_writer() 
 }
 
 #[test]
-fn inert_oracle_dependency_adapter_covers_every_state_cause_without_subscriber_traversal() {
+fn oracle_dependency_adapter_covers_every_state_cause_without_subscriber_traversal() {
   use crate::configs::oracle_config::{ActorFeedStateChangeIngress, deos_router_pool_feed};
   use pallet_oracle::{FeedStateChange, OnFeedStateChanged};
 

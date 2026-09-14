@@ -196,10 +196,19 @@ pub struct OraclePublicationBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicationBenchmarkHelper {
+  fn prepare_feed_state_hook(feed: OracleFeedId) -> DispatchResult {
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome =
+        <crate::Actors as DependencyEventIngress<OracleFeedId>>::note_dependency_event(feed);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(outcome)
+    })
+  }
+
   fn prepare_changed_hook(
     feed: OracleFeedId,
     topology: pallet_oracle::ChangedHookBenchmarkTopology,
   ) -> DispatchResult {
+    Self::prepare_feed_state_hook(feed)?;
     if matches!(
       topology,
       pallet_oracle::ChangedHookBenchmarkTopology::PrimaryFirst
@@ -244,6 +253,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
   fn prepare_secondary_capacity_edge(
     feed: OracleFeedId,
   ) -> Result<(pallet_oracle::Revision, pallet_oracle::OracleValue, bool), DispatchError> {
+    Self::prepare_feed_state_hook(feed)?;
     pallet_deos_actors::CrossingFeedMembershipCount::<Runtime>::insert(feed, 1);
     let mut current = 1_000_000_000u128;
     <crate::Actors as ObservationTransitionIngress<OracleFeedId>>::note_observation_transition(
@@ -275,12 +285,7 @@ impl pallet_oracle::PublicationBenchmarkHelper<OracleFeedId> for OraclePublicati
   }
 }
 
-/// Inert O(1) bridge from the complete Oracle state hook to Actors dependency publication.
-/// Production binding remains `()` until all six Oracle paths carry generated composed weights.
-#[allow(
-  dead_code,
-  reason = "adapter is retained for transactional evidence before weighted production cutover"
-)]
+/// O(1) bridge from the complete Oracle state hook to Actors dependency publication.
 pub struct ActorFeedStateChangeIngress;
 
 impl pallet_oracle::OnFeedStateChanged<OracleFeedId> for ActorFeedStateChangeIngress {
@@ -335,7 +340,7 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = OracleProvenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
-  type OnFeedStateChanged = ();
+  type OnFeedStateChanged = ActorFeedStateChangeIngress;
   type OnObservationChanged = ActorObservationChangeIngress;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = OraclePublicationBenchmarkHelper;
