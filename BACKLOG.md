@@ -364,8 +364,6 @@ If the finite campaign fails the materiality criterion, record its result and th
 
 ## N2 — Build the Current-State Execution Core
 
-- [ ] **N2.6 / Co-Access and Stable State Geometry.** On the vertical slice, map reads/writes and mutation frequency for resident Steps, retries, idle checks, admission, parking, owner update and sweep. Choose hot/cold partitions with stable Actor ownership; membership indexes hold bounded references, not copies of whole Contracts. Measure keys, value bytes, decoder work and update amplification. Keep live index cardinality bounded by supported occupancy, not the largest historical ActorId; recycled physical slots need generation protection. **Exit:** A concrete initial canonical layout and co-access explanation; necessary alternatives enter N6.2 before geometry freeze, not a broad layout sweep.
-
 ## N3 — Persistent Live Service, Indexed Parking and Bounded Wakeup
 
 - [ ] **N3.1 / Autonomous Discovery and Activation Checks.** Implement runtime-owned discovery using bounded notifications, current dependency/source state and timed fallback. Hints authorize checks, not effects. A parked invalidation creates one generation-bound pending check; verify current start applicability before live admission. Cheap check and admission may share a transaction when fully priced, but logical roles remain distinct. Use direct registered account lookup where appropriate and bounded shared-feed traversal; neither whole-population per-block scanning nor unbounded per-source fanout is an acceptable implicit fallback. **Exit:** Work is discovered without external executors; all negative and pending work is accounted, overload assumptions are explicit and promised checks are not dropped.
