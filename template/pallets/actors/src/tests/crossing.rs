@@ -196,6 +196,108 @@ fn crossing_idle_loader_uses_primary_pending_authority() {
   });
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn crossing_activation_requires_its_certified_threshold_selector() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let feed = 7;
+    set_observation(
+      feed,
+      crate::ScalarObservationState::Fresh {
+        value: 50,
+        observed_at: 1,
+      },
+    );
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(feed, CrossingDirection::Rising, 100, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_contract_steps(),
+    );
+    let differently_selected = system_active_contract(
+      Schedule {
+        trigger: RuntimeTrigger::observation_crossing(feed, CrossingDirection::Rising, 101, 80),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_contract_steps(),
+    )
+    .expect("differently selected Contract is valid");
+    let sovereign = sovereign_account(actor_id);
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
+      let cell = stored.as_mut().expect("Unsignaled authority exists");
+      let old = &cell.admission;
+      let replacement = crate::ActorAdmissionCertificate::new(
+        old.semantic_contract_id,
+        old.body_commitment,
+        differently_selected
+          .trigger
+          .wake_qualification(&differently_selected.window),
+        old.runtime_actor_semantics_version,
+        old.production_weight_identity,
+        old.body_geometry_version,
+        old.configured_bounds_commitment,
+        old.maximum_lifecycle_weight,
+      );
+      cell.pipeline_service_identity =
+        crate::pipeline_service_identity(replacement.admission_identity);
+      cell.admission = replacement;
+    });
+    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      .expect("mutated authority exists")
+      .admission
+      .admission_identity;
+    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
+      stored
+        .as_mut()
+        .expect("Contract head exists")
+        .header
+        .admission_identity = replacement_identity;
+    });
+    crate::ActorActivationAuthorities::<Test>::mutate(actor_id, |stored| {
+      stored
+        .as_mut()
+        .expect("Crossing activation authority exists")
+        .admission_identity = replacement_identity;
+    });
+    let locator = CrossingMemberships::<Test>::get(actor_id).expect("Crossing membership exists");
+    CrossingMemberPages::<Test>::mutate(locator.key, locator.page, |stored| {
+      stored
+        .as_mut()
+        .expect("Crossing member page exists")
+        .entries[locator.offset as usize]
+        .admission_identity = replacement_identity;
+    });
+
+    assert!(Actors::load_crossing_idle_activation_state(actor_id, feed).is_none());
+    assert_ok!(Actors::note_observation_transition(
+      feed,
+      crate::ObservationTransition {
+        revision: 2,
+        previous: Some(50),
+        current: 150,
+      },
+    ));
+    let events_before = System::events();
+    assert_noop!(Actors::crossing_work_unit(), Error::<Test>::ActorInvariant);
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    assert_eq!(System::events(), events_before);
+    assert!(
+      !crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+        .expect("authority remains fail-closed")
+        .hot
+        .pending_signal
+    );
+  });
+}
+
 #[test]
 fn observation_crossing_fire_charges_before_readiness() {
   new_test_ext().execute_with(|| {

@@ -3243,6 +3243,24 @@ pub mod pallet {
       {
         return None;
       }
+      let head = ActorContractHeads::<T>::get(actor_id)?;
+      if !certificate.authorizes_wake(head.header.trigger.wake_qualification(&head.header.window))
+        || !matches!(
+          &head.header.trigger,
+          Trigger::ObservationCrossing { feed: contract_feed, .. } if *contract_feed == feed
+        )
+        || authority.cooldown_blocks != head.header.cooldown_blocks
+        || authority.window != head.header.window
+        || authority.auto_close_at_cycle_nonce != head.header.auto_close_at_cycle_nonce
+        || authority.semantic_contract_id != head.header.semantic_contract_id
+        || authority.body_commitment != head.header.body_commitment
+        || authority.admission_identity != head.header.admission_identity
+        || !hot
+          .trigger_runtime_state
+          .is_compatible_with(&head.header.trigger)
+      {
+        return None;
+      }
       Some(ObservationActivationState {
         actor_id,
         identity,
