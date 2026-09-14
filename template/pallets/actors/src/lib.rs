@@ -2700,6 +2700,42 @@ pub mod pallet {
       Ok(())
     }
 
+    /// Resolves one typed Oracle feed to a collision-free retained scalar source identity.
+    #[allow(
+      dead_code,
+      reason = "dependency sources remain inert until Oracle owner cutover"
+    )]
+    pub(crate) fn resolve_observation_dependency_source(
+      feed: T::ObservationFeedId,
+    ) -> Result<DependencySourceMutation, DependencySourceError> {
+      if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return Err(DependencySourceError::TransactionRequired);
+      }
+      if let Some(source) = ObservationDependencySources::<T>::get(feed) {
+        return match DependencySourceObservations::<T>::get(source) {
+          Some(reverse) if reverse == feed => Ok(DependencySourceMutation::Existing(source)),
+          Some(_) => Err(DependencySourceError::ReverseMismatch),
+          None => Err(DependencySourceError::ReverseMissing),
+        };
+      }
+      let mut allocator = DependencySourceAllocatorState::<T>::get();
+      if allocator.exhausted {
+        return Err(DependencySourceError::Exhausted);
+      }
+      let source = allocator.next;
+      if DependencySourceObservations::<T>::contains_key(source) {
+        return Err(DependencySourceError::SourceOccupied);
+      }
+      match source.checked_add(1) {
+        Some(next) => allocator.next = next,
+        None => allocator.exhausted = true,
+      }
+      ObservationDependencySources::<T>::insert(feed, source);
+      DependencySourceObservations::<T>::insert(source, feed);
+      DependencySourceAllocatorState::<T>::put(allocator);
+      Ok(DependencySourceMutation::Allocated(source))
+    }
+
     /// Advances one event-complete dependency source without wrapping its causal identity.
     #[allow(
       dead_code,
@@ -5537,6 +5573,24 @@ pub mod pallet {
   #[pallet::getter(fn service_nodes)]
   pub type ServiceNodes<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ServiceNode<BlockNumberFor<T>>, OptionQuery>;
+
+  /// Inert monotone scalar source allocator for exact typed Oracle-feed identities.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_source_allocator)]
+  pub type DependencySourceAllocatorState<T: Config> =
+    StorageValue<_, DependencySourceAllocator, ValueQuery>;
+
+  /// Inert typed Oracle-feed to scalar dependency-source identity mapping.
+  #[pallet::storage]
+  #[pallet::getter(fn observation_dependency_sources)]
+  pub type ObservationDependencySources<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, DependencySourceId, OptionQuery>;
+
+  /// Inert reverse mapping proving scalar source identity ownership without a scan.
+  #[pallet::storage]
+  #[pallet::getter(fn dependency_source_observations)]
+  pub type DependencySourceObservations<T: Config> =
+    StorageMap<_, Blake2_128Concat, DependencySourceId, T::ObservationFeedId, OptionQuery>;
 
   /// Inert checked revisions for future event-complete dependency sources.
   #[pallet::storage]

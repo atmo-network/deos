@@ -9,10 +9,12 @@ use crate::{
   DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
   DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
   DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
-  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
-  LegacyProcessTransition, ParkEvidence, ParkNegativeReason, PendingCheckOwner, PendingCheckOwners,
-  PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
+  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencySourceAllocator,
+  DependencySourceAllocatorState, DependencySourceError, DependencySourceMutation,
+  DependencySourceObservations, DependencyTimedReview, DependencyTimedReviewMutation,
+  DependencyTimedReviews, LegacyProcessPlacement, LegacyProcessTransition,
+  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
+  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
   PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
   ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
   ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
@@ -1071,6 +1073,89 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
     });
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
     assert!(!ServiceNodes::<Test>::contains_key(rolled_back.actor_id));
+  });
+}
+
+#[test]
+fn observation_dependency_sources_are_bijective_transactional_and_nonwrapping() {
+  new_test_ext().execute_with(|| {
+    assert_eq!(
+      Actors::resolve_observation_dependency_source(41),
+      Err(DependencySourceError::TransactionRequired)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(41),
+        Ok(DependencySourceMutation::Allocated(0))
+      );
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(41),
+        Ok(DependencySourceMutation::Existing(0))
+      );
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(42),
+        Ok(DependencySourceMutation::Allocated(1))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(ObservationDependencySources::<Test>::get(41), Some(0));
+    assert_eq!(DependencySourceObservations::<Test>::get(0), Some(41));
+
+    let rolled_back = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let outcome = Actors::resolve_observation_dependency_source(43);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(outcome)
+    });
+    assert_eq!(rolled_back, Ok(DependencySourceMutation::Allocated(2)));
+    assert_eq!(ObservationDependencySources::<Test>::get(43), None);
+    assert_eq!(DependencySourceAllocatorState::<Test>::get().next, 2);
+
+    DependencySourceObservations::<Test>::insert(2, 98);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(43),
+        Err(DependencySourceError::SourceOccupied)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    DependencySourceObservations::<Test>::remove(2);
+
+    DependencySourceObservations::<Test>::remove(0);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(41),
+        Err(DependencySourceError::ReverseMissing)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    DependencySourceObservations::<Test>::insert(0, 99);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(41),
+        Err(DependencySourceError::ReverseMismatch)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    DependencySourceAllocatorState::<Test>::put(DependencySourceAllocator {
+      next: u64::MAX,
+      exhausted: false,
+    });
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(44),
+        Ok(DependencySourceMutation::Allocated(u64::MAX))
+      );
+      assert!(DependencySourceAllocatorState::<Test>::get().exhausted);
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(44),
+        Ok(DependencySourceMutation::Existing(u64::MAX))
+      );
+      assert_eq!(
+        Actors::resolve_observation_dependency_source(45),
+        Err(DependencySourceError::Exhausted)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
   });
 }
 
@@ -5520,6 +5605,9 @@ fn actor_storage_schema_is_explicit() {
       ("ActorProcesses", true, true),
       ("ServiceHeader", false, false),
       ("ServiceNodes", true, true),
+      ("DependencySourceAllocatorState", false, false),
+      ("ObservationDependencySources", true, true),
+      ("DependencySourceObservations", true, true),
       ("DependencyRevisions", false, true),
       ("PendingCheckOwners", true, true),
       ("DependencyRegistrationHeaders", false, true),
@@ -5709,6 +5797,9 @@ fn actor_storage_schema_is_explicit() {
     ]
   );
   assert_map_storage_types::<u64, crate::ActorIdentityOf<Test>>(entry("ActorIdentities"));
+  assert_plain_storage_type::<DependencySourceAllocator>(entry("DependencySourceAllocatorState"));
+  assert_map_storage_types::<u32, u64>(entry("ObservationDependencySources"));
+  assert_map_storage_types::<u64, u32>(entry("DependencySourceObservations"));
   assert_plain_storage_type::<u32>(entry("ActorIdentityCount"));
   assert_plain_storage_type::<u32>(entry("ActiveActorCount"));
   assert_map_storage_types::<u64, SystemSovereignState>(entry("SystemSovereigns"));

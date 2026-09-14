@@ -90,6 +90,40 @@ pub type DependencySourceId = u64;
 pub type DependencyRevision = u64;
 pub type PlanRevision = u64;
 
+/// Monotone allocator for collision-free scalar dependency-source identities.
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct DependencySourceAllocator {
+  pub next: DependencySourceId,
+  pub exhausted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencySourceMutation {
+  Allocated(DependencySourceId),
+  Existing(DependencySourceId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencySourceError {
+  TransactionRequired,
+  Exhausted,
+  ReverseMissing,
+  ReverseMismatch,
+  SourceOccupied,
+}
+
 /// Checked monotone state owned by one event-complete dependency source.
 #[derive(
   Clone,
