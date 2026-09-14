@@ -17,6 +17,7 @@ fn geometry_certificate(
   crate::ActorAdmissionCertificate::new(
     contract.semantic_contract_id(),
     contract.body_commitment().expect("body commitment"),
+    contract.trigger.wake_qualification(&contract.window),
     1,
     [4u8; 32],
     1,
@@ -690,9 +691,13 @@ fn step_ticket_binds_run_cursor_fifo_eligibility_and_contract_commitment() {
 
 #[test]
 fn admission_identity_binds_every_runtime_owned_domain_field() {
+  let qualification = manual_schedule()
+    .trigger
+    .wake_qualification(&None::<crate::ScheduleWindow<MockBlockNumber>>);
   let certificate: crate::ActorAdmissionCertificateOf<Test> = crate::ActorAdmissionCertificate::new(
     [1u8; 32],
     [2u8; 32],
+    qualification,
     3,
     [4u8; 32],
     5,
@@ -700,6 +705,16 @@ fn admission_identity_binds_every_runtime_owned_domain_field() {
     Weight::from_parts(77, 88),
   );
   assert!(certificate.has_valid_identity());
+  assert!(certificate.authorizes_wake(qualification));
+  let mut wrong_family = qualification;
+  wrong_family.family = crate::TriggerFamily::AddressEvent;
+  assert!(!certificate.authorizes_wake(wrong_family));
+  let mut wrong_selector = qualification;
+  wrong_selector.selector_commitment[0] ^= 1;
+  assert!(!certificate.authorizes_wake(wrong_selector));
+  let mut stale = certificate.clone();
+  stale.wake_qualification = wrong_selector;
+  assert!(!stale.has_valid_identity());
   let mut stale = certificate.clone();
   stale.body_geometry_version = 6;
   assert!(!stale.has_valid_identity());
@@ -715,10 +730,14 @@ fn admission_identity_binds_every_runtime_owned_domain_field() {
 fn admission_certificate_encoding_is_independent_of_resource_ceiling() {
   type SmallResources = BoundedVec<crate::ActorStepResourceEnvelope, ConstU32<1>>;
   type LargeResources = BoundedVec<crate::ActorStepResourceEnvelope, ConstU32<32>>;
+  let qualification = manual_schedule()
+    .trigger
+    .wake_qualification(&None::<crate::ScheduleWindow<MockBlockNumber>>);
   let small: crate::ActorAdmissionCertificate<SmallResources> =
     crate::ActorAdmissionCertificate::new(
       [1u8; 32],
       [2u8; 32],
+      qualification,
       3,
       [4u8; 32],
       5,
@@ -729,6 +748,7 @@ fn admission_certificate_encoding_is_independent_of_resource_ceiling() {
     crate::ActorAdmissionCertificate::new(
       [1u8; 32],
       [2u8; 32],
+      qualification,
       3,
       [4u8; 32],
       5,
@@ -1155,6 +1175,7 @@ fn contract_geometry_decomposition_is_gap_free_and_head_only_for_one_step() {
       let certificate = crate::ActorAdmissionCertificate::new(
         contract.semantic_contract_id(),
         contract.body_commitment().expect("body commitment"),
+        contract.trigger.wake_qualification(&contract.window),
         1,
         [4u8; 32],
         1,

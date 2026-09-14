@@ -1837,6 +1837,7 @@ pub mod pallet {
       Some(ActorAdmissionCertificate::new(
         contract.semantic_contract_id(),
         contract.body_commitment()?,
+        contract.trigger.wake_qualification(&contract.window),
         authority.runtime_actor_semantics_version,
         authority.production_weight_identity,
         authority.body_geometry_version,
@@ -2256,6 +2257,26 @@ pub mod pallet {
           && admission.configured_bounds_commitment == authority.configured_bounds_commitment
           && admission.maximum_lifecycle_weight == authority.maximum_lifecycle_weight
       })
+    }
+
+    #[cfg(any(test, feature = "runtime-benchmarks"))]
+    #[allow(
+      dead_code,
+      reason = "qualified host wake projection remains candidate-only until the atomic control cutover"
+    )]
+    pub(crate) fn project_control_cell_for_wake(
+      cell: &ActorControlCellOf<T>,
+      location: ActorControlLocation<BlockNumberFor<T>>,
+      qualification: ActorWakeQualification,
+    ) -> Option<(
+      ActorIdentityOf<T>,
+      ActorHotStateOf<T>,
+      ActorAdmissionCertificateOf<T>,
+    )> {
+      cell
+        .admission
+        .authorizes_wake(qualification)
+        .then(|| Self::project_control_cell(cell, location))?
     }
 
     pub(crate) fn project_control_cell(

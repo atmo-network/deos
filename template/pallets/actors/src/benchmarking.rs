@@ -94,6 +94,11 @@ mod benches {
       admission: ActorAdmissionCertificate::<ActorAdmissionResourcesOf<T>>::new(
         [1u8; 32],
         [2u8; 32],
+        ActorWakeQualification {
+          family: TriggerFamily::Manual,
+          selector_commitment: [5u8; 32],
+          schedule_commitment: [6u8; 32],
+        },
         1,
         [3u8; 32],
         1,
@@ -2521,6 +2526,7 @@ mod benches {
       contract
         .body_commitment()
         .expect("bounded benchmark body commitment"),
+      contract.trigger.wake_qualification(&contract.window),
       1,
       [2u8; 32],
       1,

@@ -963,6 +963,24 @@ impl<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId>
     }
   }
 
+  pub fn wake_qualification<BlockNumber: Encode>(
+    &self,
+    window: &Option<ScheduleWindow<BlockNumber>>,
+  ) -> ActorWakeQualification
+  where
+    AccountId: Encode,
+    AssetId: Encode,
+    ObservationFeedId: Encode,
+  {
+    ActorWakeQualification {
+      family: self.family(),
+      selector_commitment: (ACTOR_WAKE_SELECTOR_HASH_DOMAIN, self)
+        .using_encoded(frame::hashing::blake2_256),
+      schedule_commitment: (ACTOR_WAKE_SCHEDULE_HASH_DOMAIN, window)
+        .using_encoded(frame::hashing::blake2_256),
+    }
+  }
+
   pub fn manual_source_enabled(&self) -> bool {
     matches!(self, Self::Manual)
   }
@@ -1340,6 +1358,8 @@ pub enum OpeningSurface<AssetId> {
 pub const ACTOR_CONTRACT_HASH_DOMAIN: [u8; 19] = *b"DEOS_ACTOR_CONTRACT";
 pub const ACTOR_BODY_HASH_DOMAIN: [u8; 15] = *b"DEOS_ACTOR_BODY";
 pub const ACTOR_ADMISSION_HASH_DOMAIN: [u8; 20] = *b"DEOS_ACTOR_ADMISSION";
+pub const ACTOR_WAKE_SELECTOR_HASH_DOMAIN: [u8; 24] = *b"DEOS_ACTOR_WAKE_SELECTOR";
+pub const ACTOR_WAKE_SCHEDULE_HASH_DOMAIN: [u8; 24] = *b"DEOS_ACTOR_WAKE_SCHEDULE";
 pub const MAX_STEPS_PER_TAIL_CHUNK: u32 = 4;
 
 #[derive(
@@ -1451,12 +1471,22 @@ pub struct LoadedActorStep<Step> {
 }
 
 #[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorWakeQualification {
+  pub family: TriggerFamily,
+  pub selector_commitment: [u8; 32],
+  pub schedule_commitment: [u8; 32],
+}
+
+#[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 #[scale_info(skip_type_params(Resources))]
 pub struct ActorAdmissionCertificate<Resources> {
   pub semantic_contract_id: [u8; 32],
   pub body_commitment: [u8; 32],
+  pub wake_qualification: ActorWakeQualification,
   pub runtime_actor_semantics_version: u32,
   pub production_weight_identity: [u8; 32],
   pub body_geometry_version: u32,
@@ -1467,9 +1497,11 @@ pub struct ActorAdmissionCertificate<Resources> {
 }
 
 impl<Resources> ActorAdmissionCertificate<Resources> {
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     semantic_contract_id: [u8; 32],
     body_commitment: [u8; 32],
+    wake_qualification: ActorWakeQualification,
     runtime_actor_semantics_version: u32,
     production_weight_identity: [u8; 32],
     body_geometry_version: u32,
@@ -1479,6 +1511,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     let admission_identity = Self::derive_admission_identity(
       &semantic_contract_id,
       &body_commitment,
+      &wake_qualification,
       runtime_actor_semantics_version,
       &production_weight_identity,
       body_geometry_version,
@@ -1488,6 +1521,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     Self {
       semantic_contract_id,
       body_commitment,
+      wake_qualification,
       runtime_actor_semantics_version,
       production_weight_identity,
       body_geometry_version,
@@ -1498,9 +1532,11 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
     }
   }
 
+  #[allow(clippy::too_many_arguments)]
   pub fn derive_admission_identity(
     semantic_contract_id: &[u8; 32],
     body_commitment: &[u8; 32],
+    wake_qualification: &ActorWakeQualification,
     runtime_actor_semantics_version: u32,
     production_weight_identity: &[u8; 32],
     body_geometry_version: u32,
@@ -1511,6 +1547,7 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
       ACTOR_ADMISSION_HASH_DOMAIN,
       semantic_contract_id,
       body_commitment,
+      wake_qualification,
       runtime_actor_semantics_version,
       production_weight_identity,
       body_geometry_version,
@@ -1525,12 +1562,17 @@ impl<Resources> ActorAdmissionCertificate<Resources> {
       == Self::derive_admission_identity(
         &self.semantic_contract_id,
         &self.body_commitment,
+        &self.wake_qualification,
         self.runtime_actor_semantics_version,
         &self.production_weight_identity,
         self.body_geometry_version,
         &self.configured_bounds_commitment,
         self.maximum_lifecycle_weight,
       )
+  }
+
+  pub fn authorizes_wake(&self, qualification: ActorWakeQualification) -> bool {
+    self.has_valid_identity() && self.wake_qualification == qualification
   }
 }
 

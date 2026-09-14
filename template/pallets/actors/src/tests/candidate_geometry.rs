@@ -190,6 +190,11 @@ fn frame_cell(actor_id: ActorId, eligible_at: MockBlockNumber) -> C1Cell {
     admission: crate::ActorAdmissionCertificate::<crate::ActorAdmissionResourcesOf<Test>>::new(
       [1u8; 32],
       [2u8; 32],
+      crate::ActorWakeQualification {
+        family: crate::TriggerFamily::Manual,
+        selector_commitment: [5u8; 32],
+        schedule_commitment: [6u8; 32],
+      },
       1,
       [3u8; 32],
       1,
@@ -4555,9 +4560,35 @@ fn control_waiting_round_trip_preserves_primary_and_coexisting_wakeup_authority(
 fn control_temporal_transition_preserves_n_plus_one_cutoff_and_pointer_cleanup() {
   new_test_ext().execute_with(|| {
     let actor_id = frame_install_temporal_system_unsignaled(1)[0];
+    let (unsignaled_location, unsignaled) =
+      Actors::actor_control_cell(actor_id).expect("temporal Unsignaled cell exists");
+    let qualification = unsignaled.admission.wake_qualification;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, qualification,)
+        .is_some()
+    );
+    let mut wrong_family = qualification;
+    wrong_family.family = crate::TriggerFamily::Manual;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, wrong_family,)
+        .is_none()
+    );
+    let mut wrong_selector = qualification;
+    wrong_selector.selector_commitment[0] ^= 1;
+    assert!(
+      Actors::project_control_cell_for_wake(&unsignaled, unsignaled_location, wrong_selector,)
+        .is_none()
+    );
 
     let trigger_location = Actors::control_stage_unsignaled_temporal(actor_id, 10)
       .expect("Unsignaled temporal cell stages atomically");
+    let (_, waiting) = Actors::actor_control_cell(actor_id).expect("temporal Waiting cell exists");
+    assert!(
+      Actors::project_control_cell_for_wake(&waiting, trigger_location, wrong_family).is_none()
+    );
+    assert!(
+      Actors::project_control_cell_for_wake(&waiting, trigger_location, wrong_selector).is_none()
+    );
     assert_eq!(
       trigger_location,
       C1Location::Waiting {
