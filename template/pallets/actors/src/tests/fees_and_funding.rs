@@ -2931,6 +2931,56 @@ fn percentage_of_current_reloads_available_at_each_cycle() {
 }
 
 #[test]
+fn percentage_of_current_reloads_after_pipeline_fee_mutation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let task = Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Percent(Perbill::from_percent(50)),
+    };
+    let contract_steps = contract_steps_with_step(make_step(task.clone()));
+    let pipeline_fee = pipeline_opening_fee(&contract_steps);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      contract_steps,
+    );
+    let actor = sovereign_account(actor_id);
+    fund_native_raw(&actor, 1_000_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let actor_before_opening = native_balance(&actor);
+    let bob_before = native_balance(&BOB);
+    let action_fee =
+      <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(
+        &Actors::weight_upper_bound(&task),
+      );
+    let expected_transfer = actor_before_opening
+      .saturating_sub(pipeline_fee)
+      .saturating_sub(action_fee)
+      .saturating_sub(TestMinUserBalance::get())
+      / 2;
+
+    run_idle_until_cycle_nonce(actor_id, 1);
+
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(expected_transfer));
+    assert_eq!(
+      native_balance(&actor),
+      actor_before_opening
+        .saturating_sub(pipeline_fee)
+        .saturating_sub(action_fee)
+        .saturating_sub(expected_transfer),
+      "Percent must resolve from the post-Pipeline-fee canonical balance while reserving the action fee and User floor"
+    );
+  });
+}
+
+#[test]
 fn percentage_of_current_reloads_after_prior_step_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
