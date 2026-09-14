@@ -119,6 +119,57 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
 }
 
 #[test]
+fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_cells() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let (unsignaled_location, unsignaled_cell) =
+      Actors::actor_control_cell(actor_id).expect("Manual Actor starts Unsignaled");
+    assert_eq!(
+      Actors::compile_legacy_control_process(7, unsignaled_location, &unsignaled_cell, None,),
+      Err(ProcessCompileError::AmbiguousUnsignaled)
+    );
+    let park = ParkEvidence {
+      plan_identity: [4; 32],
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(9),
+    };
+    assert_eq!(
+      Actors::compile_legacy_control_process(
+        7,
+        unsignaled_location,
+        &unsignaled_cell,
+        Some(UnsignaledProcessEvidence::Parked(park)),
+      ),
+      Ok(ActorProcess {
+        generation: 7,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Parked(park)),
+      })
+    );
+
+    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
+    let (ready_location, ready_cell) =
+      Actors::actor_control_cell(actor_id).expect("latched Manual Actor is Ready");
+    assert_eq!(
+      Actors::compile_legacy_control_process(7, ready_location, &ready_cell, None),
+      Ok(ActorProcess {
+        generation: 7,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+      })
+    );
+
+    let mut malformed = ready_cell;
+    malformed.eligible_at = None;
+    assert_eq!(
+      Actors::compile_legacy_control_process(7, ready_location, &malformed, None),
+      Err(ProcessCompileError::MalformedControlCell)
+    );
+  });
+}
+
+#[test]
 fn process_status_separates_park_from_revocation_and_retirement() {
   let parked: ActorProcess<u32> = ActorProcess {
     generation: 11,

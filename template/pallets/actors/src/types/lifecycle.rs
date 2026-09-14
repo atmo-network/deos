@@ -153,6 +153,7 @@ pub enum UnsignaledProcessEvidence<BlockNumber> {
 )]
 pub enum ProcessCompileError {
   AmbiguousUnsignaled,
+  MalformedControlCell,
 }
 
 /// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.

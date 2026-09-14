@@ -2393,6 +2393,38 @@ pub mod pallet {
       ))
     }
 
+    /// Compiles one coherent legacy control owner without publishing a second storage authority.
+    /// Ready Idle work is Pending; already-open or terminal work remains Live. Unsignaled requires
+    /// separately supplied Park or lifecycle-disablement evidence and is never guessed from absence.
+    #[allow(
+      dead_code,
+      reason = "storage-free cutover adapter remains candidate-only until every placement owner moves atomically"
+    )]
+    pub(crate) fn compile_legacy_control_process(
+      generation: ActorGeneration,
+      location: ActorControlLocation<BlockNumberFor<T>>,
+      cell: &ActorControlCellOf<T>,
+      unsignaled_evidence: Option<UnsignaledProcessEvidence<BlockNumberFor<T>>>,
+    ) -> Result<ActorProcess<BlockNumberFor<T>>, ProcessCompileError> {
+      Self::project_control_cell(cell, location)
+        .ok_or(ProcessCompileError::MalformedControlCell)?;
+      let placement = match location {
+        ActorControlLocation::Ready { .. } => {
+          let kind = if cell.hot.cycle_state == CycleState::Idle && cell.hot.pending_signal {
+            ServiceResidenceKind::Pending
+          } else {
+            ServiceResidenceKind::Live
+          };
+          LegacyProcessPlacement::Ready(kind)
+        }
+        ActorControlLocation::Waiting { key, page, slot } => {
+          LegacyProcessPlacement::Waiting { key, page, slot }
+        }
+        ActorControlLocation::Unsignaled => LegacyProcessPlacement::Unsignaled(unsignaled_evidence),
+      };
+      compile_legacy_process(generation, placement)
+    }
+
     pub(crate) fn insert_unsignaled_control_authority(
       actor_id: ActorId,
       identity: ActorIdentityOf<T>,
