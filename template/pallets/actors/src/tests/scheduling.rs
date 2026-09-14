@@ -4536,6 +4536,116 @@ fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
 }
 
 #[test]
+fn temporal_occurrence_refuses_selector_and_schedule_mismatched_wake_qualification() {
+  for (schedule, mismatched_trigger, mismatched_window) in [
+    (at_time_schedule(1), RuntimeTrigger::at_time(2), None),
+    (timer_schedule(1), RuntimeTrigger::cadenced(2), None),
+    (
+      at_time_schedule(1),
+      RuntimeTrigger::at_time(1),
+      Some(crate::ScheduleWindow { start: 2, end: 20 }),
+    ),
+  ] {
+    new_test_ext().execute_with(|| {
+      frame_system::Pallet::<Test>::set_block_number(1);
+      let actor_id = create_system_with(ALICE, schedule, None, inert_contract_steps());
+      let (state, admission, loaded_step) =
+        Actors::load_frame_actor_service_state(actor_id).expect("temporal authority exists");
+      let replacement = crate::ActorAdmissionCertificate::new(
+        admission.semantic_contract_id,
+        admission.body_commitment,
+        mismatched_trigger.wake_qualification(&mismatched_window),
+        admission.runtime_actor_semantics_version,
+        admission.production_weight_identity,
+        admission.body_geometry_version,
+        admission.configured_bounds_commitment,
+        admission.maximum_lifecycle_weight,
+      );
+      let hot_before = Actors::actor_hot(actor_id).expect("temporal Actor exists");
+      let events_before = System::events();
+      let balances_before = (native_balance(&ALICE), native_balance(&BOB));
+
+      assert_eq!(
+        Actors::process_due_temporal_occurrence_loaded(
+          actor_id,
+          state,
+          replacement,
+          loaded_step,
+          2,
+        ),
+        Err(DispatchError::Other(
+          "temporal wake qualification is corrupt"
+        )),
+      );
+      assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
+      assert_eq!(System::events(), events_before);
+      assert_eq!(
+        (native_balance(&ALICE), native_balance(&BOB)),
+        balances_before
+      );
+    });
+  }
+}
+
+#[test]
+fn temporal_wakeup_drain_refuses_mismatched_schedule_qualification() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, at_time_schedule(1), None, inert_contract_steps());
+    let hot_before = Actors::actor_hot(actor_id).expect("AtTime Actor exists");
+    let pointer = hot_before
+      .trigger_wakeup_pointer
+      .expect("AtTime wake authority exists");
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("Waiting authority exists");
+    let admission = cell.admission;
+    let mismatched_window = Some(crate::ScheduleWindow { start: 2, end: 20 });
+    let replacement = crate::ActorAdmissionCertificate::new(
+      admission.semantic_contract_id,
+      admission.body_commitment,
+      RuntimeTrigger::at_time(1).wake_qualification(&mismatched_window),
+      admission.runtime_actor_semantics_version,
+      admission.production_weight_identity,
+      admission.body_geometry_version,
+      admission.configured_bounds_commitment,
+      admission.maximum_lifecycle_weight,
+    );
+    crate::ActorWaitingFrameChunks::<Test>::mutate(
+      (WakeupKey::Tick(pointer.tick), pointer.page_id),
+      |stored| {
+        let entry = stored.as_mut().expect("waiting page exists").entries[pointer.slot as usize]
+          .as_mut()
+          .expect("waiting primary exists");
+        let crate::ActorWaitingEntry::Primary(cell) = entry else {
+          panic!("temporal source owns the primary authority");
+        };
+        cell.pipeline_service_identity =
+          crate::pipeline_service_identity(replacement.admission_identity);
+        cell.admission = replacement.clone();
+      },
+    );
+    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
+      stored
+        .as_mut()
+        .expect("Contract head exists")
+        .header
+        .admission_identity = replacement.admission_identity;
+    });
+    let events_before = System::events();
+    let balances_before = (native_balance(&ALICE), native_balance(&BOB));
+
+    let (ready, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Tick(pointer.tick), 1);
+    assert!(ready.is_empty());
+    assert_eq!(stats, crate::WakeupDrainStats::default());
+    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
+    assert_eq!(System::events(), events_before);
+    assert_eq!(
+      (native_balance(&ALICE), native_balance(&BOB)),
+      balances_before
+    );
+  });
+}
+
+#[test]
 fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

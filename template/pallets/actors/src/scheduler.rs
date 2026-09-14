@@ -6557,6 +6557,7 @@ impl<T: Config> Pallet<T> {
       let (mut state, admission, loaded_step) = match frozen {
         Some((state, admission, loaded_step))
           if admission.admission_identity == expected_admission
+            && Self::admission_authorizes_contract_wake(&admission, &state.contract)
             && Self::wakeup_pointer_for_clock(&state.hot, wakeup_key.clock()) == Some(pointer) =>
         {
           (state, admission, loaded_step)
@@ -7511,6 +7512,11 @@ impl<T: Config> Pallet<T> {
     loaded_step: Option<LoadedActorStepOf<T>>,
     now_tick: SchedulerTick,
   ) -> Result<bool, DispatchError> {
+    if !Self::admission_authorizes_contract_wake(&admission, &state.contract) {
+      return Err(DispatchError::Other(
+        "temporal wake qualification is corrupt",
+      ));
+    }
     let resources = if state.contract.steps.is_empty() {
       ActorStepResourceEnvelope {
         control: T::WeightInfo::scheduler_inner_zero_step_complete(),
