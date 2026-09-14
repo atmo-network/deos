@@ -3276,12 +3276,13 @@ pub mod pallet {
       {
         return None;
       }
-      let admission = Some(admission);
       let head = ActorContractHeads::<T>::get(actor_id)?;
-      if !matches!(
-        &head.header.trigger,
-        Trigger::ObservationChange { feed: contract_feed } if *contract_feed == feed
-      ) || authority.cooldown_blocks != head.header.cooldown_blocks
+      if !admission.authorizes_wake(head.header.trigger.wake_qualification(&head.header.window))
+        || !matches!(
+          &head.header.trigger,
+          Trigger::ObservationChange { feed: contract_feed } if *contract_feed == feed
+        )
+        || authority.cooldown_blocks != head.header.cooldown_blocks
         || authority.window != head.header.window
         || authority.auto_close_at_cycle_nonce != head.header.auto_close_at_cycle_nonce
         || authority.semantic_contract_id != head.header.semantic_contract_id
@@ -3361,7 +3362,7 @@ pub mod pallet {
         identity,
         hot,
         authority,
-        admission,
+        admission: Some(admission),
         run_head,
         loaded_step,
       })
