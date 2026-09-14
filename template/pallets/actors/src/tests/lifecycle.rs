@@ -2990,6 +2990,83 @@ fn idle_contract_replacement_rebinds_retained_waiting_admission_and_executes_due
 }
 
 #[test]
+fn waiting_observation_replacement_late_failure_restores_source_and_old_feed_service() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      observation_schedule(vec![7]),
+      Some(ScheduleWindow {
+        start: 10,
+        end: 110,
+      }),
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    );
+    let (before_location, before) =
+      Actors::actor_control_cell(actor_id).expect("future-window Actor waits");
+    let authority_before = crate::ActorActivationAuthorities::<Test>::get(actor_id)
+      .expect("source activation authority");
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+    set_fail_create_checkpoint(true);
+    assert_noop!(
+      update_contract_partial!(
+        RuntimeOrigin::root(),
+        actor_id,
+        observation_schedule(vec![8]),
+        Some(ScheduleWindow {
+          start: 10,
+          end: 110,
+        }),
+      ),
+      DispatchError::Other("AtomicityCreateCheckpointFailed")
+    );
+    set_fail_create_checkpoint(false);
+
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+      root_before
+    );
+    let (after_location, after) =
+      Actors::actor_control_cell(actor_id).expect("source Waiting authority restored");
+    assert_eq!(after_location, before_location);
+    assert_eq!(after, before);
+    assert_eq!(
+      crate::ActorActivationAuthorities::<Test>::get(actor_id),
+      Some(authority_before)
+    );
+    assert_eq!(
+      Actors::actor_observation_feeds(actor_id),
+      Some(BoundedVec::truncate_from(vec![7]))
+    );
+    assert_eq!(Actors::observation_subscriber_count(7), 1);
+    assert_eq!(Actors::observation_subscriber_count(8), 0);
+
+    assert_ok!(Actors::note_observation_changed(8, 1));
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
+    assert_ok!(Actors::note_observation_changed(7, 1));
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert!(Actors::actor_hot(actor_id).unwrap().pending_signal);
+
+    for block in 10..=12 {
+      frame_system::Pallet::<Test>::set_block_number(block);
+      Actors::on_initialize(block);
+      run_prepass();
+      run_idle(Weight::MAX);
+      if Actors::actor_identity(actor_id).unwrap().cycle_nonce == 1 {
+        break;
+      }
+    }
+    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 1);
+    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
+    #[cfg(feature = "try-runtime")]
+    Actors::do_try_state().expect("rolled-back subscription and Waiting authority stay coherent");
+  });
+}
+
+#[test]
 fn waiting_observation_replacement_moves_subscription_and_executes_only_new_feed() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
