@@ -2990,6 +2990,87 @@ fn idle_contract_replacement_rebinds_retained_waiting_admission_and_executes_due
 }
 
 #[test]
+fn waiting_observation_replacement_moves_subscription_and_executes_only_new_feed() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      observation_schedule(vec![7]),
+      Some(ScheduleWindow {
+        start: 10,
+        end: 110,
+      }),
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    );
+    let (before_location, before) =
+      Actors::actor_control_cell(actor_id).expect("future-window Actor waits");
+    assert!(matches!(
+      before_location,
+      ActorControlLocation::Waiting { .. }
+    ));
+    assert_eq!(
+      Actors::actor_observation_feeds(actor_id),
+      Some(BoundedVec::truncate_from(vec![7]))
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(update_contract_partial!(
+      RuntimeOrigin::root(),
+      actor_id,
+      observation_schedule(vec![8]),
+      Some(ScheduleWindow {
+        start: 10,
+        end: 110,
+      }),
+    ));
+    let (after_location, after) =
+      Actors::actor_control_cell(actor_id).expect("replacement retains Waiting authority");
+    assert_eq!(after_location, before_location);
+    assert_eq!(after.hot.wakeup_pointer, before.hot.wakeup_pointer);
+    assert_ne!(
+      after.admission.admission_identity,
+      before.admission.admission_identity
+    );
+    assert_eq!(
+      Actors::actor_observation_feeds(actor_id),
+      Some(BoundedVec::truncate_from(vec![8]))
+    );
+    assert_eq!(Actors::observation_subscriber_count(7), 0);
+    assert_eq!(Actors::observation_subscriber_count(8), 1);
+    let authority = crate::ActorActivationAuthorities::<Test>::get(actor_id)
+      .expect("replacement activation authority");
+    assert_eq!(authority.feed, 8);
+    assert_eq!(
+      authority.admission_identity,
+      after.admission.admission_identity
+    );
+
+    assert_ok!(Actors::note_observation_changed(7, 1));
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
+
+    assert_ok!(Actors::note_observation_changed(8, 1));
+    Actors::fanout_dirty_observations(Weight::MAX);
+    assert!(Actors::actor_hot(actor_id).unwrap().pending_signal);
+    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 0);
+
+    for block in 10..=12 {
+      frame_system::Pallet::<Test>::set_block_number(block);
+      Actors::on_initialize(block);
+      run_prepass();
+      run_idle(Weight::MAX);
+      if Actors::actor_identity(actor_id).unwrap().cycle_nonce == 1 {
+        break;
+      }
+    }
+    assert_eq!(Actors::actor_identity(actor_id).unwrap().cycle_nonce, 1);
+    assert!(!Actors::actor_hot(actor_id).unwrap().pending_signal);
+    #[cfg(feature = "try-runtime")]
+    Actors::do_try_state().expect("replacement subscription and Waiting authority stay coherent");
+  });
+}
+
+#[test]
 fn control_authority_matrix_is_class_mutability_and_breaker_complete() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
