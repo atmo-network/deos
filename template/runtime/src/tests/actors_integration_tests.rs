@@ -9229,6 +9229,81 @@ fn transaction_extension_ingress_uses_generated_runtime_weights() {
 }
 
 #[test]
+fn event_complete_dependency_owner_inventory_covers_every_oracle_state_writer() {
+  use crate::configs::oracle_config::{
+    EVENT_COMPLETE_TRANSITION_OWNERS, EventCompleteDependencySource,
+    EventCompleteTransitionBoundary, deos_router_pool_feed,
+  };
+  use alloc::{collections::BTreeSet, string::String};
+
+  fn state_writers(source: &str) -> BTreeSet<String> {
+    let mut owner = None;
+    let mut owners = BTreeSet::new();
+    for line in source.lines() {
+      let trimmed = line.trim_start();
+      if let Some(rest) = trimmed
+        .strip_prefix("fn ")
+        .or_else(|| trimmed.strip_prefix("pub fn "))
+      {
+        owner = rest.split('(').next();
+      }
+      if [
+        "Feeds::<T>::insert",
+        "Feeds::<T>::try_mutate",
+        "Observations::<T>::insert",
+      ]
+      .iter()
+      .any(|needle| line.contains(needle))
+      {
+        owners.insert(
+          owner
+            .expect("Oracle state mutation must have a named owner")
+            .into(),
+        );
+      }
+    }
+    owners
+  }
+
+  let source = include_str!("../../../pallets/oracle/src/lib.rs");
+  let actual = state_writers(source);
+  let expected = EVENT_COMPLETE_TRANSITION_OWNERS
+    .iter()
+    .map(|row| String::from(row.owner))
+    .collect::<BTreeSet<_>>();
+  assert_eq!(
+    actual, expected,
+    "classify every Oracle writer that can invalidate current dependency state"
+  );
+
+  assert_eq!(
+    EVENT_COMPLETE_TRANSITION_OWNERS
+      .iter()
+      .map(|row| row.boundary)
+      .collect::<BTreeSet<_>>(),
+    BTreeSet::from([
+      EventCompleteTransitionBoundary::FunctionTransactional,
+      EventCompleteTransitionBoundary::AtomicMutationRequiresCallerTransactionAtCutover,
+      EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
+    ])
+  );
+  for row in EVENT_COMPLETE_TRANSITION_OWNERS {
+    assert!(!row.mutation.is_empty());
+    assert_eq!(
+      row.source_schema,
+      "EventCompleteDependencySource::OracleFeed(feed)"
+    );
+    assert!(row.publication_point.starts_with("after "));
+    assert!(row.publication_point.contains("before "));
+  }
+  let feed = deos_router_pool_feed(AssetKind::Native, AssetKind::Local(1));
+  assert_eq!(
+    EventCompleteDependencySource::OracleFeed(feed),
+    EventCompleteDependencySource::OracleFeed(feed)
+  );
+}
+
+#[test]
 fn certified_ingress_inventory_is_closed_and_typed() {
   seeded_test_ext().execute_with(|| {
     let inventory = RuntimeAddressEventIngress::certified_producer_inventory();

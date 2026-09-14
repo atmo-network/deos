@@ -21,6 +21,79 @@ pub const DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
 /// Closed runtime inventory of publishers certified to create Actors observation ingress.
 pub const ACTORS_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
 
+/// Collision-free production dependency identity retained until the generic Actors source key is
+/// widened from its inert scalar placeholder.
+#[allow(
+  dead_code,
+  reason = "inert dependency source schema awaits production cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventCompleteDependencySource {
+  OracleFeed(OracleFeedId),
+}
+
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EventCompleteTransitionBoundary {
+  FunctionTransactional,
+  AtomicMutationRequiresCallerTransactionAtCutover,
+  FunctionTransactionRequiredAtCutover,
+}
+
+/// One finite Oracle state-transition owner that can invalidate a current-state dependency.
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+pub struct EventCompleteTransitionOwner {
+  pub owner: &'static str,
+  pub mutation: &'static str,
+  pub boundary: EventCompleteTransitionBoundary,
+  pub source_schema: &'static str,
+  pub publication_point: &'static str,
+}
+
+/// Inert cutover inventory. Every row publishes `OracleFeed(feed)` exactly once after the named
+/// canonical mutation and before its success event, in the same transaction. Equal-value refresh
+/// is included because it advances `updated_at`; age expiry itself remains a timed-review cause.
+#[allow(
+  dead_code,
+  reason = "inert dependency owner evidence awaits production cutover"
+)]
+pub const EVENT_COMPLETE_TRANSITION_OWNERS: &[EventCompleteTransitionOwner] = &[
+  EventCompleteTransitionOwner {
+    owner: "register_feed",
+    mutation: "Feeds::insert",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactional,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after Feeds insert, before FeedRegistered",
+  },
+  EventCompleteTransitionOwner {
+    owner: "set_lifecycle",
+    mutation: "Feeds::try_mutate",
+    boundary: EventCompleteTransitionBoundary::AtomicMutationRequiresCallerTransactionAtCutover,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after lifecycle mutation, before caller success event",
+  },
+  EventCompleteTransitionOwner {
+    owner: "deactivate_feed",
+    mutation: "Feeds::try_mutate",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after lifecycle mutation, before FeedDeactivated",
+  },
+  EventCompleteTransitionOwner {
+    owner: "publish_with_provenance",
+    mutation: "Observations::insert",
+    boundary: EventCompleteTransitionBoundary::FunctionTransactionRequiredAtCutover,
+    source_schema: "EventCompleteDependencySource::OracleFeed(feed)",
+    publication_point: "after observation insert, before ObservationPublished/Refreshed",
+  },
+];
+
 pub const fn deos_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
     asset_in,
