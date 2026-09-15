@@ -5309,6 +5309,10 @@ pub mod pallet {
     }
 
     /// Strict active-state loader; malformed primary authority never falls back to dormancy.
+    #[allow(
+      dead_code,
+      reason = "current-state consumer cutover is staged behind the atomic service writer"
+    )]
     pub(crate) fn load_frame_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
       Self::load_actor_state(actor_id)
     }

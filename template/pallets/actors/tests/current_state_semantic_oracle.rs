@@ -43,11 +43,22 @@ struct Actor {
   last_commit: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ParkedBalance {
+  generation: Generation,
+  episode: u32,
+  anchor: u64,
+  current: u64,
+  threshold: u64,
+  revision: u32,
+}
+
 #[derive(Default)]
 struct Oracle {
   block: u32,
   ring: VecDeque<(ActorId, Generation)>,
   actors: BTreeMap<ActorId, Actor>,
+  parked_balances: BTreeMap<ActorId, ParkedBalance>,
   cursor: Option<(ActorId, Generation)>,
   round: VecDeque<(ActorId, Generation)>,
 }
@@ -57,7 +68,7 @@ impl Oracle {
     self.actors.insert(id, actor);
     if actor.residence == Residence::Live {
       let member = (id, actor.generation);
-      self.ring.push_back(member);
+      self.insert_before_cursor(member);
       self.cursor.get_or_insert(member);
     }
   }
@@ -164,6 +175,56 @@ impl Oracle {
     }
   }
 
+  fn arm_parked_balance(&mut self, id: ActorId, current: u64, threshold: u64, episode: u32) {
+    assert!(threshold > 0);
+    self.detach(id);
+    let generation = self.actors[&id].generation;
+    self.actors.get_mut(&id).unwrap().residence = Residence::Parked {
+      watched_revision: 0,
+    };
+    self.parked_balances.insert(
+      id,
+      ParkedBalance {
+        generation,
+        episode,
+        anchor: current,
+        current,
+        threshold,
+        revision: 0,
+      },
+    );
+  }
+
+  fn change_parked_balance(&mut self, id: ActorId, current: u64) {
+    let Some(watch) = self.parked_balances.get_mut(&id) else {
+      return; // Busy, disabled, retired, and unconfigured Actors own no watch.
+    };
+    if self.actors[&id].generation != watch.generation
+      || !matches!(
+        self.actors[&id].residence,
+        Residence::Parked { .. } | Residence::Pending { .. }
+      )
+    {
+      return;
+    }
+    watch.current = current;
+    watch.revision = watch.revision.checked_add(1).unwrap();
+    let revision = watch.revision;
+    let qualified = current.abs_diff(watch.anchor) >= watch.threshold;
+    if qualified || matches!(self.actors[&id].residence, Residence::Pending { .. }) {
+      self.invalidate(id, revision);
+    }
+  }
+
+  fn check_parked_balance(&mut self, id: ActorId, start_condition: bool) {
+    let watch = self.parked_balances[&id];
+    let qualified = watch.current.abs_diff(watch.anchor) >= watch.threshold;
+    self.check_pending(id, qualified && start_condition, watch.revision);
+    if self.actors[&id].residence == Residence::Live {
+      self.parked_balances.remove(&id);
+    }
+  }
+
   fn wake_due(&mut self, id: ActorId) {
     let actor = self.actors.get(&id).copied().unwrap();
     let Residence::Sleeping { due } = actor.residence else {
@@ -245,7 +306,7 @@ impl Oracle {
       },
     );
     let member = (id, generation);
-    self.ring.push_back(member);
+    self.insert_before_cursor(member);
     self.cursor.get_or_insert(member);
   }
 
@@ -264,7 +325,18 @@ impl Oracle {
     actor.admitted_in = self.block;
     let member = (id, actor.generation);
     assert!(!self.ring.contains(&member), "duplicate live residence");
-    self.ring.push_back(member);
+    self.insert_before_cursor(member);
+  }
+
+  /// Appends behind every current resident in encounter order, immediately before the cursor.
+  fn insert_before_cursor(&mut self, member: (ActorId, Generation)) {
+    if let Some(cursor) = self.cursor
+      && let Some(position) = self.ring.iter().position(|entry| *entry == cursor)
+    {
+      self.ring.insert(position, member);
+    } else {
+      self.ring.push_back(member);
+    }
   }
 
   fn detach(&mut self, id: ActorId) {
@@ -277,6 +349,8 @@ impl Oracle {
       };
     }
     self.ring.retain(|entry| *entry != member);
+    self.round.retain(|entry| *entry != member);
+    self.parked_balances.remove(&id);
   }
 }
 
@@ -314,6 +388,29 @@ fn mutable_round_preserves_survivor_order_and_defers_new_or_reentered_members() 
   assert_eq!(o.next(), None);
   o.begin_block(2);
   assert_eq!([o.next(), o.next(), o.next()], [Some(5), Some(1), Some(3)]);
+}
+
+#[test]
+fn partial_round_admission_appends_behind_all_current_residents() {
+  let mut o = Oracle::default();
+  for id in 1..=3 {
+    o.insert(id, live(0));
+  }
+  o.begin_block(1);
+  assert_eq!(o.next(), Some(1));
+  o.insert(
+    4,
+    Actor {
+      admitted_in: 1,
+      ..live(0)
+    },
+  );
+  // The partial round stops here; admission does not splice ahead of B, C, or wrapped A.
+  o.begin_block(2);
+  assert_eq!(
+    [o.next(), o.next(), o.next(), o.next()],
+    [Some(2), Some(3), Some(1), Some(4)]
+  );
 }
 
 #[test]
@@ -466,6 +563,48 @@ fn parking_invalidation_coalesces_and_cannot_lose_a_later_revision() {
   assert_eq!(o.next(), None);
   o.begin_block(2);
   assert_eq!(o.next(), Some(1));
+}
+
+#[test]
+fn parked_balance_keeps_a_fixed_anchor_and_tracks_only_parked_episodes() {
+  let mut o = Oracle::default();
+  o.insert(1, live(0));
+  o.arm_parked_balance(1, 1_000, 100, 1);
+  o.change_parked_balance(1, 1_060);
+  assert!(matches!(o.actors[&1].residence, Residence::Parked { .. }));
+  o.change_parked_balance(1, 1_100);
+  assert!(matches!(o.actors[&1].residence, Residence::Pending { .. }));
+
+  // A negative start decision preserves the final-cycle anchor, not the latest sample.
+  o.check_parked_balance(1, false);
+  assert!(matches!(o.actors[&1].residence, Residence::Parked { .. }));
+  assert_eq!(o.parked_balances[&1].anchor, 1_000);
+  o.change_parked_balance(1, 1_120);
+  o.check_parked_balance(1, true);
+  assert_eq!(o.actors[&1].residence, Residence::Live);
+  assert!(!o.parked_balances.contains_key(&1));
+
+  // Busy-period changes have no baseline, accumulator, or future-cycle authority.
+  o.change_parked_balance(1, 2_000);
+  assert_eq!(o.actors[&1].residence, Residence::Live);
+}
+
+#[test]
+fn parked_balance_reversal_and_generation_replacement_do_not_leak_authority() {
+  let mut o = Oracle::default();
+  o.insert(1, live(0));
+  o.arm_parked_balance(1, 500, 100, 7);
+  o.change_parked_balance(1, 600);
+  o.change_parked_balance(1, 500);
+  assert!(matches!(o.actors[&1].residence, Residence::Pending { .. }));
+  o.check_parked_balance(1, true);
+  assert!(matches!(o.actors[&1].residence, Residence::Parked { .. }));
+  assert_eq!(o.parked_balances[&1].episode, 7);
+
+  o.retire(1);
+  o.recreate(1);
+  o.change_parked_balance(1, 700);
+  assert_eq!(o.actors[&1].residence, Residence::Live);
 }
 
 #[test]

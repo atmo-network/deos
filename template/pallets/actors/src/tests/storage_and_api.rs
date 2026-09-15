@@ -4053,6 +4053,50 @@ fn canonical_service_round_matches_the_independent_semantic_trace() {
 }
 
 #[test]
+fn canonical_service_ring_appends_partial_round_admission_behind_current_residents() {
+  new_test_ext().execute_with(|| {
+    let [a, b, c, d] = [120, 121, 122, 123].map(|id| actor_ref(id, 1));
+    for actor in [a, b, c] {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, 0).unwrap();
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(1).unwrap();
+      assert_eq!(
+        Actors::consider_service_head(1),
+        Ok(ServiceRoundEncounter::Eligible(a))
+      );
+      Actors::advance_service_head(a, 1).unwrap();
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    ActorProcesses::<Test>::insert(d.actor_id, serving_process(d, ServiceResidenceKind::Live));
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_service_member(d, ServiceResidenceKind::Live, 1).unwrap();
+      Actors::begin_service_round(2).unwrap();
+      for expected in [b, c, a, d] {
+        assert_eq!(
+          Actors::consider_service_head(2),
+          Ok(ServiceRoundEncounter::Eligible(expected))
+        );
+        Actors::advance_service_head(expected, 2).unwrap();
+      }
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Ok(ServiceRoundEncounter::Closed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+  });
+}
+
+#[test]
 fn canonical_service_round_handles_empty_removal_interruption_and_faults() {
   new_test_ext().execute_with(|| {
     assert_eq!(

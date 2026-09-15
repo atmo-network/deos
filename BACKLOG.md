@@ -32,14 +32,13 @@
 | Lifecycle and cleanup | **Decision accepted and partially implemented; not production-complete or completely resource-bound.** | Execute revocation, replacement, bounded cleanup and resource release on canonical owners. |
 | Performance | **Workloads decided; standalone carriers measured; whole-service result absent.** EXP-0136 freezes W1–W12, but no canonical V1/V2 production comparison exists. | Instrument V1/V2 and bind the final composed implementation before any speedup claim. |
 
-This table reconciles repository reality at the planning basis above without rerunning unchanged Rust suites: the Actors source subtree exactly matches the inspected checkpoint. `Accepted` remains decision evidence only. The active critical path is N0.3's independent semantic/round correction followed by V1's single atomic semantic-writer/process/ring cutover; the exact immediate blocker is that every supported Publish/Replace/Remove caller and its full Weight owner must switch together before legacy placement can be removed. [R2–R8]
+This table reconciles repository reality at the planning basis above; focused tests cover the later normative round/oracle amendment without upgrading unchanged implementation claims. `Accepted` remains decision evidence only. The active critical path is V1's single atomic semantic-writer/process/ring cutover; the exact immediate blocker is that every supported Publish/Replace/Remove caller and its full Weight owner must switch together before legacy placement can be removed. [R2–R8]
 
 ### 0.2 Blocking obligations
 
 | ID | Exact blocker | Closure owner | Required exit evidence |
 | --- | --- | --- | --- |
 | B1 | Active identity/hot/admission is still stored inside legacy placement; removing placement first loses canonical authority. | N2.4, N3.5, N5.1 | All supported semantic Publish/Replace/Remove callers and their complete resource owners switch coherently; no dual authority or legacy fallback. |
-| B2 | Oracle `push_back` and carrier insertion before the persistent cursor imply different orders for admission during a partial round. | N0.3, N3.6 | Ratified semantic ordering, corrected independent model and differential mutation traces against the carrier. |
 | B3 | Ring helpers are not a full ordinary Actor service path; standalone generated values exclude remaining lifecycle/Step composition. | N2.1–N2.4, N3.1–N3.6, N5.2 | V1 through ordinary dispatch and the actual mandatory Actor service phase, with complete admission and settlement. |
 | B4 | The ratified parked-balance contract is not yet implemented through a bounded complete source/review path. | N2.5, N3.9 | One bounded complete source/review implementation of the fixed final baseline and `100 × ED` floor; no busy tracking. |
 | B5 | Net balance cannot identify real incoming credits or whitelisted senders. | N3.9 | Conditional verified-credit implementation if the default mode fails its frozen criteria; never infer provenance from net balance. |
@@ -92,9 +91,9 @@ V1 must not wait for universal balance notification coverage, a new Oracle frame
 
 The current-state section of the specification remains the starting owner; reconcile superseded later sections before release rather than asking implementers to interpret two competing contracts. [R3]
 
-### 1.2 Partial-round ordering: resolve the model/carrier mismatch now
+### 1.2 Partial-round ordering
 
-The proposed explicit resolution for N0.3 is **append behind all current residents as viewed from the persistent next-encounter cursor**. It matches the selected carrier's insertion-before-cursor rule; it must be ratified in semantic prose and an independently written list model, not accepted merely because the carrier implements it.
+The ratified rule is **append behind all current residents as viewed from the persistent next-encounter cursor**. The normative specification, independent list model and selected carrier's insertion-before-cursor behavior agree on this outcome.
 
 Required distinguishing trace:
 
@@ -268,10 +267,6 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 
 ---
 
-## N0 — Narrow Semantic Amendment and Executable Contract
-
-- [ ] **N0.3 / Normative State Machine and Independent Oracle.** Resolve B2 with a semantic order decision and independent list model. Add partial-round admission/reentry, cursor/last/interior removal and generation replacement traces, plus the parked-balance state transitions. Preserve a model independent of storage layout and the runtime scheduler. Replace contradictory current summaries and affected specification text; do not require rewriting untouched history before V1. **Exit:** model and carrier agree on the newly distinguishing traces; specification authority is unambiguous for the paths entering production.
-
 ## N1 — Evidence Continuity Without Another Research Migration
 
 - [ ] **N1.1 / Active Semantic Lineage Projection.** Keep EXP-0120–0137 and earlier records intact. Import unchanged ring, retry and custody claims at their real scope. Qualify EXP-0121–0124, EXP-0127 and their composed consumers where generic current-condition parking differs from the new parked-balance threshold. Add a small explicit semantic delta rather than automatically reopening every ancestor. **Exit:** current obligations and consumers can be found without reading the full historical corpus.
@@ -306,7 +301,7 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 
 - [ ] **N3.5 / One Concrete Ring/Sleep/Index Carrier.** Complete the coherent semantic writer + process/ring cutover on the selected doubly linked carrier and retained C32 deadline substrate. In one supported candidate build, no Actor executes through a parallel old scheduler. Convert the lifecycle closure, conditional initial service publication and generated callers as one coherent change; inert helpers are not its exit. Early unconnected profiles must reject explicitly and cannot be advertised as delivered. **Exit:** public-created V1 actors use canonical semantic/process/ring authority; empty/singleton/interior/full/deep/fragmented and rollback paths are bounded and priced.
 
-- [ ] **N3.6 / Block-Round Frontier and Persistent Ring Service.** Connect begin/probe/admit/advance to actual Prepass/Drain, sharing one immutable block-round identity. Resolve B2; preserve next-encounter order, Q1, non-consuming refusal and B+1 admission/reentry. Differentially compare mutable runtime traces to the corrected independent oracle, not just the existing fixed three-Actor trace. **Exit:** V1 Steps and adjacent retries retain membership; no duplicate, donated, skipped or recaptured turn; no production full-ring snapshot or unbounded wrap.
+- [ ] **N3.6 / Block-Round Frontier and Persistent Ring Service.** Connect begin/probe/admit/advance to actual Prepass/Drain, sharing one immutable block-round identity. Preserve the ratified next-encounter order, Q1, non-consuming refusal and B+1 admission/reentry. Differentially compare mutable runtime traces to the corrected independent oracle, not just the existing fixed three-Actor trace. **Exit:** V1 Steps and adjacent retries retain membership; no duplicate, donated, skipped or recaptured turn; no production full-ring snapshot or unbounded wrap.
 
 - [ ] **N3.7 / Dependency-Keyed Parking and Lost-Wakeup Protocol.** Finish the existing revision/scan/Pending consumers, using exact source/generation/plan/parking-episode authority. Bound scan target and append horizon; retain newer work; acknowledge only after durable destination or exact stale proof. Complete one current Oracle path, including equal-value refresh, lifecycle and age expiry. Avoid introducing unneeded per-credit source registries when actor-local certified hooks suffice. **Exit:** V2-O and source/Pending saturation cannot lose work, grow undrained sources, duplicate residence or revive old generations; unrelated source updates remain isolated and charged.
 
