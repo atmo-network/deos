@@ -63,6 +63,35 @@ mod benches {
   const CROSSING_NON_TAIL_BENCHMARK_MAX: u32 = 64;
   const CROSSING_TRIMMED_BENCHMARK_TAIL: u32 = CROSSING_NON_TAIL_BENCHMARK_MAX + 2;
 
+  fn benchmark_service_process<T: Config>(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    last_attempted: Option<BlockNumberFor<T>>,
+  ) {
+    ActorProcesses::<T>::insert(
+      actor.actor_id,
+      ActorProcess {
+        generation: actor.generation,
+        last_attempted,
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(kind)),
+      },
+    );
+  }
+
+  fn benchmark_insert_service_member<T: Config>(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    now: BlockNumberFor<T>,
+  ) {
+    benchmark_service_process::<T>(actor, kind, None);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::insert_service_member(actor, kind, now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service member is inserted");
+  }
+
   fn control_named_cell<T: Config>(actor_id: ActorId) -> ActorControlCellOf<T> {
     let owner: T::AccountId = account("control-cell", actor_id as u32, 0);
     ActorControlCell {
@@ -4409,6 +4438,104 @@ mod benches {
       core::hint::black_box(DirtyObservationListState::<T>::get());
       Pallet::<T>::update_idle_starvation_state(now, true);
     }
+  }
+
+  #[benchmark]
+  fn service_member_insert_populated() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let retained = ActorRef {
+      actor_id: 9_000,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_001,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Live, now);
+    benchmark_service_process::<T>(actor, ServiceResidenceKind::Pending, None);
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::insert_service_member(actor, ServiceResidenceKind::Pending, now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated service-ring insertion succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_round_begin_populated() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_002,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::begin_service_round(now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated service round begins");
+    }
+    assert_eq!(ServiceHeader::<T>::get().round_block, Some(now));
+  }
+
+  #[benchmark]
+  fn service_round_probe_eligible() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_003,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::begin_service_round(now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service round begins");
+    #[block]
+    {
+      let encounter = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::consider_service_head(now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("eligible service head is probed");
+      core::hint::black_box(encounter);
+    }
+  }
+
+  #[benchmark]
+  fn service_round_admit_eligible() {
+    let admitted_at: BlockNumberFor<T> = 1u32.into();
+    let now: BlockNumberFor<T> = 2u32.into();
+    let actor = ActorRef {
+      actor_id: 9_004,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, admitted_at);
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::begin_service_round(now);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("benchmark service round begins");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::advance_service_head(actor, now);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("eligible service head is admitted");
+    }
+    assert_eq!(
+      ActorProcesses::<T>::get(actor.actor_id).and_then(|process| process.last_attempted),
+      Some(now)
+    );
   }
 
   #[benchmark]

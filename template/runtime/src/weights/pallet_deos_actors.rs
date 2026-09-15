@@ -1712,6 +1712,41 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `Actors::ActorControlLocators` (r:1 w:0)
+	/// Storage: `Actors::ActorUnsignaledControlCells` (r:1 w:0)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:0)
+	/// Storage: `Actors::ServiceNodes` (r:2 w:2)
+	/// Storage: `Actors::ServiceHeader` (r:1 w:1)
+	fn service_member_insert_populated() -> Weight {
+		Weight::from_parts(35_549_000, 0)
+			.saturating_add(Weight::from_parts(0, 6086))
+			.saturating_add(T::DbWeight::get().reads(6))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	/// Storage: `Actors::ServiceHeader` (r:1 w:1)
+	fn service_round_begin_populated() -> Weight {
+		Weight::from_parts(10_127_000, 0)
+			.saturating_add(Weight::from_parts(0, 1511))
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	/// Storage: `Actors::ServiceHeader` (r:1 w:0)
+	/// Storage: `Actors::ServiceNodes` (r:1 w:0)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:0)
+	fn service_round_probe_eligible() -> Weight {
+		Weight::from_parts(17_321_000, 0)
+			.saturating_add(Weight::from_parts(0, 3550))
+			.saturating_add(T::DbWeight::get().reads(3))
+	}
+	/// Storage: `Actors::ServiceHeader` (r:1 w:1)
+	/// Storage: `Actors::ServiceNodes` (r:1 w:1)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:1)
+	fn service_round_admit_eligible() -> Weight {
+		Weight::from_parts(22_629_000, 0)
+			.saturating_add(Weight::from_parts(0, 3550))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
 	/// Storage: `Actors::DependencyRevisions` (r:1 w:1)
 	/// Storage: `Actors::DependencyRegistrationHeaders` (r:1 w:0)
 	/// Storage: `Actors::DependencyScanSourceNodes` (r:1 w:1)

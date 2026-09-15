@@ -126,6 +126,10 @@ pub trait WeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
   fn materialization_coordinator_base() -> Weight;
+  fn service_member_insert_populated() -> Weight;
+  fn service_round_begin_populated() -> Weight;
+  fn service_round_probe_eligible() -> Weight;
+  fn service_round_admit_eligible() -> Weight;
   fn dependency_publication_begun_empty_source_list() -> Weight;
   fn dependency_publication_begun_populated_source_list() -> Weight;
   fn dependency_publication_coalesced_active_source() -> Weight;
@@ -558,6 +562,22 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn service_member_insert_populated() -> Weight {
+    Weight::from_parts(150_000_000, 24_000).saturating_add(T::DbWeight::get().reads_writes(9, 5))
+  }
+
+  fn service_round_begin_populated() -> Weight {
+    Weight::from_parts(50_000_000, 8_000).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn service_round_probe_eligible() -> Weight {
+    Weight::from_parts(75_000_000, 12_000).saturating_add(T::DbWeight::get().reads(3))
+  }
+
+  fn service_round_admit_eligible() -> Weight {
+    Weight::from_parts(125_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(6, 3))
+  }
+
   fn dependency_publication_begun_empty_source_list() -> Weight {
     Weight::from_parts(100_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(5, 3))
   }
@@ -953,6 +973,10 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight { Weight::from_parts(7_543_000, 1_493) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
   fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
+  fn service_member_insert_populated() -> Weight { Weight::from_parts(150_000_000, 24_000) }
+  fn service_round_begin_populated() -> Weight { Weight::from_parts(50_000_000, 8_000) }
+  fn service_round_probe_eligible() -> Weight { Weight::from_parts(75_000_000, 12_000) }
+  fn service_round_admit_eligible() -> Weight { Weight::from_parts(125_000_000, 16_000) }
   fn dependency_publication_begun_empty_source_list() -> Weight { Weight::from_parts(100_000_000, 16_000) }
   fn dependency_publication_begun_populated_source_list() -> Weight { Weight::from_parts(150_000_000, 24_000) }
   fn dependency_publication_coalesced_active_source() -> Weight { Weight::from_parts(75_000_000, 12_000) }
