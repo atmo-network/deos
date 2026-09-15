@@ -1077,6 +1077,23 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(Weight::from_parts(0, 4078))
 			.saturating_add(T::DbWeight::get().reads(4))
 	}
+	/// Storage: `Actors::DeadlineIndexPages` (r:1 w:0)
+	/// Proof: `Actors::DeadlineIndexPages` (`max_values`: None, `max_size`: Some(330), added: 2805, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::DeadlineHeaders` (r:1 w:0)
+	/// Proof: `Actors::DeadlineHeaders` (`max_values`: None, `max_size`: Some(57), added: 2532, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::DeadlinePages` (r:1 w:0)
+	/// Proof: `Actors::DeadlinePages` (`max_values`: None, `max_size`: Some(613), added: 3088, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:0)
+	/// Proof: `Actors::ActorProcesses` (`max_values`: None, `max_size`: Some(85), added: 2560, mode: `MaxEncodedLen`)
+	fn classify_due_tick_deadline() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `851`
+		//  Estimated: `4078`
+		// Minimum execution time: 25_213_000 picoseconds.
+		Weight::from_parts(26_261_000, 0)
+			.saturating_add(Weight::from_parts(0, 4078))
+			.saturating_add(T::DbWeight::get().reads(4))
+	}
 	/// Storage: `Actors::DeadlineHandles` (r:1 w:1)
 	/// Storage: `Actors::ActorProcesses` (r:1 w:1)
 	/// Storage: `Actors::ActorControlLocators` (r:1 w:0)

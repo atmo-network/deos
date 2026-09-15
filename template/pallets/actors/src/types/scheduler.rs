@@ -314,6 +314,13 @@ pub enum DueBlockDeadlineMutation {
   ReviewProcessed(ActorRef, DependencyReviewMutation),
 }
 
+/// One retained transition from the shared tick-deadline frontier. Tick deadlines currently own
+/// timed Park reviews only; execution retries remain block-clock members.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueTickDeadlineMutation {
+  ReviewProcessed(ActorRef, DependencyReviewMutation),
+}
+
 /// Result supplied by one bounded current-state interpretation of a Pending due review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyReviewInterpretation {

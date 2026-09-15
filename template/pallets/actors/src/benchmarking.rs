@@ -63,8 +63,9 @@ mod benches {
   const CROSSING_NON_TAIL_BENCHMARK_MAX: u32 = 64;
   const CROSSING_TRIMMED_BENCHMARK_TAIL: u32 = CROSSING_NON_TAIL_BENCHMARK_MAX + 2;
 
-  fn prepare_due_retry_deadline<T: Config>() -> Result<(ActorRef, BlockNumberFor<T>), BenchmarkError>
-  {
+  fn prepare_due_retry_deadline<T: Config>(
+    key: WakeupKey<BlockNumberFor<T>>,
+  ) -> Result<(ActorRef, BlockNumberFor<T>), BenchmarkError> {
     let now = 2u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     let owner: T::AccountId = account("due-retry-deadline", 0, 0);
@@ -94,7 +95,7 @@ mod benches {
     ActorUnsignaledControlCells::<T>::remove(actor_id);
     Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
       .expect("benchmark Actor enters canonical Service");
-    let destination = Pallet::<T>::plan_deadline_destination(actor, WakeupKey::Block(now))
+    let destination = Pallet::<T>::plan_deadline_destination(actor, key)
       .expect("benchmark deadline destination exists");
     Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
       .expect("benchmark Actor enters canonical deadline");
@@ -2164,7 +2165,8 @@ mod benches {
 
   #[benchmark]
   fn classify_due_block_deadline() -> Result<(), BenchmarkError> {
-    let (actor, now) = prepare_due_retry_deadline::<T>()?;
+    let now = 2u32.into();
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
 
     #[block]
     {
@@ -2178,8 +2180,25 @@ mod benches {
   }
 
   #[benchmark]
+  fn classify_due_tick_deadline() -> Result<(), BenchmarkError> {
+    let now_tick = 2;
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Tick(now_tick))?;
+
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_next_due_tick_deadline(now_tick),
+        Ok(DueBlockDeadlineBranch::Retry(actor))
+      );
+    }
+    assert!(DeadlineHandles::<T>::contains_key(actor.actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
   fn return_due_block_deadline_to_service() -> Result<(), BenchmarkError> {
-    let (actor, now) = prepare_due_retry_deadline::<T>()?;
+    let now = 2u32.into();
+    let (actor, _) = prepare_due_retry_deadline::<T>(WakeupKey::Block(now))?;
 
     #[block]
     {

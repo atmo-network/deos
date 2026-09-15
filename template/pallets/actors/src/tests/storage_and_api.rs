@@ -20,17 +20,17 @@ use crate::{
   DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
   DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
   DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
-  DueBlockDeadlineMutation, LegacyProcessPlacement, LegacyProcessTransition,
-  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
-  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
-  ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
-  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, apply_actor_semantic_mutation,
-  compile_legacy_process, next_actor_generation, plan_legacy_process_transition,
-  project_actor_semantic_execution,
+  DueBlockDeadlineMutation, DueTickDeadlineMutation, LegacyProcessPlacement,
+  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
+  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
+  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState,
+  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError,
+  ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter,
+  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
+  plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1438,6 +1438,70 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
     assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 32;
+    let feed = 10;
+    ObservationDependencySources::<Test>::insert(feed, source);
+    DependencySourceObservations::<Test>::insert(source, feed);
+    set_observation(feed, ScalarObservationState::Unavailable);
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      14,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource { source, observed_revision: 0 }],
+      Some(WakeupKey::Tick(7)),
+    )
+    .unwrap();
+    let retained = DeadlineHandles::<Test>::get(actor_id).expect("Tick review is indexed");
+    frame_system::Pallet::<Test>::set_block_number(7);
+    assert!(matches!(Actors::classify_next_due_block_deadline(7), Err(DeadlineMutationError::MemberMissing)));
+    assert!(matches!(Actors::classify_next_due_tick_deadline(6), Err(DeadlineMutationError::InvalidDestination)));
+
+    let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let mut selector_refused = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_next_due_tick_deadline(&mut selector_refused, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    let mut branch_refused = WeightMeter::with_limit(selector_weight);
+    assert_eq!(
+      Actors::process_next_due_tick_deadline(&mut branch_refused, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(retained));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+
+    let mut admitted = WeightMeter::with_limit(selector_weight.saturating_add(review_weight));
+    assert!(matches!(
+      Actors::process_next_due_tick_deadline(&mut admitted, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
+      Ok(DueTickDeadlineMutation::ReviewProcessed(current, DependencyReviewMutation::Rearmed(_))) if current == actor
+    ));
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key), Some(WakeupKey::Tick(8)));
+    assert!(matches!(Actors::classify_next_due_block_deadline(7), Err(DeadlineMutationError::MemberMissing)));
   });
 }
 
