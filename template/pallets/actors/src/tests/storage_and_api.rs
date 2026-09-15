@@ -1121,7 +1121,7 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
     ("update_existing_frame_control_hot", "Replace"),
     ("consume_waiting_from_supplied_authority", "Replace"),
     ("write_run_state", "Replace"),
-    ("do_deactivate_actor", "Remove"),
+    ("do_deactivate_actor", "Replace"),
     ("finalize_actor_loaded_inner", "Remove"),
   ];
   assert_eq!(
@@ -1136,7 +1136,7 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
       .iter()
       .filter(|(_, operation)| *operation == "Remove")
       .count(),
-    2
+    1
   );
   for (owner, _) in semantic_operation_map {
     assert!(
@@ -1311,6 +1311,67 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   assert!(benchmarks.contains("terminal finalization instead removes the record"));
   assert!(benchmarks.contains("fn service_member_publish_populated()"));
   assert!(benchmarks.contains("fn scheduler_inner_zero_step_complete()"));
+
+  // Dispatch Weight ownership follows the semantic branch rather than the public-call aliases.
+  // User at-slot and System sovereign-id creation already have distinct generated owners; active
+  // versus dormant System creation selects its owner from the optional Contract. Every path that
+  // may terminally finalize composes the shared close upper bound, including scheduler-side close.
+  for binding in [
+    "T::WeightInfo::create_user_actor().max(T::WeightInfo::create_user_actor_crossing_new_page())",
+    "T::WeightInfo::create_user_actor_at_slot().max(T::WeightInfo::create_user_actor_crossing_new_page())",
+    "T::WeightInfo::create_system_actor()\n        .max(T::WeightInfo::create_user_actor_crossing_new_page())",
+    "T::WeightInfo::create_dormant_system_actor()",
+    "T::WeightInfo::create_system_actor_at_sovereign_id().max(T::WeightInfo::create_user_actor_crossing_new_page())",
+    "T::WeightInfo::activate_actor()",
+    "T::WeightInfo::deactivate_actor()",
+    "Pallet::<T>::close_dispatch_weight_upper()",
+  ] {
+    assert!(
+      lib.contains(binding),
+      "lifecycle Weight owner drift: {binding}"
+    );
+  }
+  for generated_owner in [
+    "create_user_actor",
+    "create_user_actor_at_slot",
+    "create_system_actor",
+    "create_system_actor_at_sovereign_id",
+    "create_dormant_system_actor",
+    "activate_actor",
+    "deactivate_actor",
+    "close_actor",
+  ] {
+    assert!(
+      pallet_weights.contains(&format!("fn {generated_owner}() -> Weight")),
+      "pallet Weight binding disappeared: {generated_owner}"
+    );
+    assert!(
+      runtime_weights.contains(&format!("fn {generated_owner}() -> Weight")),
+      "runtime Weight binding disappeared: {generated_owner}"
+    );
+  }
+  for terminal_dispatch_owner in [
+    "pause_actor",
+    "resume_actor",
+    "manual_trigger",
+    "close_actor",
+    "update_contract",
+    "permissionless_sweep",
+    "permissionless_sweep_many",
+    "cancel_run",
+  ] {
+    let marker = format!("    pub fn {terminal_dispatch_owner}(");
+    let start = lib
+      .find(&marker)
+      .unwrap_or_else(|| panic!("terminal dispatch owner disappeared: {terminal_dispatch_owner}"));
+    let prefix = &lib[start.saturating_sub(320)..start];
+    assert!(
+      prefix.contains("close_dispatch_weight_upper()"),
+      "terminal dispatch owner must price shared finalization: {terminal_dispatch_owner}"
+    );
+  }
+  assert!(scheduler.contains("pub fn close_cleanup_weight_upper() -> Weight"));
+  assert!(scheduler.contains("T::WeightInfo::close_actor()"));
 
   // A zero-Step active Contract still publishes complete active semantic state, but has no current
   // Step resource load. Initial Live publication, when selected by the new residence policy, must

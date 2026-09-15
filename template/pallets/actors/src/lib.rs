@@ -8173,7 +8173,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(19)]
-    #[pallet::weight(T::WeightInfo::run_cancel())]
+    #[pallet::weight(T::WeightInfo::run_cancel().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn cancel_run(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
       let run_state = state.run_state;
