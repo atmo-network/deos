@@ -1015,6 +1015,9 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   let lib = include_str!("../lib.rs");
   let scheduler = include_str!("../scheduler.rs");
   let execution = include_str!("../execution.rs");
+  let benchmarks = include_str!("../benchmarking.rs");
+  let pallet_weights = include_str!("../weights.rs");
+  let runtime_weights = include_str!("../../../../runtime/src/weights/pallet_deos_actors.rs");
 
   assert!(lib.contains("Self::insert_unsignaled_control_authority(actor_id, identity, hot"));
   assert!(lib.contains("ActorIdentities::<T>::remove(actor_id);"));
@@ -1246,6 +1249,43 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
       body[..end].contains(transaction),
       "initial canonical publication needs an outer rollback boundary in {owner}"
     );
+  }
+
+  // Exact incremental storage composition at the cutover boundary. Publish, Replace and Remove
+  // each require one semantic-record read plus one write. Initial Live publication must additionally
+  // compose the generated populated-ring owner, whose benchmark already covers process publication,
+  // legacy-absence checks, ring/header reads and process/node/header writes (10 reads, 6 writes).
+  // The worst supported create/activate path therefore gains 11 reads and 7 writes before any
+  // measured execution/proof contribution from the semantic record itself.
+  let semantic_mutation_io = [("Publish", 1u64, 1u64), ("Replace", 1, 1), ("Remove", 1, 1)];
+  assert_eq!(
+    semantic_mutation_io
+      .iter()
+      .find(|(operation, _, _)| *operation == "Publish")
+      .map(|(_, reads, writes)| (*reads + 10, *writes + 6)),
+    Some((11, 7))
+  );
+  assert!(benchmarks.contains("fn service_member_publish_populated()"));
+  assert!(pallet_weights.contains(
+    "fn service_member_publish_populated() -> Weight {\n    Weight::from_parts(200_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(10, 6))"
+  ));
+
+  // Existing create/activate/deactivate benchmarks and generated runtime bindings cannot account
+  // for that composition: no production semantic map exists, those lifecycle benchmarks do not
+  // execute service publication, and generated storage evidence cannot name the semantic owner.
+  // Production publication is blocked until the lifecycle benchmarks exercise the composed path
+  // and regenerate both pallet/runtime Weight bindings in the same atomic authority cutover.
+  assert!(!lib.contains("pub type ActorSemanticRecords<T:"));
+  for lifecycle_benchmark in [
+    "fn create_user_actor()",
+    "fn create_system_actor()",
+    "fn activate_actor()",
+    "fn deactivate_actor()",
+  ] {
+    assert!(benchmarks.contains(lifecycle_benchmark));
+  }
+  for generated in [pallet_weights, runtime_weights] {
+    assert!(!generated.contains("Actors::ActorSemanticRecords"));
   }
 
   for source in [lib, scheduler, execution] {
