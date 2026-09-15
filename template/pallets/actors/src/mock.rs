@@ -1302,7 +1302,9 @@ pub struct TestBlockResourceBudget;
 impl Get<crate::BlockResourceBudget> for TestBlockResourceBudget {
   fn get() -> crate::BlockResourceBudget {
     crate::BlockResourceBudget::new(
-      Weight::from_parts(1_000_000_000_000, 5_000_000),
+      // Synthetic tests admit the fixed hook plus both mandatory deadline frontiers and one
+      // maximum canonical Step; production runtimes derive their own measured budget.
+      Weight::from_parts(1_000_000_000_000, 50_000_000),
       Weight::zero(),
     )
     .unwrap_or_else(|_| crate::BlockResourceBudget::fail_closed(Weight::zero()))

@@ -783,6 +783,17 @@ pub struct WakeupBucketState {
 
 pub type QueueEntry<BlockNumber> = ActorStepTicket<BlockNumber, ActorContractCommitment<[u8; 32]>>;
 
+/// Generation-bound execution authority shared by legacy queue and canonical residence paths.
+/// Unlike `ActorStepTicket`, it carries no queue-position authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActorStepAuthority<BlockNumber, ContractCommitment> {
+  pub actor_id: ActorId,
+  pub cycle_nonce: u64,
+  pub cursor: u32,
+  pub eligible_at: BlockNumber,
+  pub contract_commitment: ContractCommitment,
+}
+
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]

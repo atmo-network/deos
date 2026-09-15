@@ -845,6 +845,9 @@ pub mod pallet {
   pub type ActorStepTicketOf<T> =
     ActorStepTicket<BlockNumberFor<T>, ActorContractCommitment<[u8; 32]>>;
 
+  pub type ActorStepAuthorityOf<T> =
+    ActorStepAuthority<BlockNumberFor<T>, ActorContractCommitment<[u8; 32]>>;
+
   pub type LoadedActorStepOf<T> = LoadedActorStep<StepOf<T>>;
 
   pub type CurrentStepPlanOf<T> = StepExecutionPlan<
@@ -852,7 +855,7 @@ pub mod pallet {
     ActorHotStateOf<T>,
     ActorRunStateOf<T>,
     ActorAdmissionCertificateOf<T>,
-    ActorStepTicketOf<T>,
+    ActorStepAuthorityOf<T>,
     LoadedActorStepOf<T>,
     StepFeeBreakdown<<T as Config>::Balance>,
   >;
@@ -2132,7 +2135,72 @@ pub mod pallet {
         hot,
         run,
         admission,
-        ticket,
+        ticket: ActorStepAuthority {
+          actor_id: ticket.actor_id,
+          cycle_nonce: ticket.cycle_nonce,
+          cursor: ticket.cursor,
+          eligible_at: ticket.eligible_at,
+          contract_commitment: ticket.contract_commitment,
+        },
+        loaded_step,
+        maximum_fee,
+        last_step_outcome: None,
+      })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_canonical_current_step_plan(
+      actor_id: ActorId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      run: Option<ActorRunStateOf<T>>,
+      admission: ActorAdmissionCertificateOf<T>,
+      loaded_step: LoadedActorStepOf<T>,
+      maximum_fee: StepFeeBreakdown<T::Balance>,
+    ) -> Option<CurrentStepPlanOf<T>> {
+      if !admission.has_valid_identity() {
+        return None;
+      }
+      let (cycle_nonce, cursor, eligible_at) = match (hot.cycle_state, run.as_ref()) {
+        (CycleState::Idle, None) => (
+          identity.cycle_nonce.checked_add(1)?,
+          0,
+          frame_system::Pallet::<T>::block_number(),
+        ),
+        (CycleState::Running, Some(run)) if run.running_is_coherent() => {
+          (run.cycle_nonce, run.cursor, run.eligible_at)
+        }
+        (CycleState::Suspended, Some(run)) if run.suspension_is_coherent() => {
+          (run.cycle_nonce, run.cursor, run.eligible_at)
+        }
+        _ => return None,
+      };
+      if loaded_step.cursor != cursor
+        || run.as_ref().is_some_and(|run| {
+          !run.has_contract_authority(
+            admission.semantic_contract_id,
+            admission.body_commitment,
+            admission.admission_identity,
+          )
+        })
+      {
+        return None;
+      }
+      Some(StepExecutionPlan {
+        identity,
+        hot,
+        run,
+        admission: admission.clone(),
+        ticket: ActorStepAuthority {
+          actor_id,
+          cycle_nonce,
+          cursor,
+          eligible_at,
+          contract_commitment: ActorContractCommitment {
+            semantic_contract_id: admission.semantic_contract_id,
+            body_commitment: admission.body_commitment,
+          },
+        },
         loaded_step,
         maximum_fee,
         last_step_outcome: None,
@@ -6006,21 +6074,6 @@ pub mod pallet {
               if !meter.can_consume(selector_envelope.saturating_add(effectful_envelope)) {
                 return Err(ServiceRoundError::InsufficientWeight);
               }
-              let queue_ticket = state
-                .hot
-                .queue_ticket
-                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-              let eligible_at = state.run_state.as_ref().map_or(now, |run| run.eligible_at);
-              let ticket = Self::build_actor_step_ticket(
-                actor.actor_id,
-                queue_ticket,
-                eligible_at,
-                &state.identity,
-                &state.hot,
-                state.run_state.as_ref(),
-                &admission,
-              )
-              .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
               let maximum_fee = Self::maximum_current_action_fee(
                 state.identity.actor_class.actor_type(),
                 &loaded_step.step,
@@ -6048,13 +6101,12 @@ pub mod pallet {
                 } else {
                   None
                 };
-              let plan = Self::build_current_step_plan(
+              let plan = Self::build_canonical_current_step_plan(
                 actor.actor_id,
                 state.identity.clone(),
                 state.hot.clone(),
                 state.run_state.clone(),
                 admission.clone(),
-                ticket,
                 loaded_step,
                 maximum_fee,
               )

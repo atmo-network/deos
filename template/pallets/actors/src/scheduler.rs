@@ -1721,11 +1721,10 @@ impl<T: Config> Pallet<T> {
     {
       return None;
     }
-    let ticket = ActorStepTicket {
+    let ticket = ActorStepAuthority {
       actor_id: actor.actor_id,
       cycle_nonce: run.cycle_nonce,
       cursor: run.cursor,
-      ticket: 0,
       eligible_at: now,
       contract_commitment: ActorContractCommitment {
         semantic_contract_id: admission.semantic_contract_id,

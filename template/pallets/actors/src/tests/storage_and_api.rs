@@ -6240,6 +6240,91 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
 }
 
 #[test]
+fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 3,
+      },
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let sovereign = Actors::actor_identity(actor_id).unwrap().sovereign_account;
+    let legacy_ticket = Actors::actor_hot(actor_id).unwrap().queue_ticket.unwrap();
+    assert_ok!(Actors::paged_consume_head_at(legacy_ticket));
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+
+    let open_resource_block = |now| {
+      let mut state = crate::BlockResourceState::new(now);
+      state.begin_prepass().unwrap();
+      state.open_external_phase().unwrap();
+      crate::CurrentBlockResourceState::<Test>::put(state);
+    };
+    open_resource_block(2);
+    assert_ne!(Actors::on_idle(2, Weight::MAX), Weight::zero());
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(5))
+    );
+    assert_eq!(
+      ActorRunStateStore::<Test>::get(actor_id)
+        .unwrap()
+        .unsuccessful_attempts_at_cursor,
+      1
+    );
+    assert_eq!(
+      crate::CurrentBlockResourceState::<Test>::get()
+        .unwrap()
+        .phase(),
+      crate::BlockResourcePhase::Finalizable
+    );
+
+    set_asset_balance(&sovereign, TestAsset::Local(1), 10);
+    frame_system::Pallet::<Test>::set_block_number(5);
+    open_resource_block(5);
+    assert_ne!(Actors::on_idle(5, Weight::MAX), Weight::zero());
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    open_resource_block(6);
+    assert_ne!(Actors::on_idle(6, Weight::MAX), Weight::zero());
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    let state = crate::CurrentBlockResourceState::<Test>::get().unwrap();
+    assert_eq!(state.phase(), crate::BlockResourcePhase::Finalizable);
+    assert_ne!(state.usage(), crate::BlockResourceUsage::default());
+    assert_eq!(state.outstanding_reservations(), 0);
+
+    assert_eq!(Actors::on_idle(6, Weight::MAX), Weight::zero());
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
+  });
+}
+
+#[test]
 fn canonical_service_round_matches_the_independent_semantic_trace() {
   new_test_ext().execute_with(|| {
     let members = [actor_ref(120, 1), actor_ref(121, 1), actor_ref(122, 1)];
@@ -7294,7 +7379,14 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
     assert_eq!(maximum_fee.total_fee, 0);
     let storage_plan = Actors::load_current_step_plan_from_storage(ticket)
       .expect("storage-backed Opening plan builds");
-    assert_eq!(storage_plan.ticket, ticket);
+    assert_eq!(storage_plan.ticket.actor_id, ticket.actor_id);
+    assert_eq!(storage_plan.ticket.cycle_nonce, ticket.cycle_nonce);
+    assert_eq!(storage_plan.ticket.cursor, ticket.cursor);
+    assert_eq!(storage_plan.ticket.eligible_at, ticket.eligible_at);
+    assert_eq!(
+      storage_plan.ticket.contract_commitment,
+      ticket.contract_commitment
+    );
     assert_eq!(storage_plan.loaded_step, loaded_step);
     assert_eq!(storage_plan.maximum_fee, maximum_fee);
     let mut future_ticket = ticket;
@@ -7329,18 +7421,16 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
       last_step_outcome: None,
       suspension: None,
     };
-    assert_eq!(
-      Actors::build_actor_step_ticket(
-        actor_id,
-        9,
-        running.eligible_at,
-        &plan.identity,
-        &running_hot,
-        Some(&running),
-        &plan.admission,
-      ),
-      Some(plan.ticket)
-    );
+    let running_ticket = Actors::build_actor_step_ticket(
+      actor_id,
+      9,
+      running.eligible_at,
+      &plan.identity,
+      &running_hot,
+      Some(&running),
+      &plan.admission,
+    )
+    .expect("coherent legacy Running ticket builds");
     assert!(
       Actors::build_actor_step_ticket(
         actor_id,
@@ -7360,7 +7450,7 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         running_hot.clone(),
         Some(running.clone()),
         plan.admission.clone(),
-        plan.ticket,
+        running_ticket,
         plan.loaded_step.clone(),
         plan.maximum_fee.clone(),
       )
@@ -7387,7 +7477,7 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         running_hot.clone(),
         Some(stale_run),
         plan.admission.clone(),
-        plan.ticket,
+        running_ticket,
         plan.loaded_step.clone(),
         plan.maximum_fee.clone(),
       )
@@ -7405,7 +7495,7 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         suspended_hot,
         Some(suspended),
         plan.admission.clone(),
-        plan.ticket,
+        running_ticket,
         plan.loaded_step.clone(),
         plan.maximum_fee.clone(),
       )
@@ -7420,7 +7510,7 @@ fn current_step_plan_builds_only_from_coherent_opening_authority() {
         running_hot,
         Some(incoherent_suspension),
         plan.admission.clone(),
-        plan.ticket,
+        running_ticket,
         plan.loaded_step.clone(),
         plan.maximum_fee.clone(),
       )
