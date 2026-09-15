@@ -5168,6 +5168,57 @@ pub mod pallet {
       })
     }
 
+    /// Atomically installs one complete generation-bound parking destination before releasing the
+    /// exact canonical Service member. Refusal retains semantic state, Run, attempts, and topology.
+    #[allow(
+      dead_code,
+      reason = "canonical parking remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn transfer_service_member_to_park(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      owner: PendingCheckOwner,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      desired: &[DependencyPlanSource],
+      timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
+      if owner.actor != actor {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::load_service_actor_semantic_state(actor, kind)
+            .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+          if PendingCheckOwners::<T>::contains_key(actor.actor_id)
+            || !DependencyPlans::<T>::get(actor.actor_id).is_empty()
+            || DependencyTimedReviews::<T>::contains_key(actor.actor_id)
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          PendingCheckOwners::<T>::insert(actor.actor_id, owner);
+          let mutation = Self::commit_negative_dependency_plan(owner, desired, timed_review)?;
+          Self::remove_service_member(actor)
+            .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+          let mut process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if process.generation != actor.generation || process.status != ProcessStatus::Serving {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          process.residence = Some(ProcessResidence::Parked(evidence));
+          ActorProcesses::<T>::insert(actor.actor_id, process);
+          Ok(mutation)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Selects the first canonical free slot in one deadline bucket without mutation.
     pub(crate) fn plan_deadline_destination(
       actor: ActorRef,

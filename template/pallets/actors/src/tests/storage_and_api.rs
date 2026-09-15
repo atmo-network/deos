@@ -606,6 +606,106 @@ fn canonical_service_semantics_load_and_mutate_without_legacy_authority() {
 }
 
 #[test]
+fn canonical_service_parking_installs_destination_before_releasing_membership() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    let source = 19;
+    let desired = [DependencyPlanSource {
+      source,
+      observed_revision: 0,
+    }];
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 7,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: [7; 32],
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: None,
+    };
+    let node = ServiceNodes::<Test>::get(actor_id).expect("member exists");
+
+    let stale_owner = PendingCheckOwner {
+      actor: actor_ref(actor_id, actor.generation + 1),
+      plan_revision: owner.plan_revision,
+    };
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        stale_owner,
+        evidence,
+        &desired,
+        None,
+      ),
+      Err(DependencyRegistrationError::PendingOwnerMismatch)
+    );
+    assert_eq!(ServiceNodes::<Test>::get(actor_id), Some(node));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
+
+    DependencyRevisions::<Test>::insert(
+      source,
+      DependencyRevisionState {
+        exhausted: true,
+        ..Default::default()
+      },
+    );
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner,
+        evidence,
+        &desired,
+        None,
+      ),
+      Err(DependencyRegistrationError::SourceExhausted)
+    );
+    assert_eq!(ServiceNodes::<Test>::get(actor_id), Some(node));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
+    DependencyRevisions::<Test>::remove(source);
+
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner,
+        evidence,
+        &desired,
+        None,
+      ),
+      Ok(DependencyPlanMutation {
+        installed: 1,
+        ..Default::default()
+      })
+    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(PendingCheckOwners::<Test>::get(actor_id), Some(owner));
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot));
+  });
+}
+
+#[test]
 fn canonical_service_semantics_reject_stale_generation_and_residence_without_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
