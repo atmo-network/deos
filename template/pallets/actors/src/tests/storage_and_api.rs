@@ -955,6 +955,151 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
 }
 
 #[test]
+fn positive_due_review_wakes_only_the_exact_current_park_episode() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 23;
+    let observed = [DependencyPlanSource {
+      source,
+      observed_revision: 0,
+    }];
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 9,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &observed,
+      Some(WakeupKey::Block(2)),
+    )
+    .unwrap();
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(2),
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_due_dependency_review(review),
+        Ok(DependencyDueReviewMutation::Published)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let stale_review = DependencyTimedReview {
+      deadline: WakeupKey::Block(1),
+      ..review
+    };
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        stale_review,
+        evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Err(DependencyRegistrationError::PendingReviewMismatch)
+    );
+    let stale_evidence = ParkEvidence {
+      plan_identity: [7; 32],
+      ..evidence
+    };
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        review,
+        stale_evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        review,
+        evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(actor_id),
+      Some(review)
+    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    DependencyRevisions::<Test>::mutate(source, |state| {
+      state.revision -= 1;
+      state.exhausted = true;
+    });
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        review,
+        evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    DependencyRevisions::<Test>::mutate(source, |state| state.exhausted = false);
+
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        review,
+        evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Ok(())
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      source, actor_id
+    ));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Service(ServiceResidenceKind::Live)))
+    );
+    assert_eq!(
+      Actors::consume_positive_dependency_review_and_wake(
+        review,
+        evidence,
+        &observed,
+        ServiceResidenceKind::Live,
+        2,
+      ),
+      Err(DependencyRegistrationError::PendingReviewMissing)
+    );
+  });
+}
+
+#[test]
 fn canonical_service_semantics_reject_stale_generation_and_residence_without_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
