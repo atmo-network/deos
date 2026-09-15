@@ -939,17 +939,9 @@ impl<T: Config> Pallet<T> {
         ))
       }
       NextResidence::Publish { state, resources } => {
-        let instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
-        match Self::schedule_next_work_with_authority(
+        match Self::publish_active_state_on_legacy_fifo(
           actor_id,
-          &instance,
-          state.hot.clone(),
-          &state.identity,
-          state.run_state.as_ref(),
+          &state,
           admission,
           resources,
           now,
@@ -7049,7 +7041,7 @@ impl<T: Config> Pallet<T> {
         _ => Err(EnqueueOutcome::CorruptedTopology),
       };
     };
-    let mut instance = Self::derive_active_actor_view(
+    let instance = Self::derive_active_actor_view(
       state.identity.clone(),
       state.hot.clone(),
       state.contract.clone(),
@@ -7086,19 +7078,11 @@ impl<T: Config> Pallet<T> {
         let (_, _, hot, _) =
           Self::load_frame_control_authority(actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
         state.hot = hot;
-        instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
       }
     }
-    let placement = Self::schedule_next_work_with_authority(
+    let placement = Self::publish_active_state_on_legacy_fifo(
       actor_id,
-      &instance,
-      state.hot,
-      &state.identity,
-      state.run_state.as_ref(),
+      &state,
       &admission,
       resources,
       now,
@@ -7222,17 +7206,9 @@ impl<T: Config> Pallet<T> {
         .map(|loaded| loaded.resources)
         .ok_or(EnqueueOutcome::CorruptedTopology)?
     };
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let placement = Self::schedule_next_work_with_authority(
+    let placement = Self::publish_active_state_on_legacy_fifo(
       actor_id,
-      &instance,
-      state.hot.clone(),
-      &state.identity,
-      state.run_state.as_ref(),
+      &state,
       &admission,
       resources,
       frame_system::Pallet::<T>::block_number(),
@@ -8264,6 +8240,35 @@ impl<T: Config> Pallet<T> {
       Vec::new()
     };
     Ok((placement, requeues))
+  }
+
+  /// Legacy physical publication boundary for one authoritative active state.
+  /// Callers select semantic residence and resource ownership before entering
+  /// this adapter; only this function derives the temporary FIFO projection.
+  fn publish_active_state_on_legacy_fifo(
+    actor_id: ActorId,
+    state: &ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<StepControlPlacement, EnqueueOutcome> {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    Self::schedule_next_work_with_authority(
+      actor_id,
+      &instance,
+      state.hot.clone(),
+      &state.identity,
+      state.run_state.as_ref(),
+      admission,
+      resources,
+      now,
+      cutoff,
+    )
   }
 
   fn schedule_next_work_with_authority(
