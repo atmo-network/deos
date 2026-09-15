@@ -76,6 +76,20 @@ V1 must not wait for universal balance notification coverage, a new Oracle frame
 
 The first V1 implementation cohort is necessarily the joint N2.1/N2.4/N3.5 atomic cutover, not an isolated continuation patch. `ActorProcesses` owns only generation, attempt guard, status and residence; it cannot supply Identity, Hot or admission authority after legacy control cells are removed. The current executable core and complete semantic loader still require that legacy authority, while the retained absence guard deliberately forbids publishing a second semantic owner before lifecycle benchmarks and generated Weight bindings exist. Therefore create/activate publication, semantic storage, ring service and their composed resource owners MUST land together for the supported profile; do not weaken the guard, invent a temporary dual reader or claim a direct-state fixture as N2.1 closure.
 
+The cutover inventory has one semantic writer cohort, not one storage declaration. Every row below is part of the first retained caller/resource boundary; helpers or tests that bypass these composition roots do not discharge it.
+
+| Semantic transition | Supported composition roots | Generated Weight owner |
+| --- | --- | --- |
+| Publish dormant | Dormant user/System creation | `create_user_actor*`, `create_dormant_system_actor` |
+| Publish active | Active user/System creation, including explicit owner-slot and sovereign-ID variants | `create_user_actor*`, `create_system_actor*`, Crossing creation branch where applicable |
+| Replace dormant → active | `activate_actor` through `do_activate_actor` | `activate_actor` plus the applicable trigger-index branch |
+| Replace active → active | Contract replacement; lifecycle, Trigger, run, retry, latch, wakeup and service mutations in dispatch, detector, prepass and mandatory service paths | Owning dispatch Weight plus the generated trigger/prepass/service unit that performs the mutation; `update_contract` and close-substitution composition are included |
+| Replace active → dormant | `deactivate_actor` through cancellation, queue/wakeup cleanup and contract removal | `deactivate_actor` plus its complete cleanup suffix |
+| Remove active | Owner close, sweep, expiry, completion, apoptosis and every terminal execution path converging on `finalize_actor_loaded_inner` | `close_dispatch_weight_upper` and the initiating dispatch/prepass/service owner |
+| Remove dormant | Dormant close through `close_inactive_actor` | `close_dispatch_weight_upper` |
+
+This inventory makes the first executable cut exact: introduce the semantic map and compare-and-replace writer only in the same retained change that converts these composition roots, switches the semantic loader and mandatory service consumer, removes legacy semantic fields from physical cells, updates try-state/metadata guards, and regenerates every affected Weight. The narrowest implementation order inside that atomic retained change is storage/writer → create/activate → mandatory service and all hot mutations → deactivate/finalize → loader/legacy-field removal → benchmarks and generated bindings; intermediate commits may be diagnostic only and must not be retained as independently valid states.
+
 ---
 
 ## 1. Continuation Contract
