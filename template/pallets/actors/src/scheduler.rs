@@ -8708,28 +8708,32 @@ impl<T: Config> Pallet<T> {
     let process_plan = Self::plan_next_work_loaded(&instance, supplied_run, now, cutoff)?;
     let process = Self::plan_process_destination(actor, process_plan, now, None)?;
     let mut hot = state.hot.clone();
-    let trigger_deadline =
-      if !instance.lifecycle.is_paused() && instance.trigger_wakeup_pointer.is_none() {
-        Self::initial_trigger_wakeup_tick(&instance)?
-          .map(|tick| {
-            Self::plan_deadline_destination(actor, WakeupKey::Tick(tick)).inspect(|handle| {
-              hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
-                tick,
-                page_id: handle.page,
-                slot: u32::from(handle.slot),
-              });
-            })
-          })
-          .transpose()
-          .map_err(|error| match error {
-            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
-              EnqueueOutcome::WakeupCapacityExhausted
-            }
-            _ => EnqueueOutcome::CorruptedTopology,
-          })?
-      } else {
-        None
+    let trigger_deadline = if instance.lifecycle.is_paused() {
+      hot.trigger_wakeup_pointer = None;
+      None
+    } else {
+      let trigger_tick = match instance.trigger_wakeup_pointer.as_ref() {
+        Some(pointer) => Some(pointer.tick),
+        None => Self::initial_trigger_wakeup_tick(&instance)?,
       };
+      trigger_tick
+        .map(|tick| {
+          Self::plan_deadline_destination(actor, WakeupKey::Tick(tick)).inspect(|handle| {
+            hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+              tick,
+              page_id: handle.page,
+              slot: u32::from(handle.slot),
+            });
+          })
+        })
+        .transpose()
+        .map_err(|error| match error {
+          DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+            EnqueueOutcome::WakeupCapacityExhausted
+          }
+          _ => EnqueueOutcome::CorruptedTopology,
+        })?
+    };
     Ok(PlannedActorPublication {
       hot,
       process,

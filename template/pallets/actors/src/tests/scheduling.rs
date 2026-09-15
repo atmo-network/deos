@@ -1177,6 +1177,54 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
 }
 
 #[test]
+fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.hot.trigger_wakeup_pointer = Some(crate::TriggerWakeupPointer {
+      tick: 9,
+      page_id: 77,
+      slot: 3,
+    });
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+    });
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+
+    Actors::test_publish_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      0,
+    )
+    .expect("existing temporal authority is rehomed");
+
+    let handle = crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+      .expect("canonical Trigger deadline owns the migrated tick");
+    assert_eq!(handle.key, WakeupKey::Tick(9));
+    assert_eq!(
+      crate::ActorSemanticStates::<Test>::get(actor_id).and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => record.hot.trigger_wakeup_pointer,
+        crate::ActorSemanticState::Dormant(_) => None,
+      }),
+      Some(crate::TriggerWakeupPointer {
+        tick: 9,
+        page_id: handle.page,
+        slot: u32::from(handle.slot),
+      }),
+      "semantic Trigger authority must point only at the new canonical residence"
+    );
+  });
+}
+
+#[test]
 fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomically() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
