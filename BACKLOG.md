@@ -269,8 +269,6 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 
 ## N1 — Evidence Continuity Without Another Research Migration
 
-- [ ] **N1.1 / Active Semantic Lineage Projection.** Keep EXP-0120–0137 and earlier records intact. Import unchanged ring, retry and custody claims at their real scope. Qualify EXP-0121–0124, EXP-0127 and their composed consumers where generic current-condition parking differs from the new parked-balance threshold. Add a small explicit semantic delta rather than automatically reopening every ancestor. **Exit:** current obligations and consumers can be found without reading the full historical corpus.
-
 - [ ] **N1.2 / Skill and Validator Boundaries.** Enforce that selected design, connected implementation, executable evidence and resource binding are separate states. Add only checks needed for this amendment; no new experiment bureaucracy or mandatory second prototype. Preserve same-host reassessment, exact artifacts and finite stopping. New decision-bearing evidence belongs in a bounded Leaf; the index and backlog contain pointers, not another diary. **Exit:** a record cannot count design acceptance as V1/V2 completion, and a new balance profile cannot inherit old numerical truth silently.
 
 - [ ] **N1.3 / Applicable Hazard Closure Routes.** Carry B1–B8 and the existing H1–H9 routes into N5.3. Distinguish a known legacy finding, an untested replacement hazard and a reproduced defect. A retained heap or fallback keeps deep/full obligations; actual elimination closes only the removed path and requires replacement coverage. **Exit:** each applicable hazard has one owner and falsifier; no correctness obligation is waived because an optimization candidate was rejected.
