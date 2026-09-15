@@ -65,6 +65,15 @@ struct EffectfulStepTransition<T: Config> {
   eligible_at: Option<BlockNumberFor<T>>,
 }
 
+/// Carrier-neutral semantic result of completing an admitted empty Contract.
+/// The legacy FIFO adapter decides whether the still-live Actor is closed or
+/// republished after the semantic cycle has completed.
+struct ZeroStepTransition<T: Config> {
+  state: ActiveActorStateOf<T>,
+  cycle_nonce: u64,
+  resources: ActorStepResourceEnvelope,
+}
+
 #[derive(Clone, Copy)]
 enum TerminalCleanupReservation {
   Included,
@@ -769,13 +778,13 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn execute_zero_step_from_consumed_frame(
+  fn execute_zero_step_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
     opening_observation: Option<CanonicalObservationState>,
-  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+  ) -> Result<ZeroStepTransition<T>, AttemptTransactionError> {
     if !matches!(
       state.contract.trigger,
       Trigger::Manual
@@ -824,6 +833,27 @@ impl<T: Config> Pallet<T> {
       result: CycleResult::Completed,
       outcomes: OutcomeTotals::default(),
     });
+    Ok(ZeroStepTransition {
+      state,
+      cycle_nonce,
+      resources: ActorStepResourceEnvelope {
+        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+        effect: Weight::zero(),
+      },
+    })
+  }
+
+  fn finalize_zero_step_on_legacy_fifo(
+    actor_id: ActorId,
+    transition: ZeroStepTransition<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+    let ZeroStepTransition {
+      state,
+      cycle_nonce,
+      resources,
+    } = transition;
     if state
       .contract
       .auto_close_at_cycle_nonce
@@ -845,10 +875,6 @@ impl<T: Config> Pallet<T> {
         None,
       ));
     }
-    let resources = ActorStepResourceEnvelope {
-      control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-      effect: Weight::zero(),
-    };
     let instance = Self::derive_active_actor_view(
       state.identity.clone(),
       state.hot.clone(),
@@ -904,6 +930,18 @@ impl<T: Config> Pallet<T> {
       None,
       None,
     ))
+  }
+
+  fn execute_zero_step_from_consumed_frame(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+    opening_observation: Option<CanonicalObservationState>,
+  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+    let transition =
+      Self::execute_zero_step_transition(actor_id, state, admission, now, opening_observation)?;
+    Self::finalize_zero_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
   fn execute_stop_cycle_from_consumed_frame(
