@@ -933,6 +933,56 @@ pub mod pallet {
     pub admission: Admission,
   }
 
+  /// Complete storage-neutral operation set for the future actor-keyed semantic owner. Every
+  /// update is a compare-and-replace of the whole bounded record, so independently authored field
+  /// patches cannot silently overwrite one another. Placement-only transitions need no operation.
+  #[derive(Clone, Debug, Eq, PartialEq)]
+  pub enum ActorSemanticMutation<Record> {
+    Publish(Record),
+    Replace {
+      expected: Record,
+      replacement: Record,
+    },
+    Remove {
+      expected: Record,
+    },
+  }
+
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  pub enum ActorSemanticMutationError {
+    AlreadyPublished,
+    Missing,
+    Stale,
+  }
+
+  pub fn apply_actor_semantic_mutation<Record: Clone + Eq>(
+    current: Option<&Record>,
+    mutation: &ActorSemanticMutation<Record>,
+  ) -> Result<Option<Record>, ActorSemanticMutationError> {
+    match (current, mutation) {
+      (None, ActorSemanticMutation::Publish(record)) => Ok(Some(record.clone())),
+      (Some(_), ActorSemanticMutation::Publish(_)) => {
+        Err(ActorSemanticMutationError::AlreadyPublished)
+      }
+      (
+        Some(current),
+        ActorSemanticMutation::Replace {
+          expected,
+          replacement,
+        },
+      ) if current == expected => Ok(Some(replacement.clone())),
+      (Some(current), ActorSemanticMutation::Remove { expected }) if current == expected => {
+        Ok(None)
+      }
+      (None, ActorSemanticMutation::Replace { .. } | ActorSemanticMutation::Remove { .. }) => {
+        Err(ActorSemanticMutationError::Missing)
+      }
+      (Some(_), ActorSemanticMutation::Replace { .. } | ActorSemanticMutation::Remove { .. }) => {
+        Err(ActorSemanticMutationError::Stale)
+      }
+    }
+  }
+
   /// Storage-free projection of fields currently duplicated by placement cells.
   #[derive(Clone, Copy, Debug, Eq, PartialEq)]
   pub struct ActorSemanticExecutionProjection<BlockNumber> {

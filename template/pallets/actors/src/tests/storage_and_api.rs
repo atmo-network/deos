@@ -1,29 +1,30 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
-  ActorRef, ActorSemanticExecutionProjection, ActorSemanticProjectionError, ActorSemanticRecord,
-  ActorStepResourceEnvelope, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles,
-  DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages,
-  DeadlineIndexPositions, DeadlineMutationError, DeadlinePages, DependencyDueReviewError,
-  DependencyDueReviewMutation, DependencyPlanMutation, DependencyPlanSource, DependencyPlans,
-  DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
-  DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
-  DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
-  DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
-  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
-  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
-  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
-  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
-  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
-  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
-  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
-  ServicePublicationError, ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError,
-  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  ActorRef, ActorSemanticExecutionProjection, ActorSemanticMutation, ActorSemanticMutationError,
+  ActorSemanticProjectionError, ActorSemanticRecord, ActorStepResourceEnvelope,
+  ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
+  DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
+  DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
+  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationError,
+  DependencyPublicationMutation, DependencyRegistrationError, DependencyRegistrationFreePositions,
+  DependencyRegistrationHandle, DependencyRegistrationHeaders, DependencyRegistrationMutation,
+  DependencyRegistrationPages, DependencyRegistrationPosition, DependencyRegistrationPositions,
+  DependencyRegistrations, DependencyRevisionError, DependencyRevisionMutation,
+  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
+  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
+  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
+  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
+  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
+  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
+  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
+  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
+  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
+  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, apply_actor_semantic_mutation,
   compile_legacy_process, plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
@@ -102,6 +103,75 @@ fn semantic_record_owns_only_non_derivable_state_and_projects_execution_geometry
   assert_eq!(
     project_actor_semantic_execution(CycleState::Running, Some((3, 31u32)), None),
     Err(ActorSemanticProjectionError::CurrentStepMissing)
+  );
+}
+
+#[test]
+fn semantic_mutation_is_complete_compare_and_replace_without_placement_authority() {
+  let original = ActorSemanticRecord {
+    identity: 1u32,
+    hot: 2u32,
+    admission: 3u32,
+  };
+  let replacement = ActorSemanticRecord {
+    identity: 1u32,
+    hot: 4u32,
+    admission: 5u32,
+  };
+  let stale = ActorSemanticRecord {
+    identity: 9u32,
+    hot: 9u32,
+    admission: 9u32,
+  };
+
+  assert_eq!(
+    apply_actor_semantic_mutation(None, &ActorSemanticMutation::Publish(original.clone()),),
+    Ok(Some(original.clone()))
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      Some(&original),
+      &ActorSemanticMutation::Publish(original.clone()),
+    ),
+    Err(ActorSemanticMutationError::AlreadyPublished)
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      Some(&original),
+      &ActorSemanticMutation::Replace {
+        expected: original.clone(),
+        replacement: replacement.clone(),
+      },
+    ),
+    Ok(Some(replacement.clone()))
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      Some(&original),
+      &ActorSemanticMutation::Replace {
+        expected: stale.clone(),
+        replacement: replacement.clone(),
+      },
+    ),
+    Err(ActorSemanticMutationError::Stale)
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      Some(&replacement),
+      &ActorSemanticMutation::Remove {
+        expected: replacement.clone(),
+      },
+    ),
+    Ok(None)
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      None,
+      &ActorSemanticMutation::Remove {
+        expected: replacement,
+      },
+    ),
+    Err(ActorSemanticMutationError::Missing)
   );
 }
 
@@ -1031,6 +1101,63 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
     assert!(
       lib.contains("fn load_actor_service_state_with_head(") && lib.contains(dependency),
       "semantic execution projection input drift: {dependency}"
+    );
+  }
+
+  // The complete post-cutover operation map is deliberately smaller than the caller set: shared
+  // construction publishes one record; every semantic writer performs whole-record Replace;
+  // deactivate/finalize remove the exact record; and residence-only movement performs no semantic
+  // mutation. Production storage remains blocked until all mapped callers and composed weights
+  // convert together.
+  let semantic_operation_map = [
+    ("insert_active_actor", "Publish"),
+    ("store_frame_control_authority", "Replace"),
+    ("replace_control_admission_for_transition", "Replace"),
+    ("prepare_observation_ready_cell", "Replace"),
+    ("update_existing_frame_control_identity", "Replace"),
+    ("update_existing_frame_control_hot", "Replace"),
+    ("consume_waiting_from_supplied_authority", "Replace"),
+    ("write_run_state", "Replace"),
+    ("do_deactivate_actor", "Remove"),
+    ("finalize_actor_loaded_inner", "Remove"),
+  ];
+  assert_eq!(
+    semantic_operation_map
+      .iter()
+      .filter(|(_, operation)| *operation == "Publish")
+      .count(),
+    1
+  );
+  assert_eq!(
+    semantic_operation_map
+      .iter()
+      .filter(|(_, operation)| *operation == "Remove")
+      .count(),
+    2
+  );
+  for (owner, _) in semantic_operation_map {
+    assert!(
+      lib.contains(&format!("fn {owner}("))
+        || scheduler.contains(&format!("fn {owner}("))
+        || execution.contains(&format!("fn {owner}(")),
+      "semantic operation owner disappeared: {owner}"
+    );
+  }
+  for placement_only_owner in [
+    "append_waiting_entry",
+    "control_normalize_ready_head",
+    "control_remove_ready_primary",
+    "remove_waiting_entry",
+  ] {
+    assert!(
+      scheduler.contains(&format!("fn {placement_only_owner}(")),
+      "placement-only semantic no-op owner disappeared: {placement_only_owner}"
+    );
+    assert!(
+      !semantic_operation_map
+        .iter()
+        .any(|(owner, _)| *owner == placement_only_owner),
+      "placement-only owner must not acquire semantic write authority: {placement_only_owner}"
     );
   }
 
