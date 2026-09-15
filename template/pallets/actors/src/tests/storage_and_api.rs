@@ -1273,6 +1273,130 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
 }
 
 #[test]
+fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 31;
+    let feed = 9;
+    ObservationDependencySources::<Test>::insert(feed, source);
+    DependencySourceObservations::<Test>::insert(source, feed);
+    set_observation(feed, ScalarObservationState::Unavailable);
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 13,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision: 0,
+      }],
+      Some(WakeupKey::Block(2)),
+    )
+    .unwrap();
+    let first_handle = Actors::plan_deadline_destination(actor, WakeupKey::Block(2)).unwrap();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_deadline_member(first_handle).unwrap();
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut no_weight = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut no_weight,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(first_handle));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+
+    let weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let mut admitted = WeightMeter::with_limit(weight);
+    assert!(matches!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut admitted,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Ok((current, DependencyReviewMutation::Rearmed(_))) if current == actor
+    ));
+    let rearmed_handle = DeadlineHandles::<Test>::get(actor_id).expect("review stays indexed");
+    assert_eq!(rearmed_handle.key, WakeupKey::Block(3));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    set_observation(feed, ScalarObservationState::Uninitialized);
+    let mut refused = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut refused,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::Interpretation(
+        DependencyRegistrationError::SourceUninitialized
+      ))
+    );
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(rearmed_handle));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+
+    set_observation(
+      feed,
+      ScalarObservationState::Fresh {
+        value: 1,
+        observed_at: 3,
+      },
+    );
+    let mut wake = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_next_due_block_observation_availability_review(
+        &mut wake,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Ok((actor, DependencyReviewMutation::Woke))
+    );
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
 fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

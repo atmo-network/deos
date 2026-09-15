@@ -295,6 +295,7 @@ pub enum DependencyDueReviewError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyReviewWorkerError {
   InsufficientWeight,
+  Deadline(DeadlineMutationError),
   Publication(DependencyDueReviewError),
   Interpretation(DependencyRegistrationError),
 }

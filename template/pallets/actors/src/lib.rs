@@ -4017,7 +4017,31 @@ pub mod pallet {
       Ok(node)
     }
 
-    /// Inserts one generation-bound process into an exact retained deadline slot.
+    fn deadline_handle_matches_process(
+      handle: DeadlineHandleOf<T>,
+      process: &ActorProcessOf<T>,
+    ) -> bool {
+      process.generation == handle.actor.generation
+        && process.status == ProcessStatus::Serving
+        && (process.residence
+          == Some(ProcessResidence::Deadline {
+            key: handle.key,
+            page: handle.page,
+            slot: handle.slot,
+          })
+          || matches!(
+            process.residence,
+            Some(ProcessResidence::Parked(_))
+              if DependencyTimedReviews::<T>::get(handle.actor.actor_id)
+                .is_some_and(|review| {
+                  review.owner.actor == handle.actor
+                    && review.deadline == handle.key
+                    && PendingCheckOwners::<T>::get(handle.actor.actor_id) == Some(review.owner)
+                })
+          ))
+    }
+
+    /// Inserts one generation-bound process obligation into an exact retained deadline slot.
     #[allow(
       dead_code,
       reason = "deadline carrier remains unreachable until atomic cutover"
@@ -4035,15 +4059,7 @@ pub mod pallet {
       }
       let process = ActorProcesses::<T>::get(handle.actor.actor_id)
         .ok_or(DeadlineMutationError::ProcessMissing)?;
-      if process.generation != handle.actor.generation
-        || process.status != ProcessStatus::Serving
-        || process.residence
-          != Some(ProcessResidence::Deadline {
-            key: handle.key,
-            page: handle.page,
-            slot: handle.slot,
-          })
-      {
+      if !Self::deadline_handle_matches_process(handle, &process) {
         return Err(DeadlineMutationError::ProcessResidenceMismatch);
       }
       if DeadlineHandles::<T>::contains_key(handle.actor.actor_id) {
@@ -4165,14 +4181,7 @@ pub mod pallet {
       if process.generation != actor.generation || handle.actor != actor {
         return Err(DeadlineMutationError::StaleGeneration);
       }
-      if process.status != ProcessStatus::Serving
-        || process.residence
-          != Some(ProcessResidence::Deadline {
-            key: handle.key,
-            page: handle.page,
-            slot: handle.slot,
-          })
-      {
+      if !Self::deadline_handle_matches_process(handle, &process) {
         return Err(DeadlineMutationError::ProcessResidenceMismatch);
       }
       let mut header =
@@ -5611,6 +5620,93 @@ pub mod pallet {
       })
     }
 
+    /// Traverses the earliest due block deadline and carries one indexed Oracle review through
+    /// its generated complete-attempt owner. Insufficient Weight performs no reads or mutation;
+    /// every admitted refusal restores the exact deadline, Pending, Park, and Service topology.
+    #[allow(
+      dead_code,
+      reason = "bounded due-review traversal remains staged behind the mandatory service cutover"
+    )]
+    pub(crate) fn process_next_due_block_observation_availability_review(
+      meter: &mut WeightMeter,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<(ActorRef, DependencyReviewMutation), DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_due_observation_availability_review();
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let key = Self::deadline_index_get(WakeupClock::Block, 0).ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
+          )?;
+          if !matches!(key, WakeupKey::Block(block) if block <= now) {
+            return Err(DependencyReviewWorkerError::Deadline(
+              DeadlineMutationError::InvalidDestination,
+            ));
+          }
+          let header = DeadlineHeaders::<T>::get(key).ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::CorruptCarrier),
+          )?;
+          let page = DeadlinePages::<T>::get(key, header.first_page).ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::CorruptCarrier),
+          )?;
+          let actor = page
+            .entries
+            .iter(/* deos-bypass: bounded-iter -- fixed C32 deadline page. */)
+            .find_map(|entry| *entry)
+            .ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::CorruptCarrier),
+          )?;
+          let process = ActorProcesses::<T>::get(actor.actor_id).ok_or(
+            DependencyReviewWorkerError::Deadline(DeadlineMutationError::ProcessMissing),
+          )?;
+          let Some(ProcessResidence::Parked(evidence)) = process.residence else {
+            return Err(DependencyReviewWorkerError::Deadline(
+              DeadlineMutationError::ProcessResidenceMismatch,
+            ));
+          };
+          let expected = DependencyTimedReviews::<T>::get(actor.actor_id).ok_or(
+            DependencyReviewWorkerError::Publication(DependencyDueReviewError::ReviewMissing),
+          )?;
+          if expected.owner.actor != actor || expected.deadline != key {
+            return Err(DependencyReviewWorkerError::Publication(
+              DependencyDueReviewError::ReviewMismatch,
+            ));
+          }
+          Self::remove_deadline_member(actor).map_err(DependencyReviewWorkerError::Deadline)?;
+          let mutation = Self::process_due_observation_availability_review(
+            meter,
+            expected,
+            evidence,
+            kind,
+            now,
+            next_review,
+          )?;
+          if matches!(mutation, DependencyReviewMutation::Rearmed(_)) {
+            let review = DependencyTimedReviews::<T>::get(actor.actor_id).ok_or(
+              DependencyReviewWorkerError::Publication(DependencyDueReviewError::ReviewMissing),
+            )?;
+            let destination = Self::plan_deadline_destination(actor, review.deadline)
+              .map_err(DependencyReviewWorkerError::Deadline)?;
+            Self::insert_deadline_member(destination)
+              .map_err(DependencyReviewWorkerError::Deadline)?;
+          }
+          Ok((actor, mutation))
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(
@@ -5795,6 +5891,17 @@ pub mod pallet {
           let due = matches!(handle.key, WakeupKey::Block(block) if block <= now);
           if !due {
             return Err(DeadlineMutationError::InvalidDestination);
+          }
+          let process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DeadlineMutationError::ProcessMissing)?;
+          if process.residence
+            != Some(ProcessResidence::Deadline {
+              key: handle.key,
+              page: handle.page,
+              slot: handle.slot,
+            })
+          {
+            return Err(DeadlineMutationError::ProcessResidenceMismatch);
           }
           Self::remove_deadline_member(actor)?;
           let mut process = ActorProcesses::<T>::get(actor.actor_id)

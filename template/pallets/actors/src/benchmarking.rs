@@ -2064,8 +2064,14 @@ mod benches {
     else {
       panic!("benchmark observation feed is available")
     };
+    T::BenchmarkHelper::deactivate_observation_feed(feed)?;
+    assert!(matches!(
+      T::ObservationProvider::current(&feed),
+      CanonicalObservationState::Unavailable
+    ));
     ObservationDependencySources::<T>::insert(feed, source);
     DependencySourceObservations::<T>::insert(source, feed);
+    DependencyRevisions::<T>::mutate(source, |state| state.revision = revision);
     let owner = PendingCheckOwner {
       actor,
       plan_revision: 1,
@@ -2088,28 +2094,36 @@ mod benches {
       Some(WakeupKey::Block(2u32.into())),
     )
     .expect("benchmark Actor enters canonical Park");
-    let review = DependencyTimedReview {
-      owner,
-      deadline: WakeupKey::Block(2u32.into()),
-    };
+    let destination = Pallet::<T>::plan_deadline_destination(actor, WakeupKey::Block(2u32.into()))
+      .expect("benchmark review owns a deadline destination");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Pallet::<T>::insert_deadline_member(destination)
+        .expect("benchmark review enters the deadline index");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
     frame_system::Pallet::<T>::set_block_number(2u32.into());
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 
     #[block]
     {
-      Pallet::<T>::process_due_observation_availability_review(
+      Pallet::<T>::process_next_due_block_observation_availability_review(
         &mut meter,
-        review,
-        evidence,
         ServiceResidenceKind::Live,
         2u32.into(),
-        None,
+        Some(WakeupKey::Block(3u32.into())),
       )
-      .expect("available observation wakes benchmark Actor");
+      .expect("unavailable indexed observation re-arms benchmark Actor");
     }
 
-    assert!(ServiceNodes::<T>::contains_key(actor_id));
-    assert!(!DependencyTimedReviews::<T>::contains_key(actor_id));
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    assert_eq!(
+      DependencyTimedReviews::<T>::get(actor_id).map(|review| review.deadline),
+      Some(WakeupKey::Block(3u32.into()))
+    );
+    assert_eq!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(3u32.into()))
+    );
     Ok(())
   }
 
