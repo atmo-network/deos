@@ -1,7 +1,7 @@
 use super::pallet::*;
 use super::{
   AddressEvent, AssetOps, BlockResourceDomain, BlockResourceLimits, BlockResourceState,
-  CanonicalObservationState, IngressFailure, ObservationProvider, StepControlExecution,
+  CanonicalObservationState, IngressFailure, ObservationProvider, RetryClass, StepControlExecution,
   StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
   StepControlWeightProvider as _, TaskEffectWeightProvider as _, weights::WeightInfo,
 };
@@ -1824,7 +1824,14 @@ impl<T: Config> Pallet<T> {
             None
           }
           (AttemptDisposition::Failed, None, None)
-            if matches!(step.on_error, StepErrorPolicy::AbortCycle) =>
+            if matches!(step.on_error, StepErrorPolicy::AbortCycle)
+              || matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
+                && attempt.step.as_ref().is_some_and(|record| {
+                  matches!(
+                    record.outcome,
+                    StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
+                  )
+                }) =>
           {
             None
           }
