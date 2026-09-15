@@ -1787,7 +1787,6 @@ impl<T: Config> Pallet<T> {
         if semantic.identity != state.identity
           || semantic.hot != state.hot
           || semantic.admission != *admission
-          || Self::load_actor_contract(actor.actor_id).as_ref() != Some(&state.contract)
           || Self::consider_service_head(now).map_err(|_| AttemptTransactionError::Invariant)?
             != ServiceRoundEncounter::Eligible(actor)
         {
@@ -1818,6 +1817,12 @@ impl<T: Config> Pallet<T> {
         } = transition;
         let later_retry_destination = match (disposition, eligible_at, deadline) {
           (AttemptDisposition::Completed, None, _) => None,
+          (AttemptDisposition::Continued, Some(eligible_at), None)
+            if matches!(step.on_error, StepErrorPolicy::ContinueNextStep)
+              && now.checked_add(&One::one()) == Some(eligible_at) =>
+          {
+            None
+          }
           (AttemptDisposition::Failed, None, None)
             if matches!(step.on_error, StepErrorPolicy::AbortCycle) =>
           {
@@ -1838,6 +1843,7 @@ impl<T: Config> Pallet<T> {
           _ => return Err(AttemptTransactionError::Invariant),
         };
         let control_outcome = match disposition {
+          AttemptDisposition::Continued => StepControlOutcome::Continued,
           AttemptDisposition::Completed => StepControlOutcome::Completed,
           AttemptDisposition::Suspended => StepControlOutcome::Suspended,
           AttemptDisposition::Failed => StepControlOutcome::Failed,

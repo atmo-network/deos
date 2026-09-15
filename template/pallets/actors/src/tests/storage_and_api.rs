@@ -6209,6 +6209,130 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
 }
 
 #[test]
+fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    setup_temporary_retry_pool();
+    set_temporary_dex_failure(true);
+    let failed = StepOf::<Test> {
+      precondition: None,
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::ContinueNextStep,
+    };
+    let completed = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(2),
+      amount: AmountResolution::Fixed(1),
+    });
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![failed, completed]).unwrap(),
+    );
+    let sovereign = Actors::actor_identity(actor_id).unwrap().sovereign_account;
+    fund_native(actor_id, 100);
+    set_asset_balance(&sovereign, TestAsset::Local(2), 10);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let first_resources = Actors::load_current_step_service_state(actor_id)
+      .unwrap()
+      .2
+      .resources;
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    let budget = <Test as crate::Config>::BlockResourceBudget::get();
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+      <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+    );
+    let first_complete = selector
+      .saturating_add(first_resources.control)
+      .saturating_add(first_resources.effect)
+      .saturating_add(suffix);
+    let mut first_state = crate::BlockResourceState::new(5);
+    assert_ok!(first_state.begin_prepass());
+    assert_ok!(first_state.open_external_phase());
+    assert_ok!(first_state.begin_drain());
+    let mut first_meter = WeightMeter::with_limit(first_complete);
+
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut first_meter,
+        5,
+        &mut first_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 0);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(2)), 0);
+    assert_eq!(first_state.outstanding_reservations(), 0);
+    let running = ActorRunStateStore::<Test>::get(actor_id).expect("cycle remains Running");
+    assert_eq!(running.cursor, 1);
+    assert_eq!(running.cumulative_outcomes.failed_steps, 1);
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+      .expect("continued Actor remains in canonical Service");
+    let second_resources = Actors::load_actor_service_state_with_control(
+      actor_id,
+      semantic.identity,
+      semantic.hot,
+      semantic.admission,
+    )
+    .and_then(|(_, _, loaded)| loaded)
+    .expect("continued Step loads from canonical authority")
+    .resources;
+    let second_complete = selector
+      .saturating_add(second_resources.control)
+      .saturating_add(second_resources.effect)
+      .saturating_add(suffix);
+    let mut second_state = crate::BlockResourceState::new(6);
+    assert_ok!(second_state.begin_prepass());
+    assert_ok!(second_state.open_external_phase());
+    assert_ok!(second_state.begin_drain());
+    let mut second_meter = WeightMeter::with_limit(second_complete);
+
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut second_meter,
+        6,
+        &mut second_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 0);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(2)), 1);
+    assert_eq!(second_state.outstanding_reservations(), 0);
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id)
+        .unwrap()
+        .last_attempted,
+      Some(6)
+    );
+  });
+}
+
+#[test]
 fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(2);
