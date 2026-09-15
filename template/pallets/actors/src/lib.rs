@@ -495,6 +495,7 @@ pub mod pallet {
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
     SystemActorContractValidator as _,
   };
+  use crate::scheduler::CyclePass;
   use alloc::vec::Vec;
   use frame::prelude::*;
   use polkadot_sdk::{
@@ -5940,6 +5941,27 @@ pub mod pallet {
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      Self::service_canonical_round_head_inner(meter, now, None)
+    }
+
+    pub(crate) fn service_canonical_round_head_with_resources(
+      meter: &mut WeightMeter,
+      now: BlockNumberFor<T>,
+      state: &mut BlockResourceState<BlockNumberFor<T>>,
+      limits: BlockResourceLimits,
+    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      Self::service_canonical_round_head_inner(meter, now, Some((state, limits)))
+    }
+
+    fn service_canonical_round_head_inner(
+      meter: &mut WeightMeter,
+      now: BlockNumberFor<T>,
+      mut resource_authority: Option<(
+        &mut BlockResourceState<BlockNumberFor<T>>,
+        BlockResourceLimits,
+      )>,
+    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      let resource_before = resource_authority.as_ref().map(|(state, _)| **state);
       let selector_envelope = T::WeightInfo::service_round_begin_populated()
         .saturating_add(T::WeightInfo::service_round_probe_eligible());
       let zero_step_envelope = T::WeightInfo::scheduler_inner_zero_step_complete().saturating_add(
@@ -5953,113 +5975,181 @@ pub mod pallet {
       if !meter.can_consume(complete_envelope) {
         return Err(ServiceRoundError::InsufficientWeight);
       }
-      let (encounter, execution_weight) =
-        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-          let result = (|| {
-            Self::begin_service_round(now)?;
-            let encounter = Self::consider_service_head(now)?;
-            let mut execution_weight = Weight::zero();
-            if let ServiceRoundEncounter::Eligible(actor) = encounter {
-              let semantic =
-                Self::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
-                  .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
-              let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+      let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::begin_service_round(now)?;
+          let encounter = Self::consider_service_head(now)?;
+          let mut execution_weight = Weight::zero();
+          if let ServiceRoundEncounter::Eligible(actor) = encounter {
+            let semantic =
+              Self::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+            let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+              actor.actor_id,
+              semantic.identity,
+              semantic.hot,
+              semantic.admission,
+            )
+            .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+            if let Some(loaded_step) = loaded_step {
+              let resources = loaded_step.resources;
+              let effectful_envelope = resources
+                .control
+                .saturating_add(resources.effect)
+                .saturating_add(
+                  T::WeightInfo::service_round_admit_eligible().max(
+                    T::WeightInfo::service_member_retire_interior()
+                      .max(T::WeightInfo::service_member_retire_pair_cursor())
+                      .max(T::WeightInfo::service_member_retire_singleton()),
+                  ),
+                );
+              if !meter.can_consume(selector_envelope.saturating_add(effectful_envelope)) {
+                return Err(ServiceRoundError::InsufficientWeight);
+              }
+              let queue_ticket = state
+                .hot
+                .queue_ticket
+                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+              let eligible_at = state.run_state.as_ref().map_or(now, |run| run.eligible_at);
+              let ticket = Self::build_actor_step_ticket(
                 actor.actor_id,
-                semantic.identity,
-                semantic.hot,
-                semantic.admission,
+                queue_ticket,
+                eligible_at,
+                &state.identity,
+                &state.hot,
+                state.run_state.as_ref(),
+                &admission,
               )
               .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-              if let Some(loaded_step) = loaded_step {
-                let resources = loaded_step.resources;
-                let effectful_envelope = resources
-                  .control
-                  .saturating_add(resources.effect)
-                  .saturating_add(
-                    T::WeightInfo::service_round_admit_eligible().max(
-                      T::WeightInfo::service_member_retire_interior()
-                        .max(T::WeightInfo::service_member_retire_pair_cursor())
-                        .max(T::WeightInfo::service_member_retire_singleton()),
-                    ),
-                  );
-                if !meter.can_consume(selector_envelope.saturating_add(effectful_envelope)) {
-                  return Err(ServiceRoundError::InsufficientWeight);
-                }
-                let queue_ticket = state
-                  .hot
-                  .queue_ticket
-                  .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-                let eligible_at = state.run_state.as_ref().map_or(now, |run| run.eligible_at);
-                let ticket = Self::build_actor_step_ticket(
-                  actor.actor_id,
-                  queue_ticket,
-                  eligible_at,
-                  &state.identity,
-                  &state.hot,
-                  state.run_state.as_ref(),
-                  &admission,
-                )
-                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-                let maximum_fee = Self::maximum_current_action_fee(
-                  state.identity.actor_class.actor_type(),
-                  &loaded_step.step,
-                  resources,
-                )
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
-                let plan = Self::build_current_step_plan(
-                  actor.actor_id,
-                  state.identity.clone(),
-                  state.hot.clone(),
-                  state.run_state.clone(),
-                  admission.clone(),
-                  ticket,
-                  loaded_step,
-                  maximum_fee,
-                )
-                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-                let evidence = Self::execute_completed_effectful_step_on_service(
-                  actor,
-                  ServiceResidenceKind::Live,
-                  state,
-                  plan,
-                  &admission,
-                  now,
-                )
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
-                execution_weight = evidence
-                  .actual_control_weight
-                  .saturating_add(evidence.actual_effect_weight)
-                  .saturating_add(
-                    T::WeightInfo::service_round_admit_eligible().max(
-                      T::WeightInfo::service_member_retire_interior()
-                        .max(T::WeightInfo::service_member_retire_pair_cursor())
-                        .max(T::WeightInfo::service_member_retire_singleton()),
-                    ),
-                  );
-              } else {
-                Self::execute_zero_step_on_service(
-                  actor,
-                  ServiceResidenceKind::Live,
-                  state,
-                  &admission,
-                  now,
-                  None,
-                )
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
-                execution_weight = zero_step_envelope;
+              let maximum_fee = Self::maximum_current_action_fee(
+                state.identity.actor_class.actor_type(),
+                &loaded_step.step,
+                resources,
+              )
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              let plan = Self::build_current_step_plan(
+                actor.actor_id,
+                state.identity.clone(),
+                state.hot.clone(),
+                state.run_state.clone(),
+                admission.clone(),
+                ticket,
+                loaded_step,
+                maximum_fee,
+              )
+              .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+              let suffix = T::WeightInfo::service_round_admit_eligible().max(
+                T::WeightInfo::service_member_retire_interior()
+                  .max(T::WeightInfo::service_member_retire_pair_cursor())
+                  .max(T::WeightInfo::service_member_retire_singleton()),
+              );
+              let mut reservation =
+                if let Some((resource_state, limits)) = resource_authority.as_mut() {
+                  Some(
+                    resource_state
+                      .reserve_actor_step(
+                        *limits,
+                        BlockResourceDomain::ActorDrainEffect,
+                        selector_envelope
+                          .saturating_add(resources.control)
+                          .saturating_add(suffix),
+                        resources.effect,
+                      )
+                      .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                  )
+                } else {
+                  None
+                };
+              let evidence = Self::execute_completed_effectful_step_on_service(
+                actor,
+                ServiceResidenceKind::Live,
+                state,
+                plan,
+                &admission,
+                now,
+              )
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              let actual_control = selector_envelope
+                .saturating_add(evidence.actual_control_weight)
+                .saturating_add(suffix);
+              if let (Some((resource_state, _)), Some(reservation)) =
+                (resource_authority.as_mut(), reservation.as_mut())
+              {
+                resource_state
+                  .settle_actor_step(reservation, actual_control, evidence.actual_effect_weight)
+                  .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
+              execution_weight = actual_control
+                .saturating_sub(selector_envelope)
+                .saturating_add(evidence.actual_effect_weight);
+            } else {
+              let mut reservation =
+                if let Some((resource_state, limits)) = resource_authority.as_mut() {
+                  Some(
+                    resource_state
+                      .reserve(
+                        *limits,
+                        BlockResourceDomain::ActorControl,
+                        selector_envelope.saturating_add(zero_step_envelope),
+                      )
+                      .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                  )
+                } else {
+                  None
+                };
+              Self::execute_zero_step_on_service(
+                actor,
+                ServiceResidenceKind::Live,
+                state,
+                &admission,
+                now,
+                None,
+              )
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              if let (Some((resource_state, _)), Some(reservation)) =
+                (resource_authority.as_mut(), reservation.as_mut())
+              {
+                resource_state
+                  .settle(
+                    reservation,
+                    selector_envelope.saturating_add(zero_step_envelope),
+                  )
+                  .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+              }
+              execution_weight = zero_step_envelope;
             }
-            Ok((encounter, execution_weight))
-          })();
-          match result {
-            Ok(outcome) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
-            }
-            Err(error) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-            }
+          } else if let Some((resource_state, limits)) = resource_authority.as_mut() {
+            let mut reservation = resource_state
+              .reserve(
+                *limits,
+                BlockResourceDomain::ActorControl,
+                selector_envelope,
+              )
+              .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+            resource_state
+              .settle(&mut reservation, selector_envelope)
+              .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
           }
-        })?;
+          Ok((encounter, execution_weight))
+        })();
+        match result {
+          Ok(outcome) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      });
+      let (encounter, execution_weight) = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+          if let (Some((state, _)), Some(before)) = (resource_authority, resource_before) {
+            *state = before;
+          }
+          return Err(error);
+        }
+      };
       meter.consume(selector_envelope);
       meter.consume(execution_weight);
       Ok(encounter)
@@ -8760,20 +8850,9 @@ pub mod pallet {
           );
           meter.consumed()
         });
-      let before_service_frontier = before_deadlines.saturating_add(deadline_weight);
-      let service_frontier_weight = {
-        let mut meter =
-          WeightMeter::with_limit(control_available.saturating_sub(before_service_frontier));
-        let _ = Self::service_canonical_round_head(&mut meter, now);
-        meter.consumed()
-      };
-      let housekeeping_weight = before_service_frontier.saturating_add(service_frontier_weight);
+      let housekeeping_weight = before_deadlines.saturating_add(deadline_weight);
       let remaining_after_housekeeping = available.saturating_sub(housekeeping_weight);
       Self::settle_on_idle_control(&mut control_authority, housekeeping_weight);
-      if breaker_active {
-        Self::finalize_empty_actor_drain(now);
-        return housekeeping_weight;
-      }
       let execution_cutoff = PrepassExecutionCutoff::<T>::get()
         .filter(|(cutoff_block, _)| *cutoff_block == now)
         .map(|(_, cutoff)| cutoff)
@@ -8790,19 +8869,37 @@ pub mod pallet {
             CurrentBlockResourceState::<T>::put(state);
             return housekeeping_weight;
           }
+          let mut service_meter = WeightMeter::with_limit(remaining_after_housekeeping);
+          let _ = Self::service_canonical_round_head_with_resources(
+            &mut service_meter,
+            now,
+            &mut state,
+            budget.limits(),
+          );
+          let service_weight = service_meter.consumed();
           let control_maximum = budget
             .limits()
             .actor_control()
             .checked_sub(&state.usage().actor_control_used())
             .unwrap_or_else(Weight::zero);
-          let pass = Self::execute_cycle_to_cutoff_with_resources(
-            remaining_after_housekeeping,
-            execution_cutoff,
-            &mut state,
-            budget.limits(),
-            BlockResourceDomain::ActorDrainEffect,
-            control_maximum,
-          );
+          let mut pass = if breaker_active {
+            CyclePass {
+              consumed: Weight::zero(),
+              effect_consumed: Weight::zero(),
+              effect_reconciliation_uncertain: false,
+              starved: false,
+            }
+          } else {
+            Self::execute_cycle_to_cutoff_with_resources(
+              remaining_after_housekeeping.saturating_sub(service_weight),
+              execution_cutoff,
+              &mut state,
+              budget.limits(),
+              BlockResourceDomain::ActorDrainEffect,
+              control_maximum,
+            )
+          };
+          pass.consumed = pass.consumed.saturating_add(service_weight);
           if state.finish_drain(budget, budget.fixed_envelope()).is_err() {
             state.halt_optional_actor_work();
           } else if let Ok(snapshot) = state.finalized_snapshot() {
@@ -8816,9 +8913,30 @@ pub mod pallet {
           CurrentBlockResourceState::<T>::put(state);
           return housekeeping_weight;
         }
-        None => Self::execute_cycle_to_cutoff(remaining_after_housekeeping, execution_cutoff),
+        None => {
+          let mut service_meter = WeightMeter::with_limit(remaining_after_housekeeping);
+          let _ = Self::service_canonical_round_head(&mut service_meter, now);
+          let service_weight = service_meter.consumed();
+          let mut pass = if breaker_active {
+            CyclePass {
+              consumed: Weight::zero(),
+              effect_consumed: Weight::zero(),
+              effect_reconciliation_uncertain: false,
+              starved: false,
+            }
+          } else {
+            Self::execute_cycle_to_cutoff(
+              remaining_after_housekeeping.saturating_sub(service_weight),
+              execution_cutoff,
+            )
+          };
+          pass.consumed = pass.consumed.saturating_add(service_weight);
+          pass
+        }
       };
-      Self::update_idle_starvation_state(now, pass.starved);
+      if !breaker_active {
+        Self::update_idle_starvation_state(now, pass.starved);
+      }
       housekeeping_weight.saturating_add(pass.consumed)
     }
 
@@ -9879,22 +9997,6 @@ pub mod pallet {
       Self::scheduler_admission_overhead()
         .saturating_add(maximum_step)
         .saturating_add(Self::close_cleanup_weight_upper())
-    }
-
-    fn finalize_empty_actor_drain(now: BlockNumberFor<T>) {
-      let Some(mut state) = CurrentBlockResourceState::<T>::get() else {
-        return;
-      };
-      let budget = T::BlockResourceBudget::get();
-      if state.ensure_block(now).is_err()
-        || state.begin_drain().is_err()
-        || state.finish_drain(budget, budget.fixed_envelope()).is_err()
-      {
-        state.halt_optional_actor_work();
-      } else if let Ok(snapshot) = state.finalized_snapshot() {
-        FinalizedBlockResourceTelemetry::<T>::put(snapshot);
-      }
-      CurrentBlockResourceState::<T>::put(state);
     }
 
     fn settle_on_idle_control(

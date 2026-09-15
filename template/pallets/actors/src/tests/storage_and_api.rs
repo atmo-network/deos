@@ -6070,12 +6070,51 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
     assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), recipient_before);
 
+    let budget = <Test as crate::Config>::BlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(5);
+    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.open_external_phase());
+    assert_ok!(resource_state.begin_drain());
+    let resource_before = resource_state;
+    let mut resource_refused = resource_state;
+    let mut exhausted = resource_refused
+      .reserve(
+        budget.limits(),
+        crate::BlockResourceDomain::ActorControl,
+        budget.limits().actor_control(),
+      )
+      .expect("test exhausts ActorControl");
+    assert_ok!(resource_refused.settle(&mut exhausted, budget.limits().actor_control(),));
+    let resource_refused_before = resource_refused;
     let mut admitted = WeightMeter::with_limit(complete);
     assert_eq!(
-      Actors::service_canonical_round_head(&mut admitted, 5),
+      Actors::service_canonical_round_head_with_resources(
+        &mut admitted,
+        5,
+        &mut resource_refused,
+        budget.limits(),
+      ),
+      Err(ServiceRoundError::ResourceUnavailable)
+    );
+    assert_eq!(admitted.consumed(), Weight::zero());
+    assert_eq!(resource_refused, resource_refused_before);
+    assert_eq!(ServiceHeader::<Test>::get(), before_header);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), recipient_before);
+
+    let mut admitted = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut admitted,
+        5,
+        &mut resource_state,
+        budget.limits(),
+      ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
     assert!(admitted.consumed().all_lte(complete));
+    assert_ne!(resource_state.usage(), resource_before.usage());
+    assert_eq!(resource_state.outstanding_reservations(), 0);
     assert_eq!(
       asset_balance(&BOB, TestAsset::Local(1)),
       recipient_before + 1

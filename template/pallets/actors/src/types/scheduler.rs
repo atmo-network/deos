@@ -90,6 +90,7 @@ pub enum ServiceRoundEncounter {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRoundError {
   InsufficientWeight,
+  ResourceUnavailable,
   TransactionRequired,
   RoundFromFuture,
   RoundNotStarted,
