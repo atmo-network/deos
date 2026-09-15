@@ -5146,6 +5146,7 @@ pub mod pallet {
     pub(crate) fn commit_retained_service_attempt(
       actor: ActorRef,
       kind: ServiceResidenceKind,
+      identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
       now: BlockNumberFor<T>,
     ) -> Result<(), ServiceRoundError> {
@@ -5154,7 +5155,7 @@ pub mod pallet {
           if Self::consider_service_head(now)? != ServiceRoundEncounter::Eligible(actor) {
             return Err(ServiceRoundError::CorruptRing);
           }
-          Self::try_store_service_control_hot(actor, kind, hot)
+          Self::try_store_service_control_state(actor, kind, identity, hot)
             .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
           Self::advance_service_head(actor, now)
         })();
@@ -5167,20 +5168,19 @@ pub mod pallet {
       })
     }
 
-    /// Stores Hot directly through the canonical semantic owner. Canonical service mutation never
-    /// recreates or updates a legacy control cell and fails closed on stale residence authority.
-    #[allow(
-      dead_code,
-      reason = "canonical service consumer remains staged behind the atomic publication cutover"
-    )]
-    pub(crate) fn try_store_service_control_hot(
+    /// Stores identity and Hot directly through the canonical semantic owner. Canonical service
+    /// mutation never recreates or updates a legacy control cell and fails closed on stale
+    /// residence authority. Generation and admission remain immutable during an attempt.
+    pub(crate) fn try_store_service_control_state(
       actor: ActorRef,
       kind: ServiceResidenceKind,
+      identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
     ) -> Result<(), crate::scheduler::EnqueueOutcome> {
       let current = Self::load_service_actor_semantic_state(actor, kind)
         .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
       let mut replacement = current.clone();
+      replacement.identity = identity;
       replacement.hot = hot;
       Self::mutate_actor_semantic_state(
         actor.actor_id,
@@ -5196,6 +5196,21 @@ pub mod pallet {
       )
       .then_some(())
       .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+    }
+
+    #[allow(
+      dead_code,
+      reason = "Hot-only canonical mutation remains a focused seam for carrier validation"
+    )]
+    pub(crate) fn try_store_service_control_hot(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      hot: ActorHotStateOf<T>,
+    ) -> Result<(), crate::scheduler::EnqueueOutcome> {
+      let identity = Self::load_service_actor_semantic_state(actor, kind)
+        .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?
+        .identity;
+      Self::try_store_service_control_state(actor, kind, identity, hot)
     }
 
     /// In-place legacy mutation requires a live primary; moving transitions publish a supplied successor.

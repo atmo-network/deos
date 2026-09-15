@@ -934,6 +934,77 @@ impl<T: Config> Pallet<T> {
     Self::finalize_zero_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
+  /// Executes and commits one generation-bound zero-Step Service attempt without restoring legacy
+  /// FIFO authority. Refusal rolls back semantic, lifecycle, process, and ring mutations together.
+  #[allow(
+    dead_code,
+    reason = "canonical Service execution remains staged behind the atomic publication cutover"
+  )]
+  pub(crate) fn execute_zero_step_on_service(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+    opening_observation: Option<CanonicalObservationState>,
+  ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        let semantic = Self::load_service_actor_semantic_state(actor, kind)
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        if semantic.identity != state.identity
+          || semantic.hot != state.hot
+          || semantic.admission != *admission
+          || Self::load_actor_contract(actor.actor_id).as_ref() != Some(&state.contract)
+        {
+          return Err(AttemptTransactionError::Invariant);
+        }
+        let transition = Self::execute_zero_step_transition(
+          actor.actor_id,
+          state,
+          admission,
+          now,
+          opening_observation,
+        )?;
+        let ZeroStepTransition {
+          next_residence,
+          cycle_nonce,
+        } = transition;
+        let status = match next_residence {
+          NextResidence::Publish { state, .. } => {
+            Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            AttemptDisposition::Completed
+          }
+          NextResidence::Close { state, reason } => {
+            // Commit semantic/lifecycle cleanup before unlinking the cursor-owning ring member.
+            Self::finalize_actor_from_consumed_state(actor.actor_id, state, admission, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            Self::retire_service_member(actor, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            AttemptDisposition::Closed(reason)
+          }
+        };
+        Ok(Self::step_simulation_evidence(
+          cycle_nonce,
+          0,
+          status,
+          OutcomeTotals::default(),
+          None,
+          None,
+        ))
+      })();
+      match result {
+        Ok(evidence) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(evidence))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
   fn finalize_next_residence_on_legacy_fifo(
     actor_id: ActorId,
     next_residence: NextResidence<T>,

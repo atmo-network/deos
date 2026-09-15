@@ -668,6 +668,7 @@ fn retained_service_attempt_commits_semantics_before_advance_and_preserves_refus
       Actors::commit_retained_service_attempt(
         actor,
         ServiceResidenceKind::Pending,
+        record.identity.clone(),
         replacement.clone(),
         2,
       ),
@@ -684,6 +685,7 @@ fn retained_service_attempt_commits_semantics_before_advance_and_preserves_refus
       Actors::commit_retained_service_attempt(
         actor,
         ServiceResidenceKind::Live,
+        record.identity.clone(),
         replacement.clone(),
         2,
       ),
@@ -707,6 +709,100 @@ fn retained_service_attempt_commits_semantics_before_advance_and_preserves_refus
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
+  });
+}
+
+#[test]
+fn canonical_zero_step_service_attempt_commits_semantics_before_ring_advance() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, Default::default());
+    let state = Actors::active_actor_state(actor_id).expect("active zero-Step state");
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(2).expect("round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    Actors::execute_zero_step_on_service(
+      actor,
+      ServiceResidenceKind::Live,
+      state,
+      &record.admission,
+      2,
+      None,
+    )
+    .expect("canonical zero-Step attempt commits");
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+      .expect("retained semantic owner remains loadable");
+    assert_eq!(stored.identity.cycle_nonce, 1);
+    assert_eq!(stored.hot.last_cycle_block, Some(2));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).unwrap().last_considered,
+      2
+    );
+  });
+}
+
+#[test]
+fn canonical_zero_step_terminal_attempt_cleans_before_service_unlink() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut contract = system_active_contract(manual_schedule(), None, Default::default())
+      .expect("zero-Step Contract");
+    contract.auto_close_at_cycle_nonce = Some(1);
+    let actor_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      Some(contract),
+    ));
+    age_fixture_control_clock(actor_id);
+    let state = Actors::active_actor_state(actor_id).expect("active zero-Step state");
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(2).expect("round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    Actors::execute_zero_step_on_service(
+      actor,
+      ServiceResidenceKind::Live,
+      state,
+      &record.admission,
+      2,
+      None,
+    )
+    .expect("terminal zero-Step attempt commits");
+    assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| (process.status, process.residence)),
+      Some((
+        ProcessStatus::Retired(CloseReason::AutoCloseNonceReached),
+        None,
+      ))
+    );
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
   });
 }
 
@@ -1542,10 +1638,17 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
       0,
       "production must not publish canonical service authority while the legacy control cell is the sole identity/hot/admission owner"
     );
+  }
+  assert_eq!(
+    scheduler.matches("Self::retire_service_member(").count(),
+    1,
+    "only the staged canonical zero-Step transaction may retire its consumed Service carrier"
+  );
+  for source in [lib, execution] {
     assert_eq!(
       source.matches("Self::retire_service_member(").count(),
       0,
-      "production must not retire canonical service authority before publication cuts over"
+      "other production paths must not retire canonical Service authority before publication cuts over"
     );
   }
 }
