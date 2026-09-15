@@ -5168,6 +5168,96 @@ pub mod pallet {
       })
     }
 
+    /// Atomically transfers one exact canonical Service member into a preselected deadline slot.
+    /// The caller must commit semantic retry state first in the same outer transaction.
+    #[allow(
+      dead_code,
+      reason = "canonical deadline transfer remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn transfer_service_member_to_deadline(
+      actor: ActorRef,
+      destination: DeadlineHandleOf<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      if destination.actor != actor {
+        return Err(DeadlineMutationError::StaleGeneration);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::remove_service_member(actor)
+            .map_err(|_| DeadlineMutationError::ProcessResidenceMismatch)?;
+          let mut process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DeadlineMutationError::ProcessMissing)?;
+          if process.generation != actor.generation || process.status != ProcessStatus::Serving {
+            return Err(DeadlineMutationError::StaleGeneration);
+          }
+          process.residence = Some(ProcessResidence::Deadline {
+            key: destination.key,
+            page: destination.page,
+            slot: destination.slot,
+          });
+          ActorProcesses::<T>::insert(actor.actor_id, process);
+          Self::insert_deadline_member(destination)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Returns one genuinely due deadline member to canonical Service exactly once.
+    #[allow(
+      dead_code,
+      reason = "canonical deadline extraction remains staged behind the atomic service cutover"
+    )]
+    pub(crate) fn return_due_deadline_member_to_service(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let handle = DeadlineHandles::<T>::get(actor.actor_id)
+            .filter(|handle| handle.actor == actor)
+            .ok_or(DeadlineMutationError::MemberMissing)?;
+          let due = matches!(handle.key, WakeupKey::Block(block) if block <= now);
+          if !due {
+            return Err(DeadlineMutationError::InvalidDestination);
+          }
+          Self::remove_deadline_member(actor)?;
+          let mut process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DeadlineMutationError::ProcessMissing)?;
+          process.residence = Some(ProcessResidence::Service(kind));
+          ActorProcesses::<T>::insert(actor.actor_id, process);
+          let admission_round = now
+            .checked_sub(&One::one())
+            .ok_or(DeadlineMutationError::InvalidDestination)?;
+          Self::insert_service_member(actor, kind, admission_round)
+            .map_err(|_| DeadlineMutationError::ProcessResidenceMismatch)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
+    /// Proves the complete Service-to-deadline destination without retaining any mutation.
+    pub(crate) fn probe_service_member_to_deadline(
+      actor: ActorRef,
+      destination: DeadlineHandleOf<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(
+          Self::transfer_service_member_to_deadline(actor, destination),
+        )
+      })
+    }
+
     /// Stores identity and Hot directly through the canonical semantic owner. Canonical service
     /// mutation never recreates or updates a legacy control cell and fails closed on stale
     /// residence authority. Generation and admission remain immutable during an attempt.

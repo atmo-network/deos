@@ -1710,7 +1710,7 @@ impl<T: Config> Pallet<T> {
     )?;
     let loaded_step = loaded_step?;
     let run = state.run_state.as_ref()?;
-    if run.eligible_at != now
+    if run.eligible_at > now
       || run.cursor != loaded_step.cursor
       || !run.suspension_is_coherent()
       || !run.has_contract_authority(
@@ -1751,11 +1751,10 @@ impl<T: Config> Pallet<T> {
     Some((state, admission, plan))
   }
 
-  /// Executes one effectful completion or adjacent-round retry through canonical Service authority.
+  /// Executes one effectful completion or retry through canonical Service authority.
   /// Retained and terminal completion commit semantic state before advancing or unlinking the ring;
-  /// a retry due in the next round commits its Run/Hot state before advancing the current frontier.
-  /// Later retry, continuation, and deadline destinations remain refused until their atomic
-  /// residence commits exist.
+  /// adjacent retries retain Service residence, while a supplied later retry destination is
+  /// preflighted before the effect and atomically receives the committed suspended state.
   #[allow(
     dead_code,
     reason = "canonical Service execution remains staged behind the atomic publication cutover"
@@ -1767,6 +1766,20 @@ impl<T: Config> Pallet<T> {
     plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    Self::execute_effectful_step_on_service_with_deadline(
+      actor, kind, state, plan, admission, now, None,
+    )
+  }
+
+  pub(crate) fn execute_effectful_step_on_service_with_deadline(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+    deadline: Option<DeadlineHandleOf<T>>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       let result = (|| {
@@ -1780,6 +1793,10 @@ impl<T: Config> Pallet<T> {
             != ServiceRoundEncounter::Eligible(actor)
         {
           return Err(AttemptTransactionError::Invariant);
+        }
+        if let Some(destination) = deadline {
+          Self::probe_service_member_to_deadline(actor, destination)
+            .map_err(|_| AttemptTransactionError::Invariant)?;
         }
         let transition =
           Self::execute_effectful_step_transition(actor.actor_id, state, plan, admission, now)?;
@@ -1796,10 +1813,17 @@ impl<T: Config> Pallet<T> {
           next_residence,
           eligible_at,
         } = transition;
-        let control_outcome = match (disposition, eligible_at) {
-          (AttemptDisposition::Completed, None) => StepControlOutcome::Completed,
-          (AttemptDisposition::Suspended, Some(eligible_at))
+        let control_outcome = match (disposition, eligible_at, deadline) {
+          (AttemptDisposition::Completed, None, None) => StepControlOutcome::Completed,
+          (AttemptDisposition::Suspended, Some(eligible_at), None)
             if now.checked_add(&One::one()) == Some(eligible_at) =>
+          {
+            StepControlOutcome::Suspended
+          }
+          (AttemptDisposition::Suspended, Some(eligible_at), Some(destination))
+            if destination.actor == actor
+              && destination.key == WakeupKey::Block(eligible_at)
+              && now.checked_add(&One::one()) != Some(eligible_at) =>
           {
             StepControlOutcome::Suspended
           }
@@ -1811,9 +1835,17 @@ impl<T: Config> Pallet<T> {
             .ok_or(AttemptTransactionError::Invariant)?;
         let placement = match next_residence {
           NextResidence::Publish { state, .. } => {
-            Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
+            Self::try_store_service_control_state(actor, kind, state.identity, state.hot)
               .map_err(|_| AttemptTransactionError::Invariant)?;
-            StepControlPlacement::Queue
+            if let Some(destination) = deadline {
+              Self::transfer_service_member_to_deadline(actor, destination)
+                .map_err(|_| AttemptTransactionError::Invariant)?;
+              StepControlPlacement::Wakeup
+            } else {
+              Self::advance_service_head(actor, now)
+                .map_err(|_| AttemptTransactionError::Invariant)?;
+              StepControlPlacement::Queue
+            }
           }
           NextResidence::Close { state, reason } => {
             Self::finalize_actor_from_consumed_state(actor.actor_id, state, admission, reason)

@@ -843,7 +843,7 @@ fn canonical_effectful_completion_commits_before_service_advance() {
 }
 
 #[test]
-fn canonical_effectful_adjacent_retry_commits_and_reenters_next_round() {
+fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(2);
     let mut step = make_step(Task::Transfer {
@@ -854,7 +854,10 @@ fn canonical_effectful_adjacent_retry_commits_and_reenters_next_round() {
     step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
     let actor_id = create_system_with(
       ALICE,
-      manual_schedule(),
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 3,
+      },
       None,
       BoundedVec::try_from(vec![step]).expect("one-Step retry Contract"),
     );
@@ -911,26 +914,59 @@ fn canonical_effectful_adjacent_retry_commits_and_reenters_next_round() {
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
 
-    Actors::execute_completed_effectful_step_on_service(
+    let retry_at = now + 3;
+    let invalid_destination = DeadlineHandle {
+      actor,
+      key: WakeupKey::Block(retry_at),
+      page: 9,
+      slot: 0,
+    };
+    assert!(matches!(
+      Actors::execute_effectful_step_on_service_with_deadline(
+        actor,
+        ServiceResidenceKind::Live,
+        state.clone(),
+        plan.clone(),
+        &admission,
+        now,
+        Some(invalid_destination),
+      ),
+      Err(AttemptTransactionError::Invariant)
+    ));
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+
+    let destination = DeadlineHandle {
+      actor,
+      key: WakeupKey::Block(retry_at),
+      page: 0,
+      slot: 0,
+    };
+    Actors::execute_effectful_step_on_service_with_deadline(
       actor,
       ServiceResidenceKind::Live,
       state,
       plan,
       &admission,
       now,
+      Some(destination),
     )
-    .expect("adjacent retry commits");
+    .expect("later retry commits into its paid deadline residence");
     let retry_run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run remains");
     assert_eq!(retry_run.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(retry_run.eligible_at, now + 1);
+    assert_eq!(retry_run.eligible_at, retry_at);
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
-    assert_eq!(
-      ServiceNodes::<Test>::get(actor_id).unwrap().last_considered,
-      now
-    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(destination));
 
-    let retry_at = now + 1;
     frame_system::Pallet::<Test>::set_block_number(retry_at);
+    Actors::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, retry_at)
+      .expect("genuinely due deadline returns to canonical Service");
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(matches!(
+      Actors::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, retry_at),
+      Err(DeadlineMutationError::MemberMissing)
+    ));
     set_asset_balance(&sovereign, TestAsset::Local(1), 10);
     let mut semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
       .expect("retry semantic owner remains loadable");
