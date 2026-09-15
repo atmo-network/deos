@@ -6,7 +6,7 @@
 
 ## DEOS 0.7.27 — First Canonical Resident Actor and Parked-Balance Activation
 
-**Planning basis:** branch `0.7.27`, inspected at commit `6d44e92d75e7334b5763a6684c62e5279c39725f`, tree `7807ddb705ef885d9ee02d2c83714a412fb9e1f1`, plus the task owner's subsequent parked-balance clarification. The published historical baseline is `v0.7.26` at `c16675edf03e3af0d6dcf3080a31c64b49765a5b`. Reconcile a newer local/remote tree at intake; do not overwrite intervening work. [R1–R3]
+**Planning basis:** branch `0.7.27`, reconciled at commit `163775acd1615897a21d5a9126a9169ff398ab5c`, tree `5d8410c1c3005d1ad5594da8dcdd9eeb727ffb74`. The Actors source subtree is unchanged from the inspected implementation checkpoint `6d44e92d75e7334b5763a6684c62e5279c39725f`; the intervening commit replaced only this backlog with the task owner's parked-balance clarification. The published historical baseline is `v0.7.26` at `c16675edf03e3af0d6dcf3080a31c64b49765a5b`. [R1–R3]
 
 **Replacement scope:** replace the active `0.7.27` backlog with this continuation plan. Retain existing N0–N7 identities and their applicable evidence; add only **N3.9 — Parked-Balance Mode Selection and Delivery**. An unchecked item below names remaining, changed or integration work, not a request to repeat its already proved subclaims. No historical experiment is renumbered or bulk-invalidated.
 
@@ -22,17 +22,17 @@
 
 ### 0.1 Reuse what exists; do not count it as a complete engine
 
-| Surface at the inspected checkpoint | Evidence-supported state | Required next connection |
+| Surface | Current evidence classification | Required next connection |
 | --- | --- | --- |
-| Current-state specification and independent oracle | Selected semantics and executable model exist; amounts are now `Fixed` / `Percent`. | Apply the parked-balance amendment and resolve the partial-round insertion discrepancy. |
-| Semantic reads | `load_actor_semantic_state` unifies lifecycle/service/observation/execution entry boundaries. Its production source is still legacy placement. | Convert the complete semantic writer and resource closure, not only the reader. |
-| Process and service carrier | Canonical process/ring storage and transaction-local helpers exist; several local carrier owners are generated. | Supported public creation, activation, actual Steps/retries and completion must use them. |
-| Deadline/Park/Pending mechanisms | Bounded types, storage boundaries and local witnesses exist in mixed implementation states. | Complete the paid due/scan/check/transfer consumers and real round-trip paths. |
-| Oracle publication | A production post-state hook publishes dependency revisions and retains source-scan membership. | Drain that work through the real worker or coherently gate the producer; an unconsumed queue is not a delivered wake mechanism. |
-| Lifecycle and cleanup | Decisions and some primitives exist. | Execute revocation, replacement, bounded cleanup and resource release on the chosen canonical owners. |
-| Performance | EXP-0136 freezes W1–W12; standalone carrier measurements exist. | No canonical V1/V2 whole-service speedup has been established at this checkpoint. |
+| Current-state specification and independent oracle | **Decision accepted; behavior tested in its existing scope.** Amounts are `Fixed` / `Percent`; the parked-balance amendment and partial-round insertion policy are not yet incorporated. | Ratify the narrow amendment and make the independent model distinguish the selected partial-round order. |
+| Semantic reads | **Implemented, production-reachable and source-guarded; only the read side is resource-bound.** `load_actor_semantic_state` unifies lifecycle, service, observation and execution entry boundaries, but reads legacy placement as the production authority. | Convert every semantic writer and its complete resource composition atomically; a partial writer would create dual authority. |
+| Process and service carrier | **Implemented and locally behavior-tested; not integrated or production-reachable.** Canonical process/ring storage, transaction-local helpers and several generated local carrier owners exist. | Route supported public creation, activation, actual Steps/retries and completion through these owners. |
+| Deadline/Park/Pending mechanisms | **Decided and partially implemented/tested/resource-bound; not integrated end to end.** Bounded types, storage boundaries and local witnesses exist in mixed states. | Complete paid due/scan/check/transfer consumers and real round trips. |
+| Oracle publication | **Implemented, production-reachable and generated at the producer boundary; not integrated with a complete consumer.** A post-state hook publishes dependency revisions and retains source-scan membership. | Drain through the real worker or coherently gate the producer before shipping. |
+| Lifecycle and cleanup | **Decision accepted and partially implemented; not production-complete or completely resource-bound.** | Execute revocation, replacement, bounded cleanup and resource release on canonical owners. |
+| Performance | **Workloads decided; standalone carriers measured; whole-service result absent.** EXP-0136 freezes W1–W12, but no canonical V1/V2 production comparison exists. | Instrument V1/V2 and bind the final composed implementation before any speedup claim. |
 
-This assessment consumes repository code and the checkpoint backlog, not independently rerun Rust suites. `Accepted` means the recorded decision was accepted at its stated scope. It does not imply connected callers, successful tests on the current tree, complete Weight coverage or a measured gain. [R2–R8]
+This table reconciles repository reality at the planning basis above without rerunning unchanged Rust suites: the Actors source subtree exactly matches the inspected checkpoint. `Accepted` remains decision evidence only. The active critical path is the narrow N0.2/N0.3 semantic and round correction followed by V1's single atomic semantic-writer/process/ring cutover; the exact immediate blocker is that every supported Publish/Replace/Remove caller and its full Weight owner must switch together before legacy placement can be removed. [R2–R8]
 
 ### 0.2 Blocking obligations
 
@@ -269,8 +269,6 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 ---
 
 ## N0 — Narrow Semantic Amendment and Executable Contract
-
-- [ ] **N0.1 / Intake and Explicit Supersession.** Reconcile the working branch against R1, preserve local changes and classify existing results as decision / implemented / production-reachable / behavior-tested / resource-bound / integrated. Adopt this continuation as the sole active plan. Record the exact cutover blocker and next executable outcome, not the count of helpers or commits. Reuse completed current-state work. **Exit:** one current status table, one active critical path and no competing backlog.
 
 - [ ] **N0.2 / Configuration, Ordering and Wake Decision Table.** Amend only the affected semantic decisions: parked-only balance monitoring; final baseline lifecycle; watched balance surface; net-change direction and inclusive threshold; per-asset ED/config changes; first-arm rule; negative-check rearm; periodic versus balance-gated recurrence; conditional permitted-credit threshold and whitelist meaning. Ratify the proposed defaults in §2 or name the exact approved alternative before code/measurements. Maintain `Fixed`/`Percent`, retry and no future Cycle. **Exit:** one finite behavior matrix; the `100 × ED` floor is enforced rather than a documentation hint; no undocumented fallback.
 
