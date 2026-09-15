@@ -5909,10 +5909,6 @@ pub mod pallet {
     /// selector reads storage, so an absent, refused, or continuously busy Block frontier cannot
     /// consume the Tick frontier's authority (and vice versa). Each branch still settles only its
     /// actual generated selector and worker Weight through the shared meter.
-    #[allow(
-      dead_code,
-      reason = "deadline mandatory-service composition remains staged behind hook cutover"
-    )]
     pub(crate) fn service_due_deadline_frontiers(
       meter: &mut WeightMeter,
       kind: ServiceResidenceKind,
@@ -8606,9 +8602,31 @@ pub mod pallet {
       } else {
         Weight::zero()
       };
-      let housekeeping_weight = fixed_weight
+      let before_deadlines = fixed_weight
         .saturating_add(saturated_cleanup_weight)
         .saturating_add(materialization_weight);
+      let deadline_weight = now
+        .checked_add(&One::one())
+        .zip(Self::current_scheduler_tick().ok())
+        .and_then(|(next_block, now_tick)| {
+          now_tick
+            .checked_add(1)
+            .map(|next_tick| (now_tick, next_block, next_tick))
+        })
+        .map_or_else(Weight::zero, |(now_tick, next_block, next_tick)| {
+          let mut meter =
+            WeightMeter::with_limit(control_available.saturating_sub(before_deadlines));
+          let _ = Self::service_due_deadline_frontiers(
+            &mut meter,
+            ServiceResidenceKind::Live,
+            now,
+            now_tick,
+            Some(WakeupKey::Block(next_block)),
+            Some(WakeupKey::Tick(next_tick)),
+          );
+          meter.consumed()
+        });
+      let housekeeping_weight = before_deadlines.saturating_add(deadline_weight);
       let remaining_after_housekeeping = available.saturating_sub(housekeeping_weight);
       Self::settle_on_idle_control(&mut control_authority, housekeeping_weight);
       if breaker_active {

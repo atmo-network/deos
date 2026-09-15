@@ -4028,7 +4028,9 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::crossing_worker_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::observation_fanout_base())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1));
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1))
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_block_deadline())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline());
 
     assert_eq!(Actors::on_idle(1, Weight::MAX), expected);
     assert_eq!(Actors::materialization_family_cursor(), 1);

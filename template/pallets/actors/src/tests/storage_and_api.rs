@@ -1620,6 +1620,71 @@ fn mandatory_deadline_service_reserves_both_independent_frontiers() {
 }
 
 #[test]
+fn on_idle_services_due_block_and_tick_frontiers_with_current_clocks() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let mut actors = Vec::new();
+    for (source, feed, deadline) in [(51, 21, WakeupKey::Block(7)), (52, 22, WakeupKey::Tick(7))] {
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+      let ActorSemanticState::Active(record) =
+        ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+      else {
+        panic!("created Actor is active");
+      };
+      let actor = actor_ref(actor_id, record.generation);
+      ActorControlLocators::<Test>::remove(actor_id);
+      ActorUnsignaledControlCells::<Test>::remove(actor_id);
+      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 6).unwrap();
+      ObservationDependencySources::<Test>::insert(feed, source);
+      DependencySourceObservations::<Test>::insert(source, feed);
+      set_observation(feed, ScalarObservationState::Unavailable);
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        u64::from(source),
+        ParkNegativeReason::SourceUnavailable,
+        Some(7),
+        &[DependencyPlanSource {
+          source,
+          observed_revision: 0,
+        }],
+        Some(deadline),
+      )
+      .unwrap();
+      set_observation(
+        feed,
+        ScalarObservationState::Fresh {
+          value: 1,
+          observed_at: 7,
+        },
+      );
+      actors.push(actor);
+    }
+    frame_system::Pallet::<Test>::set_block_number(7);
+
+    assert_eq!(Actors::on_idle(7, Weight::zero()), Weight::zero());
+    assert!(
+      actors
+        .iter()
+        .all(|actor| DeadlineHandles::<Test>::contains_key(actor.actor_id))
+    );
+
+    let consumed = Actors::on_idle(7, Weight::MAX);
+    assert_ne!(consumed, Weight::zero());
+    assert!(
+      actors
+        .iter()
+        .all(|actor| ServiceNodes::<Test>::contains_key(actor.actor_id))
+    );
+    assert!(
+      actors
+        .iter()
+        .all(|actor| !DeadlineHandles::<Test>::contains_key(actor.actor_id))
+    );
+  });
+}
+
+#[test]
 fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
