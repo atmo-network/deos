@@ -12,23 +12,24 @@ use crate::{
   DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
-  DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
-  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
-  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
-  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
-  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
-  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
-  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
-  DormantActorSemanticRecord, LegacyProcessPlacement, LegacyProcessTransition,
-  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
-  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
-  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
-  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
-  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
-  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
-  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
+  DependencyRegistrationPositions, DependencyRegistrations, DependencyReviewInterpretation,
+  DependencyReviewMutation, DependencyRevisionError, DependencyRevisionMutation,
+  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
+  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
+  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
+  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
+  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
+  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
+  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
+  ServicePublicationError, ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError,
+  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
+  plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1096,6 +1097,148 @@ fn positive_due_review_wakes_only_the_exact_current_park_episode() {
       ),
       Err(DependencyRegistrationError::PendingReviewMissing)
     );
+  });
+}
+
+#[test]
+fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 29;
+    let initial = [DependencyPlanSource {
+      source,
+      observed_revision: 0,
+    }];
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 11,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &initial,
+      Some(WakeupKey::Block(2)),
+    )
+    .unwrap();
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let first = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(2),
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_due_dependency_review(first),
+        Ok(DependencyDueReviewMutation::Published)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    assert_eq!(
+      Actors::interpret_pending_dependency_review(
+        first,
+        evidence,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+        |snapshot| {
+          assert_eq!(snapshot, &initial);
+          Ok(DependencyReviewInterpretation::Negative)
+        },
+      ),
+      Ok(DependencyReviewMutation::Rearmed(DependencyPlanMutation {
+        retained: 1,
+        timed_review: DependencyTimedReviewMutation::Installed,
+        ..Default::default()
+      }))
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let second = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(3),
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_due_dependency_review(second),
+        Ok(DependencyDueReviewMutation::Published)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert_eq!(
+      Actors::interpret_pending_dependency_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+        |_| Err(DependencyRegistrationError::StoredPlanMismatch),
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(actor_id),
+      Some(second)
+    );
+
+    assert_eq!(
+      Actors::interpret_pending_dependency_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+        |_| {
+          DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
+          Ok(DependencyReviewInterpretation::Positive)
+        },
+      ),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 0);
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(actor_id),
+      Some(second)
+    );
+
+    assert_eq!(
+      Actors::interpret_pending_dependency_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+        |snapshot| {
+          assert_eq!(snapshot, &initial);
+          Ok(DependencyReviewInterpretation::Positive)
+        },
+      ),
+      Ok(DependencyReviewMutation::Woke)
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
   });
 }
 

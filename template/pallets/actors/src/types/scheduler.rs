@@ -291,6 +291,20 @@ pub enum DependencyDueReviewError {
   ClockUnavailable,
 }
 
+/// Result supplied by one bounded current-state interpretation of a Pending due review.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewInterpretation {
+  Positive,
+  Negative,
+}
+
+/// Durable transition selected from one exact due-review interpretation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewMutation {
+  Woke,
+  Rearmed(DependencyPlanMutation),
+}
+
 /// Timed-review part of one complete dependency-plan replacement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DependencyTimedReviewMutation {

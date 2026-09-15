@@ -5431,6 +5431,98 @@ pub mod pallet {
       })
     }
 
+    /// Interprets one exact Pending due review from one bounded current-source snapshot, then
+    /// atomically selects either canonical wake or complete-plan re-arm. Any ambiguous
+    /// interpretation or authority race preserves the Pending review and Park residence.
+    #[allow(
+      dead_code,
+      reason = "due-review interpretation remains staged behind the weighted consumer cutover"
+    )]
+    pub(crate) fn interpret_pending_dependency_review<F>(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+      interpret: F,
+    ) -> Result<DependencyReviewMutation, DependencyRegistrationError>
+    where
+      F: FnOnce(
+        &[DependencyPlanSource],
+      ) -> Result<DependencyReviewInterpretation, DependencyRegistrationError>,
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          match PendingDependencyReviews::<T>::get(expected.owner.actor.actor_id) {
+            None => return Err(DependencyRegistrationError::PendingReviewMissing),
+            Some(current) if current != expected => {
+              return Err(DependencyRegistrationError::PendingReviewMismatch);
+            }
+            Some(_) => {}
+          }
+          if PendingCheckOwners::<T>::get(expected.owner.actor.actor_id) != Some(expected.owner) {
+            return Err(DependencyRegistrationError::PendingOwnerMismatch);
+          }
+          let process = ActorProcesses::<T>::get(expected.owner.actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if process.generation != expected.owner.actor.generation
+            || process.status != ProcessStatus::Serving
+            || process.residence != Some(ProcessResidence::Parked(evidence))
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          let plan = DependencyPlans::<T>::get(expected.owner.actor.actor_id);
+          let mut observed = BoundedVec::<DependencyPlanSource, T::MaxContractSteps>::default();
+          for registration in &plan {
+            if registration.handle.actor != expected.owner.actor
+              || registration.handle.plan_revision != expected.owner.plan_revision
+              || DependencyRegistrations::<T>::get(
+                registration.source,
+                expected.owner.actor.actor_id,
+              ) != Some(registration.handle)
+            {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            let source_state = DependencyRevisions::<T>::get(registration.source);
+            if source_state.exhausted {
+              return Err(DependencyRegistrationError::SourceExhausted);
+            }
+            observed
+              .try_push(DependencyPlanSource {
+                source: registration.source,
+                observed_revision: source_state.revision,
+              })
+              .map_err(|_| DependencyRegistrationError::PlanTooLarge)?;
+          }
+          match interpret(&observed)? {
+            DependencyReviewInterpretation::Positive => {
+              Self::consume_positive_dependency_review_and_wake(
+                expected, evidence, &observed, kind, now,
+              )?;
+              Ok(DependencyReviewMutation::Woke)
+            }
+            DependencyReviewInterpretation::Negative => {
+              Self::consume_negative_dependency_review_and_rearm(
+                expected,
+                evidence,
+                &observed,
+                next_review,
+              )
+              .map(DependencyReviewMutation::Rearmed)
+            }
+          }
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(
