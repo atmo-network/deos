@@ -138,7 +138,7 @@ FIFO admission determines initial ring order; thereafter service preserves cycli
 
 Level-sensitive recurrence checks current state after Cycle completion no earlier than the next round and cannot start twice in one block. While an Actor is Running, Sleeping on retry, Pending, or Live, repeated Manual or source hints coalesce and create no second Cycle, cursor reset, retry reset, or fee claim. Cadence misses coalesce to one current check without catch-up. One-shot temporal service has no recurrence after its completed or terminal Cycle.
 
-A Park certificate binds Actor id, generation, admitted dependency plan, covered authoritative revisions, negative conclusion, and any validity deadline. Complete event-driven parking requires reliable invalidation for every supported change to Available or predicate truth, including balances, holds, locks, freezes, protected minima, staking shares, observation value/validity/age, time, and applicable configuration. Otherwise the profile MUST use a bounded timed review or be rejected.
+A Park certificate binds Actor id, generation, admitted dependency plan, covered authoritative revisions, negative conclusion, and any validity deadline. Its completeness contract is profile-specific: each authored wake source names either complete bounded invalidation or bounded paid review. A parked-balance source follows §2.4 and does not require busy-state tracking or invalidation for unrelated changes to Available.
 
 Invalidation records only that recheck is owed. Repeated updates coalesce. Registration, evaluation, and acknowledgment MUST be atomic or revisioned so an update before, during, or after evaluation cannot disappear: acknowledgment clears only the exact covered revision, and a later revision leaves Pending. Pending saturation preserves one durable obligation. Disabled and Retired generations ignore ordinary wake hints. Every membership, wake, pending record, and cleanup cursor binds the exact generation; stale-generation work has no authority over a recreated Actor.
 
@@ -153,6 +153,29 @@ Existing test requirements are classified as follows:
 | Retained | Q1, committed-prefix preservation, current retry cursor/backoff, typed temporary/permanent failure, transactional mutation, custody-neutral close, bounded work, and class-neutral service remain requirements; their tests remain falsifiers where they do not depend on removed readiness semantics. |
 | Adapted | Scheduling, wakeup, cadence, Manual, balance/observation reaction, fee, and lifecycle tests MUST be rewritten to assert persistent residence, current checks, coalesced Pending, revision-safe acknowledgment, and generation-bound cleanup. |
 | Retired | Full-transition Debug digests and fixtures tied to scalar tickets, `pending_signal`, Trigger/Opening fees, Opening snapshots/timing, funding-history amounts, exact transient Crossing, sender-event history, `AllAvailable`, or successor-ticket FIFO do not govern delivery. Preserve them only as historical evidence until their replacement tests land; never regenerate them to bless the new model. |
+
+### 2.4 Parked-balance activation decisions
+
+`ParkedBalance` is an explicitly authored recurring activation mode for an idle Parked generation. Its bounded plan names exact sovereign assets, an authored minimum delta for each asset, and the supported notification or paid-review capability. It is not combined with `Cadenced`; periodic recurrence remains a separate authored mode. A running Cycle, retry, Live continuation, Pending check, Disabled generation, or Retired generation owns no parked-balance registration or accumulator.
+
+The watched quantity is the host ledger's authoritative **total owned balance** for the exact sovereign account and asset: native `Inspect::total_balance`, or fungibles `Inspect::total_balance`. It includes held or frozen ownership and is deliberately distinct from reducible/spendable `Available`, which remains the sole basis for current Task amount resolution. A hold or freeze change alone therefore does not qualify. Hosts that cannot expose this quantity and its minimum coherently MUST reject this mode.
+
+For each watched asset `a`, admission computes with checked or widened arithmetic:
+
+```text
+floor[a]     = 100 * minimum_balance[a]
+threshold[a] = max(authored_min_delta[a], floor[a])
+delta[a]     = abs_diff(total_balance_now[a], anchor[a])
+qualified    = any(delta[a] >= threshold[a])
+```
+
+Movement in either direction qualifies, equality at the threshold qualifies, and unrelated asset quantities are never summed. A missing, zero, changed, or unrepresentable minimum invalidates certification: zero/missing/overflow rejects admission, while a later minimum or authored-plan change requires an authorized reconfiguration with a new configuration identity. There is no silent saturation, native-unit substitution, or price conversion.
+
+Initial activation and explicit reconfiguration perform one atomic **arm without execution**: after all mutations of that transition commit, capture the current total-owned balances and publish the Park registration under the new generation/configuration identity. Earlier deposits form the initial anchor and are never replayed as activation. After every successfully completed balance-recurring Cycle, actual effects, actual fees, reservation release, and all transition-owned balance changes commit before one atomic anchor capture and Park publication. That completion creates a new monotone parking episode; no intermediate sample, notice, or failed check moves its anchor.
+
+A qualifying change creates one generation/episode-bound Pending check; repeated notices coalesce. A negative current start check returns to Park with the **same fixed anchor** and acknowledges only its covered revision. The unchanged covered state cannot enqueue itself again, while a later watched-balance revision or another explicitly certified start dependency creates one new check. A later revision racing evaluation remains owed. A qualifying observation that later reverses remains an owed check, but current conditions and current Available are revalidated before Cycle admission and effects.
+
+The selected default mode is fixed-anchor absolute net change. Notification coverage and bounded-review latency remain implementation gates under the intended native and supported non-native hosts; failure of those gates may select exactly one fallback rather than silently changing semantics. The only permitted fallback is parked-period certified positive credit from a bounded, nonempty whitelist of immediate authenticated producer/payer identities and exact assets. It sums permitted committed credits per asset only within the current parked episode, caps retained accumulation at that asset's threshold, uses the same inclusive `max(authored_min_delta, 100 * minimum_balance)` rule, coalesces one Pending check, and rolls back tentative evidence with the credit transaction. Unknown/absent sources, self-transfers, refunds, replayed callbacks, busy-period credits, and inferred upstream origin do not count. The whitelist qualifies wake only; execution still evaluates current conditions and spends current Available.
 
 ---
 

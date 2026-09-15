@@ -24,7 +24,7 @@
 
 | Surface | Current evidence classification | Required next connection |
 | --- | --- | --- |
-| Current-state specification and independent oracle | **Decision accepted; behavior tested in its existing scope.** Amounts are `Fixed` / `Percent`; the parked-balance amendment and partial-round insertion policy are not yet incorporated. | Ratify the narrow amendment and make the independent model distinguish the selected partial-round order. |
+| Current-state specification and independent oracle | **Decision accepted; behavior tested in its existing scope.** Amounts are `Fixed` / `Percent`; the parked-balance amendment now fixes total-owned absolute net movement, an inclusive per-asset `max(authored minimum, 100 × minimum balance)` threshold, atomic arm/rearm, parked-only recurrence, revision-safe negative checks, and one conditional certified-credit fallback. The partial-round insertion policy is not yet incorporated. | Make the independent model distinguish the selected partial-round order and add the ratified parked-balance transitions. |
 | Semantic reads | **Implemented, production-reachable and source-guarded; only the read side is resource-bound.** `load_actor_semantic_state` unifies lifecycle, service, observation and execution entry boundaries, but reads legacy placement as the production authority. | Convert every semantic writer and its complete resource composition atomically; a partial writer would create dual authority. |
 | Process and service carrier | **Implemented and locally behavior-tested; not integrated or production-reachable.** Canonical process/ring storage, transaction-local helpers and several generated local carrier owners exist. | Route supported public creation, activation, actual Steps/retries and completion through these owners. |
 | Deadline/Park/Pending mechanisms | **Decided and partially implemented/tested/resource-bound; not integrated end to end.** Bounded types, storage boundaries and local witnesses exist in mixed states. | Complete paid due/scan/check/transfer consumers and real round trips. |
@@ -32,7 +32,7 @@
 | Lifecycle and cleanup | **Decision accepted and partially implemented; not production-complete or completely resource-bound.** | Execute revocation, replacement, bounded cleanup and resource release on canonical owners. |
 | Performance | **Workloads decided; standalone carriers measured; whole-service result absent.** EXP-0136 freezes W1–W12, but no canonical V1/V2 production comparison exists. | Instrument V1/V2 and bind the final composed implementation before any speedup claim. |
 
-This table reconciles repository reality at the planning basis above without rerunning unchanged Rust suites: the Actors source subtree exactly matches the inspected checkpoint. `Accepted` remains decision evidence only. The active critical path is the narrow N0.2/N0.3 semantic and round correction followed by V1's single atomic semantic-writer/process/ring cutover; the exact immediate blocker is that every supported Publish/Replace/Remove caller and its full Weight owner must switch together before legacy placement can be removed. [R2–R8]
+This table reconciles repository reality at the planning basis above without rerunning unchanged Rust suites: the Actors source subtree exactly matches the inspected checkpoint. `Accepted` remains decision evidence only. The active critical path is N0.3's independent semantic/round correction followed by V1's single atomic semantic-writer/process/ring cutover; the exact immediate blocker is that every supported Publish/Replace/Remove caller and its full Weight owner must switch together before legacy placement can be removed. [R2–R8]
 
 ### 0.2 Blocking obligations
 
@@ -41,7 +41,7 @@ This table reconciles repository reality at the planning basis above without rer
 | B1 | Active identity/hot/admission is still stored inside legacy placement; removing placement first loses canonical authority. | N2.4, N3.5, N5.1 | All supported semantic Publish/Replace/Remove callers and their complete resource owners switch coherently; no dual authority or legacy fallback. |
 | B2 | Oracle `push_back` and carrier insertion before the persistent cursor imply different orders for admission during a partial round. | N0.3, N3.6 | Ratified semantic ordering, corrected independent model and differential mutation traces against the carrier. |
 | B3 | Ring helpers are not a full ordinary Actor service path; standalone generated values exclude remaining lifecycle/Step composition. | N2.1–N2.4, N3.1–N3.6, N5.2 | V1 through ordinary dispatch and the actual mandatory Actor service phase, with complete admission and settlement. |
-| B4 | Previous generic wake-completeness language does not express parked-only balance monitoring, a final fixed baseline or the `100 × ED` floor. | N0.2, N2.5, N3.9 | One explicit balance-mode contract and bounded complete source/review implementation; no busy tracking. |
+| B4 | The ratified parked-balance contract is not yet implemented through a bounded complete source/review path. | N2.5, N3.9 | One bounded complete source/review implementation of the fixed final baseline and `100 × ED` floor; no busy tracking. |
 | B5 | Net balance cannot identify real incoming credits or whitelisted senders. | N3.9 | Conditional verified-credit implementation if the default mode fails its frozen criteria; never infer provenance from net balance. |
 | B6 | Oracle producers are connected ahead of scan/check/service consumers. | N3.1, N3.4, N3.7 | Bounded publication-to-consumption round trip, or explicit coherent gating before any shipping state. |
 | B7 | Generation-safe cleanup and its resource/debt limits are not yet fully executable. | N4.1–N4.3, N5.2–N5.3 | Mutation/sweep/capacity traces and measured bounded maintenance; no reliance on idle-only cleanup. |
@@ -122,7 +122,7 @@ Owner-paused/disabled and retired generations ignore ordinary balance activation
 
 ## 2. Parked-Balance Trigger: Required Semantic Amendment
 
-The following requirements implement the task owner's clarification. Where the request does not uniquely determine an API choice, the proposed choice is labelled and must be closed in N0.2 **before decision measurements**. Do not keep several undocumented interpretations in code.
+The following requirements implement the task owner's clarification and the ratified N0.2 choices. They freeze one default and one conditional fallback before decision measurements; do not keep additional undocumented interpretations in code.
 
 ### 2.1 Fixed final baseline
 
@@ -145,7 +145,7 @@ Routine polls, subthreshold notifications, duplicate hints and negative checks m
 
 ### 2.2 Exact observed quantity and threshold
 
-**Proposed default to ratify:** use absolute net change of the declared sovereign asset balance:
+**Ratified default:** use absolute net change of the declared sovereign asset total-owned balance:
 
 ```text
 delta[a] = abs_diff(B_now[a], B_anchor[a])
@@ -211,7 +211,7 @@ For the fallback:
 2. Observe positive committed credits through certified host paths, including declared internal and cross-chain cases. A current net-balance difference cannot establish their source.
 3. Apply an exact asset and bounded source whitelist at that boundary. An absent source, spoofable payload or unknown upstream sender never satisfies a concrete whitelist entry. Declare whether identity means the immediate certified payer/producer, not an inferred original user through intermediaries.
 4. Reject duplicate/replayed callbacks and rollback all tentative activation evidence with the economic transaction. A self-transfer, charge/refund pair or balance-neutral ledger rearrangement must not become invented funding.
-5. Select one threshold rule before implementation. **Proposed economical default:** a bounded, threshold-capped sum of verified permitted credits during the current parked episode, with the same `100 × ED[a]` floor. Alternatively use a minimum per verified credit if ratified; these are not equivalent.
+5. Use a bounded, threshold-capped sum of verified permitted credits during the current parked episode, with the same `100 × ED[a]` floor. Per-credit thresholding is not selected.
 6. Keep only the bounded eligibility accumulator/covered authority necessary for one coalesced check, never an unbounded credit history. No credits from an open Cycle leak into the next parked episode.
 7. Evaluate current conditions and spend current Available at execution. The whitelist governs **what wakes the Actor**, not ownership or earmarking of every token already at its sovereign account. A restricted-spending policy would be a separate feature.
 
@@ -269,8 +269,6 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 ---
 
 ## N0 — Narrow Semantic Amendment and Executable Contract
-
-- [ ] **N0.2 / Configuration, Ordering and Wake Decision Table.** Amend only the affected semantic decisions: parked-only balance monitoring; final baseline lifecycle; watched balance surface; net-change direction and inclusive threshold; per-asset ED/config changes; first-arm rule; negative-check rearm; periodic versus balance-gated recurrence; conditional permitted-credit threshold and whitelist meaning. Ratify the proposed defaults in §2 or name the exact approved alternative before code/measurements. Maintain `Fixed`/`Percent`, retry and no future Cycle. **Exit:** one finite behavior matrix; the `100 × ED` floor is enforced rather than a documentation hint; no undocumented fallback.
 
 - [ ] **N0.3 / Normative State Machine and Independent Oracle.** Resolve B2 with a semantic order decision and independent list model. Add partial-round admission/reentry, cursor/last/interior removal and generation replacement traces, plus the parked-balance state transitions. Preserve a model independent of storage layout and the runtime scheduler. Replace contradictory current summaries and affected specification text; do not require rewriting untouched history before V1. **Exit:** model and carrier agree on the newly distinguishing traces; specification authority is unambiguous for the paths entering production.
 
