@@ -1276,14 +1276,49 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   // Production publication is blocked until the lifecycle benchmarks exercise the composed path
   // and regenerate both pallet/runtime Weight bindings in the same atomic authority cutover.
   assert!(!lib.contains("pub type ActorSemanticRecords<T:"));
-  for lifecycle_benchmark in [
-    "fn create_user_actor()",
-    "fn create_system_actor()",
-    "fn activate_actor()",
-    "fn deactivate_actor()",
-  ] {
-    assert!(benchmarks.contains(lifecycle_benchmark));
+  let lifecycle_branch_matrix = [
+    (
+      "create_user_actor",
+      "active creation with populated Contract geometry and an initially\n  // non-Live current-state detector residence",
+      "must Publish semantic state",
+    ),
+    (
+      "create_system_actor",
+      "System active creation shares the populated, initially non-Live",
+      "Publish active\n  // semantic state; no service publication",
+    ),
+    (
+      "create_dormant_system_actor",
+      "dormant creation uses Publish identity-only semantic state and no",
+      "Publish identity-only semantic state",
+    ),
+    (
+      "activate_actor",
+      "activation must Replace dormant with active semantic state",
+      "Replace dormant with active semantic state",
+    ),
+    (
+      "deactivate_actor",
+      "deactivation must Replace active with identity-only dormant semantic",
+      "Replace active with identity-only dormant semantic",
+    ),
+  ];
+  for (benchmark, branch_marker, cutover_operation) in lifecycle_branch_matrix {
+    assert!(benchmarks.contains(&format!("fn {benchmark}()")));
+    assert!(benchmarks.contains(branch_marker));
+    assert!(benchmarks.contains(cutover_operation));
   }
+  assert!(benchmarks.contains("terminal finalization instead removes the record"));
+  assert!(benchmarks.contains("fn service_member_publish_populated()"));
+  assert!(benchmarks.contains("fn scheduler_inner_zero_step_complete()"));
+
+  // A zero-Step active Contract still publishes complete active semantic state, but has no current
+  // Step resource load. Initial Live publication, when selected by the new residence policy, must
+  // compose the populated service owner; initially Sleeping/Parked/Unsignaled branches must not.
+  // The existing zero-Step scheduler benchmark is executable evidence for the no-Step branch, while
+  // the lifecycle comments above are an explicit guard against collapsing Dormant into zero-Step.
+  assert!(benchmarks.contains("fn scheduler_inner_zero_step_complete()"));
+  assert!(benchmarks.contains("This remains distinct from an active zero-Step Contract"));
   for generated in [pallet_weights, runtime_weights] {
     assert!(!generated.contains("Actors::ActorSemanticRecords"));
   }

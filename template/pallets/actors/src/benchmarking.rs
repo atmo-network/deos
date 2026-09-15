@@ -852,6 +852,9 @@ mod benches {
     actor_id
   }
 
+  // Semantic-cutover branch: active creation with populated Contract geometry and an initially
+  // non-Live current-state detector residence. The cutover benchmark must Publish semantic state
+  // but must not charge service-ring publication for this branch.
   #[benchmark]
   fn create_user_actor() {
     let caller: T::AccountId = whitelisted_caller();
@@ -912,6 +915,9 @@ mod benches {
     assert!(CrossingMemberships::<T>::contains_key(actor_id));
   }
 
+  // Semantic-cutover branch: System active creation shares the populated, initially non-Live
+  // publication shape while retaining its distinct custody and identity accounting: Publish active
+  // semantic state; no service publication.
   #[benchmark]
   fn create_system_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1055,6 +1061,8 @@ mod benches {
     assert_eq!(leaf.page_count, 2);
   }
 
+  // Semantic-cutover branch: dormant creation uses Publish identity-only semantic state and no
+  // process/service residence. This remains distinct from an active zero-Step Contract.
   #[benchmark]
   fn create_dormant_system_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1068,6 +1076,8 @@ mod benches {
     assert!(!Pallet::<T>::active_actor_exists(actor_id));
   }
 
+  // Semantic-cutover branch: activation must Replace dormant with active semantic state and the
+  // initial non-Live detector residence in one transaction; no service publication.
   #[benchmark]
   fn activate_actor() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1100,6 +1110,8 @@ mod benches {
     assert!(ActorObservationFeeds::<T>::get(actor_id).is_none());
   }
 
+  // Semantic-cutover branch: deactivation must Replace active with identity-only dormant semantic
+  // state after removing process/service authority; terminal finalization instead removes the record.
   #[benchmark]
   fn deactivate_actor() -> Result<(), polkadot_sdk::frame_benchmarking::BenchmarkError> {
     frame_system::Pallet::<T>::set_block_number(0u32.into());
