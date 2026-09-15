@@ -5240,6 +5240,61 @@ pub mod pallet {
       })
     }
 
+    /// Consumes one exact positive dependency result and wakes its generation/plan-bound Park
+    /// resident only after revalidating the current Pending and registration authority.
+    #[allow(
+      dead_code,
+      reason = "positive dependency wake remains staged behind the weighted consumer cutover"
+    )]
+    pub(crate) fn consume_positive_dependency_event_and_wake(
+      expected: PendingDependencyEvent,
+      kind: ServiceResidenceKind,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), DependencyRegistrationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          match PendingDependencyEvents::<T>::get(expected.owner.actor.actor_id) {
+            None => return Err(DependencyRegistrationError::PendingEventMissing),
+            Some(current) if current != expected => {
+              return Err(DependencyRegistrationError::PendingEventMismatch);
+            }
+            Some(_) => {}
+          }
+          if PendingCheckOwners::<T>::get(expected.owner.actor.actor_id) != Some(expected.owner) {
+            return Err(DependencyRegistrationError::PendingOwnerMismatch);
+          }
+          let source_state = DependencyRevisions::<T>::get(expected.source);
+          if source_state.exhausted || source_state.revision < expected.revision {
+            return Err(DependencyRegistrationError::RevisionMismatch);
+          }
+          let registration =
+            DependencyRegistrations::<T>::get(expected.source, expected.owner.actor.actor_id)
+              .ok_or(DependencyRegistrationError::RegistrationMissing)?;
+          if registration.actor != expected.owner.actor
+            || registration.plan_revision != expected.owner.plan_revision
+            || registration.acknowledged_revision < expected.revision
+          {
+            return Err(DependencyRegistrationError::CurrentRegistrationMismatch);
+          }
+          PendingDependencyEvents::<T>::remove(expected.owner.actor.actor_id);
+          Self::wake_parked_member_to_service(
+            expected.owner.actor,
+            kind,
+            expected.owner,
+            evidence,
+            now,
+          )
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(

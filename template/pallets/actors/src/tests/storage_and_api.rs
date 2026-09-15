@@ -775,8 +775,44 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
     assert_eq!(PendingCheckOwners::<Test>::get(actor_id), Some(owner));
     assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
 
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::publish_dependency_event(source),
+        Ok(DependencyPublicationMutation::Begun(1))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 1, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let pending = PendingDependencyEvents::<Test>::get(actor_id).expect("positive result pending");
+    let stale_pending = PendingDependencyEvent {
+      revision: 0,
+      ..pending
+    };
     assert_eq!(
-      Actors::wake_parked_member_to_service(actor, ServiceResidenceKind::Live, owner, evidence, 2,),
+      Actors::consume_positive_dependency_event_and_wake(
+        stale_pending,
+        ServiceResidenceKind::Live,
+        evidence,
+        2,
+      ),
+      Err(DependencyRegistrationError::PendingEventMismatch)
+    );
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(actor_id),
+      Some(pending)
+    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+
+    assert_eq!(
+      Actors::consume_positive_dependency_event_and_wake(
+        pending,
+        ServiceResidenceKind::Live,
+        evidence,
+        2,
+      ),
       Ok(())
     );
     assert_eq!(
