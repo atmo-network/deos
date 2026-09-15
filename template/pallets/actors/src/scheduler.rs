@@ -48,6 +48,21 @@ enum PlannedProcessDestination<BlockNumber> {
   },
 }
 
+/// Storage-free publication plan for the two independent physical obligations
+/// owned by one active Actor: exactly one process residence and, when its
+/// temporal Trigger is armed, one additional Tick deadline.
+#[allow(
+  dead_code,
+  reason = "composite publication remains inert until the atomic carrier cutover"
+)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlannedActorPublication<BlockNumber> {
+  hot: ActorHotState<BlockNumber>,
+  process: PlannedProcessDestination<BlockNumber>,
+  trigger_deadline: Option<DeadlineHandle<BlockNumber>>,
+  resources: ActorStepResourceEnvelope,
+}
+
 struct QueueTopology {
   head: QueueTicket,
   tail: QueueTicket,
@@ -8673,6 +8688,56 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  #[allow(
+    dead_code,
+    reason = "composite publication remains inert until the atomic carrier cutover"
+  )]
+  fn plan_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<PlannedActorPublication<BlockNumberFor<T>>, EnqueueOutcome> {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let process_plan = Self::plan_next_work_loaded(&instance, supplied_run, now, cutoff)?;
+    let process = Self::plan_process_destination(actor, process_plan, now, None)?;
+    let mut hot = state.hot.clone();
+    let trigger_deadline =
+      if !instance.lifecycle.is_paused() && instance.trigger_wakeup_pointer.is_none() {
+        Self::initial_trigger_wakeup_tick(&instance)?
+          .map(|tick| {
+            Self::plan_deadline_destination(actor, WakeupKey::Tick(tick)).inspect(|handle| {
+              hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+                tick,
+                page_id: handle.page,
+                slot: u32::from(handle.slot),
+              });
+            })
+          })
+          .transpose()
+          .map_err(|error| match error {
+            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+              EnqueueOutcome::WakeupCapacityExhausted
+            }
+            _ => EnqueueOutcome::CorruptedTopology,
+          })?
+      } else {
+        None
+      };
+    Ok(PlannedActorPublication {
+      hot,
+      process,
+      trigger_deadline,
+      resources,
+    })
+  }
+
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8764,6 +8829,50 @@ impl<T: Config> Pallet<T> {
         admission_round,
       } => (process, Some(admission_round), None),
       PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
+    })
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      ActorHotStateOf<T>,
+      ActorProcessOf<T>,
+      Option<BlockNumberFor<T>>,
+      Option<DeadlineHandleOf<T>>,
+      Option<DeadlineHandleOf<T>>,
+    ),
+    EnqueueOutcome,
+  > {
+    Self::plan_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+    .map(|publication| {
+      let (process, admission_round, process_deadline) = match publication.process {
+        PlannedProcessDestination::Disabled(process) => (process, None, None),
+        PlannedProcessDestination::Service {
+          process,
+          admission_round,
+        } => (process, Some(admission_round), None),
+        PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
+      };
+      (
+        publication.hot,
+        process,
+        admission_round,
+        process_deadline,
+        publication.trigger_deadline,
+      )
     })
   }
 

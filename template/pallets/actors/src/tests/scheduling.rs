@@ -1045,6 +1045,48 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
         slot: deadline.slot,
       })
     );
+
+    let mut temporal = state.clone();
+    temporal.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    temporal.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    temporal.hot.trigger_wakeup_pointer = None;
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let (planned_hot, planned_process, _, process_deadline, trigger_deadline) =
+      Actors::test_plan_actor_publication(
+        actor,
+        &temporal,
+        temporal.run_state.as_ref(),
+        cell.resources,
+        0,
+      )
+      .expect("process residence and temporal Trigger plan together");
+    let process_deadline = process_deadline.expect("suspended process owns Block deadline");
+    let trigger_deadline = trigger_deadline.expect("Cadenced Trigger owns Tick deadline");
+    assert!(matches!(process_deadline.key, WakeupKey::Block(_)));
+    assert!(matches!(trigger_deadline.key, WakeupKey::Tick(_)));
+    assert_eq!(process_deadline.actor, trigger_deadline.actor);
+    assert_eq!(
+      planned_process.residence,
+      Some(crate::ProcessResidence::Deadline {
+        key: process_deadline.key,
+        page: process_deadline.page,
+        slot: process_deadline.slot,
+      })
+    );
+    assert_eq!(
+      planned_hot.trigger_wakeup_pointer,
+      Some(crate::TriggerWakeupPointer {
+        tick: match trigger_deadline.key {
+          WakeupKey::Tick(tick) => tick,
+          WakeupKey::Block(_) => unreachable!("Trigger deadline uses Tick clock"),
+        },
+        page_id: trigger_deadline.page,
+        slot: u32::from(trigger_deadline.slot),
+      })
+    );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       before,
