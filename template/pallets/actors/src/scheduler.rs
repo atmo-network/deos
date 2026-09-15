@@ -1673,9 +1673,11 @@ impl<T: Config> Pallet<T> {
     Self::finalize_effectful_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
-  /// Executes one effectful completion through canonical Service authority. Retained and terminal
-  /// completion commit semantic state before advancing or unlinking the ring. Retry, continuation,
-  /// and deadline destinations remain refused until their atomic residence commits exist.
+  /// Executes one effectful completion or adjacent-round retry through canonical Service authority.
+  /// Retained and terminal completion commit semantic state before advancing or unlinking the ring;
+  /// a retry due in the next round commits its Run/Hot state before advancing the current frontier.
+  /// Later retry, continuation, and deadline destinations remain refused until their atomic
+  /// residence commits exist.
   #[allow(
     dead_code,
     reason = "canonical Service execution remains staged behind the atomic publication cutover"
@@ -1716,9 +1718,15 @@ impl<T: Config> Pallet<T> {
           next_residence,
           eligible_at,
         } = transition;
-        if disposition != AttemptDisposition::Completed || eligible_at.is_some() {
-          return Err(AttemptTransactionError::Invariant);
-        }
+        let control_outcome = match (disposition, eligible_at) {
+          (AttemptDisposition::Completed, None) => StepControlOutcome::Completed,
+          (AttemptDisposition::Suspended, Some(eligible_at))
+            if now.checked_add(&One::one()) == Some(eligible_at) =>
+          {
+            StepControlOutcome::Suspended
+          }
+          _ => return Err(AttemptTransactionError::Invariant),
+        };
         let actual_effect_weight =
           T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
             .filter(|actual| actual.all_lte(reserved_effect_weight))
@@ -1758,7 +1766,7 @@ impl<T: Config> Pallet<T> {
               CycleState::Running => StepControlPhase::Running,
               CycleState::Suspended => StepControlPhase::Suspended,
             },
-            outcome: StepControlOutcome::Completed,
+            outcome: control_outcome,
             placement,
             task_effect: effect_execution,
             action_fee_collected,
