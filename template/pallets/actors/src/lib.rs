@@ -5219,6 +5219,81 @@ pub mod pallet {
       })
     }
 
+    /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
+    /// Stale authority and occupied Pending work refuse without consuming the retained plan.
+    #[allow(
+      dead_code,
+      reason = "canonical Park wake remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn wake_parked_member_to_service(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      owner: PendingCheckOwner,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), DependencyRegistrationError> {
+      if owner.actor != actor {
+        return Err(DependencyRegistrationError::PendingOwnerMismatch);
+      }
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let mut process = ActorProcesses::<T>::get(actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if process.generation != actor.generation
+            || process.status != ProcessStatus::Serving
+            || process.residence != Some(ProcessResidence::Parked(evidence))
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          if PendingCheckOwners::<T>::get(actor.actor_id) != Some(owner)
+            || PendingDependencyEvents::<T>::contains_key(actor.actor_id)
+            || PendingDependencyReviews::<T>::contains_key(actor.actor_id)
+          {
+            return Err(DependencyRegistrationError::PendingOwnerMismatch);
+          }
+          let plan = DependencyPlans::<T>::get(actor.actor_id);
+          for registration in &plan {
+            if registration.handle.actor != actor
+              || registration.handle.plan_revision != owner.plan_revision
+              || DependencyRegistrations::<T>::get(registration.source, actor.actor_id)
+                != Some(registration.handle)
+            {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            Self::dependency_registration_position(
+              registration.source,
+              actor.actor_id,
+              registration.handle,
+            )?;
+          }
+          if let Some(review) = DependencyTimedReviews::<T>::get(actor.actor_id) {
+            if review.owner != owner {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            DependencyTimedReviews::<T>::remove(actor.actor_id);
+          }
+          for registration in &plan {
+            Self::remove_dependency_registration(registration.source, registration.handle)?;
+          }
+          DependencyPlans::<T>::remove(actor.actor_id);
+          PendingCheckOwners::<T>::remove(actor.actor_id);
+          process.residence = Some(ProcessResidence::Service(kind));
+          ActorProcesses::<T>::insert(actor.actor_id, process);
+          let admission_round = now
+            .checked_sub(&One::one())
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          Self::insert_service_member(actor, kind, admission_round)
+            .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Selects the first canonical free slot in one deadline bucket without mutation.
     pub(crate) fn plan_deadline_destination(
       actor: ActorRef,

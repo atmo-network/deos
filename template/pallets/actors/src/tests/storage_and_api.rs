@@ -702,6 +702,45 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       Some(Some(ProcessResidence::Parked(evidence)))
     );
     assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot));
+
+    let stale_evidence = ParkEvidence {
+      plan_identity: [8; 32],
+      ..evidence
+    };
+    assert_eq!(
+      Actors::wake_parked_member_to_service(
+        actor,
+        ServiceResidenceKind::Live,
+        owner,
+        stale_evidence,
+        2,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(PendingCheckOwners::<Test>::get(actor_id), Some(owner));
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+
+    assert_eq!(
+      Actors::wake_parked_member_to_service(actor, ServiceResidenceKind::Live, owner, evidence, 2,),
+      Ok(())
+    );
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Service(ServiceResidenceKind::Live)))
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert!(!DependencyRegistrations::<Test>::contains_key(
+      source, actor_id
+    ));
+
+    assert_eq!(
+      Actors::wake_parked_member_to_service(actor, ServiceResidenceKind::Live, owner, evidence, 2,),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
   });
 }
 
