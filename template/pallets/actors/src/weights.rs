@@ -126,6 +126,8 @@ pub trait WeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
   fn materialization_coordinator_base() -> Weight;
+  fn service_member_publish_empty() -> Weight;
+  fn service_member_publish_populated() -> Weight;
   fn service_member_insert_populated() -> Weight;
   fn service_round_begin_populated() -> Weight;
   fn service_round_probe_eligible() -> Weight;
@@ -562,6 +564,12 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn service_member_publish_empty() -> Weight {
+    Weight::from_parts(150_000_000, 24_000).saturating_add(T::DbWeight::get().reads_writes(6, 3))
+  }
+  fn service_member_publish_populated() -> Weight {
+    Weight::from_parts(200_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(10, 6))
+  }
   fn service_member_insert_populated() -> Weight {
     Weight::from_parts(150_000_000, 24_000).saturating_add(T::DbWeight::get().reads_writes(9, 5))
   }
@@ -973,6 +981,8 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight { Weight::from_parts(7_543_000, 1_493) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
   fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
+  fn service_member_publish_empty() -> Weight { Weight::from_parts(150_000_000, 24_000) }
+  fn service_member_publish_populated() -> Weight { Weight::from_parts(200_000_000, 32_000) }
   fn service_member_insert_populated() -> Weight { Weight::from_parts(150_000_000, 24_000) }
   fn service_round_begin_populated() -> Weight { Weight::from_parts(50_000_000, 8_000) }
   fn service_round_probe_eligible() -> Weight { Weight::from_parts(75_000_000, 12_000) }

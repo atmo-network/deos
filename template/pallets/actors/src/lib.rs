@@ -2472,6 +2472,44 @@ pub mod pallet {
       Ok(next)
     }
 
+    /// Atomically publishes one typed service process and inserts its generation-bound ring node.
+    /// This is the complete canonical carrier owner for a caller that has already removed legacy
+    /// authority; either both storage surfaces commit or neither does.
+    #[allow(
+      dead_code,
+      reason = "atomic service publication remains unreachable until supported callers cut over"
+    )]
+    pub(crate) fn publish_service_member(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServicePublicationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let current = ActorProcess {
+          generation: actor.generation,
+          last_attempted: None,
+          status: ProcessStatus::Serving,
+          residence: Some(ProcessResidence::Service(kind)),
+        };
+        let result = Self::publish_legacy_process_transition(
+          actor.actor_id,
+          current,
+          ProcessTransitionObligation::PublishTypedResidence,
+          LegacyProcessTransition::Publish(LegacyProcessPlacement::Ready(kind)),
+        )
+        .map_err(ServicePublicationError::Process)
+        .and_then(|_| {
+          Self::insert_service_member(actor, kind, now).map_err(ServicePublicationError::Ring)
+        });
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Appends one generation-bound process to the inert service ring. The caller's transaction
     /// must publish the matching process and remove legacy authority before entering this boundary.
     #[allow(

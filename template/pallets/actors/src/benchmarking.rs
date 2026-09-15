@@ -4441,6 +4441,45 @@ mod benches {
   }
 
   #[benchmark]
+  fn service_member_publish_empty() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 8_998,
+      generation: 1,
+    };
+    #[block]
+    {
+      Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, now)
+        .expect("empty service-ring publication succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+    assert!(ActorProcesses::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_member_publish_populated() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let retained = ActorRef {
+      actor_id: 8_999,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_000,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Live, now);
+    #[block]
+    {
+      Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Pending, now)
+        .expect("populated service-ring publication succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert!(ActorProcesses::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
   fn service_member_insert_populated() {
     let now: BlockNumberFor<T> = 1u32.into();
     let retained = ActorRef {

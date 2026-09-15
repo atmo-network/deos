@@ -20,9 +20,9 @@ use crate::{
   PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
   ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
   ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServiceResidenceKind, ServiceRingMutationError,
-  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  compile_legacy_process, plan_legacy_process_transition,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
+  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -384,6 +384,39 @@ fn process_publication_is_transaction_local_single_authority_and_rollback_safe()
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
     });
     assert!(!ActorProcesses::<Test>::contains_key(901));
+  });
+}
+
+#[test]
+fn service_publication_atomically_owns_process_and_ring_insertion() {
+  new_test_ext().execute_with(|| {
+    let first = actor_ref(910, 4);
+    Actors::publish_service_member(first, ServiceResidenceKind::Live, 1)
+      .expect("empty publication succeeds");
+    assert_eq!(ServiceHeader::<Test>::get().count, 1);
+    assert_eq!(
+      ActorProcesses::<Test>::get(first.actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Service(ServiceResidenceKind::Live)))
+    );
+    assert!(ServiceNodes::<Test>::contains_key(first.actor_id));
+
+    let second = actor_ref(911, 2);
+    Actors::publish_service_member(second, ServiceResidenceKind::Pending, 1)
+      .expect("populated publication succeeds");
+    assert_eq!(ServiceHeader::<Test>::get().count, 2);
+    assert!(ActorProcesses::<Test>::contains_key(second.actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(second.actor_id));
+
+    ServiceHeader::<Test>::mutate(|header| header.cursor = None);
+    let rejected = actor_ref(912, 1);
+    assert_eq!(
+      Actors::publish_service_member(rejected, ServiceResidenceKind::Live, 1),
+      Err(ServicePublicationError::Ring(
+        ServiceRingMutationError::CorruptRing
+      ))
+    );
+    assert!(!ActorProcesses::<Test>::contains_key(rejected.actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(rejected.actor_id));
   });
 }
 

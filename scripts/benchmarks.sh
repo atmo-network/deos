@@ -397,6 +397,8 @@ verify_weight_file_contract() {
 
     local required_runtime_benchmarks=(
         "scheduler_actor_state_probe"
+        "service_member_publish_empty"
+        "service_member_publish_populated"
         "service_member_insert_populated"
         "service_round_begin_populated"
         "service_round_probe_eligible"

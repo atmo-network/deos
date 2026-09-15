@@ -1,6 +1,6 @@
 use super::{
   contract::ActorContractCommitment,
-  lifecycle::{ActorId, ActorRef, ServiceResidenceKind},
+  lifecycle::{ActorId, ActorRef, ProcessPublicationError, ServiceResidenceKind},
 };
 use frame::prelude::*;
 
@@ -61,6 +61,13 @@ pub enum ServiceRingMutationError {
   CorruptRing,
   CapacityExceeded,
   BlockNumberOverflow,
+}
+
+/// Failure of one atomic process-publication and service-ring insertion owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicePublicationError {
+  Process(ProcessPublicationError),
+  Ring(ServiceRingMutationError),
 }
 
 /// Read-only classification of the current inert service-ring frontier.
