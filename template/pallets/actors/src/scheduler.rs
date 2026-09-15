@@ -47,6 +47,18 @@ struct PreparedReadyPublication<T: Config> {
   cell: ActorControlCellOf<T>,
 }
 
+/// Canonical generation-bound identity plus the validated semantic/resource envelope loaded by
+/// the legacy FIFO adapter. Mandatory service consumes this shape rather than deriving execution
+/// state directly from `ActorControlCell`; the canonical ring cut can replace only the adapter.
+struct LoadedServiceEntry<T: Config> {
+  actor: ActorRef,
+  identity: ActorIdentityOf<T>,
+  hot: ActorHotStateOf<T>,
+  admission: ActorAdmissionCertificateOf<T>,
+  resources: ActorStepResourceEnvelope,
+  eligible_at: BlockNumberFor<T>,
+}
+
 /// Carrier-neutral semantic result and next-residence intent of one effectful
 /// Step attempt. The legacy FIFO adapter consumes this result and owns physical
 /// placement; the execution core does not publish scheduler authority.
@@ -2645,6 +2657,23 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  fn load_legacy_service_entry(
+    entry: &QueueEntry<BlockNumberFor<T>>,
+  ) -> Option<LoadedServiceEntry<T>> {
+    let actor = Self::load_actor_ref(entry.actor_id)?;
+    let (location, cell) = Self::load_primary_control_cell(actor.actor_id).ok()?;
+    let (identity, hot, admission) = Self::project_control_cell(&cell, location)?;
+    let eligible_at = cell.eligible_at?;
+    Some(LoadedServiceEntry {
+      actor,
+      identity,
+      hot,
+      admission,
+      resources: cell.resources,
+      eligible_at,
+    })
+  }
+
   fn service_live_queue_entry(
     (position, entry): (QueueTicket, QueueEntry<BlockNumberFor<T>>),
     now: BlockNumberFor<T>,
@@ -2674,16 +2703,24 @@ impl<T: Config> Pallet<T> {
     if let Some(meter) = control_meter.as_deref_mut() {
       meter.consume(state_probe_weight);
     }
-    let Ok((location, cell)) = Self::load_primary_control_cell(entry.actor_id) else {
+    let Some(loaded_entry) = Self::load_legacy_service_entry(&entry) else {
       return FifoStepResult::Blocked(BlockKind::NonWeight);
     };
-    let Some((identity, hot, admission)) = Self::project_control_cell(&cell, location) else {
+    if loaded_entry.actor.actor_id != entry.actor_id {
       return FifoStepResult::Blocked(BlockKind::NonWeight);
-    };
+    }
+    let LoadedServiceEntry {
+      actor: _,
+      identity,
+      hot,
+      admission,
+      resources: entry_resources,
+      eligible_at,
+    } = loaded_entry;
     if hot.queue_ticket != Some(entry.ticket) {
       return FifoStepResult::NoWork;
     }
-    if cell.eligible_at != Some(entry.eligible_at) {
+    if eligible_at != entry.eligible_at {
       return FifoStepResult::Blocked(BlockKind::NonWeight);
     }
     let inline_terminal_due = hot.terminal_at.is_some_and(|terminal| terminal <= now)
@@ -2716,15 +2753,15 @@ impl<T: Config> Pallet<T> {
       && !inline_terminal_due
       && !hot.lifecycle.is_paused()
       && let Some(required_control) = consume_weight
-        .checked_add(&cell.resources.control)
+        .checked_add(&entry_resources.control)
         .and_then(|weight| weight.checked_add(&Self::close_cleanup_weight_upper()))
-      && let Some(required_attempt) = required_control.checked_add(&cell.resources.effect)
+      && let Some(required_attempt) = required_control.checked_add(&entry_resources.effect)
       && (!cycle_meter.can_consume(required_attempt)
         || control_meter
           .as_ref()
           .is_some_and(|meter| !meter.can_consume(required_control))
         || resources.as_ref().is_some_and(|(state, limits, domain)| {
-          state.capacity_exceeded(*limits, *domain, cell.resources.effect)
+          state.capacity_exceeded(*limits, *domain, entry_resources.effect)
         }))
       && !GlobalCircuitBreaker::<T>::get()
     {

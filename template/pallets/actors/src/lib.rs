@@ -5055,10 +5055,6 @@ pub mod pallet {
     }
 
     /// Loads the canonical generation-bound identity for active process carriers.
-    #[allow(
-      dead_code,
-      reason = "canonical carrier publication lands in the next atomic cutover"
-    )]
     pub(crate) fn load_actor_ref(actor_id: ActorId) -> Option<ActorRef> {
       match ActorSemanticStates::<T>::get(actor_id)? {
         ActorSemanticState::Active(record) if record.generation != 0 => Some(ActorRef {
