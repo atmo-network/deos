@@ -321,6 +321,14 @@ pub enum DueTickDeadlineMutation {
   ReviewProcessed(ActorRef, DependencyReviewMutation),
 }
 
+/// One bounded mandatory-service pass over the independent Block and Tick deadline frontiers.
+/// Each frontier receives one attempt even when its peer is absent or rejects retained state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DueDeadlineServicePass {
+  pub block: Result<DueBlockDeadlineMutation, DependencyReviewWorkerError>,
+  pub tick: Result<DueTickDeadlineMutation, DependencyReviewWorkerError>,
+}
+
 /// Result supplied by one bounded current-state interpretation of a Pending due review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyReviewInterpretation {

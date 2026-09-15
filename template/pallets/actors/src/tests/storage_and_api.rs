@@ -1495,13 +1495,127 @@ fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
     assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(retained));
     assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
 
-    let mut admitted = WeightMeter::with_limit(selector_weight.saturating_add(review_weight));
+    let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
+    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let complete = block_selector
+      .saturating_add(retry_weight.max(review_weight))
+      .saturating_add(selector_weight)
+      .saturating_add(review_weight);
+    let mut admitted = WeightMeter::with_limit(complete);
+    let pass = Actors::service_due_deadline_frontiers(
+      &mut admitted,
+      ServiceResidenceKind::Live,
+      7,
+      7,
+      None,
+      Some(WakeupKey::Tick(8)),
+    )
+    .unwrap();
+    assert_eq!(
+      pass.block,
+      Err(DependencyReviewWorkerError::Deadline(
+        DeadlineMutationError::MemberMissing
+      ))
+    );
     assert!(matches!(
-      Actors::process_next_due_tick_deadline(&mut admitted, ServiceResidenceKind::Live, 7, 7, Some(WakeupKey::Tick(8))),
+      pass.tick,
       Ok(DueTickDeadlineMutation::ReviewProcessed(current, DependencyReviewMutation::Rearmed(_))) if current == actor
     ));
     assert_eq!(DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key), Some(WakeupKey::Tick(8)));
     assert!(matches!(Actors::classify_next_due_block_deadline(7), Err(DeadlineMutationError::MemberMissing)));
+  });
+}
+
+#[test]
+fn mandatory_deadline_service_reserves_both_independent_frontiers() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let mut actors = Vec::new();
+    for (source, feed, deadline) in [
+      (41, 11, WakeupKey::Block(7)),
+      (42, 12, WakeupKey::Tick(7)),
+    ] {
+      let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+      let ActorSemanticState::Active(record) =
+        ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+      else {
+        panic!("created Actor is active");
+      };
+      let actor = actor_ref(actor_id, record.generation);
+      ActorControlLocators::<Test>::remove(actor_id);
+      ActorUnsignaledControlCells::<Test>::remove(actor_id);
+      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+      ObservationDependencySources::<Test>::insert(feed, source);
+      DependencySourceObservations::<Test>::insert(source, feed);
+      set_observation(feed, ScalarObservationState::Unavailable);
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        u64::from(source),
+        ParkNegativeReason::SourceUnavailable,
+        Some(7),
+        &[DependencyPlanSource { source, observed_revision: 0 }],
+        Some(deadline),
+      )
+      .unwrap();
+      set_observation(
+        feed,
+        ScalarObservationState::Fresh {
+          value: 1,
+          observed_at: 7,
+        },
+      );
+      actors.push(actor);
+    }
+    frame_system::Pallet::<Test>::set_block_number(7);
+
+    let block_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
+    let tick_selector = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_tick_deadline();
+    let review = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let retry = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let complete = block_selector
+      .saturating_add(retry.max(review))
+      .saturating_add(tick_selector)
+      .saturating_add(review);
+    let mut refused = WeightMeter::with_limit(complete.saturating_sub(Weight::from_parts(1, 0)));
+    assert_eq!(
+      Actors::service_due_deadline_frontiers(
+        &mut refused,
+        ServiceResidenceKind::Live,
+        7,
+        7,
+        None,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert!(actors.iter().all(|actor| DeadlineHandles::<Test>::contains_key(actor.actor_id)));
+
+    let mut admitted = WeightMeter::with_limit(complete);
+    let pass = Actors::service_due_deadline_frontiers(
+      &mut admitted,
+      ServiceResidenceKind::Live,
+      7,
+      7,
+      None,
+      None,
+    )
+    .unwrap();
+    assert_eq!(
+      pass.block,
+      Ok(DueBlockDeadlineMutation::ReviewProcessed(
+        actors[0],
+        DependencyReviewMutation::Woke,
+      ))
+    );
+    assert_eq!(
+      pass.tick,
+      Ok(DueTickDeadlineMutation::ReviewProcessed(
+        actors[1],
+        DependencyReviewMutation::Woke,
+      ))
+    );
+    assert!(actors.iter().all(|actor| !DeadlineHandles::<Test>::contains_key(actor.actor_id)));
   });
 }
 

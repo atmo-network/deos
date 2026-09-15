@@ -5825,10 +5825,6 @@ pub mod pallet {
     /// Processes one retained timed review from the independent Tick frontier. Selection is
     /// admitted before inspection; the existing complete review owner admits the selected branch.
     /// Block-clock members and incoherent Tick retries remain untouched.
-    #[allow(
-      dead_code,
-      reason = "tick deadline traversal remains staged behind the mandatory service cutover"
-    )]
     pub(crate) fn process_next_due_tick_deadline(
       meter: &mut WeightMeter,
       kind: ServiceResidenceKind,
@@ -5906,6 +5902,37 @@ pub mod pallet {
           }
         }
       })
+    }
+
+    /// Gives each independent deadline clock one bounded mandatory-service attempt in fixed
+    /// Block-then-Tick order. The complete maximum two-frontier envelope is admitted before either
+    /// selector reads storage, so an absent, refused, or continuously busy Block frontier cannot
+    /// consume the Tick frontier's authority (and vice versa). Each branch still settles only its
+    /// actual generated selector and worker Weight through the shared meter.
+    #[allow(
+      dead_code,
+      reason = "deadline mandatory-service composition remains staged behind hook cutover"
+    )]
+    pub(crate) fn service_due_deadline_frontiers(
+      meter: &mut WeightMeter,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      now_tick: SchedulerTick,
+      next_block_review: Option<WakeupKey<BlockNumberFor<T>>>,
+      next_tick_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DueDeadlineServicePass, DependencyReviewWorkerError> {
+      let review = T::WeightInfo::process_due_observation_availability_review();
+      let block_branch = T::WeightInfo::return_due_block_deadline_to_service().max(review);
+      let complete_envelope = T::WeightInfo::classify_due_block_deadline()
+        .saturating_add(block_branch)
+        .saturating_add(T::WeightInfo::classify_due_tick_deadline())
+        .saturating_add(review);
+      if !meter.can_consume(complete_envelope) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      let block = Self::process_next_due_block_deadline(meter, kind, now, next_block_review);
+      let tick = Self::process_next_due_tick_deadline(meter, kind, now, now_tick, next_tick_review);
+      Ok(DueDeadlineServicePass { block, tick })
     }
 
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
