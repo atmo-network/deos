@@ -897,6 +897,67 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   assert!(lib.contains(
     "Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)"
   ));
+
+  // A separate semantic owner cannot be introduced only at create/activate: these production
+  // owners still rewrite semantic fields inside the legacy placement cell after publication.
+  // Cutover must convert this complete writer closure atomically or it creates dual semantic truth.
+  for (source, owner, mutation) in [
+    (
+      lib,
+      "store_frame_control_authority",
+      "cell.identity = control_identity;",
+    ),
+    (
+      lib,
+      "store_frame_control_authority",
+      "cell.hot = Self::control_hot_from_scalar(hot.clone());",
+    ),
+    (
+      lib,
+      "replace_control_admission_for_transition",
+      "cell.admission = certificate.clone();",
+    ),
+    (
+      lib,
+      "replace_control_admission_for_transition",
+      "cell.resources = resources;",
+    ),
+    (
+      scheduler,
+      "prepare_observation_ready_cell",
+      "cell.cursor = state.run_head.as_ref().map_or(0, |run| run.cursor);",
+    ),
+    (
+      scheduler,
+      "update_existing_frame_control_identity",
+      "cell.identity = Self::control_identity_from_scalar(identity.clone())",
+    ),
+    (
+      scheduler,
+      "update_existing_frame_control_hot",
+      "cell.hot = Self::control_hot_from_scalar(hot.clone());",
+    ),
+    (
+      scheduler,
+      "consume_waiting_from_supplied_authority",
+      "cell.cursor = 0;",
+    ),
+    (
+      execution,
+      "write_run_state",
+      "cell.cursor = state.as_ref().map_or(0, |run| run.cursor);",
+    ),
+    (
+      execution,
+      "write_run_state",
+      "cell.resources = step.resources;",
+    ),
+  ] {
+    assert!(
+      source.contains(&format!("fn {owner}(")) && source.contains(mutation),
+      "semantic-owner cutover inventory drift for {owner}: {mutation}"
+    );
+  }
   for source in [lib, scheduler, execution] {
     assert_eq!(
       source.matches("Self::publish_service_member(").count(),
