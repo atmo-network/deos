@@ -1027,41 +1027,31 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
     "Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)"
   ));
 
-  // A separate semantic owner cannot be introduced only at create/activate: the active-state,
-  // service-state and observation paths all enter through the placement-backed projection. The
-  // initial scheduler also reloads that projection after every temporal placement transition.
-  for (source, owner, dependency) in [
-    (
-      lib,
-      "load_frame_control_authority",
-      "Self::project_control_cell(&cell, location)?",
-    ),
-    (
-      lib,
-      "load_frame_actor_state",
-      "Self::load_frame_control_authority(actor_id)",
-    ),
-    (
-      lib,
-      "load_actor_service_state_with_authority",
-      "Self::load_control_authority_with_authority(actor_id)?",
-    ),
-    (
-      lib,
-      "load_observation_activation_state_with_authority",
-      "Self::load_primary_control_cell(actor_id)",
-    ),
-    (
-      scheduler,
-      "prime_initial_actor_schedule",
-      "Self::load_frame_actor_service_state(actor_id)",
-    ),
+  // Lifecycle, service, observation and execution callers now enter through one storage-neutral
+  // semantic loader. Only that loader compiles the placement-backed owner; production semantic
+  // storage remains absent until the writer and Weight cutover can land atomically.
+  for owner in [
+    "load_actor_state_with_admission",
+    "load_control_authority_with_authority",
+    "load_actor_service_state_with_authority",
   ] {
+    let marker = format!("    pub(crate) fn {owner}(");
+    let start = lib
+      .find(&marker)
+      .unwrap_or_else(|| panic!("semantic loader caller disappeared: {owner}"));
+    let body = &lib[start..];
+    let end = body[marker.len()..]
+      .find("\n    pub(crate) fn ")
+      .map_or(body.len(), |offset| marker.len() + offset);
     assert!(
-      source.contains(&format!("fn {owner}(")) && source.contains(dependency),
-      "semantic-owner cutover loader inventory drift for {owner}: {dependency}"
+      body[..end].contains("Self::load_actor_semantic_state(actor_id)"),
+      "semantic loader caller bypassed the storage-neutral boundary: {owner}"
     );
   }
+  assert!(lib.contains("fn load_actor_semantic_state("));
+  assert!(lib.contains("Self::load_frame_control_authority(actor_id)"));
+  assert!(!scheduler.contains("Self::load_frame_actor_state(actor_id)"));
+  assert!(execution.contains("Self::load_actor_state_for_frame_control(actor_id)"));
 
   // Initial semantic publication has one shared owner. Create and activate supply scalar identity,
   // freshly initialized hot state, and complete contract geometry to insert_active_actor; that

@@ -944,6 +944,11 @@ pub mod pallet {
     Active(ActorSemanticRecord<Identity, Hot, Admission>),
   }
 
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  pub enum ActorSemanticLoadError {
+    Corrupt,
+  }
+
   /// Complete storage-neutral operation set for the future actor-keyed semantic owner. Every
   /// update is a compare-and-replace of the whole bounded record, so independently authored field
   /// patches cannot silently overwrite one another. Placement-only transitions need no operation.
@@ -1046,16 +1051,10 @@ pub mod pallet {
     pub resources: ActorStepResourceEnvelope,
   }
 
-  pub type ActorSemanticRecordOf<T> = ActorSemanticRecord<
-    ActorControlIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>,
-    ActorControlHotState<BlockNumberFor<T>>,
-    ActorAdmissionCertificateOf<T>,
-  >;
-  pub type ActorSemanticStateOf<T> = ActorSemanticState<
-    ActorControlIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>,
-    ActorControlHotState<BlockNumberFor<T>>,
-    ActorAdmissionCertificateOf<T>,
-  >;
+  pub type ActorSemanticRecordOf<T> =
+    ActorSemanticRecord<ActorIdentityOf<T>, ActorHotStateOf<T>, ActorAdmissionCertificateOf<T>>;
+  pub type ActorSemanticStateOf<T> =
+    ActorSemanticState<ActorIdentityOf<T>, ActorHotStateOf<T>, ActorAdmissionCertificateOf<T>>;
 
   pub type ActorControlCellOf<T> = ActorControlCell<
     <T as frame_system::Config>::AccountId,
@@ -4612,8 +4611,12 @@ pub mod pallet {
       ActorHotStateOf<T>,
       ActorAdmissionCertificateOf<T>,
     )> {
-      let (_, identity, hot, admission) = Self::load_frame_control_authority(actor_id)?;
-      Some((identity, hot, admission))
+      let (ActorSemanticState::Active(record), _) =
+        Self::load_actor_semantic_state(actor_id).ok()??
+      else {
+        return None;
+      };
+      Some((record.identity, record.hot, record.admission))
     }
 
     #[cfg(feature = "runtime-benchmarks")]
@@ -5229,42 +5232,75 @@ pub mod pallet {
       true
     }
 
-    pub(crate) fn load_actor_state_with_admission(
+    /// Storage-neutral semantic loader. The current implementation compiles the sole legacy
+    /// placement owner; the cutover can replace this source without changing lifecycle callers.
+    pub(crate) fn load_actor_semantic_state(
       actor_id: ActorId,
-    ) -> (
-      LoadedActorStateOf<T>,
-      Option<ActorAdmissionCertificateOf<T>>,
-    ) {
-      if ActorControlLocators::<T>::contains_key(actor_id) {
-        let state = Self::load_frame_actor_state(actor_id);
-        let admission = match &state {
-          LoadedActorStateOf::Active(_) => Self::load_control_admission(actor_id),
-          _ => None,
-        };
-        return (state, admission);
+    ) -> Result<
+      Option<(
+        ActorSemanticStateOf<T>,
+        Option<ActorControlLocation<BlockNumberFor<T>>>,
+      )>,
+      ActorSemanticLoadError,
+    > {
+      if let Some(location) = ActorControlLocators::<T>::get(actor_id) {
+        if ActorIdentities::<T>::contains_key(actor_id) {
+          return Err(ActorSemanticLoadError::Corrupt);
+        }
+        let (loaded_location, identity, hot, admission) =
+          Self::load_frame_control_authority(actor_id).ok_or(ActorSemanticLoadError::Corrupt)?;
+        if loaded_location != location {
+          return Err(ActorSemanticLoadError::Corrupt);
+        }
+        return Ok(Some((
+          ActorSemanticState::Active(ActorSemanticRecord {
+            identity,
+            hot,
+            admission,
+          }),
+          Some(location),
+        )));
       }
       if ActorUnsignaledControlCells::<T>::contains_key(actor_id)
         || ActorContractHeads::<T>::contains_key(actor_id)
         || ActorActivationAuthorities::<T>::contains_key(actor_id)
         || ActorRunHeads::<T>::contains_key(actor_id)
         || ActorRunPayloads::<T>::contains_key(actor_id)
+        || ActorRunStateStore::<T>::contains_key(actor_id)
         || <ActorContractTailChunks<T> as polkadot_sdk::frame_support::storage::StorageDoubleMap<
           ActorId,
           u32,
           ActorStepChunkOf<T>,
         >>::contains_prefix(actor_id)
       {
-        return (LoadedActorStateOf::Corrupt, None);
+        return Err(ActorSemanticLoadError::Corrupt);
       }
-      let identity = Self::load_control_identity(actor_id);
-      if identity.is_none() && ActorIdentities::<T>::contains_key(actor_id) {
-        return (LoadedActorStateOf::Corrupt, None);
-      }
-      let run_state = ActorRunStateStore::<T>::get(actor_id);
-      match (identity, run_state) {
-        (None, None) => (LoadedActorStateOf::NotRegistered, None),
-        (Some(identity), None) => (LoadedActorStateOf::Dormant(identity), None),
-        _ => (LoadedActorStateOf::Corrupt, None),
+      Ok(
+        ActorIdentities::<T>::get(actor_id)
+          .map(|identity| (ActorSemanticState::Dormant(identity), None)),
+      )
+    }
+
+    pub(crate) fn load_actor_state_with_admission(
+      actor_id: ActorId,
+    ) -> (
+      LoadedActorStateOf<T>,
+      Option<ActorAdmissionCertificateOf<T>>,
+    ) {
+      match Self::load_actor_semantic_state(actor_id) {
+        Ok(None) => (LoadedActorStateOf::NotRegistered, None),
+        Ok(Some((ActorSemanticState::Dormant(identity), None))) => {
+          (LoadedActorStateOf::Dormant(identity), None)
+        }
+        Ok(Some((ActorSemanticState::Active(record), Some(location)))) => {
+          let admission = record.admission.clone();
+          let state = Self::load_active_actor_state(actor_id, location, record);
+          match state {
+            LoadedActorStateOf::Active(_) => (state, Some(admission)),
+            _ => (state, None),
+          }
+        }
+        Ok(Some(_)) | Err(_) => (LoadedActorStateOf::Corrupt, None),
       }
     }
 
@@ -5274,14 +5310,19 @@ pub mod pallet {
 
     /// Strict active-state loader; malformed primary authority never falls back to dormancy.
     pub(crate) fn load_frame_actor_state(actor_id: ActorId) -> LoadedActorStateOf<T> {
-      if ActorIdentities::<T>::contains_key(actor_id) {
-        return LoadedActorStateOf::Corrupt;
-      }
-      let Some((location, identity, hot, frame_admission)) =
-        Self::load_frame_control_authority(actor_id)
-      else {
-        return LoadedActorStateOf::Corrupt;
-      };
+      Self::load_actor_state(actor_id)
+    }
+
+    fn load_active_actor_state(
+      actor_id: ActorId,
+      location: ActorControlLocation<BlockNumberFor<T>>,
+      record: ActorSemanticRecordOf<T>,
+    ) -> LoadedActorStateOf<T> {
+      let ActorSemanticRecord {
+        identity,
+        hot,
+        admission: frame_admission,
+      } = record;
       // Full classification validates temporal references; hot head admission does not load them.
       let pointers = [
         hot.wakeup_pointer,
@@ -5669,8 +5710,17 @@ pub mod pallet {
       ActorAdmissionCertificateOf<T>,
       Option<LoadedActorStepOf<T>>,
     )> {
-      let (identity, hot, admission) = Self::load_control_authority_with_authority(actor_id)?;
-      Self::load_actor_service_state_with_control(actor_id, identity, hot, admission)
+      let (ActorSemanticState::Active(record), _) =
+        Self::load_actor_semantic_state(actor_id).ok()??
+      else {
+        return None;
+      };
+      Self::load_actor_service_state_with_control(
+        actor_id,
+        record.identity,
+        record.hot,
+        record.admission,
+      )
     }
 
     pub(crate) fn load_frame_actor_service_state(

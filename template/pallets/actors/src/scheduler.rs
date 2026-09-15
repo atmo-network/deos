@@ -4447,11 +4447,7 @@ impl<T: Config> Pallet<T> {
 
   #[cfg(test)]
   pub(crate) fn test_activation_plan_kind(actor_id: ActorId) -> Result<u8, ActivationFailure> {
-    let loaded = if cfg!(feature = "runtime-benchmarks") {
-      Self::load_actor_state(actor_id)
-    } else {
-      Self::load_frame_actor_state(actor_id)
-    };
+    let loaded = Self::load_actor_state(actor_id);
     let LoadedActorStateOf::Active(state) = loaded else {
       return Err(ActivationFailure::Permanent(
         Error::<T>::ActorInvariant.into(),
