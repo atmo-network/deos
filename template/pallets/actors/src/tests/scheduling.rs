@@ -1108,6 +1108,75 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
 }
 
 #[test]
+fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical_authority() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor = crate::ActorRef {
+      actor_id,
+      generation: crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|semantic| match semantic {
+          crate::ActorSemanticState::Active(record) => Some(record.generation),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("active generation"),
+    };
+
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        cell.resources,
+        0,
+      ),
+      Ok(())
+    );
+    let mut stale_resources = cell.resources;
+    stale_resources.effect = stale_resources
+      .effect
+      .saturating_add(Weight::from_parts(1, 0));
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        stale_resources,
+        0,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+    );
+
+    crate::ActorProcesses::<Test>::insert(
+      actor_id,
+      crate::ActorProcess {
+        generation: actor.generation,
+        last_attempted: None,
+        status: crate::ProcessStatus::Disabled(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::Protocol,
+          revival_authority: crate::ProcessRevivalAuthority::Protocol,
+          basis: crate::SuspendedProcessBasis::Idle,
+        }),
+        residence: None,
+      },
+    );
+    assert_eq!(
+      Actors::test_preflight_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        cell.resources,
+        0,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
+      "a partial canonical publication must fail before the transaction boundary"
+    );
+  });
+}
+
+#[test]
 fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);

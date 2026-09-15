@@ -8738,6 +8738,61 @@ impl<T: Config> Pallet<T> {
     })
   }
 
+  /// Preflights every stable owner needed by a first canonical publication. The legacy carrier may
+  /// still exist while planning, but no canonical process, residence, or reverse handle may have
+  /// been published. Generated current-Step resources and semantic generation are checked before
+  /// any caller is allowed to enter the future transactional commit boundary.
+  #[allow(
+    dead_code,
+    reason = "composite publication preflight remains inert until the atomic carrier cutover"
+  )]
+  fn preflight_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<PlannedActorPublication<BlockNumberFor<T>>, EnqueueOutcome> {
+    if actor.generation == 0
+      || ActorProcesses::<T>::contains_key(actor.actor_id)
+      || ServiceNodes::<T>::contains_key(actor.actor_id)
+      || DeadlineHandles::<T>::contains_key(actor.actor_id)
+      || TriggerDeadlineHandles::<T>::contains_key(actor.actor_id)
+      || state.run_state.is_some() != supplied_run.is_some()
+    {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    let admission = Self::build_admission_certificate(&state.contract)
+      .ok_or(EnqueueOutcome::CorruptedTopology)?;
+    if semantic.generation != actor.generation
+      || semantic.identity != state.identity
+      || semantic.hot != state.hot
+      || semantic.admission != admission
+    {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    let expected_resources = if state.contract.steps.is_empty() {
+      ActorStepResourceEnvelope {
+        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+        effect: Weight::zero(),
+      }
+    } else {
+      let cursor = supplied_run.map_or(0, |run| run.cursor);
+      Self::derive_step_resource_envelopes(&state.contract)
+        .and_then(|envelopes| envelopes.get(cursor as usize).copied())
+        .ok_or(EnqueueOutcome::CorruptedTopology)?
+    };
+    if resources != expected_resources {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
+    Self::plan_actor_publication(actor, state, supplied_run, resources, now, cutoff)
+  }
+
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8830,6 +8885,25 @@ impl<T: Config> Pallet<T> {
       } => (process, Some(admission_round), None),
       PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
     })
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_preflight_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::preflight_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+    .map(|_| ())
   }
 
   #[cfg(test)]
