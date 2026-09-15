@@ -166,6 +166,7 @@ thread_local! {
   static OBSERVATIONS: RefCell<
     alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
   > = RefCell::new(alloc::collections::BTreeMap::new());
+  static OBSERVATION_REVISION_RACE_SOURCE: RefCell<Option<u64>> = const { RefCell::new(None) };
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
@@ -253,6 +254,7 @@ pub fn reset_mock_adapters() {
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
+  OBSERVATION_REVISION_RACE_SOURCE.with(|source| *source.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
@@ -277,9 +279,16 @@ pub fn staking_share_balance_reads() -> u32 {
   STAKING_SHARE_BALANCE_READS.with(|reads| *reads.borrow())
 }
 
+pub fn race_observation_source_revision_once(source: u64) {
+  OBSERVATION_REVISION_RACE_SOURCE.with(|value| *value.borrow_mut() = Some(source));
+}
+
 pub struct MockObservationProvider;
 impl crate::ObservationProvider<u32, u64> for MockObservationProvider {
   fn current(feed: &u32) -> crate::CanonicalObservationState {
+    if let Some(source) = OBSERVATION_REVISION_RACE_SOURCE.with(|value| value.borrow_mut().take()) {
+      crate::DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
+    }
     match Self::observe(feed, 0, u32::MAX) {
       crate::ScalarObservationState::Fresh { value, .. } => {
         #[cfg(feature = "runtime-benchmarks")]

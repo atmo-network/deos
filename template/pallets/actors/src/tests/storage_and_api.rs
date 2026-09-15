@@ -12,24 +12,24 @@ use crate::{
   DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
-  DependencyRegistrationPositions, DependencyRegistrations, DependencyReviewInterpretation,
-  DependencyReviewMutation, DependencyRevisionError, DependencyRevisionMutation,
-  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
-  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
-  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
-  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
-  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
-  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
-  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
-  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
-  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
+  DependencyRegistrationPositions, DependencyRegistrations, DependencyReviewMutation,
+  DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
+  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
+  DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
+  DependencyScanSourceNode, DependencyScanSourceNodes, DependencySourceAllocator,
+  DependencySourceAllocatorState, DependencySourceError, DependencySourceMutation,
+  DependencySourceObservations, DependencyTimedReview, DependencyTimedReviewMutation,
+  DependencyTimedReviews, DormantActorSemanticRecord, LegacyProcessPlacement,
+  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
+  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
+  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
+  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
+  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState,
+  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError,
+  ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter,
+  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
+  plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1187,6 +1187,21 @@ fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
+    let stale_evidence = ParkEvidence {
+      plan_identity: [7; 32],
+      ..evidence
+    };
+    assert_eq!(
+      Actors::interpret_pending_observation_availability_review(
+        second,
+        stale_evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+
     set_observation(feed, ScalarObservationState::Uninitialized);
     assert_eq!(
       Actors::interpret_pending_observation_availability_review(
@@ -1198,30 +1213,31 @@ fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
       ),
       Err(DependencyRegistrationError::SourceUninitialized)
     );
-    assert_eq!(
-      PendingDependencyReviews::<Test>::get(actor_id),
-      Some(second)
-    );
 
+    DependencySourceObservations::<Test>::remove(source);
     assert_eq!(
-      Actors::interpret_pending_dependency_review(
+      Actors::interpret_pending_observation_availability_review(
         second,
         evidence,
         ServiceResidenceKind::Live,
         3,
         None,
-        |_| {
-          DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
-          Ok(DependencyReviewInterpretation::Positive)
-        },
       ),
-      Err(DependencyRegistrationError::RevisionMismatch)
+      Err(DependencyRegistrationError::StoredPlanMismatch)
     );
-    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 0);
+    DependencySourceObservations::<Test>::insert(source, feed);
+    ObservationDependencySources::<Test>::insert(feed, source + 1);
     assert_eq!(
-      PendingDependencyReviews::<Test>::get(actor_id),
-      Some(second)
+      Actors::interpret_pending_observation_availability_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
     );
+    ObservationDependencySources::<Test>::insert(feed, source);
 
     set_observation(
       feed,
@@ -1230,6 +1246,55 @@ fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
         observed_at: 3,
       },
     );
+    race_observation_source_revision_once(source);
+    assert_eq!(
+      Actors::interpret_pending_observation_availability_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    assert_eq!(DependencyRevisions::<Test>::get(source).revision, 0);
+
+    ServiceNodes::<Test>::insert(
+      actor_id,
+      ServiceNode {
+        generation: actor.generation,
+        previous: actor,
+        next: actor,
+        kind: ServiceResidenceKind::Live,
+        eligible_from: 2,
+        last_considered: 2,
+      },
+    );
+    assert_eq!(
+      Actors::interpret_pending_observation_availability_review(
+        second,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    ServiceNodes::<Test>::remove(actor_id);
+
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(actor_id),
+      Some(second)
+    );
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+    assert!(DependencyRegistrations::<Test>::contains_key(
+      source, actor_id
+    ));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+
     assert_eq!(
       Actors::interpret_pending_observation_availability_review(
         second,
