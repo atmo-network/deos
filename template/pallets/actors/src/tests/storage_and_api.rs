@@ -1,5 +1,6 @@
 use super::*;
 use crate::scheduler::AttemptTransactionError;
+use crate::weights::WeightInfo as _;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorSemanticExecutionProjection, ActorSemanticLoadError, ActorSemanticMutation,
@@ -5956,6 +5957,46 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
       );
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
+  });
+}
+
+#[test]
+fn mandatory_service_frontier_pre_admits_and_captures_without_consuming_the_head() {
+  new_test_ext().execute_with(|| {
+    let actor = actor_ref(123, 1);
+    ActorProcesses::<Test>::insert(
+      actor.actor_id,
+      serving_process(actor, ServiceResidenceKind::Live),
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::insert_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let before = ServiceHeader::<Test>::get();
+    let mut refused = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::capture_service_round_head(&mut refused, 5),
+      Err(ServiceRoundError::InsufficientWeight)
+    );
+    assert_eq!(refused.consumed(), Weight::zero());
+    assert_eq!(ServiceHeader::<Test>::get(), before);
+
+    let envelope = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let mut admitted = WeightMeter::with_limit(envelope);
+    assert_eq!(
+      Actors::capture_service_round_head(&mut admitted, 5),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert_eq!(admitted.consumed(), envelope);
+    assert_eq!(ServiceHeader::<Test>::get().round_block, Some(5));
+    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(actor));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor.actor_id)
+        .unwrap()
+        .last_attempted,
+      None
+    );
   });
 }
 

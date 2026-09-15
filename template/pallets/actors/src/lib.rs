@@ -5931,6 +5931,37 @@ pub mod pallet {
       Ok(DueDeadlineServicePass { block, tick })
     }
 
+    /// Opens the canonical Service round and captures its current head under one pre-admitted
+    /// selector envelope. The round mutation and probe commit together; under-weight or invariant
+    /// refusal leaves the prior frontier untouched. The selected member is not advanced here:
+    /// only its complete service transaction may consume the encounter.
+    pub(crate) fn capture_service_round_head(
+      meter: &mut WeightMeter,
+      now: BlockNumberFor<T>,
+    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      let envelope = T::WeightInfo::service_round_begin_populated()
+        .saturating_add(T::WeightInfo::service_round_probe_eligible());
+      if !meter.can_consume(envelope) {
+        return Err(ServiceRoundError::InsufficientWeight);
+      }
+      let encounter = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::begin_service_round(now)?;
+          Self::consider_service_head(now)
+        })();
+        match result {
+          Ok(encounter) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(encounter))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })?;
+      meter.consume(envelope);
+      Ok(encounter)
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(
@@ -8626,7 +8657,14 @@ pub mod pallet {
           );
           meter.consumed()
         });
-      let housekeeping_weight = before_deadlines.saturating_add(deadline_weight);
+      let before_service_frontier = before_deadlines.saturating_add(deadline_weight);
+      let service_frontier_weight = {
+        let mut meter =
+          WeightMeter::with_limit(control_available.saturating_sub(before_service_frontier));
+        let _ = Self::capture_service_round_head(&mut meter, now);
+        meter.consumed()
+      };
+      let housekeeping_weight = before_service_frontier.saturating_add(service_frontier_weight);
       let remaining_after_housekeeping = available.saturating_sub(housekeeping_weight);
       Self::settle_on_idle_control(&mut control_authority, housekeeping_weight);
       if breaker_active {

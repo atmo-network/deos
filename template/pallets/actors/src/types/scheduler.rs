@@ -89,6 +89,7 @@ pub enum ServiceRoundEncounter {
 /// Rejected transaction-local operations on the inert service-ring round frontier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRoundError {
+  InsufficientWeight,
   TransactionRequired,
   RoundFromFuture,
   RoundNotStarted,

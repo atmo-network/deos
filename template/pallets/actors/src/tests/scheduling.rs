@@ -4030,7 +4030,9 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::block_resource_finalize())
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1))
       .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_block_deadline())
-      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline());
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::classify_due_tick_deadline())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_begin_populated())
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
 
     assert_eq!(Actors::on_idle(1, Weight::MAX), expected);
     assert_eq!(Actors::materialization_family_cursor(), 1);
