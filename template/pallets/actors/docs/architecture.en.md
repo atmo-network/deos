@@ -68,7 +68,7 @@ Current owner-slot representation is fixed-width and runtime-shaped:
 
 The package stores each actor identity once and decomposes each active epoch into bounded hot, certified Contract, funding, and optional run owners:
 
-- `ActorSemanticStates`: canonical lifecycle semantic owner; stores dormant identity or active Identity/Hot/admission independently of physical placement, whose mirrored fields must cross-validate exactly
+- `ActorSemanticStates`: canonical lifecycle semantic and Contract-generation owner; stores dormant identity plus last generation or active Identity/generation/Hot/admission independently of physical placement, whose mirrored fields must cross-validate exactly. Initial Contract publication uses generation one, replacement checked-increments it, dormancy preserves it, and ordinary Hot updates do not change it
 - `ActorIdentities`: dormant physical identity partition only; it must equal the dormant semantic state and cannot coexist with active partitions
 - `ActorProcesses`: inert generation-bound process storage for the pending service-carrier cutover; no production path populates or reads it, while the legacy paged FIFO remains sole scheduler authority
 - `ServiceHeader` / `ServiceNodes`: inert canonical service-ring storage with one generation-bound node per Actor and transaction-required append/remove helpers; process residence must match, legacy physical scheduler authority must be absent, and no production scheduler path reaches this carrier
@@ -794,7 +794,7 @@ TryRuntime checks current run payload and cursor coherence independently from Co
 Primary storage follows explicit owners. Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
 
 - `NextActorId`: monotonic actor ID allocator
-- `ActorSemanticStates`: canonical dormant-or-active semantic records; lifecycle writers publish, replace and remove them transactionally, and loading accepts only an exact independently derived physical partition
+- `ActorSemanticStates`: canonical dormant-or-active semantic and Contract-generation records; lifecycle writers publish, checked-increment, preserve, replace and remove them transactionally, and loading accepts only an exact independently derived physical partition. Active records expose the nonzero generation-bound `ActorRef` required by process carriers
 - `ActorIdentities`: dormant physical identities retaining owner, class/custody locator, mutability, cycle nonce and last control-mutation block; each must equal its canonical dormant semantic record
 - `ActorProcesses`: inert optional generation-bound process record; its transaction-required helper rejects legacy physical scheduler coexistence, stale-current replacement and failed planning, but remains unreachable from production until the complete service-carrier cutover
 - `ServiceHeader` / `ServiceNodes`: inert persistent-ring header and actor-keyed nodes; one composed transaction owner publishes the process and inserts into an empty or populated ring atomically, rolling both surfaces back on insertion failure. Transaction-local append/remove separately verifies matching process residence, generation, local links, singleton/interior/cursor structure and legacy-authority exclusion; no supported production caller reaches these owners yet

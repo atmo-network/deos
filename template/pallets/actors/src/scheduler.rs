@@ -5342,12 +5342,9 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     location: ActorControlLocation<BlockNumberFor<T>>,
   ) -> Result<(), ActorControlTransitionError> {
-    if !matches!(
-      ActorSemanticStates::<T>::get(actor_id),
-      Some(ActorSemanticState::Active(_))
-    ) {
+    let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id) else {
       return Err(ActorControlTransitionError::Invariant);
-    }
+    };
     let (_, cell) = Self::load_primary_control_cell(actor_id)?;
     let (identity, hot, admission) =
       Self::project_control_cell(&cell, location).ok_or(ActorControlTransitionError::Invariant)?;
@@ -5355,6 +5352,7 @@ impl<T: Config> Pallet<T> {
       actor_id,
       ActorSemanticState::Active(ActorSemanticRecord {
         identity,
+        generation: current.generation,
         hot,
         admission,
       }),

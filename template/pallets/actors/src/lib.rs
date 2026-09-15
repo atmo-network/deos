@@ -929,19 +929,35 @@ pub mod pallet {
   )]
   pub struct ActorSemanticRecord<Identity, Hot, Admission> {
     pub identity: Identity,
+    /// Stable Contract-generation authority used by every generation-bound carrier.
+    pub generation: u64,
     pub hot: Hot,
     pub admission: Admission,
   }
 
-  /// Complete lifecycle shape for the future actor-keyed semantic owner. Dormancy retains only
-  /// identity authority; active zero-Step Actors still use `Active` because they retain hot and
-  /// admission semantics even though execution projection has no current Step.
+  /// Dormant semantic authority preserves the last published Contract generation. Generation zero
+  /// means that this identity has never published a Contract.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct DormantActorSemanticRecord<Identity> {
+    pub identity: Identity,
+    pub generation: u64,
+  }
+
+  /// Complete lifecycle shape for the future actor-keyed semantic owner. Active zero-Step Actors
+  /// still use `Active` because they retain generation, hot, and admission semantics even though
+  /// execution projection has no current Step.
   #[derive(
     Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
   )]
   pub enum ActorSemanticState<Identity, Hot, Admission> {
-    Dormant(Identity),
+    Dormant(DormantActorSemanticRecord<Identity>),
     Active(ActorSemanticRecord<Identity, Hot, Admission>),
+  }
+
+  pub fn next_actor_generation(current: u64) -> Option<u64> {
+    current.checked_add(1).filter(|generation| *generation != 0)
   }
 
   #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1051,6 +1067,7 @@ pub mod pallet {
     pub resources: ActorStepResourceEnvelope,
   }
 
+  pub type DormantActorSemanticRecordOf<T> = DormantActorSemanticRecord<ActorIdentityOf<T>>;
   pub type ActorSemanticRecordOf<T> =
     ActorSemanticRecord<ActorIdentityOf<T>, ActorHotStateOf<T>, ActorAdmissionCertificateOf<T>>;
   pub type ActorSemanticStateOf<T> =
@@ -5032,9 +5049,24 @@ pub mod pallet {
 
     pub(crate) fn load_control_identity(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
       ActorSemanticStates::<T>::get(actor_id).map(|state| match state {
-        ActorSemanticState::Dormant(identity) => identity,
+        ActorSemanticState::Dormant(record) => record.identity,
         ActorSemanticState::Active(record) => record.identity,
       })
+    }
+
+    /// Loads the canonical generation-bound identity for active process carriers.
+    #[allow(
+      dead_code,
+      reason = "canonical carrier publication lands in the next atomic cutover"
+    )]
+    pub(crate) fn load_actor_ref(actor_id: ActorId) -> Option<ActorRef> {
+      match ActorSemanticStates::<T>::get(actor_id)? {
+        ActorSemanticState::Active(record) if record.generation != 0 => Some(ActorRef {
+          actor_id,
+          generation: record.generation,
+        }),
+        ActorSemanticState::Dormant(_) | ActorSemanticState::Active(_) => None,
+      }
     }
 
     pub(crate) fn control_hot_exists(actor_id: ActorId) -> bool {
@@ -5162,19 +5194,19 @@ pub mod pallet {
           );
           Ok(output)
         }
-        ActorSemanticState::Dormant(mut identity) => {
+        ActorSemanticState::Dormant(mut record) => {
           ensure!(
             !ActorControlLocators::<T>::contains_key(actor_id)
               && !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
             Error::<T>::ActorInvariant
           );
-          let output = mutate(&mut identity)?;
-          ActorIdentities::<T>::insert(actor_id, &identity);
+          let output = mutate(&mut record.identity)?;
+          ActorIdentities::<T>::insert(actor_id, &record.identity);
           Self::mutate_actor_semantic_state(
             actor_id,
             ActorSemanticMutation::Replace {
               expected: current,
-              replacement: ActorSemanticState::Dormant(identity),
+              replacement: ActorSemanticState::Dormant(record),
             },
           )
           .map_err(|_| Error::<T>::ActorInvariant)?;
@@ -5278,11 +5310,27 @@ pub mod pallet {
       for (key, page) in reference_updates {
         ActorWaitingFrameChunks::<T>::insert(key, page);
       }
+      let Some(next_generation) = next_actor_generation(semantic_record.generation) else {
+        return false;
+      };
       semantic_record.admission = certificate.clone();
-      matches!(
-        ActorSemanticStates::<T>::get(actor_id),
-        Some(ActorSemanticState::Active(stored)) if stored == semantic_record
+      let Some(current_semantics @ ActorSemanticState::Active(_)) =
+        ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return false;
+      };
+      if current_semantics != ActorSemanticState::Active(semantic_record.clone()) {
+        return false;
+      }
+      semantic_record.generation = next_generation;
+      Self::mutate_actor_semantic_state(
+        actor_id,
+        ActorSemanticMutation::Replace {
+          expected: current_semantics,
+          replacement: ActorSemanticState::Active(semantic_record),
+        },
       )
+      .is_ok()
     }
 
     fn mutate_actor_semantic_state(
@@ -5318,8 +5366,8 @@ pub mod pallet {
         || ActorRunHeads::<T>::contains_key(actor_id)
         || ActorRunPayloads::<T>::contains_key(actor_id);
       match (&state, location, dormant_identity.as_ref()) {
-        (Some(ActorSemanticState::Dormant(identity)), None, Some(stored_identity))
-          if identity == stored_identity && !has_active_partition => {}
+        (Some(ActorSemanticState::Dormant(record)), None, Some(stored_identity))
+          if &record.identity == stored_identity && !has_active_partition => {}
         (Some(ActorSemanticState::Active(_)), Some(_), None) => {}
         (None, None, None) if !has_active_partition => {}
         _ => return Err(ActorSemanticLoadError::Corrupt),
@@ -5341,8 +5389,8 @@ pub mod pallet {
     ) {
       match Self::load_actor_semantic_state(actor_id) {
         Ok(None) => (LoadedActorStateOf::NotRegistered, None),
-        Ok(Some((ActorSemanticState::Dormant(identity), None))) => {
-          (LoadedActorStateOf::Dormant(identity), None)
+        Ok(Some((ActorSemanticState::Dormant(record), None))) => {
+          (LoadedActorStateOf::Dormant(record.identity), None)
         }
         Ok(Some((ActorSemanticState::Active(record), Some(location)))) => {
           let admission = record.admission.clone();
@@ -5376,6 +5424,7 @@ pub mod pallet {
     ) -> LoadedActorStateOf<T> {
       let ActorSemanticRecord {
         identity,
+        generation: _,
         hot,
         admission: frame_admission,
       } = record;
@@ -6005,20 +6054,34 @@ pub mod pallet {
           control: T::WeightInfo::scheduler_inner_zero_step_complete(),
           effect: Weight::zero(),
         });
+      let (generation, dormant_expected) = match intent {
+        TriggerTransitionIntent::CreateActive | TriggerTransitionIntent::GenesisInstallation => {
+          (1, None)
+        }
+        TriggerTransitionIntent::ActivateDormant => {
+          let Some(ActorSemanticState::Dormant(record)) = ActorSemanticStates::<T>::get(actor_id)
+          else {
+            return Err(Error::<T>::ActorInvariant.into());
+          };
+          ensure!(record.identity == identity, Error::<T>::ActorInvariant);
+          let generation =
+            next_actor_generation(record.generation).ok_or(Error::<T>::ActorInvariant)?;
+          (generation, Some(record))
+        }
+        _ => return Err(Error::<T>::ActorInvariant.into()),
+      };
       let semantic_record = ActorSemanticRecord {
         identity: identity.clone(),
+        generation,
         hot: hot.clone(),
         admission: admission.clone(),
       };
-      let semantic_mutation = match intent {
-        TriggerTransitionIntent::CreateActive | TriggerTransitionIntent::GenesisInstallation => {
-          ActorSemanticMutation::Publish(ActorSemanticState::Active(semantic_record))
-        }
-        TriggerTransitionIntent::ActivateDormant => ActorSemanticMutation::Replace {
-          expected: ActorSemanticState::Dormant(identity.clone()),
+      let semantic_mutation = match dormant_expected {
+        None => ActorSemanticMutation::Publish(ActorSemanticState::Active(semantic_record)),
+        Some(expected) => ActorSemanticMutation::Replace {
+          expected: ActorSemanticState::Dormant(expected),
           replacement: ActorSemanticState::Active(semantic_record),
         },
-        _ => return Err(Error::<T>::ActorInvariant.into()),
       };
       Self::mutate_actor_semantic_state(actor_id, semantic_mutation)
         .map_err(|_| Error::<T>::ActorInvariant)?;
@@ -6846,7 +6909,12 @@ pub mod pallet {
         assert!(
           Pallet::<T>::mutate_actor_semantic_state(
             actor_id,
-            ActorSemanticMutation::Publish(ActorSemanticState::Dormant(identity)),
+            ActorSemanticMutation::Publish(ActorSemanticState::Dormant(
+              DormantActorSemanticRecord {
+                identity,
+                generation: 0,
+              },
+            )),
           )
           .is_ok(),
           "duplicate genesis dormant semantic state: {actor_id}"
@@ -9463,7 +9531,10 @@ pub mod pallet {
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
         if Self::mutate_actor_semantic_state(
           actor_id,
-          ActorSemanticMutation::Publish(ActorSemanticState::Dormant(identity.clone())),
+          ActorSemanticMutation::Publish(ActorSemanticState::Dormant(DormantActorSemanticRecord {
+            identity: identity.clone(),
+            generation: 0,
+          })),
         )
         .is_err()
         {
@@ -9856,7 +9927,15 @@ pub mod pallet {
         identity.last_control_mutation_block != now,
         Error::<T>::ControlMutationRateLimited
       );
-      let dormant_identity = identity.clone();
+      let Some(ActorSemanticState::Dormant(dormant_record)) =
+        ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return Err(Error::<T>::ActorNotFound.into());
+      };
+      ensure!(
+        dormant_record.identity == identity,
+        Error::<T>::ActorInvariant
+      );
       identity.last_control_mutation_block = now;
       // Reactivation anchors the fresh Active epoch at the current block; the fresh hot
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
@@ -9890,8 +9969,11 @@ pub mod pallet {
         if Self::mutate_actor_semantic_state(
           actor_id,
           ActorSemanticMutation::Replace {
-            expected: ActorSemanticState::Dormant(dormant_identity),
-            replacement: ActorSemanticState::Dormant(identity.clone()),
+            expected: ActorSemanticState::Dormant(dormant_record.clone()),
+            replacement: ActorSemanticState::Dormant(DormantActorSemanticRecord {
+              identity: identity.clone(),
+              generation: dormant_record.generation,
+            }),
           },
         )
         .is_err()
@@ -9983,18 +10065,25 @@ pub mod pallet {
         ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        let Some(expected @ ActorSemanticState::Active(_)) =
-          ActorSemanticStates::<T>::get(actor_id)
-        else {
+        let Some(expected) = ActorSemanticStates::<T>::get(actor_id) else {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             Error::<T>::ActorInvariant.into(),
           ));
         };
+        let ActorSemanticState::Active(ref active_record) = expected else {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
+        };
+        let generation = active_record.generation;
         if Self::mutate_actor_semantic_state(
           actor_id,
           ActorSemanticMutation::Replace {
             expected,
-            replacement: ActorSemanticState::Dormant(state.identity.clone()),
+            replacement: ActorSemanticState::Dormant(DormantActorSemanticRecord {
+              identity: state.identity.clone(),
+              generation,
+            }),
           },
         )
         .is_err()
@@ -10765,7 +10854,15 @@ pub mod pallet {
         Self::mutate_actor_semantic_state(
           actor_id,
           ActorSemanticMutation::Remove {
-            expected: ActorSemanticState::Dormant(identity.clone()),
+            expected: ActorSemanticState::Dormant(DormantActorSemanticRecord {
+              identity: identity.clone(),
+              generation: ActorSemanticStates::<T>::get(actor_id)
+                .and_then(|state| match state {
+                  ActorSemanticState::Dormant(record) => Some(record.generation),
+                  ActorSemanticState::Active(_) => None,
+                })
+                .ok_or(Error::<T>::ActorInvariant)?,
+            }),
           },
         )
         .map_err(|_| Error::<T>::ActorInvariant)?;

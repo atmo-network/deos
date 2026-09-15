@@ -16,16 +16,17 @@ use crate::{
   DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
   DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
   DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
-  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
-  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
-  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
-  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, apply_actor_semantic_mutation,
-  compile_legacy_process, plan_legacy_process_transition, project_actor_semantic_execution,
+  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
+  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
+  ServicePublicationError, ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError,
+  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
+  plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -56,12 +57,18 @@ fn process_skeleton_uses_generation_bound_references() {
 fn semantic_record_owns_only_non_derivable_state_and_projects_execution_geometry() {
   let record = ActorSemanticRecord {
     identity: 11u32,
+    generation: 7,
     hot: 12u32,
     admission: 13u32,
   };
   assert_eq!(
-    (record.identity, record.hot, record.admission),
-    (11, 12, 13)
+    (
+      record.identity,
+      record.generation,
+      record.hot,
+      record.admission,
+    ),
+    (11, 7, 12, 13)
   );
 
   let resources = ActorStepResourceEnvelope {
@@ -107,15 +114,27 @@ fn semantic_record_owns_only_non_derivable_state_and_projects_execution_geometry
 }
 
 #[test]
+fn semantic_generation_is_nonzero_and_fails_closed_at_exhaustion() {
+  assert_eq!(next_actor_generation(0), Some(1));
+  assert_eq!(next_actor_generation(41), Some(42));
+  assert_eq!(next_actor_generation(u64::MAX), None);
+}
+
+#[test]
 fn semantic_mutation_is_complete_compare_and_replace_without_placement_authority() {
-  let dormant = ActorSemanticState::Dormant(1u32);
+  let dormant = ActorSemanticState::Dormant(DormantActorSemanticRecord {
+    identity: 1u32,
+    generation: 0,
+  });
   let active = ActorSemanticState::Active(ActorSemanticRecord {
     identity: 1u32,
+    generation: 1,
     hot: 4u32,
     admission: 5u32,
   });
   let stale = ActorSemanticState::Active(ActorSemanticRecord {
     identity: 9u32,
+    generation: 9,
     hot: 9u32,
     admission: 9u32,
   });

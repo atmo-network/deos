@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorControlLocation, ActorControlLocators,
-  ActorRunHeads, ActorRunPayloads, ActorUnsignaledControlCells,
+  ActorRunHeads, ActorRunPayloads, ActorSemanticState, ActorSemanticStates,
+  ActorUnsignaledControlCells,
 };
 
 #[test]
@@ -71,6 +72,7 @@ fn latched_contract_replacement_preserves_temporal_trigger_authority() {
           contract_steps_with_step(make_step(Task::StopCycle))
         },
       );
+      assert_eq!(Actors::load_actor_ref(actor_id).unwrap().generation, 1);
       assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
       frame_system::Pallet::<Test>::set_block_number(2);
       let mut replacement = Actors::actor_contract(actor_id).expect("admitted Contract");
@@ -80,6 +82,7 @@ fn latched_contract_replacement_preserves_temporal_trigger_authority() {
         actor_id,
         replacement
       ));
+      assert_eq!(Actors::load_actor_ref(actor_id).unwrap().generation, 2);
       assert!(Actors::actor_hot(actor_id).unwrap().pending_signal);
       Actors::execute_cycle(Weight::MAX);
       let hot = Actors::actor_hot(actor_id).expect("persistent Actor survives Opening");
@@ -403,6 +406,11 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
       let dormant = Actors::actor_identity(actor_id).expect("durable identity");
       assert_eq!(dormant.cycle_nonce, 1);
       assert_eq!(ActorIdentities::<Test>::get(actor_id), Some(dormant));
+      assert!(matches!(
+        ActorSemanticStates::<Test>::get(actor_id),
+        Some(ActorSemanticState::Dormant(record)) if record.generation == 1
+      ));
+      assert!(Actors::load_actor_ref(actor_id).is_none());
       assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
       assert!(Actors::actor_run_state(actor_id).is_none());
     }
@@ -423,6 +431,7 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
     for actor_id in [user_id, system_id] {
       let active = Actors::active_actor_view(actor_id).expect("reactivated actor");
       assert_eq!(active.cycle_nonce, 1);
+      assert_eq!(Actors::load_actor_ref(actor_id).unwrap().generation, 2);
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
       assert_eq!(
         ActorControlLocators::<Test>::get(actor_id),

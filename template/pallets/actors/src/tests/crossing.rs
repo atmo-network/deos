@@ -1281,7 +1281,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       "atomic pair prototype must roll back membership and queue surfaces"
     );
     let page = CrossingMemberPages::<Test>::get(locator.key, locator.page).expect("source page");
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(Actors::crossing_source_prefix_count(&page, 1, 2), 2);
     assert_eq!(Actors::crossing_source_prefix_count(&page, 1, u32::MAX), 3);
     assert_eq!(
@@ -1464,6 +1463,7 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     assert_eq!(wakeup_preflight.placed_immediate_fifo, Some(false));
     assert_ok!(Actors::store_actor_contract(actors[2], original_contract));
     mutate_actor_hot_coherent(actors[2], |hot| *hot = original_wakeup_hot);
+    let read_only_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     let mut heterogeneous_hot = Actors::actor_hot(actors[2]).expect("second prefix actor");
     let original_hot = heterogeneous_hot.clone();
@@ -1512,7 +1512,7 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     ));
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
+      read_only_root
     );
 
     CrossingMemberships::<Test>::mutate(actors[3], |maybe_locator| {
