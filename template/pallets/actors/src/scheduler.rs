@@ -74,7 +74,6 @@ enum NextResidence<T: Config> {
   },
   Publish {
     state: ActiveActorStateOf<T>,
-    instance: ActiveActorViewOf<T>,
     resources: ActorStepResourceEnvelope,
   },
 }
@@ -877,16 +876,7 @@ impl<T: Config> Pallet<T> {
         reason: CloseReason::AutoCloseNonceReached,
       }
     } else {
-      let instance = Self::derive_active_actor_view(
-        state.identity.clone(),
-        state.hot.clone(),
-        state.contract.clone(),
-      );
-      NextResidence::Publish {
-        state,
-        instance,
-        resources,
-      }
+      NextResidence::Publish { state, resources }
     };
     Ok(ZeroStepTransition {
       next_residence,
@@ -948,53 +938,56 @@ impl<T: Config> Pallet<T> {
           false,
         ))
       }
-      NextResidence::Publish {
-        state,
-        instance,
-        resources,
-      } => match Self::schedule_next_work_with_authority(
-        actor_id,
-        &instance,
-        state.hot.clone(),
-        &state.identity,
-        state.run_state.as_ref(),
-        admission,
-        resources,
-        now,
-        ServiceCutoff::Snapshotted,
-      ) {
-        Ok(placement) => {
-          if placement == StepControlPlacement::None {
-            Self::restore_unsignaled_from_authority(
+      NextResidence::Publish { state, resources } => {
+        let instance = Self::derive_active_actor_view(
+          state.identity.clone(),
+          state.hot.clone(),
+          state.contract.clone(),
+        );
+        match Self::schedule_next_work_with_authority(
+          actor_id,
+          &instance,
+          state.hot.clone(),
+          &state.identity,
+          state.run_state.as_ref(),
+          admission,
+          resources,
+          now,
+          ServiceCutoff::Snapshotted,
+        ) {
+          Ok(placement) => {
+            if placement == StepControlPlacement::None {
+              Self::restore_unsignaled_from_authority(
+                actor_id,
+                state.hot,
+                &state.identity,
+                state.run_state.as_ref(),
+                admission,
+                resources,
+              )
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            }
+            Ok((placement, AttemptDisposition::Completed, false))
+          }
+          Err(error) => {
+            if !Self::scheduler_index_is_exhausted(error) {
+              return Err(AttemptTransactionError::Invariant);
+            }
+            Self::finalize_actor_from_consumed_state(
               actor_id,
-              state.hot,
-              &state.identity,
-              state.run_state.as_ref(),
+              state,
               admission,
-              resources,
+              CloseReason::SchedulerIndexExhausted,
             )
             .map_err(|_| AttemptTransactionError::Invariant)?;
+            Ok((
+              StepControlPlacement::None,
+              AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
+              true,
+            ))
           }
-          Ok((placement, AttemptDisposition::Completed, false))
         }
-        Err(error) => {
-          if !Self::scheduler_index_is_exhausted(error) {
-            return Err(AttemptTransactionError::Invariant);
-          }
-          Self::finalize_actor_from_consumed_state(
-            actor_id,
-            state,
-            admission,
-            CloseReason::SchedulerIndexExhausted,
-          )
-          .map_err(|_| AttemptTransactionError::Invariant)?;
-          Ok((
-            StepControlPlacement::None,
-            AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
-            true,
-          ))
-        }
-      },
+      }
     }
   }
 
@@ -1205,14 +1198,8 @@ impl<T: Config> Pallet<T> {
           reason: CloseReason::AutoCloseNonceReached,
         }
       } else {
-        let placement_instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
         NextResidence::Publish {
           state,
-          instance: placement_instance,
           resources: commit_plan.loaded_step.resources,
         }
       },
@@ -1348,14 +1335,8 @@ impl<T: Config> Pallet<T> {
           reason: CloseReason::AutoCloseNonceReached,
         }
       } else {
-        let placement_instance = Self::derive_active_actor_view(
-          state.identity.clone(),
-          state.hot.clone(),
-          state.contract.clone(),
-        );
         NextResidence::Publish {
           state,
-          instance: placement_instance,
           resources: next_resources,
         }
       },
@@ -1458,11 +1439,6 @@ impl<T: Config> Pallet<T> {
       Self::load_current_step_with_admission(actor_id, placement_cursor, admission)
         .map(|loaded| loaded.resources)
         .ok_or(AttemptTransactionError::Invariant)?;
-    let placement_instance = Self::derive_active_actor_view(
-      plan.identity.clone(),
-      plan.hot.clone(),
-      state.contract.clone(),
-    );
     let failure_close_reason = if disposition != AttemptDisposition::Failed {
       None
     } else if retry_attempt_limit_reached {
@@ -1492,7 +1468,6 @@ impl<T: Config> Pallet<T> {
       Some(reason) => NextResidence::Close { state, reason },
       None => NextResidence::Publish {
         state,
-        instance: placement_instance,
         resources: placement_resources,
       },
     };
