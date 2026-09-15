@@ -20,16 +20,17 @@ use crate::{
   DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
   DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
   DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
-  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
-  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
-  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
-  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
-  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
+  DueBlockDeadlineMutation, LegacyProcessPlacement, LegacyProcessTransition,
+  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
+  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState, ServiceHeader,
+  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
+  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, apply_actor_semantic_mutation,
+  compile_legacy_process, next_actor_generation, plan_legacy_process_transition,
+  project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1362,13 +1363,16 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
     let weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
     let mut admitted = WeightMeter::with_limit(weight);
     assert!(matches!(
-      Actors::process_next_due_block_observation_availability_review(
+      Actors::process_next_due_block_deadline(
         &mut admitted,
         ServiceResidenceKind::Live,
         2,
         Some(WakeupKey::Block(3)),
       ),
-      Ok((current, DependencyReviewMutation::Rearmed(_))) if current == actor
+      Ok(DueBlockDeadlineMutation::ReviewProcessed(
+        current,
+        DependencyReviewMutation::Rearmed(_)
+      )) if current == actor
     ));
     let rearmed_handle = DeadlineHandles::<Test>::get(actor_id).expect("review stays indexed");
     assert_eq!(rearmed_handle.key, WakeupKey::Block(3));
@@ -1968,9 +1972,27 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
     ));
 
     frame_system::Pallet::<Test>::set_block_number(retry_at);
+    let deadline_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let mut no_weight = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
-      Actors::return_next_due_block_deadline_to_service(ServiceResidenceKind::Live, retry_at),
-      Ok(actor)
+      Actors::process_next_due_block_deadline(
+        &mut no_weight,
+        ServiceResidenceKind::Live,
+        retry_at,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    let mut admitted = WeightMeter::with_limit(deadline_weight);
+    assert_eq!(
+      Actors::process_next_due_block_deadline(
+        &mut admitted,
+        ServiceResidenceKind::Live,
+        retry_at,
+        None,
+      ),
+      Ok(DueBlockDeadlineMutation::RetryReturned(actor))
     );
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(matches!(

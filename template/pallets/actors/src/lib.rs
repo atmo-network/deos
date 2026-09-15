@@ -5724,6 +5724,70 @@ pub mod pallet {
       })
     }
 
+    /// Classifies and processes one member from the shared earliest due block bucket. Sleeping
+    /// retries return directly to Service; Parked members alone enter the timed-review worker.
+    /// The conservative review envelope is admitted before classification, so insufficient Weight
+    /// cannot inspect or consume either branch.
+    #[allow(
+      dead_code,
+      reason = "mixed deadline traversal remains staged behind the mandatory service cutover"
+    )]
+    pub(crate) fn process_next_due_block_deadline(
+      meter: &mut WeightMeter,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DueBlockDeadlineMutation, DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_due_observation_availability_review();
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      let key = Self::deadline_index_get(WakeupClock::Block, 0).ok_or(
+        DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
+      )?;
+      if !matches!(key, WakeupKey::Block(block) if block <= now) {
+        return Err(DependencyReviewWorkerError::Deadline(
+          DeadlineMutationError::InvalidDestination,
+        ));
+      }
+      let header = DeadlineHeaders::<T>::get(key).ok_or(DependencyReviewWorkerError::Deadline(
+        DeadlineMutationError::CorruptCarrier,
+      ))?;
+      let page = DeadlinePages::<T>::get(key, header.first_page).ok_or(
+        DependencyReviewWorkerError::Deadline(DeadlineMutationError::CorruptCarrier),
+      )?;
+      let actor = page
+        .entries
+        .iter(/* deos-bypass: bounded-iter -- fixed C32 deadline page. */)
+        .find_map(|entry| *entry)
+        .ok_or(DependencyReviewWorkerError::Deadline(
+          DeadlineMutationError::CorruptCarrier,
+        ))?;
+      let process = ActorProcesses::<T>::get(actor.actor_id).ok_or(
+        DependencyReviewWorkerError::Deadline(DeadlineMutationError::ProcessMissing),
+      )?;
+      match process.residence {
+        Some(ProcessResidence::Deadline { .. }) => {
+          Self::return_due_deadline_member_to_service(actor, kind, now)
+            .map_err(DependencyReviewWorkerError::Deadline)?;
+          meter.consume(weight);
+          Ok(DueBlockDeadlineMutation::RetryReturned(actor))
+        }
+        Some(ProcessResidence::Parked(_)) => {
+          Self::process_next_due_block_observation_availability_review(
+            meter,
+            kind,
+            now,
+            next_review,
+          )
+          .map(|(actor, mutation)| DueBlockDeadlineMutation::ReviewProcessed(actor, mutation))
+        }
+        _ => Err(DependencyReviewWorkerError::Deadline(
+          DeadlineMutationError::ProcessResidenceMismatch,
+        )),
+      }
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(

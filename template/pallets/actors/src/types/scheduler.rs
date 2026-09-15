@@ -300,6 +300,13 @@ pub enum DependencyReviewWorkerError {
   Interpretation(DependencyRegistrationError),
 }
 
+/// One classified transition from the shared block-deadline frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueBlockDeadlineMutation {
+  RetryReturned(ActorRef),
+  ReviewProcessed(ActorRef, DependencyReviewMutation),
+}
+
 /// Result supplied by one bounded current-state interpretation of a Pending due review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyReviewInterpretation {
