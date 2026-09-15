@@ -5026,31 +5026,30 @@ pub mod pallet {
       }
     }
 
-    /// Active identity belongs to the primary; the separate registry owns dormant identities.
     pub(crate) fn control_identity_exists(actor_id: ActorId) -> bool {
-      ActorControlLocators::<T>::contains_key(actor_id)
-        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
-        || ActorIdentities::<T>::contains_key(actor_id)
+      ActorSemanticStates::<T>::contains_key(actor_id)
     }
 
     pub(crate) fn load_control_identity(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
-      if ActorControlLocators::<T>::contains_key(actor_id) {
-        return Self::load_frame_control_authority(actor_id).map(|(_, identity, _, _)| identity);
-      }
-      if ActorUnsignaledControlCells::<T>::contains_key(actor_id) {
-        return None;
-      }
-      ActorIdentities::<T>::get(actor_id)
+      ActorSemanticStates::<T>::get(actor_id).map(|state| match state {
+        ActorSemanticState::Dormant(identity) => identity,
+        ActorSemanticState::Active(record) => record.identity,
+      })
     }
 
     pub(crate) fn control_hot_exists(actor_id: ActorId) -> bool {
-      ActorControlLocators::<T>::contains_key(actor_id)
-        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      matches!(
+        ActorSemanticStates::<T>::get(actor_id),
+        Some(ActorSemanticState::Active(_))
+      )
     }
 
     #[cfg(any(test, feature = "runtime-benchmarks"))]
     pub(crate) fn load_control_hot(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
-      Self::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+      match ActorSemanticStates::<T>::get(actor_id)? {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      }
     }
 
     #[cfg(feature = "try-runtime")]
@@ -5080,7 +5079,19 @@ pub mod pallet {
       if !ActorControlLocators::<T>::contains_key(actor_id) {
         return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
       }
-      Self::update_existing_frame_control_hot(actor_id, &hot)
+      let current = ActorSemanticStates::<T>::get(actor_id)
+        .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+      let ActorSemanticState::Active(mut record) = current.clone() else {
+        return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+      };
+      record.hot = hot.clone();
+      Self::update_existing_frame_control_hot(actor_id, &hot)?;
+      matches!(
+        ActorSemanticStates::<T>::get(actor_id),
+        Some(ActorSemanticState::Active(stored)) if stored == record
+      )
+      .then_some(())
+      .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)
     }
 
     /// Mutates the physical primary without introducing a second hot-state owner.
@@ -5089,9 +5100,14 @@ pub mod pallet {
       missing: Error<T>,
       mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> Result<R, DispatchError>,
     ) -> Result<R, DispatchError> {
-      let (_, _, mut hot, _) = Self::load_frame_control_authority(actor_id).ok_or(missing)?;
-      let output = mutate(&mut hot)?;
-      Self::update_existing_frame_control_hot(actor_id, &hot)
+      let Some(current) = ActorSemanticStates::<T>::get(actor_id) else {
+        return Err(missing.into());
+      };
+      let ActorSemanticState::Active(mut record) = current.clone() else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      let output = mutate(&mut record.hot)?;
+      Self::try_store_control_hot_with_authority(actor_id, record.hot)
         .map_err(|_| Error::<T>::ActorInvariant)?;
       Ok(output)
     }
@@ -5102,11 +5118,14 @@ pub mod pallet {
       fallback: R,
       mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> R,
     ) -> R {
-      let Some((_, _, mut hot, _)) = Self::load_frame_control_authority(actor_id) else {
+      let Some(current) = ActorSemanticStates::<T>::get(actor_id) else {
         return fallback;
       };
-      let output = mutate(&mut hot);
-      match Self::update_existing_frame_control_hot(actor_id, &hot) {
+      let ActorSemanticState::Active(mut record) = current.clone() else {
+        return fallback;
+      };
+      let output = mutate(&mut record.hot);
+      match Self::try_store_control_hot_with_authority(actor_id, record.hot) {
         Ok(()) => output,
         Err(_) => fallback,
       }
@@ -5128,22 +5147,40 @@ pub mod pallet {
       missing: Error<T>,
       mutate: impl FnOnce(&mut ActorIdentityOf<T>) -> Result<R, DispatchError>,
     ) -> Result<R, DispatchError> {
-      if ActorControlLocators::<T>::contains_key(actor_id) {
-        let (_, mut identity, _, _) =
-          Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
-        let output = mutate(&mut identity)?;
-        Self::update_existing_frame_control_identity(actor_id, &identity)
+      let current = ActorSemanticStates::<T>::get(actor_id).ok_or(missing)?;
+      match current.clone() {
+        ActorSemanticState::Active(mut record) => {
+          let output = mutate(&mut record.identity)?;
+          Self::update_existing_frame_control_identity(actor_id, &record.identity)
+            .map_err(|_| Error::<T>::ActorInvariant)?;
+          ensure!(
+            matches!(
+              ActorSemanticStates::<T>::get(actor_id),
+              Some(ActorSemanticState::Active(stored)) if stored == record
+            ),
+            Error::<T>::ActorInvariant
+          );
+          Ok(output)
+        }
+        ActorSemanticState::Dormant(mut identity) => {
+          ensure!(
+            !ActorControlLocators::<T>::contains_key(actor_id)
+              && !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
+            Error::<T>::ActorInvariant
+          );
+          let output = mutate(&mut identity)?;
+          ActorIdentities::<T>::insert(actor_id, &identity);
+          Self::mutate_actor_semantic_state(
+            actor_id,
+            ActorSemanticMutation::Replace {
+              expected: current,
+              replacement: ActorSemanticState::Dormant(identity),
+            },
+          )
           .map_err(|_| Error::<T>::ActorInvariant)?;
-        return Ok(output);
+          Ok(output)
+        }
       }
-      ensure!(
-        !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
-        Error::<T>::ActorInvariant
-      );
-      ActorIdentities::<T>::try_mutate(actor_id, |maybe| {
-        let identity = maybe.as_mut().ok_or(missing)?;
-        mutate(identity)
-      })
     }
 
     /// Admission is carried by the sole active primary.
@@ -5154,7 +5191,10 @@ pub mod pallet {
     pub(crate) fn load_control_admission(
       actor_id: ActorId,
     ) -> Option<ActorAdmissionCertificateOf<T>> {
-      Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)
+      match ActorSemanticStates::<T>::get(actor_id)? {
+        ActorSemanticState::Active(record) => Some(record.admission),
+        ActorSemanticState::Dormant(_) => None,
+      }
     }
 
     /// Replaces admission and current-Step resources in the existing primary. Source-consumed
@@ -5164,7 +5204,16 @@ pub mod pallet {
       certificate: &ActorAdmissionCertificateOf<T>,
       contract: &ActorContractOf<T>,
     ) -> bool {
+      let Some(current) = ActorSemanticStates::<T>::get(actor_id) else {
+        return false;
+      };
+      let ActorSemanticState::Active(mut semantic_record) = current.clone() else {
+        return false;
+      };
       let Ok((location, mut cell)) = Self::load_primary_control_cell(actor_id) else {
+        return false;
+      };
+      if semantic_record.admission != cell.admission {
         return false;
       };
       let Some(resources) = Self::derive_step_resource_envelopes(contract).and_then(|resources| {
@@ -5229,11 +5278,27 @@ pub mod pallet {
       for (key, page) in reference_updates {
         ActorWaitingFrameChunks::<T>::insert(key, page);
       }
-      true
+      semantic_record.admission = certificate.clone();
+      matches!(
+        ActorSemanticStates::<T>::get(actor_id),
+        Some(ActorSemanticState::Active(stored)) if stored == semantic_record
+      )
     }
 
-    /// Storage-neutral semantic loader. The current implementation compiles the sole legacy
-    /// placement owner; the cutover can replace this source without changing lifecycle callers.
+    fn mutate_actor_semantic_state(
+      actor_id: ActorId,
+      mutation: ActorSemanticMutation<ActorSemanticStateOf<T>>,
+    ) -> Result<Option<ActorSemanticStateOf<T>>, ActorSemanticMutationError> {
+      let current = ActorSemanticStates::<T>::get(actor_id);
+      let replacement = apply_actor_semantic_mutation(current.as_ref(), &mutation)?;
+      match &replacement {
+        Some(state) => ActorSemanticStates::<T>::insert(actor_id, state),
+        None => ActorSemanticStates::<T>::remove(actor_id),
+      }
+      Ok(replacement)
+    }
+
+    /// Loads the canonical semantic owner together with its independently derived placement.
     pub(crate) fn load_actor_semantic_state(
       actor_id: ActorId,
     ) -> Result<
@@ -5243,42 +5308,29 @@ pub mod pallet {
       )>,
       ActorSemanticLoadError,
     > {
-      if let Some(location) = ActorControlLocators::<T>::get(actor_id) {
-        if ActorIdentities::<T>::contains_key(actor_id) {
-          return Err(ActorSemanticLoadError::Corrupt);
-        }
-        let (loaded_location, identity, hot, admission) =
-          Self::load_frame_control_authority(actor_id).ok_or(ActorSemanticLoadError::Corrupt)?;
-        if loaded_location != location {
-          return Err(ActorSemanticLoadError::Corrupt);
-        }
-        return Ok(Some((
-          ActorSemanticState::Active(ActorSemanticRecord {
-            identity,
-            hot,
-            admission,
-          }),
-          Some(location),
-        )));
-      }
-      if ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      let state = ActorSemanticStates::<T>::get(actor_id);
+      let location = ActorControlLocators::<T>::get(actor_id);
+      let dormant_identity = ActorIdentities::<T>::get(actor_id);
+      let has_active_partition = ActorUnsignaledControlCells::<T>::contains_key(actor_id)
         || ActorContractHeads::<T>::contains_key(actor_id)
         || ActorActivationAuthorities::<T>::contains_key(actor_id)
-        || ActorRunHeads::<T>::contains_key(actor_id)
-        || ActorRunPayloads::<T>::contains_key(actor_id)
         || ActorRunStateStore::<T>::contains_key(actor_id)
-        || <ActorContractTailChunks<T> as polkadot_sdk::frame_support::storage::StorageDoubleMap<
-          ActorId,
-          u32,
-          ActorStepChunkOf<T>,
-        >>::contains_prefix(actor_id)
-      {
-        return Err(ActorSemanticLoadError::Corrupt);
+        || ActorRunHeads::<T>::contains_key(actor_id)
+        || ActorRunPayloads::<T>::contains_key(actor_id);
+      match (&state, location, dormant_identity.as_ref()) {
+        (Some(ActorSemanticState::Dormant(identity)), None, Some(stored_identity))
+          if identity == stored_identity && !has_active_partition => {}
+        (Some(ActorSemanticState::Active(_)), Some(_), None) => {}
+        (None, None, None) if !has_active_partition => {}
+        _ => return Err(ActorSemanticLoadError::Corrupt),
       }
-      Ok(
-        ActorIdentities::<T>::get(actor_id)
-          .map(|identity| (ActorSemanticState::Dormant(identity), None)),
-      )
+      Ok(state.map(|state| {
+        let location = match state {
+          ActorSemanticState::Dormant(_) => None,
+          ActorSemanticState::Active(_) => ActorControlLocators::<T>::get(actor_id),
+        };
+        (state, location)
+      }))
     }
 
     pub(crate) fn load_actor_state_with_admission(
@@ -5327,6 +5379,18 @@ pub mod pallet {
         hot,
         admission: frame_admission,
       } = record;
+      let Some((physical_location, physical_identity, physical_hot, physical_admission)) =
+        Self::load_frame_control_authority(actor_id)
+      else {
+        return LoadedActorStateOf::Corrupt;
+      };
+      if physical_location != location
+        || physical_identity != identity
+        || physical_hot != hot
+        || physical_admission != frame_admission
+      {
+        return LoadedActorStateOf::Corrupt;
+      }
       // Full classification validates temporal references; hot head admission does not load them.
       let pointers = [
         hot.wakeup_pointer,
@@ -5941,6 +6005,23 @@ pub mod pallet {
           control: T::WeightInfo::scheduler_inner_zero_step_complete(),
           effect: Weight::zero(),
         });
+      let semantic_record = ActorSemanticRecord {
+        identity: identity.clone(),
+        hot: hot.clone(),
+        admission: admission.clone(),
+      };
+      let semantic_mutation = match intent {
+        TriggerTransitionIntent::CreateActive | TriggerTransitionIntent::GenesisInstallation => {
+          ActorSemanticMutation::Publish(ActorSemanticState::Active(semantic_record))
+        }
+        TriggerTransitionIntent::ActivateDormant => ActorSemanticMutation::Replace {
+          expected: ActorSemanticState::Dormant(identity.clone()),
+          replacement: ActorSemanticState::Active(semantic_record),
+        },
+        _ => return Err(Error::<T>::ActorInvariant.into()),
+      };
+      Self::mutate_actor_semantic_state(actor_id, semantic_mutation)
+        .map_err(|_| Error::<T>::ActorInvariant)?;
       ensure!(
         Self::insert_unsignaled_control_authority(actor_id, identity, hot, admission, resources,),
         Error::<T>::ActorInvariant
@@ -6022,6 +6103,13 @@ pub mod pallet {
   #[pallet::getter(fn actor_identities)]
   pub type ActorIdentities<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, ActorIdentityOf<T>, OptionQuery>;
+
+  /// Canonical actor-keyed semantic authority. Physical service and deadline cells retain only
+  /// placement data and must agree with the active/dormant partition represented here.
+  #[pallet::storage]
+  #[pallet::getter(fn actor_semantic_states)]
+  pub type ActorSemanticStates<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, ActorSemanticStateOf<T>, OptionQuery>;
 
   /// Canonical generation-bound process owner. This remains inert until the legacy control
   /// mutation cohorts atomically transfer scheduler authority into it.
@@ -6755,7 +6843,14 @@ pub mod pallet {
         SystemSovereignCount::<T>::mutate(|count| *count = count.saturating_add(1));
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        ActorIdentities::<T>::insert(actor_id, identity);
+        assert!(
+          Pallet::<T>::mutate_actor_semantic_state(
+            actor_id,
+            ActorSemanticMutation::Publish(ActorSemanticState::Dormant(identity)),
+          )
+          .is_ok(),
+          "duplicate genesis dormant semantic state: {actor_id}"
+        );
         ActorIdentityCount::<T>::put(
           identity_count
             .checked_add(1)
@@ -7783,7 +7878,6 @@ pub mod pallet {
               Error::<T>::ImmutableActor
             );
             inst.lifecycle = ActiveLifecycle::Paused;
-            inst.queue_ticket = None;
             Self::record_control_mutation_with_authority(actor_id, now)?;
             Self::deposit_event(Event::ActorPaused { actor_id });
             Ok(())
@@ -9367,6 +9461,16 @@ pub mod pallet {
           last_control_mutation_block: frame_system::Pallet::<T>::block_number(),
         };
         SovereignIndex::<T>::insert(&sovereign_account, actor_id);
+        if Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Publish(ActorSemanticState::Dormant(identity.clone())),
+        )
+        .is_err()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
+        }
         ActorIdentities::<T>::insert(actor_id, &identity);
         if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
@@ -9752,6 +9856,7 @@ pub mod pallet {
         identity.last_control_mutation_block != now,
         Error::<T>::ControlMutationRateLimited
       );
+      let dormant_identity = identity.clone();
       identity.last_control_mutation_block = now;
       // Reactivation anchors the fresh Active epoch at the current block; the fresh hot
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
@@ -9782,6 +9887,20 @@ pub mod pallet {
             Error::<T>::ActorAlreadyActive.into(),
           ));
         }
+        if Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Replace {
+            expected: ActorSemanticState::Dormant(dormant_identity),
+            replacement: ActorSemanticState::Dormant(identity.clone()),
+          },
+        )
+        .is_err()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
+        }
+        ActorIdentities::<T>::insert(actor_id, &identity);
         if let Err(error) = Self::insert_active_actor(
           actor_id,
           identity,
@@ -9863,6 +9982,26 @@ pub mod pallet {
           state.identity.actor_class.actor_type(),
         ) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        let Some(expected @ ActorSemanticState::Active(_)) =
+          ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
+        };
+        if Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Replace {
+            expected,
+            replacement: ActorSemanticState::Dormant(state.identity.clone()),
+          },
+        )
+        .is_err()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::ActorInvariant.into(),
+          ));
         }
         ActorIdentities::<T>::insert(actor_id, state.identity.clone());
         if let Err(error) = ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -10328,6 +10467,19 @@ pub mod pallet {
       identity.last_control_mutation_block = now;
       Self::update_existing_frame_control_identity(actor_id, &identity)
         .map_err(|_| Error::<T>::ActorInvariant)?;
+      let current = ActorSemanticStates::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
+      let ActorSemanticState::Active(mut record) = current.clone() else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      record.identity = identity;
+      Self::mutate_actor_semantic_state(
+        actor_id,
+        ActorSemanticMutation::Replace {
+          expected: current,
+          replacement: ActorSemanticState::Active(record),
+        },
+      )
+      .map_err(|_| Error::<T>::ActorInvariant)?;
       Ok(())
     }
 
@@ -10534,6 +10686,16 @@ pub mod pallet {
             Some(&admission),
             instance.actor_class.actor_type(),
           )?;
+          let semantic_state = ActorSemanticStates::<T>::get(actor_id)
+            .filter(|state| matches!(state, ActorSemanticState::Active(_)))
+            .ok_or(Error::<T>::ActorInvariant)?;
+          Self::mutate_actor_semantic_state(
+            actor_id,
+            ActorSemanticMutation::Remove {
+              expected: semantic_state,
+            },
+          )
+          .map_err(|_| Error::<T>::ActorInvariant)?;
           ActiveActorCount::<T>::try_mutate(|count| -> DispatchResult {
             *count = count
               .checked_sub(1)
@@ -10600,6 +10762,13 @@ pub mod pallet {
       }
 
       Self::with_control_transaction(|| {
+        Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Remove {
+            expected: ActorSemanticState::Dormant(identity.clone()),
+          },
+        )
+        .map_err(|_| Error::<T>::ActorInvariant)?;
         ActorIdentities::<T>::remove(actor_id);
         ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count

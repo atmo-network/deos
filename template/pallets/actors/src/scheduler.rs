@@ -1871,6 +1871,7 @@ impl<T: Config> Pallet<T> {
           };
           ActorWaitingFrameChunks::<T>::insert((key, pointer.page_id), page);
           ActorControlLocators::<T>::insert(actor_id, location);
+          Self::replace_active_semantics_from_primary(actor_id, location)?;
           return Ok(location);
         }
         if page
@@ -1904,6 +1905,7 @@ impl<T: Config> Pallet<T> {
     let slot = u8::try_from(slot).map_err(|_| ActorControlTransitionError::Invariant)?;
     let location = ActorControlLocation::Waiting { key, page, slot };
     ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)?;
     Ok(location)
   }
 
@@ -1949,7 +1951,9 @@ impl<T: Config> Pallet<T> {
     ActorReadyFrameChunks::<T>::insert(page, chunk);
     ActorReadyTail::<T>::put(next_tail);
     ActorReadyOccupancy::<T>::put(next_occupancy);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Ready { ticket: tail });
+    let location = ActorControlLocation::Ready { ticket: tail };
+    ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)?;
     Ok((actor_id, tail))
   }
 
@@ -3697,8 +3701,10 @@ impl<T: Config> Pallet<T> {
       resources,
     };
     ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-    Ok(())
+    let location = ActorControlLocation::Unsignaled;
+    ActorControlLocators::<T>::insert(actor_id, location);
+    Self::replace_active_semantics_from_primary(actor_id, location)
+      .map_err(|_| EnqueueOutcome::CorruptedTopology)
   }
 
   fn consume_ready_primary(actor_id: ActorId, ticket: QueueTicket) -> Result<(), EnqueueOutcome> {
@@ -3776,7 +3782,10 @@ impl<T: Config> Pallet<T> {
         cell.cursor = 0;
         cell.eligible_at = None;
         ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-        ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
+        let destination = ActorControlLocation::Unsignaled;
+        ActorControlLocators::<T>::insert(actor_id, destination);
+        Self::replace_active_semantics_from_primary(actor_id, destination)
+          .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
       }
       return Ok(());
     }
@@ -4191,8 +4200,6 @@ impl<T: Config> Pallet<T> {
       },
       |loaded| loaded.resources,
     );
-    Self::try_store_control_hot_with_authority(state.actor_id, hot.clone())
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
     Self::try_wakeup_substrate_schedule_transition_with_authority(
       state.actor_id,
       wakeup_key,
@@ -4698,6 +4705,9 @@ impl<T: Config> Pallet<T> {
           .ok_or(EnqueueOutcome::CorruptedTopology)?
       };
       let mut hot = state.hot;
+      if !hot.lifecycle.is_paused() {
+        hot.pending_signal = false;
+      }
       hot.queue_ticket = None;
       Self::remove_primary_control_cell_inner(actor_id)
         .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
@@ -4991,6 +5001,14 @@ impl<T: Config> Pallet<T> {
     admission: &ActorAdmissionCertificateOf<T>,
     clock: WakeupClock,
   ) -> Result<Option<WakeupPointer<BlockNumberFor<T>>>, EnqueueOutcome> {
+    let Some((_, frame_identity, frame_hot, frame_admission)) =
+      Self::load_frame_control_authority(actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    if frame_identity != state.identity || frame_hot != state.hot || frame_admission != *admission {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
     let Some(pointer) = Self::wakeup_pointer_for_clock(&state.hot, clock) else {
       return Ok(None);
     };
@@ -5320,12 +5338,42 @@ impl<T: Config> Pallet<T> {
     Ok((location, cell))
   }
 
+  pub(crate) fn replace_active_semantics_from_primary(
+    actor_id: ActorId,
+    location: ActorControlLocation<BlockNumberFor<T>>,
+  ) -> Result<(), ActorControlTransitionError> {
+    if !matches!(
+      ActorSemanticStates::<T>::get(actor_id),
+      Some(ActorSemanticState::Active(_))
+    ) {
+      return Err(ActorControlTransitionError::Invariant);
+    }
+    let (_, cell) = Self::load_primary_control_cell(actor_id)?;
+    let (identity, hot, admission) =
+      Self::project_control_cell(&cell, location).ok_or(ActorControlTransitionError::Invariant)?;
+    ActorSemanticStates::<T>::insert(
+      actor_id,
+      ActorSemanticState::Active(ActorSemanticRecord {
+        identity,
+        hot,
+        admission,
+      }),
+    );
+    Ok(())
+  }
+
   pub(crate) fn store_primary_control_cell(
     location: ActorControlLocation<BlockNumberFor<T>>,
     cell: ActorControlCellOf<T>,
   ) -> Result<(), ActorControlTransitionError> {
     let actor_id = cell.actor_id;
-    if ActorControlLocators::<T>::get(actor_id) != Some(location) {
+    if ActorControlLocators::<T>::get(actor_id) != Some(location)
+      || !matches!(
+        ActorSemanticStates::<T>::get(actor_id),
+        Some(ActorSemanticState::Active(_))
+      )
+      || Self::project_control_cell(&cell, location).is_none()
+    {
       return Err(ActorControlTransitionError::Invariant);
     }
     match location {
@@ -5370,7 +5418,7 @@ impl<T: Config> Pallet<T> {
         ActorWaitingFrameChunks::<T>::insert((key, page), chunk);
       }
     }
-    Ok(())
+    Self::replace_active_semantics_from_primary(actor_id, location)
   }
 
   pub(crate) fn remove_primary_control_cell_inner(
@@ -6225,6 +6273,14 @@ impl<T: Config> Pallet<T> {
     else {
       return Err(EnqueueOutcome::CorruptedTopology);
     };
+    let Some((_, frame_identity, frame_hot, frame_admission)) =
+      Self::load_frame_control_authority(actor_id)
+    else {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    };
+    if frame_identity != state.identity || frame_hot != state.hot || frame_admission != admission {
+      return Err(EnqueueOutcome::CorruptedTopology);
+    }
     let resources = if state.contract.steps.is_empty() {
       ActorStepResourceEnvelope {
         control: T::WeightInfo::scheduler_inner_zero_step_complete(),
@@ -7050,8 +7106,10 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
     cell.eligible_at = None;
     ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-    ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-    Ok(())
+    let destination = ActorControlLocation::Unsignaled;
+    ActorControlLocators::<T>::insert(actor_id, destination);
+    Self::replace_active_semantics_from_primary(actor_id, destination)
+      .map_err(|_| EnqueueOutcome::CorruptedTopology)
   }
 
   pub(crate) fn prime_frame_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {

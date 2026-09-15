@@ -1023,9 +1023,7 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   assert!(lib.contains("Self::insert_unsignaled_control_authority(actor_id, identity, hot"));
   assert!(lib.contains("ActorIdentities::<T>::remove(actor_id);"));
   assert!(lib.contains("Self::prime_initial_actor_schedule(actor_id)"));
-  assert!(lib.contains(
-    "Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)"
-  ));
+  assert!(lib.contains("ActorSemanticStates::<T>::get(actor_id)"));
 
   // Lifecycle, service, observation and execution callers now enter through one storage-neutral
   // semantic loader. Only that loader compiles the placement-backed owner; production semantic
@@ -6458,6 +6456,7 @@ fn actor_storage_schema_is_explicit() {
       ("ActorRunHead", true, true),
       ("ActorRunPayload", true, true),
       ("ActorIdentities", true, true),
+      ("ActorSemanticStates", true, true),
       ("ActorProcesses", true, true),
       ("ServiceHeader", false, false),
       ("ServiceNodes", true, true),
@@ -7118,27 +7117,32 @@ fn canonical_loader_distinguishes_absence_dormancy_active_and_corruption() {
 
 #[test]
 fn canonical_loader_classifies_every_primary_partition_presence_mask() {
-  for mask in 0u8..8 {
+  for mask in 0u8..16 {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+      let semantic =
+        crate::ActorSemanticStates::<Test>::take(actor_id).expect("semantic authority fixture");
       let cell =
         crate::ActorUnsignaledControlCells::<Test>::take(actor_id).expect("primary fixture");
       let locator = crate::ActorControlLocators::<Test>::take(actor_id).expect("locator fixture");
       let head = ActorContractHeads::<Test>::take(actor_id).expect("Contract head fixture");
       if mask & 0b0001 != 0 {
-        crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
+        crate::ActorSemanticStates::<Test>::insert(actor_id, semantic);
       }
       if mask & 0b0010 != 0 {
-        crate::ActorControlLocators::<Test>::insert(actor_id, locator);
+        crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
       }
       if mask & 0b0100 != 0 {
+        crate::ActorControlLocators::<Test>::insert(actor_id, locator);
+      }
+      if mask & 0b1000 != 0 {
         ActorContractHeads::<Test>::insert(actor_id, head);
       }
       let loaded = Actors::load_actor_state(actor_id);
       match mask {
         0 => assert!(matches!(loaded, LoadedActorStateOf::NotRegistered)),
-        7 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
+        15 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
         _ => assert!(
           matches!(loaded, LoadedActorStateOf::Corrupt),
           "mask {mask:04b}"

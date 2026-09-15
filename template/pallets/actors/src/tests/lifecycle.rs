@@ -973,8 +973,16 @@ fn control_permanent_placement_exhaustion_closes_through_the_unified_sink() {
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     consumed.hot.wakeup_pointer = None;
     consumed.eligible_at = None;
-    ActorUnsignaledControlCells::<Test>::insert(actor_id, consumed);
+    ActorUnsignaledControlCells::<Test>::insert(actor_id, &consumed);
     ActorControlLocators::<Test>::insert(actor_id, ActorControlLocation::Unsignaled);
+    let (_, _, physical_hot, _) = Actors::load_frame_control_authority(actor_id)
+      .expect("rewritten physical authority is coherent");
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |state| {
+      let Some(crate::ActorSemanticState::Active(record)) = state else {
+        panic!("active semantic authority exists");
+      };
+      record.hot = physical_hot;
+    });
     crate::WakeupCursorLen::<Test>::insert(
       WakeupClock::Block,
       <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),

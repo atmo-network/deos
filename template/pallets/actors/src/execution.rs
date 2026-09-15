@@ -414,16 +414,18 @@ impl<T: Config> Pallet<T> {
       {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
       }
-      let hot_update = Self::try_mutate_control_hot_with_authority(
-        actor_id,
-        Error::<T>::ActorNotFound,
-        |hot| -> DispatchResult {
-          hot.cycle_state = next_cycle_state.unwrap_or(CycleState::Idle);
-          Ok(())
-        },
-      );
-      if let Err(error) = hot_update {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      if state.is_none() {
+        let hot_update = Self::try_mutate_control_hot_with_authority(
+          actor_id,
+          Error::<T>::ActorNotFound,
+          |hot| -> DispatchResult {
+            hot.cycle_state = CycleState::Idle;
+            Ok(())
+          },
+        );
+        if let Err(error) = hot_update {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
       }
       let (location, mut cell) = match Self::load_primary_control_cell(actor_id) {
         Ok(primary) => primary,
@@ -449,6 +451,11 @@ impl<T: Config> Pallet<T> {
       {
         cell.eligible_at = Some(run.eligible_at);
       }
+      if let Some(run_state) = state.as_ref() {
+        ActorRunStateStore::<T>::insert(actor_id, run_state.clone());
+      } else {
+        ActorRunStateStore::<T>::remove(actor_id);
+      }
       let primary_publication = if placement_run.is_none() {
         Self::remove_primary_control_cell_inner(actor_id).and_then(|_| {
           if let ActorControlLocation::Waiting { key, .. } = location {
@@ -463,22 +470,18 @@ impl<T: Config> Pallet<T> {
           } else {
             cell.eligible_at = None;
             ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-            ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-            Ok(())
+            let destination = ActorControlLocation::Unsignaled;
+            ActorControlLocators::<T>::insert(actor_id, destination);
+            Self::replace_active_semantics_from_primary(actor_id, destination)
           }
         })
       } else {
-        Self::store_primary_control_cell(location, cell)
+        Ok(())
       };
       if primary_publication.is_err() {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
           Error::<T>::ActorRunInvariant.into(),
         ));
-      }
-      if let Some(run_state) = state {
-        ActorRunStateStore::<T>::insert(actor_id, run_state);
-      } else {
-        ActorRunStateStore::<T>::remove(actor_id);
       }
       if let Some((cursor, eligible_at)) = placement_run {
         if Self::try_wakeup_substrate_schedule_transition_with_authority(
