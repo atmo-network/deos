@@ -5168,6 +5168,58 @@ pub mod pallet {
       })
     }
 
+    /// Selects the first canonical free slot in one deadline bucket without mutation.
+    pub(crate) fn plan_deadline_destination(
+      actor: ActorRef,
+      key: WakeupKey<BlockNumberFor<T>>,
+    ) -> Result<DeadlineHandleOf<T>, DeadlineMutationError> {
+      let Some(header) = DeadlineHeaders::<T>::get(key) else {
+        return Ok(DeadlineHandle {
+          actor,
+          key,
+          page: 0,
+          slot: 0,
+        });
+      };
+      let mut page_id = header.first_page;
+      for visited in 0..header.page_count {
+        let page =
+          DeadlinePages::<T>::get(key, page_id).ok_or(DeadlineMutationError::CorruptCarrier)?;
+        if page.entries.len() != 32 || page.live_entries > 32 {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        let mut slot = 0usize;
+        while slot < 32 {
+          if page.entries[slot].is_none() {
+            return Ok(DeadlineHandle {
+              actor,
+              key,
+              page: page_id,
+              slot: u8::try_from(slot).map_err(|_| DeadlineMutationError::CorruptCarrier)?,
+            });
+          }
+          slot = slot
+            .checked_add(1)
+            .ok_or(DeadlineMutationError::CorruptCarrier)?;
+        }
+        if visited + 1 == header.page_count {
+          if page_id != header.last_page || page.next_page.is_some() {
+            return Err(DeadlineMutationError::CorruptCarrier);
+          }
+          return Ok(DeadlineHandle {
+            actor,
+            key,
+            page: header.next_page,
+            slot: 0,
+          });
+        }
+        page_id = page
+          .next_page
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      }
+      Err(DeadlineMutationError::CorruptCarrier)
+    }
+
     /// Atomically transfers one exact canonical Service member into a preselected deadline slot.
     /// The caller must commit semantic retry state first in the same outer transaction.
     #[allow(
@@ -5244,6 +5296,39 @@ pub mod pallet {
           }
         }
       })
+    }
+
+    /// Extracts the canonical head member of the earliest due block bucket.
+    #[allow(
+      dead_code,
+      reason = "canonical deadline traversal remains staged behind the atomic service cutover"
+    )]
+    pub(crate) fn return_next_due_block_deadline_to_service(
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+    ) -> Result<ActorRef, DeadlineMutationError> {
+      let key = Self::deadline_index_get(WakeupClock::Block, 0)
+        .ok_or(DeadlineMutationError::MemberMissing)?;
+      if !matches!(key, WakeupKey::Block(block) if block <= now) {
+        return Err(DeadlineMutationError::InvalidDestination);
+      }
+      let header = DeadlineHeaders::<T>::get(key).ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let page = DeadlinePages::<T>::get(key, header.first_page)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let mut slot = 0usize;
+      let actor = loop {
+        if slot >= 32 {
+          return Err(DeadlineMutationError::CorruptCarrier);
+        }
+        if let Some(actor) = page.entries[slot] {
+          break actor;
+        }
+        slot = slot
+          .checked_add(1)
+          .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      };
+      Self::return_due_deadline_member_to_service(actor, kind, now)?;
+      Ok(actor)
     }
 
     /// Proves the complete Service-to-deadline destination without retaining any mutation.

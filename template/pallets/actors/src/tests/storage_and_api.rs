@@ -915,33 +915,6 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
     });
 
     let retry_at = now + 3;
-    let invalid_destination = DeadlineHandle {
-      actor,
-      key: WakeupKey::Block(retry_at),
-      page: 9,
-      slot: 0,
-    };
-    assert!(matches!(
-      Actors::execute_effectful_step_on_service_with_deadline(
-        actor,
-        ServiceResidenceKind::Live,
-        state.clone(),
-        plan.clone(),
-        &admission,
-        now,
-        Some(invalid_destination),
-      ),
-      Err(AttemptTransactionError::Invariant)
-    ));
-    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
-    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
-
-    let destination = DeadlineHandle {
-      actor,
-      key: WakeupKey::Block(retry_at),
-      page: 0,
-      slot: 0,
-    };
     Actors::execute_effectful_step_on_service_with_deadline(
       actor,
       ServiceResidenceKind::Live,
@@ -949,22 +922,36 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
       plan,
       &admission,
       now,
-      Some(destination),
+      Some(WakeupKey::Block(retry_at)),
     )
-    .expect("later retry commits into its paid deadline residence");
+    .expect("later retry commits into its canonically selected deadline residence");
     let retry_run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run remains");
     assert_eq!(retry_run.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(retry_run.eligible_at, retry_at);
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
-    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(destination));
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id),
+      Some(DeadlineHandle {
+        actor,
+        key: WakeupKey::Block(retry_at),
+        page: 0,
+        slot: 0,
+      })
+    );
+    assert!(matches!(
+      Actors::return_next_due_block_deadline_to_service(ServiceResidenceKind::Live, now),
+      Err(DeadlineMutationError::InvalidDestination)
+    ));
 
     frame_system::Pallet::<Test>::set_block_number(retry_at);
-    Actors::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, retry_at)
-      .expect("genuinely due deadline returns to canonical Service");
+    assert_eq!(
+      Actors::return_next_due_block_deadline_to_service(ServiceResidenceKind::Live, retry_at),
+      Ok(actor)
+    );
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(matches!(
-      Actors::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, retry_at),
+      Actors::return_next_due_block_deadline_to_service(ServiceResidenceKind::Live, retry_at),
       Err(DeadlineMutationError::MemberMissing)
     ));
     set_asset_balance(&sovereign, TestAsset::Local(1), 10);
@@ -4945,6 +4932,16 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
         .live_entries,
       32
     );
+    let planned_actor = actor_ref(240, 4);
+    assert_eq!(
+      Actors::plan_deadline_destination(planned_actor, key),
+      Ok(DeadlineHandle {
+        actor: planned_actor,
+        key,
+        page: 1,
+        slot: 0,
+      })
+    );
 
     let removed = DeadlineHandle {
       actor: actor_ref(207, 3),
@@ -4958,8 +4955,17 @@ fn canonical_deadline_carrier_covers_fragmentation_full_pages_move_and_rollback(
       )
     })
     .expect("interior removal succeeds");
+    assert_eq!(
+      Actors::plan_deadline_destination(planned_actor, key),
+      Ok(DeadlineHandle {
+        actor: planned_actor,
+        key,
+        page: 0,
+        slot: 7,
+      })
+    );
     let replacement = DeadlineHandle {
-      actor: actor_ref(240, 4),
+      actor: planned_actor,
       key,
       page: 0,
       slot: 7,

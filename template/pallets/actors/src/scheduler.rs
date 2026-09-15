@@ -1779,7 +1779,7 @@ impl<T: Config> Pallet<T> {
     plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-    deadline: Option<DeadlineHandleOf<T>>,
+    deadline: Option<WakeupKey<BlockNumberFor<T>>>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       let result = (|| {
@@ -1794,6 +1794,10 @@ impl<T: Config> Pallet<T> {
         {
           return Err(AttemptTransactionError::Invariant);
         }
+        let deadline = deadline
+          .map(|key| Self::plan_deadline_destination(actor, key))
+          .transpose()
+          .map_err(|_| AttemptTransactionError::Invariant)?;
         if let Some(destination) = deadline {
           Self::probe_service_member_to_deadline(actor, destination)
             .map_err(|_| AttemptTransactionError::Invariant)?;
