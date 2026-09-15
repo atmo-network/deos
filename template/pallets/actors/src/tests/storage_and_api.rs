@@ -3422,6 +3422,55 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
 }
 
 #[test]
+fn canonical_service_round_matches_the_independent_semantic_trace() {
+  new_test_ext().execute_with(|| {
+    let members = [actor_ref(120, 1), actor_ref(121, 1), actor_ref(122, 1)];
+    for actor in members {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, 0).unwrap();
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+
+    let mut block = 0;
+    for row in include_str!("../../tests/fixtures/current_state_round_trace_v1.tsv").lines() {
+      if row.starts_with('#') || row.is_empty() {
+        continue;
+      }
+      let mut fields = row.split('\t');
+      let next_block = fields.next().unwrap().parse::<u64>().unwrap();
+      let expected = fields.next().unwrap().parse::<u64>().unwrap();
+      let action = fields.next().unwrap();
+      assert!(fields.next().is_none());
+      if next_block != block {
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          Actors::begin_service_round(next_block).unwrap();
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+        });
+        block = next_block;
+      }
+      let actor = members[(expected - 120) as usize];
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        assert_eq!(
+          Actors::consider_service_head(block),
+          Ok(ServiceRoundEncounter::Eligible(actor))
+        );
+        if action == "admit" {
+          Actors::advance_service_head(actor, block).unwrap();
+        } else {
+          assert!(matches!(action, "refuse_ref_time" | "refuse_proof_size"));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+  });
+}
+
+#[test]
 fn canonical_service_round_handles_empty_removal_interruption_and_faults() {
   new_test_ext().execute_with(|| {
     assert_eq!(

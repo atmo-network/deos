@@ -317,20 +317,34 @@ fn mutable_round_preserves_survivor_order_and_defers_new_or_reentered_members() 
 }
 
 #[test]
-fn partial_round_continues_from_the_next_encounter_across_blocks() {
+fn production_round_trace_preserves_partial_continuity_and_refused_head() {
   let mut o = Oracle::default();
-  for id in 1..=3 {
+  for id in 120..=122 {
     o.insert(id, live(0));
   }
 
-  o.begin_block(1);
-  assert_eq!(o.next(), Some(1));
-  o.begin_block(2);
-  assert_eq!(o.next(), Some(2));
-  o.begin_block(3);
-  assert_eq!(o.next(), Some(3));
-  o.begin_block(4);
-  assert_eq!(o.next(), Some(1));
+  let mut block = 0;
+  for row in include_str!("fixtures/current_state_round_trace_v1.tsv").lines() {
+    if row.starts_with('#') || row.is_empty() {
+      continue;
+    }
+    let mut fields = row.split('\t');
+    let next_block = fields.next().unwrap().parse::<u32>().unwrap();
+    let expected = fields.next().unwrap().parse::<u8>().unwrap();
+    let action = fields.next().unwrap();
+    assert!(fields.next().is_none());
+    if next_block != block {
+      o.begin_block(next_block);
+      block = next_block;
+    }
+    assert_eq!(o.peek(), Some(expected));
+    match action {
+      "admit" => o.admit(expected),
+      "refuse_ref_time" => o.refuse(expected, ResourceDimension::RefTime),
+      "refuse_proof_size" => o.refuse(expected, ResourceDimension::ProofSize),
+      _ => panic!("unknown trace action: {action}"),
+    }
+  }
 }
 
 #[test]
