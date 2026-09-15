@@ -811,9 +811,15 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       observed_revision: pending.revision,
     }];
     assert_eq!(
-      Actors::consume_negative_dependency_event_and_rearm(pending, evidence, &successor, None,),
+      Actors::consume_negative_dependency_event_and_rearm(
+        pending,
+        evidence,
+        &successor,
+        Some(WakeupKey::Block(2)),
+      ),
       Ok(DependencyPlanMutation {
         retained: 1,
+        timed_review: DependencyTimedReviewMutation::Installed,
         ..Default::default()
       })
     );
@@ -822,6 +828,75 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
       Some(Some(ProcessResidence::Parked(evidence)))
     );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(2),
+    };
+    assert_eq!(
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::publish_due_dependency_review(review),
+        )
+      }),
+      Ok(DependencyDueReviewMutation::Published)
+    );
+    let stale_review = DependencyTimedReview {
+      deadline: WakeupKey::Block(1),
+      ..review
+    };
+    assert_eq!(
+      Actors::consume_negative_dependency_review_and_rearm(
+        stale_review,
+        evidence,
+        &successor,
+        None,
+      ),
+      Err(DependencyRegistrationError::PendingReviewMismatch)
+    );
+    assert_eq!(
+      Actors::consume_negative_dependency_review_and_rearm(
+        review,
+        stale_evidence,
+        &successor,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    DependencyRevisions::<Test>::mutate(source, |state| state.revision += 1);
+    assert_eq!(
+      Actors::consume_negative_dependency_review_and_rearm(review, evidence, &successor, None,),
+      Err(DependencyRegistrationError::RevisionMismatch)
+    );
+    DependencyRevisions::<Test>::mutate(source, |state| state.revision -= 1);
+    assert_eq!(
+      Actors::consume_negative_dependency_review_and_rearm(
+        review,
+        evidence,
+        &successor,
+        Some(WakeupKey::Block(2)),
+      ),
+      Err(DependencyRegistrationError::DeadlineNotFuture)
+    );
+    assert_eq!(
+      PendingDependencyReviews::<Test>::get(actor_id),
+      Some(review)
+    );
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+    assert_eq!(
+      Actors::consume_negative_dependency_review_and_rearm(review, evidence, &successor, None,),
+      Ok(DependencyPlanMutation {
+        retained: 1,
+        ..Default::default()
+      })
+    );
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
 
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {

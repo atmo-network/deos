@@ -5276,6 +5276,42 @@ pub mod pallet {
       })
     }
 
+    /// Consumes one exact due-review negative result only after its complete successor plan is
+    /// durable for the same generation/plan-bound Park resident. Refusal preserves the Pending
+    /// review, registrations, and Park residence.
+    #[allow(
+      dead_code,
+      reason = "negative dependency review continuation remains staged behind the weighted consumer cutover"
+    )]
+    pub(crate) fn consume_negative_dependency_review_and_rearm(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      desired: &[DependencyPlanSource],
+      timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          let process = ActorProcesses::<T>::get(expected.owner.actor.actor_id)
+            .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if process.generation != expected.owner.actor.generation
+            || process.status != ProcessStatus::Serving
+            || process.residence != Some(ProcessResidence::Parked(evidence))
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          Self::consume_pending_dependency_review(expected, desired, timed_review)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Consumes one exact positive dependency result and wakes its generation/plan-bound Park
     /// resident only after revalidating the current Pending and registration authority.
     #[allow(
