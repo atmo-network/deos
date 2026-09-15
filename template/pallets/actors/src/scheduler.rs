@@ -1673,9 +1673,9 @@ impl<T: Config> Pallet<T> {
     Self::finalize_effectful_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
-  /// Executes one effectful completion through canonical Service authority. This first adapter is
-  /// intentionally narrower than the carrier-neutral transition: retry, continuation, deadline,
-  /// and terminal destinations remain refused until their atomic residence commits exist.
+  /// Executes one effectful completion through canonical Service authority. Retained and terminal
+  /// completion commit semantic state before advancing or unlinking the ring. Retry, continuation,
+  /// and deadline destinations remain refused until their atomic residence commits exist.
   #[allow(
     dead_code,
     reason = "canonical Service execution remains staged behind the atomic publication cutover"
@@ -1696,6 +1696,8 @@ impl<T: Config> Pallet<T> {
           || semantic.hot != state.hot
           || semantic.admission != *admission
           || Self::load_actor_contract(actor.actor_id).as_ref() != Some(&state.contract)
+          || Self::consider_service_head(now).map_err(|_| AttemptTransactionError::Invariant)?
+            != ServiceRoundEncounter::Eligible(actor)
         {
           return Err(AttemptTransactionError::Invariant);
         }
@@ -1717,15 +1719,24 @@ impl<T: Config> Pallet<T> {
         if disposition != AttemptDisposition::Completed || eligible_at.is_some() {
           return Err(AttemptTransactionError::Invariant);
         }
-        let NextResidence::Publish { state, .. } = next_residence else {
-          return Err(AttemptTransactionError::Invariant);
-        };
         let actual_effect_weight =
           T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
             .filter(|actual| actual.all_lte(reserved_effect_weight))
             .ok_or(AttemptTransactionError::Invariant)?;
-        Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
-          .map_err(|_| AttemptTransactionError::Invariant)?;
+        let placement = match next_residence {
+          NextResidence::Publish { state, .. } => {
+            Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            StepControlPlacement::Queue
+          }
+          NextResidence::Close { state, reason } => {
+            Self::finalize_actor_from_consumed_state(actor.actor_id, state, admission, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            Self::retire_service_member(actor, reason)
+              .map_err(|_| AttemptTransactionError::Invariant)?;
+            StepControlPlacement::None
+          }
+        };
         let actual_fee = Self::maximum_current_action_fee(
           execution_instance.actor_class.actor_type(),
           &step,
@@ -1748,7 +1759,7 @@ impl<T: Config> Pallet<T> {
               CycleState::Suspended => StepControlPhase::Suspended,
             },
             outcome: StepControlOutcome::Completed,
-            placement: StepControlPlacement::Queue,
+            placement,
             task_effect: effect_execution,
             action_fee_collected,
           },

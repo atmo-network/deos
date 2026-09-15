@@ -1,33 +1,34 @@
 use super::*;
+use crate::scheduler::AttemptTransactionError;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorSemanticExecutionProjection, ActorSemanticLoadError, ActorSemanticMutation,
   ActorSemanticMutationError, ActorSemanticProjectionError, ActorSemanticRecord,
   ActorSemanticState, ActorSemanticStates, ActorStepResourceEnvelope, ActorUnsignaledControlCells,
-  ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
-  DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
-  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationError,
-  DependencyPublicationMutation, DependencyRegistrationError, DependencyRegistrationFreePositions,
-  DependencyRegistrationHandle, DependencyRegistrationHeaders, DependencyRegistrationMutation,
-  DependencyRegistrationPages, DependencyRegistrationPosition, DependencyRegistrationPositions,
-  DependencyRegistrations, DependencyRevisionError, DependencyRevisionMutation,
-  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
-  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
-  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
-  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
-  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
-  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
-  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
-  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
-  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
-  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
-  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
-  ServicePublicationError, ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError,
-  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
-  plan_legacy_process_transition, project_actor_semantic_execution,
+  ActorWaitingOccupancies, CloseReason, CompletionPolicy, DeadlineHandle, DeadlineHandles,
+  DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages,
+  DeadlineIndexPositions, DeadlineMutationError, DeadlinePages, DependencyDueReviewError,
+  DependencyDueReviewMutation, DependencyPlanMutation, DependencyPlanSource, DependencyPlans,
+  DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
+  DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
+  DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
+  DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
+  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
+  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
+  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
+  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
+  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
+  DormantActorSemanticRecord, LegacyProcessPlacement, LegacyProcessTransition,
+  ObservationDependencySources, ParkEvidence, ParkNegativeReason, PendingCheckOwner,
+  PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents, PendingDependencyReviews,
+  PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause, ProcessDisablement,
+  ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority, ProcessStatus,
+  ProcessTransitionError, ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
+  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
+  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -838,6 +839,124 @@ fn canonical_effectful_completion_commits_before_service_advance() {
       ServiceNodes::<Test>::get(actor_id).unwrap().last_considered,
       now
     );
+  });
+}
+
+#[test]
+fn canonical_effectful_terminal_attempt_rolls_back_then_cleans_before_service_unlink() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    let actor_id = Actors::next_actor_id();
+    assert_ok!(Actors::create_system_actor(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      system_active_contract_with_completion(
+        manual_schedule(),
+        None,
+        contract_steps_with_step(step),
+        CompletionPolicy::CloseAfterProductiveCycle,
+      ),
+    ));
+    let sovereign = Actors::actor_identity(actor_id)
+      .expect("active identity")
+      .sovereign_account;
+    set_asset_balance(&sovereign, TestAsset::Local(1), 10);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let now = frame_system::Pallet::<Test>::block_number();
+    let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
+      .expect("legacy source exposes the complete admitted Step");
+    let ticket = Actors::build_actor_step_ticket(
+      actor_id,
+      state.hot.queue_ticket.expect("triggered Actor is Ready"),
+      now,
+      &state.identity,
+      &state.hot,
+      state.run_state.as_ref(),
+      &admission,
+    )
+    .expect("opening ticket");
+    let maximum_fee = Actors::maximum_current_action_fee(
+      ActorType::System,
+      &loaded_step.step,
+      loaded_step.resources,
+    )
+    .expect("System fee envelope");
+    let plan = Actors::build_current_step_plan(
+      actor_id,
+      state.identity.clone(),
+      state.hot.clone(),
+      state.run_state.clone(),
+      admission.clone(),
+      ticket,
+      loaded_step,
+      maximum_fee,
+    )
+    .expect("coherent opening plan");
+    let generation =
+      match ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists") {
+        ActorSemanticState::Active(record) => record.generation,
+        ActorSemanticState::Dormant(_) => panic!("created Actor is active"),
+      };
+    let actor = actor_ref(actor_id, generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(now).expect("round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let recipient_before = asset_balance(&BOB, TestAsset::Local(1));
+    ServiceHeader::<Test>::mutate(|header| header.cursor = None);
+    assert!(matches!(
+      Actors::execute_completed_effectful_step_on_service(
+        actor,
+        ServiceResidenceKind::Live,
+        state.clone(),
+        plan.clone(),
+        &admission,
+        now,
+      ),
+      Err(AttemptTransactionError::Invariant)
+    ));
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), recipient_before);
+    assert!(ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+
+    ServiceHeader::<Test>::mutate(|header| header.cursor = Some(actor));
+    Actors::execute_completed_effectful_step_on_service(
+      actor,
+      ServiceResidenceKind::Live,
+      state,
+      plan,
+      &admission,
+      now,
+    )
+    .expect("terminal effectful attempt commits");
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Local(1)),
+      recipient_before + 1
+    );
+    assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| (process.status, process.residence)),
+      Some((
+        ProcessStatus::Retired(CloseReason::ProductiveCycleCompleted),
+        None,
+      ))
+    );
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
   });
 }
 
@@ -1729,8 +1848,8 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   }
   assert_eq!(
     scheduler.matches("Self::retire_service_member(").count(),
-    1,
-    "only the staged canonical zero-Step transaction may retire its consumed Service carrier"
+    2,
+    "only staged canonical zero-Step and effectful completion transactions may retire their consumed Service carriers"
   );
   for source in [lib, execution] {
     assert_eq!(
