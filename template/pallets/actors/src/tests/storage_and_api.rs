@@ -792,23 +792,68 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       ..pending
     };
     assert_eq!(
-      Actors::consume_positive_dependency_event_and_wake(
-        stale_pending,
-        ServiceResidenceKind::Live,
-        evidence,
-        2,
-      ),
+      Actors::consume_negative_dependency_event_and_rearm(stale_pending, evidence, &desired, None,),
       Err(DependencyRegistrationError::PendingEventMismatch)
+    );
+    assert_eq!(
+      Actors::consume_negative_dependency_event_and_rearm(pending, stale_evidence, &desired, None,),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
     );
     assert_eq!(
       PendingDependencyEvents::<Test>::get(actor_id),
       Some(pending)
     );
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
+
+    let successor = [DependencyPlanSource {
+      source,
+      observed_revision: pending.revision,
+    }];
+    assert_eq!(
+      Actors::consume_negative_dependency_event_and_rearm(pending, evidence, &successor, None,),
+      Ok(DependencyPlanMutation {
+        retained: 1,
+        ..Default::default()
+      })
+    );
+    assert!(!PendingDependencyEvents::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::complete_dependency_scan(source, pending.revision, 1),
+        Ok(DependencyScanMutation::Completed)
+      );
+      assert_eq!(
+        Actors::publish_dependency_event(source),
+        Ok(DependencyPublicationMutation::Begun(2))
+      );
+      assert_eq!(
+        Actors::process_dependency_scan_member(source, 2, 0),
+        Ok(DependencyScanMutation::Advanced(1))
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let newer_pending =
+      PendingDependencyEvents::<Test>::get(actor_id).expect("newer positive result pending");
+    assert_eq!(
+      Actors::consume_negative_dependency_event_and_rearm(pending, evidence, &successor, None,),
+      Err(DependencyRegistrationError::PendingEventMismatch)
+    );
+    assert_eq!(
+      PendingDependencyEvents::<Test>::get(actor_id),
+      Some(newer_pending)
+    );
+    assert_eq!(DependencyPlans::<Test>::get(actor_id).len(), 1);
 
     assert_eq!(
       Actors::consume_positive_dependency_event_and_wake(
-        pending,
+        newer_pending,
         ServiceResidenceKind::Live,
         evidence,
         2,
