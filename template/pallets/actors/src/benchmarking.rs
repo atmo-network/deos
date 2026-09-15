@@ -2094,13 +2094,10 @@ mod benches {
       Some(WakeupKey::Block(2u32.into())),
     )
     .expect("benchmark Actor enters canonical Park");
-    let destination = Pallet::<T>::plan_deadline_destination(actor, WakeupKey::Block(2u32.into()))
-      .expect("benchmark review owns a deadline destination");
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Pallet::<T>::insert_deadline_member(destination)
-        .expect("benchmark review enters the deadline index");
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
+    assert_eq!(
+      DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(2u32.into()))
+    );
     frame_system::Pallet::<T>::set_block_number(2u32.into());
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
 

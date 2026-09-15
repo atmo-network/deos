@@ -5214,6 +5214,15 @@ pub mod pallet {
             actor,
             plan_revision,
           };
+          let deadline_destination = timed_review
+            .map(|key| Self::plan_deadline_destination(actor, key))
+            .transpose()
+            .map_err(|error| match error {
+              DeadlineMutationError::CapacityExceeded => {
+                DependencyRegistrationError::CapacityExceeded
+              }
+              _ => DependencyRegistrationError::StoredPlanMismatch,
+            })?;
           let evidence = ParkEvidence {
             plan_identity: admission.admission_identity,
             reason,
@@ -5236,6 +5245,14 @@ pub mod pallet {
           }
           process.residence = Some(ProcessResidence::Parked(evidence));
           ActorProcesses::<T>::insert(actor.actor_id, process);
+          if let Some(destination) = deadline_destination {
+            Self::insert_deadline_member(destination).map_err(|error| match error {
+              DeadlineMutationError::CapacityExceeded => {
+                DependencyRegistrationError::CapacityExceeded
+              }
+              _ => DependencyRegistrationError::StoredPlanMismatch,
+            })?;
+          }
           Ok(mutation)
         })();
         match result {

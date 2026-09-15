@@ -734,6 +734,30 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
     assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
     DependencyRevisions::<Test>::remove(source);
 
+    let occupied_deadline = Actors::plan_deadline_destination(actor, WakeupKey::Block(2)).unwrap();
+    DeadlineHandles::<Test>::insert(actor_id, occupied_deadline);
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
+        &desired,
+        Some(WakeupKey::Block(2)),
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    assert_eq!(ServiceNodes::<Test>::get(actor_id), Some(node));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
+    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id),
+      Some(occupied_deadline)
+    );
+    DeadlineHandles::<Test>::remove(actor_id);
+
     assert_eq!(
       Actors::transfer_service_member_to_park(
         actor,
@@ -1313,11 +1337,9 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
       Some(WakeupKey::Block(2)),
     )
     .unwrap();
-    let first_handle = Actors::plan_deadline_destination(actor, WakeupKey::Block(2)).unwrap();
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::insert_deadline_member(first_handle).unwrap();
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
+    let first_handle =
+      DeadlineHandles::<Test>::get(actor_id).expect("parking publishes timed review deadline");
+    assert_eq!(first_handle.key, WakeupKey::Block(2));
 
     frame_system::Pallet::<Test>::set_block_number(2);
     let mut no_weight = WeightMeter::with_limit(Weight::zero());
