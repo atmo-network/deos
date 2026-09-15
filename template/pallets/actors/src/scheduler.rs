@@ -74,6 +74,24 @@ struct ZeroStepTransition<T: Config> {
   resources: ActorStepResourceEnvelope,
 }
 
+/// Carrier-neutral semantic result of completing StopCycle from either an
+/// Opening or Running frame. The legacy FIFO finalizer owns republication,
+/// fees, holds, and physical StepCommitEvidence.
+struct StopCycleTransition<T: Config> {
+  state: ActiveActorStateOf<T>,
+  execution_instance: ActiveActorViewOf<T>,
+  step: StepOf<T>,
+  control_context: StepControlWeightContext,
+  reserved_control_weight: Weight,
+  reserved_effect_weight: Weight,
+  effect_execution: super::TaskEffectExecution,
+  outcomes: OutcomeTotals,
+  cycle_nonce: u64,
+  cursor: u32,
+  phase: StepControlPhase,
+  next_resources: ActorStepResourceEnvelope,
+}
+
 #[derive(Clone, Copy)]
 enum TerminalCleanupReservation {
   Included,
@@ -1021,13 +1039,103 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn execute_stop_cycle_from_consumed_frame(
+  fn finalize_stop_cycle_on_legacy_fifo(
+    actor_id: ActorId,
+    transition: StopCycleTransition<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let StopCycleTransition {
+      state,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      reserved_effect_weight,
+      effect_execution,
+      outcomes,
+      cycle_nonce,
+      cursor,
+      phase,
+      next_resources,
+    } = transition;
+    let (placement, attempt_status, closed_for_exhaustion) =
+      Self::finalize_stop_cycle_residence_on_legacy_fifo(
+        actor_id,
+        &state,
+        admission,
+        next_resources,
+        now,
+      )?;
+    let actual_effect_weight =
+      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
+        .ok_or(AttemptTransactionError::Invariant)?;
+    if !actual_effect_weight.all_lte(reserved_effect_weight) {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let actual_control_weight = T::StepControlWeight::actual_control_weight(
+      control_context,
+      &step,
+      reserved_control_weight,
+      StepControlExecution {
+        phase,
+        outcome: StepControlOutcome::Completed,
+        placement,
+        task_effect: effect_execution,
+        action_fee_collected: false,
+      },
+    )
+    .ok_or(AttemptTransactionError::Invariant)?;
+    if !actual_control_weight.all_lte(reserved_control_weight) {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let actual_fee = Self::maximum_current_action_fee(
+      execution_instance.actor_class.actor_type(),
+      &step,
+      ActorStepResourceEnvelope {
+        control: Weight::zero(),
+        effect: actual_effect_weight,
+      },
+    )
+    .map_err(|_| AttemptTransactionError::Invariant)?;
+    if execution_instance.actor_class.actor_type() == ActorType::User
+      && !actual_fee.total_fee.is_zero()
+    {
+      Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)
+        .map_err(|_| AttemptTransactionError::FeeCollection)?;
+    }
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Self::reconcile_actor_state_hold_with_authority(actor_id)
+        .map_err(|_| AttemptTransactionError::StateHold)?;
+    }
+    Ok(StepCommitEvidence {
+      closed_for_exhaustion,
+      actual_control_weight,
+      actual_effect_weight,
+      attempt: Self::step_simulation_evidence(
+        cycle_nonce,
+        cursor,
+        attempt_status,
+        outcomes,
+        None,
+        Some(
+          if matches!(effect_execution, super::TaskEffectExecution::Invoked) {
+            StepOutcome::Stopped
+          } else {
+            StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
+          },
+        ),
+      ),
+    })
+  }
+
+  fn execute_opening_stop_cycle_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     commit_plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+  ) -> Result<StopCycleTransition<T>, AttemptTransactionError> {
     let step = commit_plan.loaded_step.step.clone();
     if state.hot.cycle_state != CycleState::Idle
       || state.run_state.is_some()
@@ -1124,79 +1232,41 @@ impl<T: Config> Pallet<T> {
       outcomes,
     });
 
-    let (placement, attempt_status, closed_for_exhaustion) =
-      Self::finalize_stop_cycle_residence_on_legacy_fifo(
-        actor_id,
-        &state,
-        admission,
-        commit_plan.loaded_step.resources,
-        now,
-      )?;
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_control_weight = T::StepControlWeight::actual_control_weight(
+    Ok(StopCycleTransition {
+      state,
+      execution_instance: instance,
+      step,
       control_context,
-      &step,
       reserved_control_weight,
-      StepControlExecution {
-        phase: StepControlPhase::Opening,
-        outcome: StepControlOutcome::Completed,
-        placement,
-        task_effect: effect_execution,
-        action_fee_collected: false,
-      },
-    )
-    .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_control_weight.all_lte(reserved_control_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      ActorStepResourceEnvelope {
-        control: Weight::zero(),
-        effect: actual_effect_weight,
-      },
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if instance.actor_class.actor_type() == ActorType::User && !actual_fee.total_fee.is_zero() {
-      Self::collect_user_step_fee(&instance.sovereign_account, actual_fee.total_fee)
-        .map_err(|_| AttemptTransactionError::FeeCollection)?;
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::reconcile_actor_state_hold_with_authority(actor_id)
-        .map_err(|_| AttemptTransactionError::StateHold)?;
-    }
-    Ok(StepCommitEvidence {
-      closed_for_exhaustion,
-      actual_control_weight,
-      actual_effect_weight,
-      attempt: Self::step_simulation_evidence(
-        cycle_nonce,
-        0,
-        attempt_status,
-        outcomes,
-        None,
-        Some(if predicate_matches {
-          StepOutcome::Stopped
-        } else {
-          StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
-        }),
-      ),
+      reserved_effect_weight,
+      effect_execution,
+      outcomes,
+      cycle_nonce,
+      cursor: 0,
+      phase: StepControlPhase::Opening,
+      next_resources: commit_plan.loaded_step.resources,
     })
   }
 
-  fn execute_running_stop_cycle_from_consumed_frame(
+  fn execute_stop_cycle_from_consumed_frame(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+    commit_plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let transition =
+      Self::execute_opening_stop_cycle_transition(actor_id, state, commit_plan, admission, now)?;
+    Self::finalize_stop_cycle_on_legacy_fifo(actor_id, transition, admission, now)
+  }
+
+  fn execute_running_stop_cycle_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     commit_plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+  ) -> Result<StopCycleTransition<T>, AttemptTransactionError> {
     let step = commit_plan.loaded_step.step.clone();
     let mut run = commit_plan
       .run
@@ -1286,70 +1356,32 @@ impl<T: Config> Pallet<T> {
     let next_resources = Self::load_current_step_with_admission(actor_id, 0, admission)
       .map(|loaded| loaded.resources)
       .ok_or(AttemptTransactionError::Invariant)?;
-    let (placement, attempt_status, closed_for_exhaustion) =
-      Self::finalize_stop_cycle_residence_on_legacy_fifo(
-        actor_id,
-        &state,
-        admission,
-        next_resources,
-        now,
-      )?;
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_control_weight = T::StepControlWeight::actual_control_weight(
+    Ok(StopCycleTransition {
+      state,
+      execution_instance: instance,
+      step,
       control_context,
-      &step,
       reserved_control_weight,
-      StepControlExecution {
-        phase: StepControlPhase::Running,
-        outcome: StepControlOutcome::Completed,
-        placement,
-        task_effect: effect_execution,
-        action_fee_collected: false,
-      },
-    )
-    .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_control_weight.all_lte(reserved_control_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
-    let actual_fee = Self::maximum_current_action_fee(
-      instance.actor_class.actor_type(),
-      &step,
-      ActorStepResourceEnvelope {
-        control: Weight::zero(),
-        effect: actual_effect_weight,
-      },
-    )
-    .map_err(|_| AttemptTransactionError::Invariant)?;
-    if instance.actor_class.actor_type() == ActorType::User && !actual_fee.total_fee.is_zero() {
-      Self::collect_user_step_fee(&instance.sovereign_account, actual_fee.total_fee)
-        .map_err(|_| AttemptTransactionError::FeeCollection)?;
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::reconcile_actor_state_hold_with_authority(actor_id)
-        .map_err(|_| AttemptTransactionError::StateHold)?;
-    }
-    Ok(StepCommitEvidence {
-      closed_for_exhaustion,
-      actual_control_weight,
-      actual_effect_weight,
-      attempt: Self::step_simulation_evidence(
-        cycle_nonce,
-        cursor,
-        attempt_status,
-        outcomes,
-        None,
-        Some(if predicate_matches {
-          StepOutcome::Stopped
-        } else {
-          StepOutcome::Skipped(StepSkippedReason::PreconditionFalse)
-        }),
-      ),
+      reserved_effect_weight,
+      effect_execution,
+      outcomes,
+      cycle_nonce,
+      cursor,
+      phase: StepControlPhase::Running,
+      next_resources,
     })
+  }
+
+  fn execute_running_stop_cycle_from_consumed_frame(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+    commit_plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let transition =
+      Self::execute_running_stop_cycle_transition(actor_id, state, commit_plan, admission, now)?;
+    Self::finalize_stop_cycle_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
   fn execute_effectful_step_transition(
