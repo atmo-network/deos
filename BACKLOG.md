@@ -267,10 +267,6 @@ V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full dom
 
 ---
 
-## N1 — Evidence Continuity Without Another Research Migration
-
-- [ ] **N1.3 / Applicable Hazard Closure Routes.** Carry B1–B8 and the existing H1–H9 routes into N5.3. Distinguish a known legacy finding, an untested replacement hazard and a reproduced defect. A retained heap or fallback keeps deep/full obligations; actual elimination closes only the removed path and requires replacement coverage. **Exit:** each applicable hazard has one owner and falsifier; no correctness obligation is waived because an optimization candidate was rejected.
-
 ## N2 — Complete the Actual Current-State Execution Path
 
 - [ ] **N2.1 / Minimal Canonical Continuation.** Connect the current Run/Cycle representation to ordinary new-engine execution. Prove Idle/open-run consistency, exact generation/Contract binding, cursor advancement, completion, zero-Step distinction and one current obligation. Keep independent semantic tests already passed; fill the missing production entrypoints. **Exit:** the V1 ordinary Actor advances and completes without direct test-state construction or legacy placement.
