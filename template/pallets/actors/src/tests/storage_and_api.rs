@@ -21,8 +21,9 @@ use crate::{
   ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
   ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
   ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
-  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
-  UnsignaledProcessEvidence, compile_legacy_process, plan_legacy_process_transition,
+  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
+  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
+  plan_legacy_process_transition,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -417,6 +418,50 @@ fn service_publication_atomically_owns_process_and_ring_insertion() {
     );
     assert!(!ActorProcesses::<Test>::contains_key(rejected.actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(rejected.actor_id));
+  });
+}
+
+#[test]
+fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process() {
+  new_test_ext().execute_with(|| {
+    let members = [
+      actor_ref(920, 1),
+      actor_ref(921, 1),
+      actor_ref(922, 1),
+      actor_ref(923, 1),
+    ];
+    for actor in members {
+      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+        .expect("service publication succeeds");
+    }
+
+    for actor in [members[2], members[0], members[3], members[1]] {
+      Actors::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("interior, cursor, pair, and singleton retirement succeeds");
+      assert!(!ServiceNodes::<Test>::contains_key(actor.actor_id));
+      assert_eq!(
+        ActorProcesses::<Test>::get(actor.actor_id)
+          .map(|process| (process.status, process.residence)),
+        Some((ProcessStatus::Retired(CloseReason::OwnerInitiated), None))
+      );
+    }
+    assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
+
+    let corrupt = actor_ref(924, 1);
+    Actors::publish_service_member(corrupt, ServiceResidenceKind::Live, 2)
+      .expect("service publication succeeds");
+    ServiceHeader::<Test>::mutate(|header| header.cursor = None);
+    assert_eq!(
+      Actors::retire_service_member(corrupt, CloseReason::OwnerInitiated),
+      Err(ServiceRetirementError::Ring(
+        ServiceRingMutationError::CorruptRing
+      ))
+    );
+    assert!(ServiceNodes::<Test>::contains_key(corrupt.actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(corrupt.actor_id),
+      Some(serving_process(corrupt, ServiceResidenceKind::Live))
+    );
   });
 }
 

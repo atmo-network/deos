@@ -70,6 +70,13 @@ pub enum ServicePublicationError {
   Ring(ServiceRingMutationError),
 }
 
+/// Failure of one atomic service-ring unlink and irreversible process retirement owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRetirementError {
+  Ring(ServiceRingMutationError),
+  Process(ProcessPublicationError),
+}
+
 /// Read-only classification of the current inert service-ring frontier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRoundEncounter {

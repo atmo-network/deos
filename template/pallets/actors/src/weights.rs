@@ -128,6 +128,9 @@ pub trait WeightInfo {
   fn materialization_coordinator_base() -> Weight;
   fn service_member_publish_empty() -> Weight;
   fn service_member_publish_populated() -> Weight;
+  fn service_member_retire_singleton() -> Weight;
+  fn service_member_retire_pair_cursor() -> Weight;
+  fn service_member_retire_interior() -> Weight;
   fn service_member_insert_populated() -> Weight;
   fn service_round_begin_populated() -> Weight;
   fn service_round_probe_eligible() -> Weight;
@@ -570,6 +573,15 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   fn service_member_publish_populated() -> Weight {
     Weight::from_parts(200_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(10, 6))
   }
+  fn service_member_retire_singleton() -> Weight {
+    Weight::from_parts(34_851_000, 3_948).saturating_add(T::DbWeight::get().reads_writes(5, 3))
+  }
+  fn service_member_retire_pair_cursor() -> Weight {
+    Weight::from_parts(42_394_000, 6_086).saturating_add(T::DbWeight::get().reads_writes(6, 4))
+  }
+  fn service_member_retire_interior() -> Weight {
+    Weight::from_parts(46_724_000, 8_634).saturating_add(T::DbWeight::get().reads_writes(7, 5))
+  }
   fn service_member_insert_populated() -> Weight {
     Weight::from_parts(150_000_000, 24_000).saturating_add(T::DbWeight::get().reads_writes(9, 5))
   }
@@ -983,6 +995,9 @@ impl WeightInfo for TestWeightInfo {
   fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
   fn service_member_publish_empty() -> Weight { Weight::from_parts(150_000_000, 24_000) }
   fn service_member_publish_populated() -> Weight { Weight::from_parts(200_000_000, 32_000) }
+  fn service_member_retire_singleton() -> Weight { Weight::from_parts(34_851_000, 3_948) }
+  fn service_member_retire_pair_cursor() -> Weight { Weight::from_parts(42_394_000, 6_086) }
+  fn service_member_retire_interior() -> Weight { Weight::from_parts(46_724_000, 8_634) }
   fn service_member_insert_populated() -> Weight { Weight::from_parts(150_000_000, 24_000) }
   fn service_round_begin_populated() -> Weight { Weight::from_parts(50_000_000, 8_000) }
   fn service_round_probe_eligible() -> Weight { Weight::from_parts(75_000_000, 12_000) }

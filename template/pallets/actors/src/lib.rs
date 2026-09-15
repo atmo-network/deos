@@ -3778,6 +3778,41 @@ pub mod pallet {
       Ok(DependencyRegistrationMutation::Removed)
     }
 
+    /// Atomically unlinks one service member and irreversibly retires its canonical process.
+    /// No production caller reaches this owner before the complete carrier cutover.
+    #[allow(
+      dead_code,
+      reason = "atomic service retirement remains unreachable until supported callers cut over"
+    )]
+    pub(crate) fn retire_service_member(
+      actor: ActorRef,
+      reason: CloseReason,
+    ) -> Result<(), ServiceRetirementError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Self::remove_service_member(actor)
+          .map_err(ServiceRetirementError::Ring)
+          .and_then(|_| {
+            let current = ActorProcesses::<T>::get(actor.actor_id).ok_or(
+              ServiceRetirementError::Process(ProcessPublicationError::ProcessMissing),
+            )?;
+            Self::publish_legacy_process_transition(
+              actor.actor_id,
+              current,
+              ProcessTransitionObligation::RetireOrDisable,
+              LegacyProcessTransition::Retire(reason),
+            )
+            .map(|_| ())
+            .map_err(ServiceRetirementError::Process)
+          });
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Removes exactly one generation-bound member from the inert service ring.
     #[allow(
       dead_code,

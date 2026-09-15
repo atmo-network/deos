@@ -4480,6 +4480,82 @@ mod benches {
   }
 
   #[benchmark]
+  fn service_member_retire_singleton() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 9_001,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("singleton service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().count, 0);
+    assert!(!ServiceNodes::<T>::contains_key(actor.actor_id));
+  }
+
+  #[benchmark]
+  fn service_member_retire_pair_cursor() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let actor = ActorRef {
+      actor_id: 9_002,
+      generation: 1,
+    };
+    let retained = ActorRef {
+      actor_id: 9_003,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(retained, ServiceResidenceKind::Pending, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("pair cursor service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(retained));
+    assert_eq!(ServiceHeader::<T>::get().count, 1);
+  }
+
+  #[benchmark]
+  fn service_member_retire_interior() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    let first = ActorRef {
+      actor_id: 9_004,
+      generation: 1,
+    };
+    let actor = ActorRef {
+      actor_id: 9_005,
+      generation: 1,
+    };
+    let last = ActorRef {
+      actor_id: 9_006,
+      generation: 1,
+    };
+    benchmark_insert_service_member::<T>(first, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(actor, ServiceResidenceKind::Live, now);
+    benchmark_insert_service_member::<T>(last, ServiceResidenceKind::Pending, now);
+    #[block]
+    {
+      Pallet::<T>::retire_service_member(actor, CloseReason::OwnerInitiated)
+        .expect("interior service member retirement succeeds");
+    }
+    assert_eq!(ServiceHeader::<T>::get().cursor, Some(first));
+    assert_eq!(ServiceHeader::<T>::get().count, 2);
+    assert_eq!(
+      ServiceNodes::<T>::get(first.actor_id).expect("first").next,
+      last
+    );
+    assert_eq!(
+      ServiceNodes::<T>::get(last.actor_id)
+        .expect("last")
+        .previous,
+      first
+    );
+  }
+
+  #[benchmark]
   fn service_member_insert_populated() {
     let now: BlockNumberFor<T> = 1u32.into();
     let retained = ActorRef {
