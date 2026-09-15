@@ -2758,15 +2758,38 @@ pub mod pallet {
           return Err(DispatchError::Other("dependency source identity occupied"));
         }
       };
-      match Self::publish_dependency_event(source) {
+      match Self::publish_dependency_event_with_source_retention(source) {
         Ok(
           DependencyPublicationMutation::Begun(_) | DependencyPublicationMutation::Coalesced { .. },
         ) => Ok(()),
         Ok(DependencyPublicationMutation::Exhausted) => {
           Err(DispatchError::Other("dependency revision exhausted"))
         }
-        Err(DependencyRevisionError::TransactionRequired) => Err(DispatchError::Other(
+        Err(DependencyPublicationError::Revision(DependencyRevisionError::TransactionRequired)) => {
+          Err(DispatchError::Other(
+            "dependency event requires transaction",
+          ))
+        }
+        Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::TransactionRequired,
+        )) => Err(DispatchError::Other(
           "dependency event requires transaction",
+        )),
+        Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::CapacityExceeded,
+        )) => Err(DispatchError::Other(
+          "dependency scan source capacity reached",
+        )),
+        Err(DependencyPublicationError::SourceCarrier(DependencyScanSourceError::ScanInactive)) => {
+          Err(DispatchError::Other("dependency scan source inactive"))
+        }
+        Err(DependencyPublicationError::SourceCarrier(DependencyScanSourceError::Missing)) => {
+          Err(DispatchError::Other("dependency scan source missing"))
+        }
+        Err(DependencyPublicationError::SourceCarrier(
+          DependencyScanSourceError::CorruptTopology,
+        )) => Err(DispatchError::Other(
+          "dependency scan source topology corrupt",
         )),
       }
     }
@@ -2833,10 +2856,6 @@ pub mod pallet {
     }
 
     /// Publishes one revision and transactionally retains its active source for fair scanning.
-    #[allow(
-      dead_code,
-      reason = "combined publication remains inert until generated Weight cutover"
-    )]
     pub(crate) fn publish_dependency_event_with_source_retention(
       source: DependencySourceId,
     ) -> Result<DependencyPublicationMutation, DependencyPublicationError> {

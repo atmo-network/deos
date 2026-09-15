@@ -9337,6 +9337,56 @@ fn oracle_dependency_adapter_covers_every_state_cause_without_subscriber_travers
       0,
       "publication is O(1) and does not traverse absent subscribers"
     );
+    assert_eq!(
+      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
+      1,
+      "all six causes retain one coalesced fair source membership"
+    );
+    assert!(pallet_deos_actors::DependencyScanSourceNodes::<Runtime>::contains_key(source));
+  });
+}
+
+#[test]
+fn oracle_dependency_carrier_capacity_refusal_rolls_back_registration_and_source_allocation() {
+  seeded_test_ext().execute_with(|| {
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
+      AssetKind::Native,
+      AssetKind::Local(60_001),
+    );
+    let capacity = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+      .saturating_mul(<Runtime as pallet_deos_actors::Config>::MaxContractSteps::get());
+    pallet_deos_actors::DependencyScanSourceListState::<Runtime>::put(
+      pallet_deos_actors::DependencyScanSourceList {
+        cursor: None,
+        count: capacity,
+      },
+    );
+    let allocator_before = pallet_deos_actors::DependencySourceAllocatorState::<Runtime>::get();
+
+    assert_noop!(
+      Oracle::register_feed(
+        RuntimeOrigin::root(),
+        feed,
+        deos_router_account(),
+        feed.meaning(),
+        primitives::OracleProvenance::DeosRouterPreExecutionReserves,
+        feed.scale,
+        pallet_oracle::Aggregation::LastValue,
+        pallet_oracle::ZeroPolicy::Reject,
+        false,
+      ),
+      polkadot_sdk::sp_runtime::DispatchError::Other("dependency scan source capacity reached")
+    );
+    assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(feed));
+    assert!(!pallet_deos_actors::ObservationDependencySources::<Runtime>::contains_key(feed));
+    assert_eq!(
+      pallet_deos_actors::DependencySourceAllocatorState::<Runtime>::get(),
+      allocator_before
+    );
+    assert_eq!(
+      pallet_deos_actors::DependencyScanSourceListState::<Runtime>::get().count,
+      capacity
+    );
   });
 }
 

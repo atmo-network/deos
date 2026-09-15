@@ -767,7 +767,7 @@ fn runtime_binds_generated_oracle_weights_and_stable_pallet_index() {
   assert_eq!(
     crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::register_feed_new_producer()
       .proof_size(),
-    44_898,
+    45_174,
     "runtime weight must charge the accepted measured ProofSize above the generated estimate"
   );
 }

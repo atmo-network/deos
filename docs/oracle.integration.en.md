@@ -54,7 +54,9 @@ The System Actors market guard consumes only Fresh nonzero directional observati
 
 Ingress remains subscriber-independent O(1). It does not read subscriber pages, mark actor readiness, enqueue actors, evaluate conditions, or execute plans. Deferred Actors fanout follows exact active dirty feeds and occupied subscriber pages through the existing scheduler.
 
-DEOS Oracle publication and Actors ingress share one transaction boundary. Any revision, capacity, or reciprocal-topology failure rolls back the DEOS Oracle observation and event rather than exposing a revision without its reaction obligation.
+`ActorFeedStateChangeIngress` binds the complete `OnFeedStateChanged` domain to one exact dependency source. Registration starts a fixed-revision scan and inserts that source into the bounded fair circular carrier; pause, resume, deactivation, changed publication, and equal refresh advance the source revision while coalescing behind the retained scan. This path remains O(1) and performs no subscriber traversal.
+
+DEOS Oracle publication and both Actors ingress paths share one transaction boundary. Any revision, source-allocation, carrier-capacity, dirty-capacity, or reciprocal-topology failure rolls back the DEOS Oracle mutation and event rather than exposing state without its reaction obligation.
 
 Direct publication propagates the exact Actors dispatch error, including `DirtyObservationCapacityExceeded` and `DirtyObservationInvariant`. DEOS Router maps a rejected pre-execution publication to `InvalidOracleData`; its outer swap transaction rolls back fee, pool, payer, recipient, Oracle, event, and dirty-ingress effects.
 
@@ -78,30 +80,30 @@ The client must not reconstruct history from session observations or present cac
 
 `template/runtime/src/weights/pallet_oracle.rs` owns the executable DEOS Oracle methods. Production generation must use the reference benchmark runtime and preserve RefTime, measured or estimated ProofSize, reads, and writes as separate evidence.
 
-Registration measures existing-producer and new-producer storage topologies separately. Publication binds one generated maximum across empty, Primary first/existing, Secondary first/existing, combined, capacity-rejection, and equal-refresh branches. Each changed branch measures the concrete Actors hook in place; no independent hook Weight is added.
+Registration measures existing-producer and new-producer storage topologies separately, including first-source carrier insertion. Lifecycle and prepared publication paths measure coalesced carrier membership; unprepared changed publication measures first insertion. Publication binds one generated maximum across empty, Primary first/existing, Secondary first/existing, combined, capacity-rejection, and equal-refresh branches. Each changed branch measures both concrete Actors hooks in place; no independent hook Weight is added.
 
 Any change to Actors ingress storage, Oracle hook composition, runtime bounds, producer identity, or pool admission invalidates composed publication evidence even when the reusable Oracle algorithm remains unchanged.
 
 ## Accepted Production Weight Evidence
 
-Production-Wasm `50 × 20` generation on 2026-08-23 produced the following runtime methods. RefTime excludes runtime database charges; reads and writes expose those charges separately.
+Production-Wasm `50 × 20` generation on 2026-09-15 produced the following runtime methods. RefTime excludes runtime database charges; reads and writes expose those charges separately.
 
 | Path | RefTime | ProofSize | Reads | Writes |
 | --- | ---: | ---: | ---: | ---: |
-| Register existing producer | 146,111,000 | 20,532 | 3 | 3 |
-| Register new producer | 215,185,000 | 44,394 conservative bridge | 4 | 4 |
-| Pause / resume / deactivate maximum | 15,435,000 | 3,551 | 1 | 1 |
-| Publish LastValue empty | 33,733,000 | 3,559 | 6 | 1 |
-| Publish changed EMA empty | 37,156,000 | 3,559 | 6 | 1 |
-| Publish Primary first | 46,795,000 | 3,559 | 7 | 4 |
-| Publish Primary existing | 46,864,000 | 3,559 | 6 | 3 |
-| Publish Secondary first | 49,239,000 | 6,060 | 9 | 4 |
-| Publish Secondary existing | 49,099,000 | 6,060 | 9 | 4 |
-| Publish combined | 58,667,000 | 6,060 | 10 | 7 |
-| Reject at Secondary capacity | 45,188,000 | 6,060 | 8 | 0 |
-| Publish equal EMA refresh | 22,280,000 | 3,551 | 2 | 1 |
+| Register existing producer | 181,241,000 | 20,532 | 10 | 9 |
+| Register new producer | 242,912,000 | 45,174 conservative bridge | 11 | 10 |
+| Pause / resume / deactivate maximum | 40,020,000 | 3,551 | 5 | 2 |
+| Publish LastValue empty | 56,292,000 | 3,587 | 10 | 2 |
+| Publish changed EMA empty | 65,163,000 | 3,587 | 13 | 7 |
+| Publish Primary first | 67,328,000 | 3,587 | 11 | 5 |
+| Publish Primary existing | 65,862,000 | 3,587 | 10 | 4 |
+| Publish Secondary first | 70,052,000 | 6,636 | 13 | 5 |
+| Publish Secondary existing | 70,192,000 | 6,636 | 13 | 5 |
+| Publish combined | 79,550,000 | 6,636 | 14 | 8 |
+| Reject at Secondary capacity | 48,261,000 | 6,636 | 8 | 0 |
+| Publish equal EMA refresh | 47,353,000 | 3,551 | 6 | 2 |
 
-The new-producer benchmark measured `44,394` ProofSize above its generated `34,255` estimate, so normalization retains the measured conservative bridge. Combined publication is the successful maximum; failed capacity append commits no writes.
+The new-producer benchmark measured `45,174` ProofSize above its generated `34,255` estimate, so normalization retains the measured conservative bridge. Combined publication is the successful maximum; failed Crossing-capacity append commits no writes. Carrier-capacity refusal is separately covered as a transactional runtime regression because benchmark setup cannot make an invalid full topology part of a successful path.
 
 These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
 
@@ -109,6 +111,6 @@ These values bound configured operations only; they imply no publication, subscr
 
 Runtime tests pin pallet index `52`, generated-weight binding, direction/aggregation/scale non-aliasing, Root registration, signed producer publication, Fresh revision `1`, bidirectional pool admission, idempotent re-indexing, independent directional values, the `500`-pair bound, one-slot capacity rejection, and reverse-identity rollback.
 
-Runtime regressions inject exact dirty-capacity and reciprocal-topology failures through the real Actors hook, prove no Oracle observation, event, or dirty ownership commits, restore healthy topology, and prove later publication succeeds. Router regressions separately pin hook-rejection and later failed-swap rollback across DEOS Oracle state, event, revision, fee, pool, payer, and recipient surfaces with a real subscriber.
+Runtime regressions inject exact carrier-capacity, dirty-capacity, and reciprocal-topology failures through the real Actors hooks, prove no Oracle mutation, source allocation, event, or dirty ownership commits, restore healthy topology, and prove later publication succeeds. Router regressions separately pin hook-rejection and later failed-swap rollback across DEOS Oracle state, event, revision, fee, pool, payer, and recipient surfaces with a real subscriber.
 
 Reactive integration fails if publication iterates subscribers, directly executes actors, admits only one direction, accepts mutable semantic reuse, commits DEOS Oracle state without dirty ingress, or presents current reserves as archive or unconditional fair-price truth.
