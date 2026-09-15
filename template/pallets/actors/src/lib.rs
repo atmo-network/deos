@@ -5177,18 +5177,39 @@ pub mod pallet {
     pub(crate) fn transfer_service_member_to_park(
       actor: ActorRef,
       kind: ServiceResidenceKind,
-      owner: PendingCheckOwner,
-      evidence: ParkEvidence<BlockNumberFor<T>>,
+      plan_revision: u64,
+      reason: ParkNegativeReason,
+      review_at: Option<BlockNumberFor<T>>,
       desired: &[DependencyPlanSource],
       timed_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DependencyPlanMutation, DependencyRegistrationError> {
-      if owner.actor != actor {
-        return Err(DependencyRegistrationError::PendingOwnerMismatch);
-      }
       polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let result = (|| {
-          Self::load_service_actor_semantic_state(actor, kind)
+          let record = Self::load_service_actor_semantic_state(actor, kind)
             .map_err(|_| DependencyRegistrationError::StoredPlanMismatch)?;
+          let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+            actor.actor_id,
+            record.identity.clone(),
+            record.hot.clone(),
+            record.admission.clone(),
+          )
+          .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+          if state.identity != record.identity
+            || state.hot != record.hot
+            || admission != record.admission
+            || loaded_step.is_none()
+          {
+            return Err(DependencyRegistrationError::StoredPlanMismatch);
+          }
+          let owner = PendingCheckOwner {
+            actor,
+            plan_revision,
+          };
+          let evidence = ParkEvidence {
+            plan_identity: admission.admission_identity,
+            reason,
+            review_at,
+          };
           if PendingCheckOwners::<T>::contains_key(actor.actor_id)
             || !DependencyPlans::<T>::get(actor.actor_id).is_empty()
             || DependencyTimedReviews::<T>::contains_key(actor.actor_id)

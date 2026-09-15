@@ -630,31 +630,83 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       plan_revision: 7,
     };
     let evidence = ParkEvidence {
-      plan_identity: [7; 32],
+      plan_identity: record.admission.admission_identity,
       reason: ParkNegativeReason::SourceUnavailable,
       review_at: None,
     };
     let node = ServiceNodes::<Test>::get(actor_id).expect("member exists");
 
-    let stale_owner = PendingCheckOwner {
-      actor: actor_ref(actor_id, actor.generation + 1),
-      plan_revision: owner.plan_revision,
-    };
     assert_eq!(
       Actors::transfer_service_member_to_park(
-        actor,
+        actor_ref(actor_id, actor.generation + 1),
         ServiceResidenceKind::Live,
-        stale_owner,
-        evidence,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
         &desired,
         None,
       ),
-      Err(DependencyRegistrationError::PendingOwnerMismatch)
+      Err(DependencyRegistrationError::StoredPlanMismatch)
     );
     assert_eq!(ServiceNodes::<Test>::get(actor_id), Some(node));
     assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
     assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
     assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
+
+    let mut stale_run_record = record.clone();
+    stale_run_record.hot.cycle_state = CycleState::Running;
+    ActorSemanticStates::<Test>::insert(actor_id, ActorSemanticState::Active(stale_run_record));
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
+        &desired,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    ActorSemanticStates::<Test>::insert(actor_id, ActorSemanticState::Active(record.clone()));
+
+    let head = ActorContractHeads::<Test>::get(actor_id).expect("Contract head exists");
+    let mut stale_step_head = head.clone();
+    stale_step_head.first_step = None;
+    ActorContractHeads::<Test>::insert(actor_id, stale_step_head);
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
+        &desired,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    ActorContractHeads::<Test>::insert(actor_id, head.clone());
+
+    let mut stale_resources_head = head.clone();
+    stale_resources_head.first_step_resources = None;
+    ActorContractHeads::<Test>::insert(actor_id, stale_resources_head);
+    assert_eq!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        ServiceResidenceKind::Live,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
+        &desired,
+        None,
+      ),
+      Err(DependencyRegistrationError::StoredPlanMismatch)
+    );
+    ActorContractHeads::<Test>::insert(actor_id, head);
+    assert_eq!(ServiceNodes::<Test>::get(actor_id), Some(node));
+    assert!(!PendingCheckOwners::<Test>::contains_key(actor_id));
+    assert!(DependencyPlans::<Test>::get(actor_id).is_empty());
 
     DependencyRevisions::<Test>::insert(
       source,
@@ -667,8 +719,9 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       Actors::transfer_service_member_to_park(
         actor,
         ServiceResidenceKind::Live,
-        owner,
-        evidence,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
         &desired,
         None,
       ),
@@ -684,8 +737,9 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       Actors::transfer_service_member_to_park(
         actor,
         ServiceResidenceKind::Live,
-        owner,
-        evidence,
+        owner.plan_revision,
+        evidence.reason,
+        evidence.review_at,
         &desired,
         None,
       ),
