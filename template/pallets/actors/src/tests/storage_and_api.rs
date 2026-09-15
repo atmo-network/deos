@@ -989,6 +989,51 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
     );
   }
 
+  // Initial semantic publication has one shared owner. Create and activate supply scalar identity,
+  // freshly initialized hot state, and complete contract geometry to insert_active_actor; that
+  // owner derives admission and the zero-Step/Step-0 resource envelope before publishing the
+  // Unsignaled cell. The future cutover therefore needs no caller-specific record constructor.
+  for dependency in [
+    "Self::build_admission_certificate(&contract)",
+    "Self::derive_step_resource_envelopes(&contract)",
+    "T::WeightInfo::scheduler_inner_zero_step_complete()",
+    "Self::insert_unsignaled_control_authority(actor_id, identity, hot, admission, resources,)",
+    "Self::store_actor_contract(actor_id, contract)",
+  ] {
+    assert!(
+      lib.contains("fn insert_active_actor(") && lib.contains(dependency),
+      "initial semantic construction input drift: {dependency}"
+    );
+  }
+  for caller in ["do_create_actor", "do_activate_actor"] {
+    let marker = format!("    fn {caller}(");
+    let start = lib
+      .find(&marker)
+      .unwrap_or_else(|| panic!("initial publication caller disappeared: {caller}"));
+    let body = &lib[start..];
+    let end = body[marker.len()..]
+      .find("\n    fn ")
+      .map_or(body.len(), |offset| marker.len() + offset);
+    assert!(
+      body[..end].contains("Self::insert_active_actor("),
+      "supported initial publication must retain the shared constructor: {caller}"
+    );
+  }
+
+  // Every projected field has one post-cutover source: semantic record for identity/hot/admission,
+  // run state for cursor/eligibility, and contract geometry for current-Step resources. Placement
+  // may retain only residence and reverse-handle evidence after this complete loader conversion.
+  for dependency in [
+    "ActorRunStateStore::<T>::get(actor_id)",
+    "Self::load_current_step_from_geometry(",
+    "ActorContractHeads::<T>::get(actor_id)?",
+  ] {
+    assert!(
+      lib.contains("fn load_actor_service_state_with_head(") && lib.contains(dependency),
+      "semantic execution projection input drift: {dependency}"
+    );
+  }
+
   // These production owners still rewrite semantic fields inside the legacy placement cell after
   // publication. Cutover must convert this complete writer closure atomically or it creates dual
   // semantic truth.
