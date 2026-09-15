@@ -2715,6 +2715,14 @@ fn age_fixture_control_clock(actor_id: ActorId) {
       });
     }
   }
+  pallet_deos_actors::ActorSemanticStates::<Runtime>::mutate(actor_id, |maybe| {
+    let Some(pallet_deos_actors::ActorSemanticState::Active(record)) = maybe else {
+      panic!("fixture active Actor semantic state exists");
+    };
+    record.identity.last_control_mutation_block = aged_at;
+  });
+  Actors::active_actor_state(actor_id)
+    .expect("fixture control-clock aging preserves semantic/physical identity equality");
 }
 
 fn actor_account(actor_id: ActorId) -> crate::AccountId {

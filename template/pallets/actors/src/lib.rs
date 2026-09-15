@@ -7714,7 +7714,7 @@ pub mod pallet {
             actor_id,
             ActorSemanticMutation::Publish(ActorSemanticState::Dormant(
               DormantActorSemanticRecord {
-                identity,
+                identity: identity.clone(),
                 generation: 0,
               },
             )),
@@ -7722,6 +7722,7 @@ pub mod pallet {
           .is_ok(),
           "duplicate genesis dormant semantic state: {actor_id}"
         );
+        ActorIdentities::<T>::insert(actor_id, identity);
         ActorIdentityCount::<T>::put(
           identity_count
             .checked_add(1)
