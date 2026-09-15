@@ -7771,10 +7771,19 @@ pub mod pallet {
     OptionQuery,
   >;
 
-  /// Inert generation-bound reverse handles for exact deadline removal.
+  /// Inert generation-bound reverse handles for exact process or Park deadline removal.
+  ///
+  /// Trigger deadlines use their own reverse owner because one Actor may simultaneously own a
+  /// process residence and an independent temporal Trigger membership.
   #[pallet::storage]
   #[pallet::getter(fn deadline_handles)]
   pub type DeadlineHandles<T: Config> =
+    StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
+
+  /// Inert generation-bound reverse handles for exact temporal Trigger deadline removal.
+  #[pallet::storage]
+  #[pallet::getter(fn trigger_deadline_handles)]
+  pub type TriggerDeadlineHandles<T: Config> =
     StorageMap<_, Blake2_128Concat, ActorId, DeadlineHandleOf<T>, OptionQuery>;
 
   /// Inert C32 pages of the clock-local min-heaps over nonempty canonical deadline buckets.

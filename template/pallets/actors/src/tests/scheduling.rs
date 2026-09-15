@@ -1092,6 +1092,18 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
       before,
       "typed process and destination planning must remain storage-free"
     );
+
+    crate::DeadlineHandles::<Test>::insert(actor_id, process_deadline);
+    crate::TriggerDeadlineHandles::<Test>::insert(actor_id, trigger_deadline);
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id),
+      Some(process_deadline)
+    );
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id),
+      Some(trigger_deadline),
+      "independent reverse owners must preserve both simultaneous memberships"
+    );
   });
 }
 

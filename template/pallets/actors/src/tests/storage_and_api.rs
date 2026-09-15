@@ -9459,6 +9459,7 @@ fn actor_storage_schema_is_explicit() {
       ("DeadlineHeaders", true, true),
       ("DeadlinePages", true, true),
       ("DeadlineHandles", true, true),
+      ("TriggerDeadlineHandles", true, true),
       ("DeadlineIndexPages", true, true),
       ("DeadlineIndexPositions", true, true),
       ("DeadlineIndexLen", false, true),
