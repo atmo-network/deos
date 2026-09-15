@@ -5099,7 +5099,76 @@ pub mod pallet {
       Self::load_frame_control_authority(actor_id).map(|(_, identity, hot, _)| (identity, hot))
     }
 
-    /// In-place mutation requires a live primary; moving transitions publish a supplied successor.
+    /// Loads one active semantic owner only when its generation and canonical Service residence
+    /// agree and no legacy control authority remains.
+    #[allow(
+      dead_code,
+      reason = "canonical service consumer remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn load_service_actor_semantic_state(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+    ) -> Result<ActorSemanticRecordOf<T>, ActorSemanticLoadError> {
+      if ActorControlLocators::<T>::contains_key(actor.actor_id)
+        || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+      {
+        return Err(ActorSemanticLoadError::Corrupt);
+      }
+      let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor.actor_id)
+      else {
+        return Err(ActorSemanticLoadError::Corrupt);
+      };
+      let process = ActorProcesses::<T>::get(actor.actor_id)
+        .filter(|process| {
+          process.generation == actor.generation
+            && process.status == ProcessStatus::Serving
+            && process.residence == Some(ProcessResidence::Service(kind))
+        })
+        .ok_or(ActorSemanticLoadError::Corrupt)?;
+      let node = ServiceNodes::<T>::get(actor.actor_id)
+        .filter(|node| node.generation == actor.generation && node.kind == kind)
+        .ok_or(ActorSemanticLoadError::Corrupt)?;
+      if record.generation != actor.generation
+        || process.generation != record.generation
+        || node.generation != record.generation
+      {
+        return Err(ActorSemanticLoadError::Corrupt);
+      }
+      Ok(record)
+    }
+
+    /// Stores Hot directly through the canonical semantic owner. Canonical service mutation never
+    /// recreates or updates a legacy control cell and fails closed on stale residence authority.
+    #[allow(
+      dead_code,
+      reason = "canonical service consumer remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn try_store_service_control_hot(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      hot: ActorHotStateOf<T>,
+    ) -> Result<(), crate::scheduler::EnqueueOutcome> {
+      let current = Self::load_service_actor_semantic_state(actor, kind)
+        .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+      let mut replacement = current.clone();
+      replacement.hot = hot;
+      Self::mutate_actor_semantic_state(
+        actor.actor_id,
+        ActorSemanticMutation::Replace {
+          expected: ActorSemanticState::Active(current),
+          replacement: ActorSemanticState::Active(replacement.clone()),
+        },
+      )
+      .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+      matches!(
+        Self::load_service_actor_semantic_state(actor, kind),
+        Ok(stored) if stored == replacement
+      )
+      .then_some(())
+      .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+    }
+
+    /// In-place legacy mutation requires a live primary; moving transitions publish a supplied successor.
     pub(crate) fn try_store_control_hot_with_authority(
       actor_id: ActorId,
       hot: ActorHotStateOf<T>,

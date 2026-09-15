@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
-  ActorRef, ActorSemanticExecutionProjection, ActorSemanticMutation, ActorSemanticMutationError,
-  ActorSemanticProjectionError, ActorSemanticRecord, ActorSemanticState, ActorStepResourceEnvelope,
+  ActorRef, ActorSemanticExecutionProjection, ActorSemanticLoadError, ActorSemanticMutation,
+  ActorSemanticMutationError, ActorSemanticProjectionError, ActorSemanticRecord,
+  ActorSemanticState, ActorSemanticStates, ActorStepResourceEnvelope, ActorUnsignaledControlCells,
   ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
   DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
@@ -563,6 +564,79 @@ fn service_publication_atomically_owns_process_and_ring_insertion() {
     );
     assert!(!ActorProcesses::<Test>::contains_key(rejected.actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(rejected.actor_id));
+  });
+}
+
+#[test]
+fn canonical_service_semantics_load_and_mutate_without_legacy_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    assert_eq!(
+      Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live),
+      Ok(record.clone())
+    );
+
+    let mut replacement = record.hot.clone();
+    replacement.unsuccessful_attempt_streak = 7;
+    assert_eq!(
+      Actors::try_store_service_control_hot(
+        actor,
+        ServiceResidenceKind::Live,
+        replacement.clone(),
+      ),
+      Ok(())
+    );
+    assert_eq!(Actors::load_control_hot(actor_id), Some(replacement));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn canonical_service_semantics_reject_stale_generation_and_residence_without_mutation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+
+    let mut rejected = record.hot.clone();
+    rejected.unsuccessful_attempt_streak = 9;
+    let stale = actor_ref(actor_id, actor.generation + 1);
+    for (reference, kind) in [
+      (stale, ServiceResidenceKind::Live),
+      (actor, ServiceResidenceKind::Pending),
+    ] {
+      assert_eq!(
+        Actors::load_service_actor_semantic_state(reference, kind),
+        Err(ActorSemanticLoadError::Corrupt)
+      );
+      assert_eq!(
+        Actors::try_store_service_control_hot(reference, kind, rejected.clone()),
+        Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
+      );
+      assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
+    }
   });
 }
 
