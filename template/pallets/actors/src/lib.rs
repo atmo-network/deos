@@ -5724,10 +5724,36 @@ pub mod pallet {
       })
     }
 
+    /// Classifies one member from the shared earliest due block bucket without mutation.
+    pub(crate) fn classify_next_due_block_deadline(
+      now: BlockNumberFor<T>,
+    ) -> Result<DueBlockDeadlineBranch, DeadlineMutationError> {
+      let key = Self::deadline_index_get(WakeupClock::Block, 0)
+        .ok_or(DeadlineMutationError::MemberMissing)?;
+      if !matches!(key, WakeupKey::Block(block) if block <= now) {
+        return Err(DeadlineMutationError::InvalidDestination);
+      }
+      let header = DeadlineHeaders::<T>::get(key).ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let page = DeadlinePages::<T>::get(key, header.first_page)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let actor = page
+        .entries
+        .iter(/* deos-bypass: bounded-iter -- fixed C32 deadline page. */)
+        .find_map(|entry| *entry)
+        .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      let process =
+        ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
+      match process.residence {
+        Some(ProcessResidence::Deadline { .. }) => Ok(DueBlockDeadlineBranch::Retry(actor)),
+        Some(ProcessResidence::Parked(_)) => Ok(DueBlockDeadlineBranch::Review(actor)),
+        _ => Err(DeadlineMutationError::ProcessResidenceMismatch),
+      }
+    }
+
     /// Classifies and processes one member from the shared earliest due block bucket. Sleeping
     /// retries return directly to Service; Parked members alone enter the timed-review worker.
-    /// The conservative review envelope is admitted before classification, so insufficient Weight
-    /// cannot inspect or consume either branch.
+    /// Classification and the selected complete branch each have an independent generated Weight
+    /// owner, so refusal cannot inspect state or consume a member under the wrong branch envelope.
     #[allow(
       dead_code,
       reason = "mixed deadline traversal remains staged behind the mandatory service cutover"
@@ -5738,42 +5764,25 @@ pub mod pallet {
       now: BlockNumberFor<T>,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DueBlockDeadlineMutation, DependencyReviewWorkerError> {
-      let weight = T::WeightInfo::process_due_observation_availability_review();
-      if !meter.can_consume(weight) {
+      let selector_weight = T::WeightInfo::classify_due_block_deadline();
+      if !meter.can_consume(selector_weight) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
-      let key = Self::deadline_index_get(WakeupClock::Block, 0).ok_or(
-        DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
-      )?;
-      if !matches!(key, WakeupKey::Block(block) if block <= now) {
-        return Err(DependencyReviewWorkerError::Deadline(
-          DeadlineMutationError::InvalidDestination,
-        ));
-      }
-      let header = DeadlineHeaders::<T>::get(key).ok_or(DependencyReviewWorkerError::Deadline(
-        DeadlineMutationError::CorruptCarrier,
-      ))?;
-      let page = DeadlinePages::<T>::get(key, header.first_page).ok_or(
-        DependencyReviewWorkerError::Deadline(DeadlineMutationError::CorruptCarrier),
-      )?;
-      let actor = page
-        .entries
-        .iter(/* deos-bypass: bounded-iter -- fixed C32 deadline page. */)
-        .find_map(|entry| *entry)
-        .ok_or(DependencyReviewWorkerError::Deadline(
-          DeadlineMutationError::CorruptCarrier,
-        ))?;
-      let process = ActorProcesses::<T>::get(actor.actor_id).ok_or(
-        DependencyReviewWorkerError::Deadline(DeadlineMutationError::ProcessMissing),
-      )?;
-      match process.residence {
-        Some(ProcessResidence::Deadline { .. }) => {
+      meter.consume(selector_weight);
+      match Self::classify_next_due_block_deadline(now)
+        .map_err(DependencyReviewWorkerError::Deadline)?
+      {
+        DueBlockDeadlineBranch::Retry(actor) => {
+          let branch_weight = T::WeightInfo::return_due_block_deadline_to_service();
+          if !meter.can_consume(branch_weight) {
+            return Err(DependencyReviewWorkerError::InsufficientWeight);
+          }
           Self::return_due_deadline_member_to_service(actor, kind, now)
             .map_err(DependencyReviewWorkerError::Deadline)?;
-          meter.consume(weight);
+          meter.consume(branch_weight);
           Ok(DueBlockDeadlineMutation::RetryReturned(actor))
         }
-        Some(ProcessResidence::Parked(_)) => {
+        DueBlockDeadlineBranch::Review(_) => {
           Self::process_next_due_block_observation_availability_review(
             meter,
             kind,
@@ -5782,9 +5791,6 @@ pub mod pallet {
           )
           .map(|(actor, mutation)| DueBlockDeadlineMutation::ReviewProcessed(actor, mutation))
         }
-        _ => Err(DependencyReviewWorkerError::Deadline(
-          DeadlineMutationError::ProcessResidenceMismatch,
-        )),
       }
     }
 

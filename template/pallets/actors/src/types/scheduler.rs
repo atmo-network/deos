@@ -300,6 +300,13 @@ pub enum DependencyReviewWorkerError {
   Interpretation(DependencyRegistrationError),
 }
 
+/// One resource-classified member from the shared block-deadline frontier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DueBlockDeadlineBranch {
+  Retry(ActorRef),
+  Review(ActorRef),
+}
+
 /// One classified transition from the shared block-deadline frontier.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DueBlockDeadlineMutation {

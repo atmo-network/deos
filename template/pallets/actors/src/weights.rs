@@ -48,6 +48,8 @@ pub trait WeightInfo {
   fn record_observation_fanout_worker_fault() -> Weight;
   fn record_wakeup_worker_fault() -> Weight;
   fn process_due_observation_availability_review() -> Weight;
+  fn classify_due_block_deadline() -> Weight;
+  fn return_due_block_deadline_to_service() -> Weight;
   fn crossing_worker_base() -> Weight { Weight::from_parts(25_000_000, 8_000) }
   fn crossing_work_probe() -> Weight { Weight::from_parts(400_000_000, 20_000) }
   fn crossing_selection_probe() -> Weight { Weight::from_parts(50_000_000, 0) }
@@ -369,6 +371,16 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   fn process_due_observation_availability_review() -> Weight {
     Weight::from_parts(1_500_000_000, 400_000)
       .saturating_add(T::DbWeight::get().reads_writes(24, 20))
+  }
+
+  fn classify_due_block_deadline() -> Weight {
+    Weight::from_parts(100_000_000, 100_000)
+      .saturating_add(T::DbWeight::get().reads(6))
+  }
+
+  fn return_due_block_deadline_to_service() -> Weight {
+    Weight::from_parts(800_000_000, 300_000)
+      .saturating_add(T::DbWeight::get().reads_writes(16, 14))
   }
 
   fn pipeline_admission_apoptosis() -> Weight {
@@ -928,6 +940,8 @@ impl WeightInfo for TestWeightInfo {
   fn record_observation_fanout_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
   fn record_wakeup_worker_fault() -> Weight { Weight::from_parts(16_000_000, 1_529) }
   fn process_due_observation_availability_review() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
+  fn classify_due_block_deadline() -> Weight { Weight::from_parts(100_000_000, 100_000) }
+  fn return_due_block_deadline_to_service() -> Weight { Weight::from_parts(800_000_000, 300_000) }
   fn pipeline_admission_apoptosis() -> Weight { Weight::from_parts(161_616_000, 5_736) }
   fn close_actor() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }

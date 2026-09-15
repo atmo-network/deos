@@ -63,6 +63,44 @@ mod benches {
   const CROSSING_NON_TAIL_BENCHMARK_MAX: u32 = 64;
   const CROSSING_TRIMMED_BENCHMARK_TAIL: u32 = CROSSING_NON_TAIL_BENCHMARK_MAX + 2;
 
+  fn prepare_due_retry_deadline<T: Config>() -> Result<(ActorRef, BlockNumberFor<T>), BenchmarkError>
+  {
+    let now = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let owner: T::AccountId = account("due-retry-deadline", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let destination = Pallet::<T>::plan_deadline_destination(actor, WakeupKey::Block(now))
+      .expect("benchmark deadline destination exists");
+    Pallet::<T>::transfer_service_member_to_deadline(actor, destination)
+      .expect("benchmark Actor enters canonical deadline");
+    Ok((actor, now))
+  }
+
   fn benchmark_service_process<T: Config>(
     actor: ActorRef,
     kind: ServiceResidenceKind,
@@ -2121,6 +2159,35 @@ mod benches {
       DeadlineHandles::<T>::get(actor_id).map(|handle| handle.key),
       Some(WakeupKey::Block(3u32.into()))
     );
+    Ok(())
+  }
+
+  #[benchmark]
+  fn classify_due_block_deadline() -> Result<(), BenchmarkError> {
+    let (actor, now) = prepare_due_retry_deadline::<T>()?;
+
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::classify_next_due_block_deadline(now),
+        Ok(DueBlockDeadlineBranch::Retry(actor))
+      );
+    }
+    assert!(DeadlineHandles::<T>::contains_key(actor.actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
+  fn return_due_block_deadline_to_service() -> Result<(), BenchmarkError> {
+    let (actor, now) = prepare_due_retry_deadline::<T>()?;
+
+    #[block]
+    {
+      Pallet::<T>::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
+        .expect("due retry returns to canonical Service");
+    }
+    assert!(!DeadlineHandles::<T>::contains_key(actor.actor_id));
+    assert!(ServiceNodes::<T>::contains_key(actor.actor_id));
     Ok(())
   }
 

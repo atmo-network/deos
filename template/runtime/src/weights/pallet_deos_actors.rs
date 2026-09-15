@@ -1064,6 +1064,42 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(T::DbWeight::get().reads(28))
 			.saturating_add(T::DbWeight::get().writes(18))
 	}
+	/// Storage: `Actors::DeadlineIndexPages` (r:1 w:0)
+	/// Storage: `Actors::DeadlineHeaders` (r:1 w:0)
+	/// Storage: `Actors::DeadlinePages` (r:1 w:0)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:0)
+	fn classify_due_block_deadline() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `835`
+		//  Estimated: `4078`
+		// Minimum execution time: 23_118_000 picoseconds.
+		Weight::from_parts(25_353_000, 0)
+			.saturating_add(Weight::from_parts(0, 4078))
+			.saturating_add(T::DbWeight::get().reads(4))
+	}
+	/// Storage: `Actors::DeadlineHandles` (r:1 w:1)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:1)
+	/// Storage: `Actors::ActorControlLocators` (r:1 w:0)
+	/// Storage: `Actors::ActorUnsignaledControlCells` (r:1 w:0)
+	/// Storage: `Actors::DeadlineHeaders` (r:1 w:1)
+	/// Storage: `Actors::DeadlinePages` (r:1 w:1)
+	/// Storage: `Actors::ActorWaitingOccupancies` (r:1 w:0)
+	/// Storage: `Actors::ActorWaitingCursorIndices` (r:1 w:0)
+	/// Storage: `Actors::DeadlineIndexPositions` (r:1 w:1)
+	/// Storage: `Actors::DeadlineIndexLen` (r:1 w:1)
+	/// Storage: `Actors::DeadlineIndexPages` (r:1 w:1)
+	/// Storage: `Actors::ServiceNodes` (r:1 w:1)
+	/// Storage: `Actors::ServiceHeader` (r:1 w:1)
+	fn return_due_block_deadline_to_service() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1330`
+		//  Estimated: `4078`
+		// Minimum execution time: 86_186_000 picoseconds.
+		Weight::from_parts(89_678_000, 0)
+			.saturating_add(Weight::from_parts(0, 4078))
+			.saturating_add(T::DbWeight::get().reads(13))
+			.saturating_add(T::DbWeight::get().writes(9))
+	}
 	/// Storage: `Actors::CrossingWorkerFaultState` (r:1 w:1)
 	/// Proof: `Actors::CrossingWorkerFaultState` (`max_values`: Some(1), `max_size`: Some(44), added: 539, mode: `MaxEncodedLen`)
 	fn clear_crossing_worker_fault() -> Weight {

@@ -1360,7 +1360,26 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
       Some(Some(ProcessResidence::Parked(evidence)))
     );
 
-    let weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
+    let review_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let mut branch_refused =
+      WeightMeter::with_limit(selector_weight.saturating_add(retry_weight));
+    assert_eq!(
+      Actors::process_next_due_block_deadline(
+        &mut branch_refused,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(DeadlineHandles::<Test>::get(actor_id), Some(first_handle));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
+      Some(Some(ProcessResidence::Parked(evidence)))
+    );
+    let weight = selector_weight.saturating_add(review_weight);
     let mut admitted = WeightMeter::with_limit(weight);
     assert!(matches!(
       Actors::process_next_due_block_deadline(
@@ -1972,7 +1991,9 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
     ));
 
     frame_system::Pallet::<Test>::set_block_number(retry_at);
-    let deadline_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
+    let selector_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::classify_due_block_deadline();
+    let retry_weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::return_due_block_deadline_to_service();
+    let deadline_weight = selector_weight.saturating_add(retry_weight);
     let mut no_weight = WeightMeter::with_limit(Weight::zero());
     assert_eq!(
       Actors::process_next_due_block_deadline(
@@ -1984,6 +2005,18 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
       Err(DependencyReviewWorkerError::InsufficientWeight)
     );
     assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    let mut branch_refused = WeightMeter::with_limit(selector_weight);
+    assert_eq!(
+      Actors::process_next_due_block_deadline(
+        &mut branch_refused,
+        ServiceResidenceKind::Live,
+        retry_at,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
     let mut admitted = WeightMeter::with_limit(deadline_weight);
     assert_eq!(
       Actors::process_next_due_block_deadline(
