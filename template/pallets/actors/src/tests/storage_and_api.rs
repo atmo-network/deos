@@ -898,9 +898,45 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
     "Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)"
   ));
 
-  // A separate semantic owner cannot be introduced only at create/activate: these production
-  // owners still rewrite semantic fields inside the legacy placement cell after publication.
-  // Cutover must convert this complete writer closure atomically or it creates dual semantic truth.
+  // A separate semantic owner cannot be introduced only at create/activate: the active-state,
+  // service-state and observation paths all enter through the placement-backed projection. The
+  // initial scheduler also reloads that projection after every temporal placement transition.
+  for (source, owner, dependency) in [
+    (
+      lib,
+      "load_frame_control_authority",
+      "Self::project_control_cell(&cell, location)?",
+    ),
+    (
+      lib,
+      "load_frame_actor_state",
+      "Self::load_frame_control_authority(actor_id)",
+    ),
+    (
+      lib,
+      "load_actor_service_state_with_authority",
+      "Self::load_control_authority_with_authority(actor_id)?",
+    ),
+    (
+      lib,
+      "load_observation_activation_state_with_authority",
+      "Self::load_primary_control_cell(actor_id)",
+    ),
+    (
+      scheduler,
+      "prime_initial_actor_schedule",
+      "Self::load_frame_actor_service_state(actor_id)",
+    ),
+  ] {
+    assert!(
+      source.contains(&format!("fn {owner}(")) && source.contains(dependency),
+      "semantic-owner cutover loader inventory drift for {owner}: {dependency}"
+    );
+  }
+
+  // These production owners still rewrite semantic fields inside the legacy placement cell after
+  // publication. Cutover must convert this complete writer closure atomically or it creates dual
+  // semantic truth.
   for (source, owner, mutation) in [
     (
       lib,
@@ -958,6 +994,33 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
       "semantic-owner cutover inventory drift for {owner}: {mutation}"
     );
   }
+  // Both supported initial publication callers already provide the required outer rollback
+  // boundary. The blocker is therefore the complete loader/writer conversion and composed weight,
+  // not a missing transaction around create or activate.
+  for (owner, transaction) in [
+    (
+      "do_create_actor",
+      "polkadot_sdk::frame_support::storage::with_transaction(||",
+    ),
+    (
+      "do_activate_actor",
+      "polkadot_sdk::frame_support::storage::with_transaction(||",
+    ),
+  ] {
+    let marker = format!("    fn {owner}(");
+    let start = lib
+      .find(&marker)
+      .unwrap_or_else(|| panic!("initial publication owner disappeared: {owner}"));
+    let body = &lib[start..];
+    let end = body[marker.len()..]
+      .find("\n    fn ")
+      .map_or(body.len(), |offset| marker.len() + offset);
+    assert!(
+      body[..end].contains(transaction),
+      "initial canonical publication needs an outer rollback boundary in {owner}"
+    );
+  }
+
   for source in [lib, scheduler, execution] {
     assert_eq!(
       source.matches("Self::publish_service_member(").count(),
