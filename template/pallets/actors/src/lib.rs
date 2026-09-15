@@ -6027,6 +6027,27 @@ pub mod pallet {
                 resources,
               )
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              let retry_deadline =
+                if let StepErrorPolicy::RetryLater { max_attempts } = loaded_step.step.on_error {
+                  let attempted = state.run_state.as_ref().map_or(1, |run| {
+                    run.unsuccessful_attempts_at_cursor.saturating_add(1)
+                  });
+                  if attempted < max_attempts {
+                    let eligible_at = Self::suspension_eligible_at(
+                      state.contract.cooldown_blocks,
+                      state.contract.window,
+                      now,
+                      attempted,
+                    )
+                    .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+                    (now.checked_add(&One::one()) != Some(eligible_at))
+                      .then_some(WakeupKey::Block(eligible_at))
+                  } else {
+                    None
+                  }
+                } else {
+                  None
+                };
               let plan = Self::build_current_step_plan(
                 actor.actor_id,
                 state.identity.clone(),
@@ -6060,13 +6081,14 @@ pub mod pallet {
                 } else {
                   None
                 };
-              let evidence = Self::execute_completed_effectful_step_on_service(
+              let evidence = Self::execute_effectful_step_on_service_with_deadline(
                 actor,
                 ServiceResidenceKind::Live,
                 state,
                 plan,
                 &admission,
                 now,
+                retry_deadline,
               )
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
               let actual_control = selector_envelope

@@ -1817,20 +1817,25 @@ impl<T: Config> Pallet<T> {
           next_residence,
           eligible_at,
         } = transition;
-        let control_outcome = match (disposition, eligible_at, deadline) {
-          (AttemptDisposition::Completed, None, None) => StepControlOutcome::Completed,
+        let later_retry_destination = match (disposition, eligible_at, deadline) {
+          (AttemptDisposition::Completed, None, _) => None,
           (AttemptDisposition::Suspended, Some(eligible_at), None)
             if now.checked_add(&One::one()) == Some(eligible_at) =>
           {
-            StepControlOutcome::Suspended
+            None
           }
           (AttemptDisposition::Suspended, Some(eligible_at), Some(destination))
             if destination.actor == actor
               && destination.key == WakeupKey::Block(eligible_at)
               && now.checked_add(&One::one()) != Some(eligible_at) =>
           {
-            StepControlOutcome::Suspended
+            Some(destination)
           }
+          _ => return Err(AttemptTransactionError::Invariant),
+        };
+        let control_outcome = match disposition {
+          AttemptDisposition::Completed => StepControlOutcome::Completed,
+          AttemptDisposition::Suspended => StepControlOutcome::Suspended,
           _ => return Err(AttemptTransactionError::Invariant),
         };
         let actual_effect_weight =
@@ -1841,7 +1846,7 @@ impl<T: Config> Pallet<T> {
           NextResidence::Publish { state, .. } => {
             Self::try_store_service_control_state(actor, kind, state.identity, state.hot)
               .map_err(|_| AttemptTransactionError::Invariant)?;
-            if let Some(destination) = deadline {
+            if let Some(destination) = later_retry_destination {
               Self::transfer_service_member_to_deadline(actor, destination)
                 .map_err(|_| AttemptTransactionError::Invariant)?;
               StepControlPlacement::Wakeup

@@ -7,31 +7,31 @@ use crate::{
   ActorSemanticMutationError, ActorSemanticProjectionError, ActorSemanticRecord,
   ActorSemanticState, ActorSemanticStates, ActorStepResourceEnvelope, ActorUnsignaledControlCells,
   ActorWaitingOccupancies, CloseReason, CompletionPolicy, DeadlineHandle, DeadlineHandles,
-  DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages,
-  DeadlineIndexPositions, DeadlineMutationError, DeadlinePages, DependencyDueReviewError,
-  DependencyDueReviewMutation, DependencyPlanMutation, DependencyPlanSource, DependencyPlans,
-  DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
-  DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
-  DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
-  DependencyRegistrationPositions, DependencyRegistrations, DependencyReviewMutation,
-  DependencyReviewWorkerError, DependencyRevisionError, DependencyRevisionMutation,
-  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
-  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
-  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
-  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
-  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
-  DueBlockDeadlineMutation, DueTickDeadlineMutation, LegacyProcessPlacement,
-  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
-  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
-  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState,
-  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError,
-  ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter,
-  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
-  plan_legacy_process_transition, project_actor_semantic_execution,
+  DeadlineHeader, DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError,
+  DeadlineIndexPages, DeadlineIndexPositions, DeadlineMutationError, DeadlinePages,
+  DependencyDueReviewError, DependencyDueReviewMutation, DependencyPlanMutation,
+  DependencyPlanSource, DependencyPlans, DependencyPublicationError, DependencyPublicationMutation,
+  DependencyRegistrationError, DependencyRegistrationFreePositions, DependencyRegistrationHandle,
+  DependencyRegistrationHeaders, DependencyRegistrationMutation, DependencyRegistrationPages,
+  DependencyRegistrationPosition, DependencyRegistrationPositions, DependencyRegistrations,
+  DependencyReviewMutation, DependencyReviewWorkerError, DependencyRevisionError,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
+  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
+  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
+  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
+  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
+  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
+  DormantActorSemanticRecord, DueBlockDeadlineMutation, DueTickDeadlineMutation,
+  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
+  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
+  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -6125,6 +6125,117 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
         .last_attempted,
       Some(5)
     );
+  });
+}
+
+#[test]
+fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let actor_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 3,
+      },
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let resources = Actors::load_current_step_service_state(actor_id)
+      .unwrap()
+      .2
+      .resources;
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let before_header = ServiceHeader::<Test>::get();
+    let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    let retry_key = WakeupKey::Block(5);
+    DeadlineHeaders::<Test>::insert(
+      retry_key,
+      DeadlineHeader {
+        first_page: 0,
+        last_page: 0,
+        next_page: 1,
+        page_count: 1,
+        count: 1,
+      },
+    );
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+      <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+    );
+    let complete = selector
+      .saturating_add(resources.control)
+      .saturating_add(resources.effect)
+      .saturating_add(suffix);
+    let budget = <Test as crate::Config>::BlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(2);
+    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.open_external_phase());
+    assert_ok!(resource_state.begin_drain());
+    let resource_before = resource_state;
+    let mut meter = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut meter,
+        2,
+        &mut resource_state,
+        budget.limits(),
+      ),
+      Err(ServiceRoundError::ProcessResidenceMismatch)
+    );
+    assert_eq!(meter.consumed(), Weight::zero());
+    assert_eq!(resource_state, resource_before);
+    assert_eq!(ServiceHeader::<Test>::get(), before_header);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+
+    DeadlineHeaders::<Test>::remove(retry_key);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut meter,
+        2,
+        &mut resource_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert!(meter.consumed().all_lte(complete));
+    assert_ne!(resource_state.usage(), resource_before.usage());
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(retry_key)
+    );
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+      Some(ProcessResidence::Deadline { key, .. }) if key == retry_key
+    ));
+    let run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run remains canonical");
+    assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(run.eligible_at, 5);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
   });
 }
 
