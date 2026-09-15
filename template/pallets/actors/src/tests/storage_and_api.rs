@@ -5961,41 +5961,55 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
 }
 
 #[test]
-fn mandatory_service_frontier_pre_admits_and_captures_without_consuming_the_head() {
+fn mandatory_service_frontier_pre_admits_and_executes_one_zero_step_head() {
   new_test_ext().execute_with(|| {
-    let actor = actor_ref(123, 1);
-    ActorProcesses::<Test>::insert(
-      actor.actor_id,
-      serving_process(actor, ServiceResidenceKind::Live),
-    );
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::insert_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    let before = ServiceHeader::<Test>::get();
-    let mut refused = WeightMeter::with_limit(Weight::zero());
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, Default::default());
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    let before_header = ServiceHeader::<Test>::get();
+    let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let zero_step = <Test as crate::Config>::WeightInfo::scheduler_inner_zero_step_complete()
+      .saturating_add(
+        <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+          <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+            .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+            .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+        ),
+      );
+    let complete = selector.saturating_add(zero_step);
+    let mut refused = WeightMeter::with_limit(complete.saturating_sub(Weight::from_parts(1, 0)));
     assert_eq!(
-      Actors::capture_service_round_head(&mut refused, 5),
+      Actors::service_canonical_round_head(&mut refused, 5),
       Err(ServiceRoundError::InsufficientWeight)
     );
     assert_eq!(refused.consumed(), Weight::zero());
-    assert_eq!(ServiceHeader::<Test>::get(), before);
+    assert_eq!(ServiceHeader::<Test>::get(), before_header);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
 
-    let envelope = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
-      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
-    let mut admitted = WeightMeter::with_limit(envelope);
+    let mut admitted = WeightMeter::with_limit(complete);
     assert_eq!(
-      Actors::capture_service_round_head(&mut admitted, 5),
+      Actors::service_canonical_round_head(&mut admitted, 5),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
-    assert_eq!(admitted.consumed(), envelope);
-    assert_eq!(ServiceHeader::<Test>::get().round_block, Some(5));
-    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(actor));
+    assert_eq!(admitted.consumed(), complete);
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+      .expect("retained zero-Step Actor remains canonical");
+    assert_eq!(stored.identity.cycle_nonce, 1);
+    assert_eq!(stored.hot.last_cycle_block, Some(5));
     assert_eq!(
-      ActorProcesses::<Test>::get(actor.actor_id)
+      ActorProcesses::<Test>::get(actor_id)
         .unwrap()
         .last_attempted,
-      None
+      Some(5)
     );
   });
 }

@@ -5931,34 +5931,72 @@ pub mod pallet {
       Ok(DueDeadlineServicePass { block, tick })
     }
 
-    /// Opens the canonical Service round and captures its current head under one pre-admitted
-    /// selector envelope. The round mutation and probe commit together; under-weight or invariant
-    /// refusal leaves the prior frontier untouched. The selected member is not advanced here:
-    /// only its complete service transaction may consume the encounter.
-    pub(crate) fn capture_service_round_head(
+    /// Opens one canonical Service round and executes an eligible zero-Step head under one
+    /// pre-admitted selector/execution envelope. Effectful heads remain captured for the later
+    /// complete effect budget; they are not marked attempted or advanced. Weight, state, or
+    /// invariant refusal leaves the prior round, member, process, and cursor untouched.
+    pub(crate) fn service_canonical_round_head(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
-      let envelope = T::WeightInfo::service_round_begin_populated()
+      let selector_envelope = T::WeightInfo::service_round_begin_populated()
         .saturating_add(T::WeightInfo::service_round_probe_eligible());
-      if !meter.can_consume(envelope) {
+      let zero_step_envelope = T::WeightInfo::scheduler_inner_zero_step_complete().saturating_add(
+        T::WeightInfo::service_round_admit_eligible().max(
+          T::WeightInfo::service_member_retire_interior()
+            .max(T::WeightInfo::service_member_retire_pair_cursor())
+            .max(T::WeightInfo::service_member_retire_singleton()),
+        ),
+      );
+      let complete_envelope = selector_envelope.saturating_add(zero_step_envelope);
+      if !meter.can_consume(complete_envelope) {
         return Err(ServiceRoundError::InsufficientWeight);
       }
-      let encounter = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-        let result = (|| {
-          Self::begin_service_round(now)?;
-          Self::consider_service_head(now)
-        })();
-        match result {
-          Ok(encounter) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(encounter))
+      let (encounter, executed_zero_step) =
+        polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          let result = (|| {
+            Self::begin_service_round(now)?;
+            let encounter = Self::consider_service_head(now)?;
+            let mut executed_zero_step = false;
+            if let ServiceRoundEncounter::Eligible(actor) = encounter {
+              let semantic =
+                Self::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+                  .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+                actor.actor_id,
+                semantic.identity,
+                semantic.hot,
+                semantic.admission,
+              )
+              .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+              if loaded_step.is_none() {
+                Self::execute_zero_step_on_service(
+                  actor,
+                  ServiceResidenceKind::Live,
+                  state,
+                  &admission,
+                  now,
+                  None,
+                )
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+                executed_zero_step = true;
+              }
+            }
+            Ok((encounter, executed_zero_step))
+          })();
+          match result {
+            Ok(outcome) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
+            }
+            Err(error) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+            }
           }
-          Err(error) => {
-            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-          }
-        }
-      })?;
-      meter.consume(envelope);
+        })?;
+      meter.consume(selector_envelope);
+      if executed_zero_step {
+        meter.consume(zero_step_envelope);
+      }
       Ok(encounter)
     }
 
@@ -8661,7 +8699,7 @@ pub mod pallet {
       let service_frontier_weight = {
         let mut meter =
           WeightMeter::with_limit(control_available.saturating_sub(before_service_frontier));
-        let _ = Self::capture_service_round_head(&mut meter, now);
+        let _ = Self::service_canonical_round_head(&mut meter, now);
         meter.consumed()
       };
       let housekeeping_weight = before_service_frontier.saturating_add(service_frontier_weight);
