@@ -886,6 +886,32 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
 }
 
 #[test]
+fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner() {
+  let lib = include_str!("../lib.rs");
+  let scheduler = include_str!("../scheduler.rs");
+  let execution = include_str!("../execution.rs");
+
+  assert!(lib.contains("Self::insert_unsignaled_control_authority(actor_id, identity, hot"));
+  assert!(lib.contains("ActorIdentities::<T>::remove(actor_id);"));
+  assert!(lib.contains("Self::prime_initial_actor_schedule(actor_id)"));
+  assert!(lib.contains(
+    "Self::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)"
+  ));
+  for source in [lib, scheduler, execution] {
+    assert_eq!(
+      source.matches("Self::publish_service_member(").count(),
+      0,
+      "production must not publish canonical service authority while the legacy control cell is the sole identity/hot/admission owner"
+    );
+    assert_eq!(
+      source.matches("Self::retire_service_member(").count(),
+      0,
+      "production must not retire canonical service authority before publication cuts over"
+    );
+  }
+}
+
+#[test]
 fn process_status_separates_park_from_revocation_and_retirement() {
   let parked: ActorProcess<u32> = ActorProcess {
     generation: 11,
