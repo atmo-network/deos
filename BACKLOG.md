@@ -1,627 +1,511 @@
 # DEOS Backlog
 
-> Open framework work only. Specifications own normative behavior; code and tests own implementation and regressions; generated artifacts own exact resource bindings; Experiment Records own decision evidence. `BACKLOG.md` alone owns release scope and remaining work. Remove completed tasks from the active backlog without deleting their evidence.
+> Open framework work only. Specifications own normative behavior; code and tests own implementation and regressions; generated artifacts own resource bindings; Experiment Records own decision evidence. `BACKLOG.md` owns remaining work, priorities and release gates. Remove completed work from the active list without deleting its evidence. Do not grow a chronological implementation diary inside a task.
 >
-> Pre-`1.0`: no DEOS network launches before `1.0`. The `0.7.x` line is fresh-genesis. Published tags and reviewed history remain immutable. Breaking authoring, storage and API changes must be explicit and tested, never silent reinterpretations of existing Contracts.
+> Pre-`1.0`: no DEOS network launches before `1.0`. The `0.7.x` line is fresh-genesis. Published tags and historical observations remain immutable. Breaking authoring, storage, fee and scheduling changes must be explicit. This plan authorizes continuation of `0.7.27`, not publication, force-push, tag replacement or a second permanent execution engine.
 
-## DEOS 0.7.27 — Current-State Actors, Persistent Live Ring and Certified Parking
+## DEOS 0.7.27 — First Canonical Resident Actor and Parked-Balance Activation
 
-**Planning status:** repository reality is reconciled on branch `0.7.27` through the current local checkpoint above published `v0.7.26`. The current-state specification and independent oracle are active; stable process, service-ring, deadline, round, dependency, Pending and review boundaries exist in mixed implementation states. Oracle dependency publication is connected to one production caller with generated composed Weight. Lifecycle, service, observation and execution reads now converge on one storage-neutral semantic loader, while its sole production source remains legacy placement and the writer/Weight cutover, canonical Actor service ring, scan worker, V1/V2 execution and legacy-authority removal remain incomplete. `Accepted` Experiment status freezes a decision, not implementation, production reachability, executable tests, generated resources or end-to-end evidence. Report those states separately; helper and commit counts are not progress evidence.
+**Planning basis:** branch `0.7.27`, inspected at commit `6d44e92d75e7334b5763a6684c62e5279c39725f`, tree `7807ddb705ef885d9ee02d2c83714a412fb9e1f1`, plus the task owner's subsequent parked-balance clarification. The published historical baseline is `v0.7.26` at `c16675edf03e3af0d6dcf3080a31c64b49765a5b`. Reconcile a newer local/remote tree at intake; do not overwrite intervening work. [R1–R3]
 
-**Immediate cutover blockers:**
+**Replacement scope:** replace the active `0.7.27` backlog with this continuation plan. Retain existing N0–N7 identities and their applicable evidence; add only **N3.9 — Parked-Balance Mode Selection and Delivery**. An unchecked item below names remaining, changed or integration work, not a request to repeat its already proved subclaims. No historical experiment is renumbered or bulk-invalidated.
 
-| Entry/path | Missing prerequisite | Owner/test | Resource binding | Exact connection condition |
-| --- | --- | --- | --- | --- |
-| Canonical service V1 | Publish identity, hot state and admission outside legacy placement: one storage-neutral loader now classifies Dormant/Active and derives active execution from Run plus Contract geometry, but create/activate still publish the sole active semantic owner inside an Unsignaled control cell and remove scalar `ActorIdentities`; deleting placement before writer conversion would therefore delete authority | N2.4, N3.5–N3.6, N5.1; the source-backed cutover blocker regression binds lifecycle, service, observation and execution callers to the neutral loader, forbids production publication/retirement calls while legacy ownership remains, and guards active non-Live create, dormant create, activation, deactivation, terminal removal and zero-Step distinction | Generated composed extrema cover atomic process publication plus empty/populated insertion and singleton/pair-cursor/interior retirement; lifecycle branches are explicitly mapped, but semantic Publish/Replace/Remove and conditional initial Live composition remain ungenerated while current Step/retry and completion are unbound | One supported profile transactionally publishes the non-placement semantic owner, removes its legacy cell/locator, then publishes `ActorProcesses` plus `ServiceNodes`; every writer and Weight converts in the same transaction with no dual-authority intermediate |
-| Oracle Park V2 | Weighted source scan probe/member/completion/fault, source-cursor service, Pending delivery/consumption and Live return | N3.3–N3.8; lost-wakeup and occupied-destination fixtures | Generated publication already applies; scan, Pending, negative-check and transfer owners remain absent | Fixed-target scan advances only after durable Pending/stale proof and completion removes or retains exact source membership atomically |
-| Timed-review V2 | Canonical due extraction, Pending check and return using the retained deadline carrier | N3.3, N3.5, N3.8; generic balance review fixture | Generated deadline probe/extract/move, check and refusal owners | Generic balance remains timed-review and one authority survives every full/refused destination |
-| Production hard cut | Complete supported caller conversion and compile-time deletion of legacy scheduling authority | N5.1/N5.3; supported-path and absence regressions | Regenerated complete Actors/runtime/consumer bindings | No Actor/profile is simultaneously owned by legacy placement and canonical process/ring state |
+**Primary near-term outcome:** one ordinary User Actor, created and funded through supported public runtime paths, actually executes a multi-Step Contract through the canonical persistent service ring, retains membership across adjacent-round Steps and retry, reads fresh balances, preserves committed effects, and uses no legacy placement authority.
 
-**Release outcome:** deliver autonomous current-state Actors with multi-block programs, live sovereign-balance amounts and bounded retry/error policies. Keep useful near-term continuations resident in a live scheduling ring instead of removing and republishing a successor after every Step. Keep other nonterminal Actors outside ordinary service only under an explicit wake or timed-review contract. Implement generation-safe asynchronous reclamation and sound physical/resource coverage, and demonstrate a materially useful end-to-end result without hiding negative-check, indexing or cleanup costs.
+**Next outcome:** a recurring Actor captures its final balance, parks, ignores subthreshold changes, and wakes through a bounded runtime-owned path only after a qualifying parked-period change. The default candidate observes net balance movement from the fixed parking baseline with a floor of **at least 100 times the watched asset's existential/minimum balance**. If that trigger cannot meet its correctness, coverage and cost contract, select the explicitly scoped alternative of verified incoming credits to parked Actors, including a source whitelist. Do not substitute generic polling-on-any-spendability-change for the requested trigger.
 
-**The selected direction is a logical service design, not a preselected linked-list implementation.** A compact intrusive carrier, paged carrier or adequate existing representation may realize it. Choose one using the smallest necessary physical comparison. “Ring” must not become an excuse to reintroduce a second executor, unbounded pointer traversal, lost wakeups or an undocumented ordering policy.
+**Release outcome:** finish the supported current-state/ring/wake/lifecycle machine; close every known applicable correctness and resource blocker; remove legacy service authority; bind and measure the actual implementation. A first working Actor is the next decisive milestone, not the whole release.
 
-**Release boundary:** `0.7.27` closes one complete, measured semantic and physical design. A later `0.7.28` campaign may tune its encodings and residual costs. Correctness, actual index representation and production Weight coverage cannot be deferred; exhaustive bitmap/page/fanout/cache sweeps are not required now.
+---
 
-### What changed from the preceding plan
+## 0. Current Reality and Immediate Blockers
 
-The current-state mandate and historical-evidence requalification remain. The service architecture is now explicit:
+### 0.1 Reuse what exists; do not count it as a complete engine
 
-```text
-                bounded dependency notification / timed review
-                                   |
-                                   v
-                         ACTIVATION CHECK
-                        /                \
-         false + safe wait plan          current start condition true
-                    |                              |
-                 PARKED                            v
-                    ^                       PERSISTENT LIVE RING
-                    |                         |              |
-                    +---- no current work ----+              |
-                                             next Step       | known later eligibility
-                                             stays resident  v
-                                                        SLEEP INDEX
-                                                             |
-                                                        due -> live
-
-Owner controls / terminal outcome -> DISABLED or RETIRED
-Retired old generation -> bounded RECLAIMING -> reclaimed state
-Sovereign custody is not moved or deleted by these scheduler transitions.
-```
-
-The preceding conversational sketch is not a completed algorithm. This plan expressly closes its missing proof obligations: a saved ring length alone cannot enforce a block round during membership changes; a singly linked ring cannot remove an arbitrary member in constant work without extra authority or a priced deferred mechanism; and stable residency does not make a Step cost only one header update. These are new design requirements derived from the sketch, not claims that the released code has these defects.
-
-## 1. Semantic and Physical Contract
-
-### 1.1 Agreed requirements
-
-| Surface | Required direction | Boundary |
+| Surface at the inspected checkpoint | Evidence-supported state | Required next connection |
 | --- | --- | --- |
-| Autonomy | Runtime discovers and executes work itself. | No keeper, external intent executor or bot is required for ordinary progress. Existing authoritative data producers keep their own upstream role. |
-| Program | One Actor may run a bounded sequence of Steps in separate blocks. | Keep its economic responsibility together; preserve already committed Steps. A whole-program atomic recipe is not the new default. |
-| Current inputs | Each admitted Attempt reads the required authoritative current state. | Preserve exactly `Fixed` and `Percent` on valid typed Task surfaces, including available shares where appropriate. `Percent(100%)` means all current Available capacity. |
-| Errors and retry | Retain `AbortCycle`, `ContinueNextStep` and bounded `RetryLater`. | Retry is the same current Step/Cycle with fresh dynamic inputs, not a restart of the whole program. Admission deferral is not an executed failure. |
-| Single process | One open Cycle and one logical current service obligation per Actor. | No deferred next-Cycle latch or concurrent future-start machine while a Cycle runs or retries. Multiple physical dependency registrations do not constitute multiple execution obligations. |
-| Current-state activation | A notification is permission to check, not proof that execution is now applicable. | Intermediate external states may be missed and changes may coalesce. Do not retain exact historical Crossing semantics under an unchanged name. |
-| Funding history | Remove `PercentageOfLastFunding` and its Actor-only accumulator. | Independent custody, verified credit, adapter security and source authorization remain. |
-| Live residency | Near-term runnable continuations stay in the ring across Steps and, where valid, Cycle boundaries. | No remove/reinsert or successor rematerialization merely because Q1 advances to the next block. State, cursor, fees, outcomes and guards still change and must be priced. |
-| Parking | Nonterminal idle Actors may leave ordinary service with a complete wake plan or an explicit timed review. | False now does not prove permanent uselessness or authorize deletion. Parking changes service membership, not custody or Contract ownership. |
-| Delayed work | A known future Step/retry/recheck uses a bounded sleep index when retaining it in the ring would cause wasteful visits. | `not_before` remains a lower bound; delays under bounded capacity are visible. Waiting is not a new future Cycle. |
-| Cleanup | Separate loss of execution authority from physical reclamation. | Only authorized/terminal generations are reclaimable. A parked Actor is not garbage; owner mutation and old-generation sweeping must safely coexist. |
-| Essential safety | Determinism, authorization, custody, atomic current-Step effects, committed-prefix durability, bounded work/state and complete two-component Weight. | These are not available as performance sacrifices. |
-| Physical realization | One measured hot/cold layout, loaded-context discipline, ring, wake/recheck index, sleep mechanism and reclamation path. | Concrete encodings are chosen in this release; broader tuning is not. |
+| Current-state specification and independent oracle | Selected semantics and executable model exist; amounts are now `Fixed` / `Percent`. | Apply the parked-balance amendment and resolve the partial-round insertion discrepancy. |
+| Semantic reads | `load_actor_semantic_state` unifies lifecycle/service/observation/execution entry boundaries. Its production source is still legacy placement. | Convert the complete semantic writer and resource closure, not only the reader. |
+| Process and service carrier | Canonical process/ring storage and transaction-local helpers exist; several local carrier owners are generated. | Supported public creation, activation, actual Steps/retries and completion must use them. |
+| Deadline/Park/Pending mechanisms | Bounded types, storage boundaries and local witnesses exist in mixed implementation states. | Complete the paid due/scan/check/transfer consumers and real round-trip paths. |
+| Oracle publication | A production post-state hook publishes dependency revisions and retains source-scan membership. | Drain that work through the real worker or coherently gate the producer; an unconsumed queue is not a delivered wake mechanism. |
+| Lifecycle and cleanup | Decisions and some primitives exist. | Execute revocation, replacement, bounded cleanup and resource release on the chosen canonical owners. |
+| Performance | EXP-0136 freezes W1–W12; standalone carrier measurements exist. | No canonical V1/V2 whole-service speedup has been established at this checkpoint. |
 
-This table records the task owner's direction in the conversation. The normative released specification [S2] remains the historical contract until N0 replaces its affected sections explicitly.
+This assessment consumes repository code and the checkpoint backlog, not independently rerun Rust suites. `Accepted` means the recorded decision was accepted at its stated scope. It does not imply connected callers, successful tests on the current tree, complete Weight coverage or a measured gain. [R2–R8]
 
-### 1.2 Decisions to close in N0, not options to keep forever
+### 0.2 Blocking obligations
 
-| Decision | Working rule / required resolution |
-| --- | --- |
-| Ordering | Adopt persistent cyclic service with FIFO admission to the ring and preserved encounter order. This is not automatically the old global FIFO of per-Step tickets. Write the exact changed promise and counterexample behavior before production integration. No cheap-task, class or fee-based priority is implied. |
-| Q1 and block boundary | Preserve at most one committed Step per Actor per block. Use one shared block-round boundary across all Actor passes. As a proposed conservative default, new/reentered memberships and source activity first observed in block B cannot receive service before B+1. Validate this against reference configurations; any different timing rule needs an explicit decision. |
-| Live-head resource refusal | A runnable eligible head whose complete transition does not fit keeps priority for the next permissible pass/block; do not rotate it away to execute cheaper followers. A certified waiting/removal transition may detach a non-runnable head under the new specified ordering contract. |
-| Recurrence | Name supported one-shot, level-sensitive repeated and coalesced-change-driven start modes. Persistent truth must not produce unbounded same-block starts. A busy Actor acquires no separate future-start obligation. |
-| Short versus long wait | Prefer retaining a continuation due by the next permitted round. Put known longer waits into the sleep index. Fix the deterministic threshold and handling of unexpected future eligibility; do not use guessed probability as execution authority. |
-| False preconditions | Preserve the existing skip/advance behavior unless separately changed. Start-condition false, Step-condition false, input unavailable and retry failure are different results. Do not park a running Cycle merely because its original start condition is now false. |
-| Opening snapshots | Remove `PercentageAtOpening`, Opening-timed predicates and their snapshot machinery. Retain exactly `Fixed` and current-Available `Percent`; `Percent(100%)` replaces `AllAvailable`. Reject, rather than reinterpret, every historical encoded removed form. |
-| Trigger family replacement | Map each useful old configuration to current-state start/review behavior or an explicit unsupported form. Exact transient crossing, sender/history-dependent activation and notification completeness are not equivalent to current-state polling. |
-| Time | Choose supported clock domains, precision, intervals and overload/catch-up behavior. Coarse timing is allowed only with an explicit semantic limit. No arbitrary fixed number of period classes is imposed by this plan. |
-| Manual / busy controls | Preserve authorization. Specify redundant Manual behavior while live/busy, paused, parked and retrying; it cannot silently reset retries or purchase a second Cycle. |
-| Billing | Price notifications, negative checks, executed Attempts, refusal, retained state and cleanup. Reconcile removed Trigger/Opening fees instead of carrying their old names mechanically. A deposit is not reserved future CPU/PoV. |
-| Parking versus disablement | Define autonomous wakeable parking separately from owner-paused/disabled state. Immutable/System controls keep their actual authority rules; a sweeper gains no mutation authority. |
-| Atomic recipes | Not required for this release. Do not replace per-Step retry and prefix semantics under the cover of optimizing the ring. |
-
-Close these as a finite decision table and executable oracle. Do not expand the runtime with every possible policy to avoid selecting one. Record additional approval when a decision goes beyond the stated mandate.
-
-#### N0.2 frozen capability and transition matrix
-
-The following table is the finite input to N0.3. It selects semantics, not a physical carrier.
-
-| Profile | Start and recurrence | Current Step inputs and errors | Waiting and return |
+| ID | Exact blocker | Closure owner | Required exit evidence |
 | --- | --- | --- | --- |
-| Burn Actor and liquidity/splitter families | Level-sensitive balance start; an exact account/asset notification coalesces a check. Completion may start another Cycle no earlier than the next block round only if the current condition still holds. | Current predicates; `Fixed` or `Percent`; existing `ContinueNextStep`/`AbortCycle` policy. Market `RetryLater` retries the same Step with fresh state. | Complete balance/spendability wake coverage parks indefinitely; otherwise timed review. Next-round continuation remains live; later retry sleeps. |
-| Fee Sink Actor | Cadenced level-sensitive start at its configured deadline; missed periods coalesce to one current check and do not replay historical intervals. | Current threshold and `Percent` of current Available; `AbortCycle`. | Sleep until the next cadence deadline. Overload delays service without creating catch-up Cycles. |
-| One-shot temporal User | `AtTime` becomes eligible once at or after its deadline. | Current predicates and amounts at the actual Attempt. | Sleep until due; after the single completed/terminal Cycle it has no autonomous recurrence. |
-| Manual User/System Actor | An authorized Manual request coalesces to one activation check. A request while Running, Sleeping retry, Pending or already Live creates no second Cycle and does not reset retry state. | Current predicates and amounts; authored error policy. | Manual is direct bounded lookup. A paused/disabled Actor rejects ordinary Manual activation; the authorized resume/control path is separate. |
-| Balance-reactive User | Level-sensitive current balance/spendability condition over exact declared surfaces; sender identity is not activation history. | Current predicates and amounts; authored error policy. | Exact complete invalidation parks indefinitely; hosts lacking complete spendability notifications use timed review or reject the profile. |
-| Observation-reactive User | Level-sensitive current typed observation, or coalesced-change-driven reevaluation where every intermediate value is explicitly non-semantic. Exact transient Crossing is unsupported. | Current value/validity/age at check and Attempt; unknown, unavailable, uninitialized or stale is false for activation and typed failure where a Step requires valid input. | Exact feed invalidation plus validity/age deadline; incomplete domains use timed review. |
-| Representative multi-Step/retry User | Start follows one of the supported families above; while busy no future-start obligation is acquired. | At most one committed Step per Actor per block; prior committed prefix survives; false Step precondition skips/advances; temporary failure may retry the same cursor. | Due by the next permitted round remains Live; later known eligibility sleeps; start-condition changes never park an open Cycle. |
+| B1 | Active identity/hot/admission is still stored inside legacy placement; removing placement first loses canonical authority. | N2.4, N3.5, N5.1 | All supported semantic Publish/Replace/Remove callers and their complete resource owners switch coherently; no dual authority or legacy fallback. |
+| B2 | Oracle `push_back` and carrier insertion before the persistent cursor imply different orders for admission during a partial round. | N0.3, N3.6 | Ratified semantic ordering, corrected independent model and differential mutation traces against the carrier. |
+| B3 | Ring helpers are not a full ordinary Actor service path; standalone generated values exclude remaining lifecycle/Step composition. | N2.1–N2.4, N3.1–N3.6, N5.2 | V1 through ordinary dispatch and the actual mandatory Actor service phase, with complete admission and settlement. |
+| B4 | Previous generic wake-completeness language does not express parked-only balance monitoring, a final fixed baseline or the `100 × ED` floor. | N0.2, N2.5, N3.9 | One explicit balance-mode contract and bounded complete source/review implementation; no busy tracking. |
+| B5 | Net balance cannot identify real incoming credits or whitelisted senders. | N3.9 | Conditional verified-credit implementation if the default mode fails its frozen criteria; never infer provenance from net balance. |
+| B6 | Oracle producers are connected ahead of scan/check/service consumers. | N3.1, N3.4, N3.7 | Bounded publication-to-consumption round trip, or explicit coherent gating before any shipping state. |
+| B7 | Generation-safe cleanup and its resource/debt limits are not yet fully executable. | N4.1–N4.3, N5.2–N5.3 | Mutation/sweep/capacity traces and measured bounded maintenance; no reliance on idle-only cleanup. |
+| B8 | Retained heaps, new selectors and callbacks still carry deep/full/rollback coverage obligations. | N5.2–N5.3, N7.2 | Reachable-domain coverage and complete composed charging, or verified elimination of the path and coverage of its replacement. |
 
-| Decision surface | Frozen rule |
-| --- | --- |
-| Amounts | Exactly `Fixed(value)` and `Percent(perbill)`. `Percent` uses widened floor arithmetic over current Available at every Attempt; dynamic zero skips; positive `Fixed` above current capacity is funding unavailable and is never clipped. `Percent(100%)` is semantically all current Available. |
-| Predicates | All admitted predicates are Current. Remove `ObservationTiming`, Opening predicate results, `OpeningSurface`, Opening amount snapshots, `PercentageOfLastFunding`, its accumulator and funding snapshot. Independent custody/credit authorization remains. |
-| Ring order | FIFO admission into a persistent cyclic ring, then preserved cyclic encounter order. A resident continuation keeps membership; it does not publish a successor ticket. This deliberately replaces global FIFO by per-Step ticket. A resource-blocked eligible head retains priority; a certified non-runnable transition may remove it under the state rules. |
-| Block round and Q1 | One shared round frontier spans all Actor passes. At most one Step commit per Actor per block. Membership first admitted or reentered in block B is ineligible until B+1; removal cannot donate a turn, and reentry cannot reset the same-block guard. |
-| Short/long wait | Eligibility by the next permitted round stays Live. Any known later block/tick enters the bounded sleep index. Unexpected future eligibility without complete notification uses a deterministic timed review, never guessed readiness. |
-| False/unknown | False idle start produces no Cycle and refreshes a valid park plan. Unknown/stale cannot certify indefinite parking: use the typed dependency deadline/retry or timed review. False Step precondition skips and advances. Temporary execution failure follows authored retry; permanent failure follows authored Abort/Continue policy. |
-| Nonterminal return | Live remains Live for next-round work, moves to Sleep for a known later eligibility, or Parked only when idle with a complete/timed wake plan. Due Sleep and invalidated Park create one coalesced Pending check; successful current check admits Live no earlier than the next round. Pause/disable requires authorized recovery; retirement can only proceed through generation-safe reclamation. |
-| Recurrence | Supported modes are one-shot temporal, level-sensitive repeated, coalesced-change-driven and authorized Manual. Persistent truth cannot start twice in one block. Busy Actors do not remember another occurrence; after completion current state is checked no earlier than the next round. |
-| Controls | Create/update/pause/resume/close authority remains actor-type/mutability-specific. Manual is activation intent only: redundant intent is idempotent and cannot reset cursor, retry count, fees or round guard. Parked is autonomous and is not paused; cleanup has no mutation or custody authority. |
-| Fees | Charge independent bounded owners for notification/invalidation, current negative/positive activation check, live/sleep/park transfer, admitted Attempt/effect, resource refusal and reclamation. No old Trigger/Opening fee name survives mechanically; no fee buys a second Cycle or reserves future execution capacity. User paths pre-admit their complete selected transition or fail without partial semantic mutation. |
-| Cleanup | Terminal/authorized retirement revokes execution first, then bounded generation-bound sweeping reclaims physical state. Parked/Sleeping/Pending are not garbage. Custody remains sovereign and unchanged by service or cleanup transitions. |
-| Unsupported legacy forms | Reject historical SCALE forms for `PercentageAtOpening`, `PercentageOfLastFunding`, `AllAvailable`, Opening timing, exact `ObservationCrossing`, and sender/history-dependent `AddressEvent`; do not decode them into new meanings. `ObservationChange` maps only to coalesced current reevaluation, `Cadenced` to deadline recurrence, `AtTime` to one-shot time, and `Manual` to authorized intent. Legacy broad AddressEvent is admitted only when certification can derive exact current dependencies and a complete or timed wake plan. |
+Do not turn these eight blockers into eight new programmes. Each needs its smallest connected closure. Preserve the existing `cancel_run` close-allowance correction and requalify it against the retained lifecycle rather than reopening its old omission by accident. [R9]
 
-No additional approval is required for this matrix: it applies the agreed current-state mandate and the separately approved two-mode amount/Opening removal. Any later proposal for transient event history, a second pending Cycle, priority classes, Opening snapshots, or a different same-block timing guarantee reopens task-owner approval.
-
-### 1.3 One canonical process, different memberships
-
-Logical service states describe ownership; they do not mandate a new stored enum for every word below.
-
-| State / role | What is retained | Valid next transition |
-| --- | --- | --- |
-| **Live** | Canonical current process and one live membership; may be idle but due for its next start check. | One metered turn: Step/check, remain live, sleep, park, disable or retire. |
-| **Sleeping** | Same current process and one future eligibility/review obligation. | Due extraction makes it eligible for live service or an activation check according to whether a Cycle is open. |
-| **Parked** | No open Cycle requiring continuation; current Contract, custody identity and a bounded wake/review plan. | Relevant invalidation or a scheduled review creates one coalesced activation-check obligation. |
-| **Activation pending** | A parked Actor needs a current-state check; no new Cycle is yet admitted. | False refreshes/replaces parking evidence; true installs one live membership; capacity refusal retains the check obligation. |
-| **Paused / disabled** | Explicitly non-serving policy or process state with declared owner/protocol recovery. | Only the specified authorized transition; ordinary hints do not override pause or restore revoked authority. |
-| **Retired / reclaiming** | Execution authority revoked; bounded old-generation state and cleanup cursor. | Owner or protocol cleanup; no automatic execution revival of partially deleted state. |
-
-An open retry is Sleeping or Live when due, not Parked under a start-condition certificate. Releasing current execution state is never a side effect of a false start predicate. Fault/quarantine state must be typed and visible rather than disguised as normal parking or absence.
-
-For each Actor/generation there is exactly one canonical residence/service owner. Dirty flags, reverse registrations and summary bitmaps are derived index authority with explicit consistency rules. A notification may invalidate a certificate while the Actor is still physically in the parking index; that transient state means **recheck owed**, not a claim that the condition remains false.
-
-### 1.4 Persistent ring and block-round safety
-
-The semantic reference model may take an ordered snapshot of eligible memberships at a block-round boundary. This is an oracle technique, **not** permission to enumerate or rewrite every live Actor at each block. Production must realize equivalent bounded service using frontier/round/membership authority.
-
-Required invariants:
-
-1. **Resident continuation:** after a successful Step that can continue next round, update required execution state and the service cursor without deleting/recreating the Actor's live membership or allocating a successor ticket solely for that progress.
-2. **One block-round:** Prepass and later Actor passes share the same round identity/frontier and progress. Stopping for resource limits and resuming does not start another round.
-3. **No duplicate turn or commit:** a member receives at most the specified one ordinary turn per block-round, and Q1 independently protects Step commits. Define paid resource-prefix retries across phases explicitly; they cannot become unbounded inspections or duplicate Attempts.
-4. **Membership cut:** new or reentered memberships do not consume the turn of a member removed from the original round. Remove/reinsert, generation change and ring wrap cannot reset an Actor's same-block guard.
-5. **Mutable round:** deletion of head/tail/interior members, cancellation, parking, sleeping, retiring and additions must preserve the remaining order without skipping an eligible survivor. A saved `len` or a sentinel that may be removed is insufficient by itself.
-6. **No cheap-head bypass:** a live eligible head blocked only by insufficient remaining resources is retained; no class/Task/fee affinity is introduced. Certified absence of current work is a separate paid transition that may detach it under the approved new contract.
-7. **Bounded work even without effects:** empty/stale nodes, already-served nodes, ineligible entries and failed transfers have bounded paid traversal. Physical visit limits are explicit; guards cannot create an infinite loop around a singleton ring.
-8. **Fresh state:** residency retains scheduling locality, not yesterday's balances, quotes or eligibility decisions. Every admitted Attempt follows the current-input and mutation/rollback rules.
-
-A supported Actor's complete transition must fit the applicable full-block service policy, or its input/profile must be explicitly inadmissible before becoming a permanently impossible live head. Changed runtime bounds/Weight require bounded recertification or a declared safe non-serving disposition; do not hide a permanently oversized transition behind ordinary temporary deferral.
-
-A possible production technique combines a block-round frontier, membership generation/admission sequence and persistent per-Actor progress guards. This is a design candidate, not prescribed extra storage. Prove the chosen construction against the reference model and measure its bookkeeping.
-
-Append/wake admission order, delayed return order and the relation between an unserved remainder and previously served residents must be deterministic. Persistent round-robin residency does not by itself reproduce the old future-ticket FIFO; N0 names precisely what is preserved and what changes. “Likely to execute soon” describes the intended working set, not a fixed latency promise under a large live population.
-
-### 1.5 Parking evidence and wake completeness
-
-A park decision needs a **Park Certificate** in the logical sense: a compact runtime-owned reason why ordinary reevaluation can wait, plus the authority that ends that wait. It need not be a signature, large proof object or new public type. It binds the current Actor generation, accepted start/read plan, applicable dependency state and any time validity limit.
-
-Two admissible forms:
-
-- **Complete event-driven parking:** every supported change that can invalidate the negative conclusion or create promised service reliably marks the Actor for bounded reevaluation. No periodic polling is required for the closed dependency domain.
-- **Timed-review parking:** complete notification coverage is unavailable or too expensive; retain an explicit next review deadline in the bounded runtime service mechanism. Polling cost and delay remain part of the result.
-
-Do not create two permanent engines for these forms. They are two wake plans in one service design.
-
-Completeness covers the actual predicate/read domain: balances and spendability, holds/locks/freezes, fee reserve/protected minima, staking shares, authoritative observations and their validity/age, time and runtime/configuration changes where relevant. Check balance decreases as well as increases when they can change the predicate. Notification coverage for asset transfers alone is not coverage for `AvailableNow`.
-
-Use exact dependency keys, not only a coarse BALANCE/OBSERVATION type bit. A generation-bound read plan may conservatively watch all relevant dependencies. Smaller falsity witnesses for AND/OR are optional later optimizations; do not enumerate all truth assignments or invent an expensive solver for the first release.
-
-No supported complete-park path may silently miss a wakeup. If a host cannot provide completeness, explicitly choose timed review or reject that profile. Unknown/stale/corrupt state is not proof of safe indefinite parking. Preserve typed failures and bounded recovery.
-
-### 1.6 Indexed parking and coalesced activation without cause history
-
-Canonical Actor data remains under stable bounded ownership; parking indexes hold references and wake metadata. Organize lookup by concrete dependency or activation class as appropriate:
+### 0.3 Work order
 
 ```text
-sovereign/account + typed balance surface -> matching parked registrations
-feed or shared dependency                -> bounded parked subscriber pages
-manual / owner control                   -> direct authorized Actor lookup
-time / fallback review                   -> sleep/review bucket
+Intake + narrow semantic/round correction + known safety triage
+                         |
+                         v
+V1: public User creation -> canonical semantic owner -> actual ring service
+    -> several committed Steps -> real retry -> completion
+                         |
+                         v
+V2-B: completed recurring Actor -> fixed balance baseline -> Park
+      -> qualified parked change -> one check -> Live -> new Cycle
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+V2-O: existing Oracle          lifecycle/reclaim
+producer -> consumer          and full supported cutover
+              |                     |
+              +----------+----------+
+                         v
+whole-service workloads -> final resource/artifact closure -> review -> release
 ```
 
-An account-to-Actor relation must be real registered authority; do not assume a hashed sovereign address can be inverted. Actor-local direct lookup may avoid a subscriber list. Shared dependencies must not cause unbounded fanout in the source mutation.
+V1 must not wait for universal balance notification coverage, a new Oracle framework, exhaustive cleanup tuning, an alternate heap or a history-wide experiment migration. Its supported lifecycle and failure suffixes must nevertheless be correct and funded. A new helper is progress only when it discharges a named blocker on this path.
 
-A bounded notification records only that a check is owed. Repeated notifications coalesce; while already pending they do not append more checks. During an open Cycle they create no next-Cycle promise. Source state can still change and the next current Step reads it. A positive activation check proves applicability only at its defined observation point. Ring admission is not a durable promise that `start_when` will still be true later: recheck at actual Cycle start or prove the carried authority remains fresh. Price any second check and do not recreate a paid historical readiness latch under the name “activation”.
+---
 
-**Lost-wakeup invariant:** an update arriving before, during or after negative evaluation, registration, dequeue, callback or acknowledgment cannot disappear between clearing `pending` and going back to sleep. Use an explicit atomic/version protocol: install or validate watched revisions, evaluate, then acknowledge only the version actually covered; a later change leaves pending work. Handle replay/rollback, registration replacement, same-block updates, generation reuse and revision exhaustion. A plain `dirty = false` after a check is not a proof.
+## 1. Continuation Contract
 
-If a feed-level dirty cursor amortizes wake discovery, updates during partial traversal, new/removed subscribers and notifications behind the cursor must remain discoverable. Pending-queue saturation cannot drop an invalidated certificate: retain durable/coalesced source or Actor-level work with a bounded recovery rule. This obligation does not require one stored event per historical source update.
+### 1.1 Preserved decisions
 
-### 1.7 Residency transfers, idle locality and anti-thrashing
+- Runtime-owned autonomy; no keepers, external intent executors or required bots.
+- Bounded multi-block Contracts; at most one committed Step per Actor per block; earlier committed effects survive a later Step failure.
+- Current predicates and exactly `Fixed(value)` / `Percent(perbill)` on valid Task surfaces. `Percent(100%)` means all current Available capacity, respecting current fees, ledger restrictions and protected minima.
+- `AbortCycle`, `ContinueNextStep` and bounded `RetryLater`. Retry retains the same generation/Cycle/cursor and reads fresh dynamic inputs. Admission refusal is not an executed failure.
+- One open Cycle and one logical current service obligation. No queued future Cycle, busy funding history or retry-counter reset caused by external hints.
+- Persistent cyclic service, generation-bound membership and one block-round identity. No cost/class priority and no bypass of an eligible resource-blocked head.
+- Parked is nonterminal; Paused/Disabled is separately authorized; Retired cannot be revived. Contract mutation and old-generation sweeping preserve custody and new-generation state.
+- One canonical semantic source plus derived residence indexes. Parking does not move the Contract or custody into a second store.
 
-Transfer service membership, **not the complete Actor**. Contract, custody and canonical continuation are not serialized into a parking silo and copied back. Hot/cold partitions may be physically reorganized when justified by co-access evidence, but mere service-state changes do not require full body movement.
+The current-state section of the specification remains the starting owner; reconcile superseded later sections before release rather than asking implementers to interpret two competing contracts. [R3]
 
-For Live -> Sleep/Park, Park -> Pending -> Live, cancellation and retirement:
+### 1.2 Partial-round ordering: resolve the model/carrier mismatch now
 
-- pay for inspection and reserve the complete selected transfer before semantic mutation;
-- establish/reserve a valid destination or explicit durable pending authority before dropping the old obligation;
-- commit canonical residence and all required indexes atomically; on failure preserve exactly one obligation;
-- provide bounded head, tail and **arbitrary-member** removal for owner control and generation replacement;
-- do not search the entire ring for a predecessor. A singly linked carrier needs a proven predecessor mechanism or a bounded, fully priced lazy alternative; a doubly linked/paged carrier has its own write costs;
-- bound stale memberships and retained generations. Tombstones may exist only as an explicitly priced bounded mechanism, not an unaccounted substitute for unlink;
-- do not let observer-only API calls or unsupported helpers become alternate membership writers.
+The proposed explicit resolution for N0.3 is **append behind all current residents as viewed from the persistent next-encounter cursor**. It matches the selected carrier's insertion-before-cursor rule; it must be ratified in semantic prose and an independently written list model, not accepted merely because the carrier implements it.
 
-No background pass scans the live ring merely to decide who should be parked. Make that decision during an already owed Actor turn or explicit lifecycle transition.
-
-On Cycle completion, an idle Actor may remain resident until its next allowed start check. If a fresh, already available context safely proves continued live service or a valid park plan, use it; otherwise prefer one bounded later check to Park -> immediately reactivate churn. Do not commit a second Cycle or use a stale cached balance just to avoid a move. Fix the maximum such live grace in the service policy.
-
-Unrelated changes cannot wake a parked Actor; repeated relevant changes cannot duplicate its pending entry. A false activation check normally refreshes parking evidence without rewriting unchanged registrations. An already-live next-Step/retry due at the next permissible round need not leave the ring. Longer waits use the sleep index rather than paid repeated live visits. Owner-disabled and retired Actors do not follow ordinary wake hints.
-
-**Optimization hypothesis to prove:** useful consecutive turns require fewer physical membership operations than repeated dequeue/successor publication. Ring-head writes, predecessor/tail repairs, per-Actor guards, negative checks and cold-state reads still count. Do not report “Step -> head = next” as the total economic or resource cost of a Step.
-
-### 1.8 Physical closure here; tuning later
-
-| Mandatory function in `0.7.27` | Not mandatory now |
-| --- | --- |
-| Freshness-safe loaded Attempt context; an adequate derived Step/Wake read plan | A new VM, JIT, persistent global value cache or every specialized shape |
-| Stable canonical ownership, co-access-informed hot/cold geometry | Broad AoS/SoA, key-locality, packing and hasher sweeps |
-| Correct block-round/live membership and bounded arbitrary control | A particular intrusive layout or globally optimal ring page width |
-| Exact-key parked lookup, coalesced pending checks, complete or timed-review wake plans | A universal dependency graph or a second causal event history |
-| One concrete sleep/review structure with saturation/wrap/recovery coverage | Exhaustive radix/timing-wheel/fanout competition |
-| Safe disablement, generation-isolated reclaim and bounded debt | Maximum sweeper throughput or every possible batching variant |
-| Metered selectors/transfers, actual production Weight and end-to-end cost | Cosmetic coefficient records without a changed useful service boundary |
-
-Choose every installed encoding and bound now. Defer its broad optimization, not its existence or coverage. Do not add a technique just because it appeared in the previous brainstorming catalogue.
-
-## 2. Historical Evidence Without Historical Lock-In
-
-### 2.1 Keep the records; change how they are consumed
-
-Keep historical experiment IDs, paths, original decisions, measurements and validity limitations. Do not renumber sealed IDs, restart the allocator, bulk-mark the corpus `Rejected`/`Invalidated`, or relocate every historical file. A semantic redesign can make an experiment irrelevant to the new contract without making its original result false. [S3]
-
-Start a **new semantic lineage** within the existing Actors track. Use a stable descriptive identifier such as `current-state-v1` only as a planning label until the accepted specification binds its exact identity. A semantic lineage is not automatically a new folder, track, global registry or framework subsystem.
-
-The Actors track entrypoint should show, in order:
-
-1. Current accepted/proposed semantic contract and active release proof obligations.
-2. Explicitly imported prior claims, with scope and current owner.
-3. Historical lineages and their existing records, fully discoverable but not all rendered as current work.
-
-The active graph contains new mandatory obligations plus deliberately imported prerequisite claims. `Uses evidence from`, provenance links and ancestry do not import every historical hard dependency recursively. A reused theorem still needs its actual premises justified; a reference to the old experiment is not that justification.
-
-### 2.2 Historical result and current applicability are independent
-
-Use the existing record decision vocabulary for the original decision. Add a compact **current-lineage applicability projection**, preferably in the existing track index or owning current record, rather than retrofitting every old file.
-
-| Current use | Meaning | Release effect |
-| --- | --- | --- |
-| **Reuse — scoped** | The exact claim's premises, mechanism and required identities still hold, or an explicit bridge proves applicability. | May discharge only the named new obligation. Numerical Weight and service conclusions need quantitative applicability, not just qualitative similarity. |
-| **Revalidate — required** | The mechanism or claim survives, but relevant semantics, domain, code or artifact identity changed. | A bounded new proof is required before relying on it. |
-| **Hazard transfer** | An old finding exposes a failure mode that may recur in retained or replacement code. | Carry the failure scenario into the new safety inventory; do not import the old implementation as a mandatory design. |
-| **Historical — no active dependency** | Its claim belongs to removed semantics, an unselected mechanism or a past campaign target. | Preserve the record and lesson; no release gate or rerun follows merely from its existence. |
-
-Unassessed old records are **not imported evidence**. The initial pass must identify known safety findings and retained cross-domain dependencies, but does not require a fresh verdict on every old experiment. Detailed assessment happens when a current claim consumes an old result or a retained path makes an old hazard relevant.
-
-A minimal imported-claim row contains: `old ID + claim/section → old premises → relevant change → current use + reason → current obligation/owner`. If using a selected claim from a compound old index section, extract that claim with provenance; do not first refactor every unrelated historical section.
-
-### 2.3 Initial routing examples, to verify rather than assume
-
-| Historical evidence | Initial route for the new model |
-| --- | --- |
-| C1 selection and A0 exact transition oracle | Historical architecture/old semantics. Retained invariants become inputs to new tests. The entire old transition digest is not a conformance gate for intentionally changed behavior. |
-| Useful Trigger / pending next-Cycle latch / rearm while Running | Historical where these transitions are actually removed. New single-Cycle lifecycle and reevaluation behavior need new proofs. |
-| LastFunding accumulation and source filtering | Historical for the deleted Actor amount mode. Reuse or revalidate independent custody/ingress/authentication claims that still apply. |
-| Opening snapshots and old 12/24/48 joint geometry | Conditional on the N0 decision. Unused old geometry is not a mandatory numerical target; retained snapshot functionality keeps its coverage obligations. |
-| Atomic Task effects, committed-prefix durability, retry outcome boundaries, custody, authorization | Hazard transfer and likely scoped reuse/revalidation. These are retained obligations, not automatically valid implementations. |
-| EXP-0113/0114 selection-owner gap and fix | Preserve the general failure scenario: pure control flow needs a measured owner. Import the numerical coefficient only if the actual measured selector still applies. |
-| EXP-0117 deep temporal coverage/full-capacity findings | Hazard transfer immediately. If the same cursor survives for retry, idle reevaluation or sweeping, qualify that domain. If fully removed, prove elimination and replacement safety; do not repair the old cursor just to close its historical record. [S4] |
-| EXP-0118 rejected multi-way cursor | Historical narrow outcome and optional candidate insight, not a ban on a new design. No mandatory encoding experiment until the new service contract actually needs that structure. [S5] |
-| Old P7/P8 percentages, sensitivity rankings and fixed cohorts | Diagnostic context. Not current ranking, a guaranteed saving or a complete new workload contract. Recompute only consumed premises under matching identities. [S6] |
-| PR #32 tail/non-tail selection failure | General hazard transfer: selector eligibility must imply executor-domain validity. Preserve the concrete regression if that code survives; apply an equivalent test to replacements. |
-
-### 2.4 Eliminating a legacy hazard is a proof, not a label
-
-An inherited safety obligation may close for `0.7.27` through any of:
-
-- a confirmed repair and current regression;
-- a valid scope/reachability explanation refuting the apparent counterexample;
-- verified removal from every supported execution/configuration path, plus coverage of the replacement responsibility;
-- an explicitly approved and enforced support restriction, with no silently accepted unsupported configuration.
-
-For elimination, inspect production calls, genesis, runtime hooks, adapters, generic embedding, feature builds, supported upgrades/migration code if any, authoring inputs, generated descriptors and maintenance/recovery entrypoints. A `legacy` module or fallback that remains reachable keeps its safety obligations. Stored old state is not evidence of elimination when a supported path can revive it.
-
-Keep the historical finding's original status and scope. “Not present in the new release” does not mean “the old release was correct.” If safe old-line remediation is independently needed, name that work separately rather than either hiding it or making full old-engine modernization a prerequisite.
-
-### 2.5 Known findings to route at intake
-
-These IDs come from the original supplied plan and are not reserved EXP numbers. They make the handoff self-contained; verify applicability rather than assuming each finding is a defect in the new model.
-
-| Finding | Intake responsibility |
-| --- | --- |
-| H1 — deep temporal coverage | EXP-0117 challenges deep Retain/Remove coverage under its limited fixtures. Validate complete reachable paths and total accounting if inherited; otherwise prove elimination and replacement coverage. [S4] |
-| H2 — full-capacity rearm | Classify ordinary capacity exhaustion versus corruption/worker poisoning, and preserve a bounded current obligation or defined refusal/recovery in whichever new index survives. [S4] |
-| H3 — narrow multi-way rejection and wording | Keep EXP-0118's historical outcome. Its threshold and sign-error prose do not decide new-layout selection; requalify any consumed quantitative premise. [S5] |
-| H4 — sensitivity inconsistency | Reconcile treatment of freed earlier charges before reusing the old removal/partial-reduction model. Test any new counterfactual model used to rank candidates. [S6] |
-| H5 — primary evidence inside the index | Extract independently decidable evidence only when a current obligation consumes it. New primary measurements belong to Leaves, not the growing entrypoint. [S3], [S6] |
-| H6 — transient observations/prototypes | Label missing historical bytes. Preserve essential new samples, traces, fixture identity and prototype diffs rather than only a digest of unavailable output. |
-| H7 — mixed resource boundaries | Requalify old reservation, settlement, physical-access and workload percentages. Their magnitudes do not rank the new engine. |
-| H8 — selector/executor mismatch | Carry the PR #32 tail/non-tail failure scenario into every retained or replacement domain-specific selector; do not label the fixed Crossing bug still unfixed. [S7] |
-| H9 — stale current summaries | Correct the current backlog/index/binding projection; preserve the published tag and distinguish absolute blocks, horizons, queue entries and current artifact identities. |
-
-A rejection of a new candidate never restores authority to a contradicted baseline. A known applicable finding always has its own closure owner, regardless of the optimization campaign's stopping rule.
-
-## 3. Baselines and Honest Comparisons
-
-| Reference | Purpose | Restriction |
-| --- | --- | --- |
-| **H — Published `v0.7.26`** | Immutable historical delivery and economic-use-case reference | Verify commit `c16675edf03e3af0d6dcf3080a31c64b49765a5b` and its recorded artifacts. Challenged old coverage remains qualified. [S1], [S7] |
-| **L — Legacy overlap bridge, only where needed** | Check a surviving mechanism or compare a shared supported scenario | Repair/remeasure only the comparison-critical or retained domain. A complete optimized legacy engine is not required. |
-| **CS0 — Sound implementation of the accepted new contract** | Native same-semantics reference for physical choices | Prefer a pinned minimal complete vertical slice already needed for development. Do not manufacture a deliberately slow strawman or a second permanent executor. |
-| **CS1 — Selected release implementation** | Final new-model result | Compare CS1/CS0 on the same contract. Compare CS1/H separately by economic goal and explicitly list changed guarantees. |
-
-A reference model for semantic tests is not a throughput baseline unless it uses representative production execution. If no separate CS0 optimization is warranted, report the new model's measured result without inventing a CS1/CS0 speedup.
-
-Separate physical efficiency, change in admitted timing/order guarantees, resource-policy redistribution, pricing correction and eliminated capability. Preserve negative/censored results. Do not compare “Steps/block” without verifying that both Steps represent the same economic work. Use successful effects, completed intended workflows, resource cost, detection/progress/completion delay, pending work and maintenance debt.
-
-The benchmark host remains the user's interactive workstation. Use finite matched same-host comparisons and retained raw evidence under the Benchmark Reassessment Protocol. A fresh noisy number is not automatically stronger; an old contradicted coefficient is not protected by the noise of a new run. Empirical bounds require justified measurement scope and conservatism; a maximum of a few fitted medians is not a universal CPU theorem.
-
-## 4. Execution Order, Campaign Bound and Meaning of Completion
-
-Task IDs name workstreams, not an instruction to implement the whole kernel before defining comparisons.
+Required distinguishing trace:
 
 ```text
-N0 exact current-state + ring/parking semantics and oracle
-  + N1 hazard/applicability intake
-  + N6.1 workloads and materiality before decision measurements
-                              |
-                              v
-N2 minimal multi-Step/current-balance/retry kernel
-  + N3.6 independent round model
-  + N3.3/N3.7 wake/parking protocol model
-                              |
-                              v
-N2.5/N2.6 Step-Wake plans + co-access/initial geometry
-  + N3.1–N3.8 one live/sleep/park/pending implementation
-  + N4 disablement/mutation/reclaim
-  + N5.2 path-by-path resources
-  + N6.2 bounded necessary carrier choices
-                              |
-                              v
-N6.5 residency/thrashing/whole-maintenance evidence
-  + N5.1/N5.3/N5.4 removal, hazards and physical closure
-                              |
-                              v
-N6.3 final whole-service comparison -> N6.4 design decision
-                              |
-                              v
-N7 final artifact set, independent review, assurance and publication
+initial order A -> B -> C; A receives an admitted turn; next cursor = B
+D is admitted before the next block; no more turns occur in this block
+next block expected order: B -> C -> A -> D
 ```
 
-Begin known safety triage immediately. A working provisional carrier may support the vertical slice, but cannot become the release geometry merely by being implemented first. Do not begin with a complete old-engine repair, full historical DAG migration or universal physical optimization sweep.
+The inspected model's fixed-array `push_back` instead yields `B -> C -> D -> A`. Add this counterexample before changing either side. If the owning specification deliberately selects the latter policy, change the carrier accordingly and record that choice; the two cannot remain different. [R4–R5]
 
-**Finite campaign:** freeze the smallest adequate shortlist and finite refinement allowance for each necessary design choice. Keep one active candidate on a shared hot path. Coupled pieces may form one candidate when their necessity is stated. Test a simple adequate carrier before adding indexes to save costs that have not been observed. Not every task needs a new Experiment ID or multiple prototypes.
+New or reentered memberships in B stay ineligible until B+1. Deletion cannot donate a turn. Reentry or generation replacement cannot reset the same-block guard. Resource refusal preserves the same candidate through a later pass and the next block. Do not use initial ring length, a removable sentinel, or production-wide membership copying as the proof.
 
-**Normal release acceptance:** close the agreed semantic and physical responsibilities, all known supported-domain safety/resource blockers, and demonstrate a predeclared materially useful end-to-end gain on at least one representative core economic goal. Compare the new contract's physical choices on equal semantics; compare against the old release through a labelled capability/timing/order bridge. Count the whole cost of detection, negative checks, sleeping, mutation and reclamation. A smaller queue-operation coefficient alone is not enough.
+### 1.3 Parked-balance monitoring is not busy-state tracking
 
-There is no mandatory `100/block`, `2×` or universal percentage. Define materiality before selecting on results. Do not require every workload to improve. Separate safety repricing, changed guarantees, resource redistribution and actual work removed. Old due-frontier isolation already limits what may honestly be claimed as a new scalability gain: do not assume the previous scheduler scanned every existing Actor without evidence.
+Balance activation exists only for a configured, recurring, **idle parked** Actor. A timed review of an idle parked balance watch is logically still this parking obligation even if represented by the deadline carrier.
 
-If the finite campaign fails the materiality criterion, record its result and the exact remaining decision. Do not endlessly add candidates or claim a gain. Publishing a semantic/correctness-only checkpoint requires a distinct task-owner disposition; the default release goal is unchanged.
+No balance-trigger work may create a future Cycle while the Actor is Live, Running, retrying or Sleeping for an open Cycle. Current Steps continue to read real balances normally. A balance change during a retry can make that same Step executable, but does not wake it ahead of its retry policy or create another Cycle.
 
-**Freeze:** after N5.4/N6.4 choose one production service/physical design. N7 admits only required correctness, soundness, binding, review and public-truth corrections. Independent performance opportunities belong to the proposed `0.7.28` portfolio unless explicitly reauthorized.
+A cheap producer-side lookup may be necessary to discover that no parked registration exists. This bounded lookup still has a resource owner. “No busy tracking” means no Actor-specific baseline updates, credit accumulation, membership changes, full activation evaluation or Trigger fee for the busy Actor; it does not falsely promise zero cost to the underlying ledger operation.
 
-## N2 — Build the Current-State Execution Core
+Owner-paused/disabled and retired generations ignore ordinary balance activation. Other explicitly authored activation modes retain their own rules; an internal review timer must not secretly bypass the balance threshold and become an unconditional periodic trigger.
 
-## N3 — Persistent Live Service, Indexed Parking and Bounded Wakeup
+---
 
-- [ ] **N3.1 / Autonomous Discovery and Activation Checks.** `EXP-0121` freezes the source inventory, one generation-bound Pending-check boundary and retained-overload contract; runtime realization remains open across N3.2–N3.8. Implement runtime-owned discovery using bounded notifications, current dependency/source state and timed fallback. Hints authorize checks, not effects. A parked invalidation creates one generation-bound pending check; verify current start applicability before live admission. Cheap check and admission may share a transaction when fully priced, but logical roles remain distinct. Use direct registered account lookup where appropriate and bounded shared-feed traversal; neither whole-population per-block scanning nor unbounded per-source fanout is an acceptable implicit fallback. **Exit:** Work is discovered without external executors; all negative and pending work is accounted, overload assumptions are explicit and promised checks are not dropped.
+## 2. Parked-Balance Trigger: Required Semantic Amendment
 
-- [ ] **N3.2 / One Current Obligation and Residence Policy.** `EXP-0122` freezes the logical return matrix and exact semantic threshold: work due no later than B + 1 remains Live under round/Q1 guards, while a known deadline after B + 1 transfers once to Sleep; Park requires a complete certificate and Pending owns an unacknowledged current check. Implement this policy across continuation, retry, idle review and completion. Ignore future-start hints while a Cycle is open; they cannot reset or reserve a second Cycle. On completion retain Live for the next permitted level check, Sleep to a known cadence/review, Park from fresh complete negative evidence, or terminate one-shot authority; avoid Park -> immediate Live churn and old-style Q1-only successor wakes. **Exit:** Recurring policies, multi-Step Actors and retries advance with one service owner; no same-block restart loop, double Cycle or unnecessary per-Step topology migration.
+The following requirements implement the task owner's clarification. Where the request does not uniquely determine an API choice, the proposed choice is labelled and must be closed in N0.2 **before decision measurements**. Do not keep several undocumented interpretations in code.
 
-- [ ] **N3.3 / Certified Parking and Wake Completeness.** `EXP-0123` freezes the logical Park Certificate: exact generation and accepted-plan binding, typed negative reason, conservative exact dependency keys/revisions, and every relevant time boundary. Event-driven Park is allowed only for a proved closed mutation domain; otherwise retain one deterministic timed-review Sleep obligation. Generic balance/spendability remains timed-review by default until the host certifies every affecting mutation route; observation/feed and authored temporal paths may use exact invalidation/deadline authority. Implement the certificate and distinguish parked idle policies from open retries and owner-disabled state. Notification invalidation makes a check owed; it does not assert execution applicability. **Exit:** No live work is hidden by a stale/partial certificate; false-now never implies deletion, and every supported nonterminal wait has the promised bounded-cost return path.
+### 2.1 Fixed final baseline
 
-- [ ] **N3.4 / Negative Work, Fairness and Griefing Budget.** `EXP-0124` freezes one complete coalesced activation check as the negative-work atom. A User secures its generated Trigger-control maximum before Pending materialization; a System check consumes bounded Actor Control allocation; each later timed review needs fresh authority. Duplicate/busy hints create no fee, work, retry reset or future Cycle. Implement retained prepaid authority, bounded repair retries, stale cleanup and strict valid-head FIFO without cheap-head bypass. Keep repairable provider/fee/resource refusal distinct from invariant fault, and cover tiny-credit storms, toggling, always-false/true programs, expensive heads, stale prefixes and sustained mixed demand. **Exit:** No free unbounded polling/fanout, hidden priority or repeated unpaid prefix work; contention and liveness hold within declared capacity/provider assumptions.
+For each explicitly watched asset/surface `a`:
 
-- [ ] **N3.5 / One Concrete Ring/Sleep/Index Carrier.** Implement and validate the carrier selected by `EXP-0125`: stable Actor-generation process records, one actor-keyed intrusive doubly linked service ring for Live/Pending, retained C32 deadline pages plus paged min-heaps for Sleep/Park reviews, process-owned Park evidence, and generation-bound reverse handles. The compile-safe `ActorProcess`/`ProcessResidence`/`ActorRef` and inert `ServiceHeader`/`ServiceNode` shapes now exist without shadow storage; a pure ring oracle covers empty, singleton, interior, cursor, wrap, and stale-generation mutation. Cutover inventory confirms create/activate/deactivate/finalize are transactional but placement authority is distributed across Ready/Waiting/Unsignaled frame mutations: Ready and Waiting can compile to Service and Deadline, while Unsignaled cannot distinguish valid Parked, Disabled, or missing evidence. The inert process shape now separates process-owned `Serving`, cause/authority-typed `Disabled`, irreversible `Retired`, and explicit plan-bound Park evidence; it creates no storage or behavior. A pure storage-free compiler maps typed Ready/Waiting/Park/Disabled inputs into exact process state and rejects evidence-free `Unsignaled`; it deliberately cannot authorize storage publication. A storage-free adapter now accepts only a coherent real `ActorControlLocation`/`ActorControlCell`, derives Ready Idle+latched work as Pending and other Ready work as Live, preserves exact Waiting handles, rejects malformed cells, and still requires separately supplied typed Unsignaled evidence. A source-backed regression inventories every raw Ready/Waiting/Unsignaled storage mutation owner across `lib.rs`, `scheduler.rs`, and `execution.rs`, classifying its transaction boundary and required process transition; any unclassified owner fails the focused test. A pure storage-free planner now consumes that exhaustive obligation type plus the current coherent process and typed transition evidence; it preserves process identity, compiles typed publication/successors, permits only explicit disable/retire removal, and rejects detach-without-successor, obligation mismatches, malformed current state, and evidence-free Unsignaled transitions. The same exhaustive inventory now binds every owner to a concrete publish/preserve/replace/terminal/carrier planner intent, its mutation-owner or complete direct-caller atomic publication cohort, and success-or-rollback outcome; the witness corrected benchmark-only Ready removal to its actual function-owned transaction. Canonical `ActorProcesses` storage and one transaction-required publication helper now exist inertly: publication rejects any remaining legacy locator/cell, replacement requires the exact stored current process, planner failure writes nothing, and enclosing rollback removes a staged successor. Canonical `ServiceHeader`/`ServiceNodes` storage and transaction-local append/remove helpers are also inert: they require matching generation-bound Service process residence and no legacy authority, preserve empty/singleton/interior/cursor links, reject stale generations or local corruption, and roll back staged mutation. Generated standalone production-runtime weights now cover the populated append maximum, atomic process publication over empty/populated insertion, atomic service retirement over singleton/pair-cursor/interior unlink, plus round begin, eligible probe and eligible admission carrier extrema; the artifact guard requires every owner, while no benchmark pretends these inert boundaries are a complete production caller. Canonical `DeadlineHeaders`/`DeadlinePages`/`DeadlineHandles` now add inert retained C32 deadline ownership: transaction-local insert/remove/move requires exact generation-bound Deadline process residence, reuses fragmented slots, rejects full/invalid destinations, unlinks empty pages, and rolls back failed movement. Clock-local `DeadlineIndexPages`/`DeadlineIndexPositions`/`DeadlineIndexLen` now form the inert paged binary min-heaps over exactly the nonempty canonical Block/Tick buckets: deadline-member publication/removal transactionally creates, validates or repairs the exact heap entry while direct index boundaries reject legacy authority, missing/corrupt headers, stale inverse positions and capacity overflow; full C32 page boundaries, clustered/overdue ordering, exact repair and enclosing rollback are covered without touching production wakeup traversal. No production caller reaches these boundaries. Supported create and activate both call `insert_active_actor`, which places identity, hot state, admission, cursor and current-Step resources only in an Unsignaled control cell, removes scalar `ActorIdentities`, and then calls `prime_initial_actor_schedule`; active loaders continue to recover admission and state from that placement cell. The read closure is likewise placement-backed: active classification enters through `load_frame_actor_state`, service/execution through `load_actor_service_state_with_authority`, observation activation directly through `load_observation_activation_state_with_authority`, and initial scheduling reloads `load_frame_actor_service_state` after temporal placement. The post-publication writer closure is cross-module: `store_frame_control_authority`, `replace_control_admission_for_transition`, `prepare_observation_ready_cell`, `update_existing_frame_control_identity`, `update_existing_frame_control_hot`, `consume_waiting_from_supplied_authority`, and `write_run_state` mutate those same fields inside legacy placement. `do_create_actor` and `do_activate_actor` already provide outer rollback transactions, so transaction availability is not the blocker. A storage-free minimal `ActorSemanticState` now makes the complete lifecycle shape explicit: `Dormant` retains identity only, while `Active(ActorSemanticRecord)` retains identity, hot state, and admission, including zero-Step Actors. Cursor/eligibility project from canonical run state and current-Step resources project from contract geometry, with pure invariants rejecting Idle/run and Running-or-Suspended/no-run mismatches or missing resources. Compare-and-replace tests cover dormant-to-active activation and active-to-dormant deactivation without introducing storage or production authority. The cutover mapping is now source-bound: create and activate share `insert_active_actor`, which receives scalar identity/fresh hot state plus complete contract geometry, derives admission and either Step-0 or generated zero-Step resources, then publishes before storing geometry; service projection reads run state plus exact contract head/tail geometry, so no caller-specific constructor or zero-Step semantic field is needed. The complete storage-neutral semantic operation set is one fail-if-present `Publish`, whole-record compare-and-replace for every identity/hot/admission writer including active-to-dormant deactivation, and exact-record `Remove` only for terminal finalization; placement-only residence movement performs no semantic mutation. A source-backed owner map and pure stale/missing/duplicate refusal prove this shape. Each semantic operation adds one read and one write; initial Live publication must compose that with the generated populated service/process publication owner (`10r/6w`), so the worst supported create/activate path gains at least `11r/7w` plus the semantic record's measured execution/proof contribution. Existing lifecycle benchmarks neither execute that composed path nor name semantic storage, so production publication remains blocked until create/activate/deactivate/finalize benchmarks exercise the complete cutover and regenerate pallet/runtime Weight bindings atomically with caller conversion. The source-backed Weight-owner matrix now binds active/dormant creation, at-slot/sovereign aliases, activation, deactivation and every dispatch/scheduler terminal-finalization caller to its generated lifecycle owner or shared close upper bound; this exposed and corrected `cancel_run` as the sole dispatch that could terminally finalize without charging close cleanup. A create-only or Ready-only semantic split would still create dual truth or lose the sole current owner; the smallest valid cutover must convert this complete loader/writer closure together with initial placement and composed Weight. A source-backed regression binds that closure and keeps canonical service publication/retirement unreachable until the atomic conversion. Do not populate `ActorProcesses` from `Unsignaled` or retain two residence authorities. Preserve direct arbitrary unlink, destination-first or transactional movement, one occupancy authority, no allocation on retained Live progress, and complete Block/Tick/review coverage. Open a second N6.2 candidate only if implementation falsifies a recorded bound. Cover empty/singleton/interior/wrap/full rings, fragmented/full pages, clustered/overdue deadlines, stale generations, refusal, rollback, and corruption. **Exit:** The selected bounded storage/index design is implemented with structural and generated full/fragmented evidence; common Live progress allocates no membership and every control operation has bounded authority.
+```text
+B_anchor[a] = authoritative final watched balance
+T[a]        >= 100 * ED[a]
+```
 
-- [ ] **N3.6 / Block-Round Frontier and Persistent Ring Service.** Implement the `EXP-0126` round protocol across Prepass/Drain or their approved replacements: consensus block B is the immutable round identity; `ServiceHeader` owns one persistent next-encounter cursor; each node owns `eligible_from` and `last_considered`; process state independently owns Q1 `last_attempted`. Inert transaction-required round boundaries now initialize one immutable `round_block`, classify Empty/Closed/AlreadyAttempted/Eligible at the persistent cursor, reject stale generation and malformed future markers, stamp an admitted attempt into process-owned `last_attempted`, and defensively converge an already-attempted head without a second attempt; compile/publication transitions preserve Q1, ring admission derives `eligible_from = B + 1` and `last_considered = B`, and production Prepass/Drain remain unchanged. The independent oracle preserves its next-encounter position across partial rounds, distinguishes candidate observation from admitted turn/cursor movement, and leaves a resource-refused head unchanged across later passes and the next block. One shared storage-neutral trace now proves the actual carrier matches the oracle for cross-block continuation, wrap, and independent RefTime/ProofSize refusal without importing pointer layout; generation, mutation, Cycle-outcome and Q1 differential fixtures remain open. Generated production-runtime owners measure populated append (`35,549,000` ps / `6,086` bytes), atomic retirement across singleton (`34,851,000` / `3,948`), pair-cursor (`42,394,000` / `6,086`) and interior (`46,724,000` / `8,634`) unlink, round begin (`10,127,000` / `1,511`), eligible probe (`17,321,000` / `3,550`) and eligible admission (`22,629,000` / `3,550`) without connecting a second scheduler authority. Stamp every B admission/reentry as already considered and eligible from B + 1, stop at the first B marker, and never advance a valid unaffordable head. Prove zero/one/many members, interruption, wrap, head/cursor/interior/last removal, cancellation and generation replacement without initial length, removable sentinel, phase-local cursor or scanned served prefix. **Exit:** No duplicate or skipped eligible turn, donated/recaptured turn, same-block reentry exploit, ring-wrap loop or phase-reset double service; a resident next Step needs no successor rematerialization.
+Capture `B_anchor` after the last committed Step effect and actual fee settlement, after releasing transient Attempt reservations, and after every balance-affecting finalization operation covered by the transition. Capture only when the configured recurrence requires another balance-activated Cycle. Do not enumerate all sovereign assets. The watched set comes from a bounded authored/derived plan.
 
-- [ ] **N3.7 / Dependency-Keyed Parking and Lost-Wakeup Protocol.** Implement the `EXP-0127` protocol across exact-key registries/direct mappings, reverse ownership and bounded dirty/Pending traversal. Inert `DependencyRevisions`, `PendingCheckOwners`, and exact source/Actor `DependencyRegistrations` now establish checked source revision/exhaustion state, one Actor-generation/plan-revision obligation, and acknowledged-revision handles without notification traversal or production authority. Transaction-required revision mutation advances monotonically, writes sticky exhaustion instead of wrapping, and rolls back with its enclosing transition; install is overlap-idempotent, while replace validates the successor before overwriting exact old authority and remove accepts only the exact current handle. Inert transaction-local scan boundaries now capture one fixed source revision and fixed append horizon, retain a scalar cursor, derive each encountered exact handle from source-owned retained C32 registration pages, atomically remove an exact stale slot or advance its matching generation/plan Pending registration acknowledgment through the fixed target before moving the cursor, hand completion directly to the newest retained revision/horizon, and fail closed without erasing cursor state on authority refusal, exhaustion, or rollback. Exact reverse positions keep replacement/removal in place, append across full pages, and retain a bounded free-position stack; holes are reused only outside active scans so fragmentation cannot retarget a cursor or create unbounded append growth. An inert event-complete publication boundary now atomically advances the source and retains exactly one scan: it captures the new revision/horizon only when idle, otherwise coalesces behind the immutable active target, and preserves scan state on exhaustion or enclosing rollback. The finite production source-owner inventory is now closed to Oracle feed state: registration, pause/resume lifecycle mutation, deactivation, and changed or equal-value publication each bind the collision-free `OracleFeed(feed)` source schema, present transaction boundary, and exact post-write/pre-event publication point; source-backed runtime evidence rejects every unclassified `Feeds`/`Observations` writer. A transaction-required inert bijection now resolves each typed Oracle feed to one monotonically allocated scalar `DependencySourceId` with exact reverse ownership, idempotent reuse, sticky exhaustion, occupied-source refusal, and enclosing rollback; no hash or unbounded lookup can define source identity. The generic Oracle package now exposes one closed `OnFeedStateChanged` post-write/pre-event hook covering registration, pause, resume, deactivation, changed publication, and equal-value refresh under each owning transaction; exhaustive package evidence proves authoritative post-state visibility and rollback. The production DEOS adapter maps every hook cause through the exact feed/source bijection into the event-complete publication boundary in O(1), reuses identity, and fails transactionally on source/revision exhaustion; all six causes and enclosing rollback are covered. Oracle benchmark setup distinguishes allocation/begun registration from reuse/coalesced existing-feed lifecycle and publication paths, generated Oracle weights charge the composed Actors storage effects, and the existing changed-observation ingress remains unchanged. An inert Actors-owned exact circular source carrier now bounds occupancy by the maximum complete-plan registration population, preserves one fair cursor, admits only active scans transactionally, makes duplicate insertion idempotent, supports O(1) arbitrary removal only after scan completion, and fails closed on capacity/topology errors with rollback evidence. An inert combined publication boundary now retains even an empty fixed-horizon scan source, keeps exactly one membership across coalescing, and rolls revision plus carrier mutation back together. Production Oracle publication now resolves its exact source, advances the revision, and retains one fair scan-source membership in the same transaction; all six causes share this boundary, coalescing preserves one membership, and carrier-capacity refusal rolls back Oracle registration plus source allocation. Three distinct Actors benchmarks close empty-list begun, populated-list begun, and coalesced/already-active carrier insertion branches with generated production-runtime Weight ledgers; the benchmark artifact guard requires all three. Oracle-composed production weights now cover begun versus coalesced carrier effects across registration, lifecycle, changed publication, and equal refresh. Generated scan probe/member/completion/fault weights, explicit fault ownership, fair fourth-family shared-budget integration, and transactional completion/removal wiring remain ordered gates; the existing observation dirty list stays solely legacy feed-trigger fanout authority. Age expiry remains timed and incomplete balance/spendability remains timed. An inert single-source negative-evaluation commit now transactionally revalidates exact Actor generation/plan and source revision, installs or replaces one registration, acknowledges only that covered snapshot, and preserves old authority on refusal or rollback. An Actor-owned bounded complete-plan commit now prevalidates every desired source snapshot and exact retained registration, installs or replaces successors before removing obsolete sources, rejects duplicate/oversized/capacity-invalid plans, and preserves the complete prior set on refusal or rollback. The same transaction now retains one optional Actor-owned Block/Tick timed review, validates its exact generation/plan and strictly future clock domain before event mutation, and atomically installs, retains, replaces, or removes it while refusal and rollback preserve the complete prior event/time plan. An inert due-review boundary now revalidates the authoritative Block/Tick clock and exact current generation/plan/review, publishes one typed durable Pending destination before removing the deadline authority, and makes exact replay idempotent while early, stale, raced, occupied-destination, and rollback paths retain the prior owner. Exact Pending-review consumption now prevalidates the retained cause, atomically installs the complete event-only or event-plus-time successor plan before removing only that Pending authority, and preserves the prior obligation on replay, owner/source race, invalid deadline, capacity refusal, or rollback. Event-source scans now publish one exact Actor-generation/plan-bound source/revision cause into durable Pending event authority before acknowledging the registration or advancing the cursor; scan acknowledgment updates the matching complete-plan handle atomically, an already-Pending matching owner coalesces without cause history, and stale destination ownership, rollback, or source/owner races preserve the unacknowledged obligation. Exact Pending-event consumption revalidates the retained cause, owner, current source and acknowledged registration, installs the complete event-only or event-plus-time successor before removing only that event destination, and preserves authority on replay, mismatch, revision advancement, invalid deadline, capacity refusal, or rollback. Event and timed causes share one Actor-keyed logical Pending destination: either publication fails closed while the other cause is retained, and exact consumption releases only its cause before a later alternate publication can succeed. Keep each shared traversal target fixed, retain newer revisions as the next target, and advance a subscriber cursor only after stale proof or durable destination authority. Exhaustion is sticky and fail-closed; incomplete balance/spendability/provider domains retain timed review. Coalesce updates without cause history. **Exit:** Deterministic adversarial interleavings cannot lose the only future check, publish two activations or wake an unrelated/old generation; notification cost remains bounded and fully attributed.
+Bind the anchor to Actor id, semantic generation, plan/configuration identity, a monotone parking episode and the exact asset/surface. This is wake metadata, **not** an Opening snapshot, a funding accumulator or a basis for future Task amounts.
 
-- [ ] **N3.8 / Membership Transfers, Arbitrary Control and Saturation.** `EXP-0128` freezes one transactional residence exchange: preflight and stage the destination while the source remains authoritative, linearize once through `Process.residence`, then release the exact source and advance cursors/acknowledgment in the same commit. Normal full conditions retain the unchanged source with typed local backpressure. Pause/update/cancel/retire directly revoke and unlink without ordinary destination capacity; interrupted detach retains one generation-bound process-local cleanup cursor serviced only from mandatory Control reserve. Implement this across every Live/Sleep/Park/Pending edge, owner/protocol control, stale generation, last-member deletion, callback rollback and full carrier. **Exit:** Exactly one current residence, terminal cleanup authority or completed deletion remains after every outcome; no unbounded search, dropped invalidation or full-capacity terminal dead end, and every path has a complete resource owner.
+If a completed Actor remains Live for one final permitted turn before parking, retain the completion anchor. A qualifying change between completion and installation of the parked registration must remain detectable; do not silently replace the anchor with the later balance and absorb the change. Alternatively, complete baseline capture and park publication atomically in the completion transition when its full cost is admitted.
 
-## N4 — Disablement, Mutation and Asynchronous Reclamation
+Initial activation of a newly created or explicitly reconfigured Contract has no preceding completed Cycle. Define one explicit initial arm operation using the committed initialization balance. It must not mistake the initial balance for an incoming credit or retroactively replay deposits made while no parked registration existed.
 
-- [ ] **N4.1 / Revocation and Authorized Revival.** `EXP-0129` freezes one process-owned `Serving`/typed `Disabled`/irreversible `Retired` status protocol. Park remains automatic negative current-state evidence, never owner status. Revocation removes serving authority before bounded direct detach and preserves custody, committed Cycle prefixes, retry attempts/deadlines and failure state without economic rollback. Resume/reactivation is an explicit cause-authorized, generation/plan-bound current-state reconstruction with complete admission and B + 1 eligibility; it never reattaches a raw stale residence. Contract replacement retires the old semantic generation before an atomically admitted replacement can serve. Immutable/System rights do not expand implicitly, Retired has no revival edge, and ordinary wakes only detach stale references. Implement the finite status/Cycle/authority matrix. **Exit:** Cheap cessation of service and authorized mutation/revival are complete; nonterminal parked Actors are never mistaken for reclaimable objects.
+Routine polls, subthreshold notifications, duplicate hints and negative checks must not move `B_anchor`. A new anchor is normally established by completion of the next admitted Cycle, or by an explicit authorized contract/rearm transition. Record any exceptional reset policy and its economic consequence.
 
-- [ ] **N4.2 / Generation-Safe Owner and Protocol Cleanup.** `EXP-0130` freezes one sealed retired-generation cleanup manifest with fixed direct-residence, executable-auxiliary, detector/reverse-registration, semantic-state, resource-release and tombstone phases. Each generated unit deletes or proves stale one exact generation-tagged quantum and advances its canonical cursor atomically; no population scan, mutable discovered-work queue, semantic wake or generation-blind key deletion is allowed. Replacement generations use disjoint namespaces, while custody is excluded and holds/slots release only after prove-empty finalization. Mandatory maintenance is separately funded rather than idle-only, and admission must keep cleanup-debt creation below sustainable service. Implement the phase/interruption/replacement/full-capacity matrix. **Exit:** Owner mutation during sweep preserves the new program and custody; mandatory disablement remains possible at full capacity and cleanup progress is explicitly funded and bounded.
+### 2.2 Exact observed quantity and threshold
 
-- [ ] **N4.3 / Retained State, Holds and Reclamation Debt.** `EXP-0131` freezes one generation-owned retained-byte hold plus admission-time terminal-capacity bond. Disabled state remains fully collateralized; retirement converts the presecured bond into exact classed cleanup debt without allocating at the mandatory edge. Component-wise payer/global high-water checks bound old generations and stale references; mutable admission backs off before saturation while mandatory revocation consumes reserved capacity. No post-seal old-generation reference may be created. Separately funded non-borrowable maintenance drains the canonical cursor after halt/interruption, and old hold/slot/bond release only after prove-empty finalization. Implement the lifecycle, saturation and recovery matrices and generate exact byte/debt/rate owners. **Exit:** No free cold storage, unsecured terminal debt, future-generation subsidy, custody mutation or silent transfer between storage collateral and block computation.
+**Proposed default to ratify:** use absolute net change of the declared sovereign asset balance:
 
-## N5 — Remove Obsolete Duties and Close the Physical Resource Model
+```text
+delta[a] = abs_diff(B_now[a], B_anchor[a])
+qualified = delta[a] >= T[a]
+T[a] = max(authored_min_delta[a], checked_mul(100, ED[a]))
+```
 
-- [ ] **N5.1 / Old-Path Reachability and Removal.** `EXP-0132` freezes a fresh-genesis hard cut: delete the old `pending_signal` Cycle latch, Opening snapshot/surfaces, Ready tickets/pages, waiting primary cells, per-Step successor publication and unmetered fallback; replace temporal/run/API forms only under one stable generation-bound process and Live/Sleep/Park/Pending residence machine. Preserve sovereign custody, provider anchors, fee collection and effect adapters strictly as non-scheduling boundaries. Implement every Manual, ingress, observation/Crossing, temporal, retry, lifecycle, genesis, independent-host and client route without a compatibility reader, dual write, migration or fallback scheduler; regenerate metadata, ABI and Weight owners atomically. **Exit:** Compile-time absence and supported-path tests prove deleted authority unreachable, preserved boundaries cannot schedule work, custody/effects are unchanged, and only one engine owns each behavior.
+This interprets “balance change” as movement in either direction and “at least 100 times ED” as an inclusive boundary. The task owner did not separately choose increase-only behavior or per-credit versus cumulative incoming thresholds; freeze those distinctions explicitly. Do not silently convert the default to positive credits.
 
-- [ ] **N5.2 / Complete Weight Owners and Reachable State Domain.** `EXP-0133` freezes one generated resource-domain matrix for create/certify, notifications, observation and negative checks, ring rounds, current execution/retry, arbitrary unlink, residence transfers, Sleep extraction, Park refresh, lifecycle mutation, cleanup, mandatory service and bounded APIs. Every descriptor admits prerequisite reads, selector CPU, distinct-key/root-inclusive proof, staged writes and mandatory refusal/rollback suffix before mutation. Task effects reserve then settle independently; dispatch Control, retained-byte holds and cleanup debt remain separate. Implement maximum/singleton/full/fragmented/deep, cold/hit, stale, refused and rollback fixtures with setup assertions, no assumed overlap discount and no fallback Weight. **Exit:** Every shipped route and retained class maps to generated owners over its complete legal domain, and production bindings reconcile requested/outstanding/settled Weight, physical keys/proofs and collateral maxima.
+`B_now` must be bound to one named, authoritative host balance surface. Prefer the actual asset balance rather than transient Actor fee availability for this trigger; decide whether the host's free or total-owned balance best implements that contract and document it. **Do not equate balance, total-owned balance and spendable Available.** Effect amount resolution continues to use current Available independently. A hold/freeze change without a watched balance change is not automatically a balance trigger; a separately promised spendability/observation/time wake retains its own coverage obligation. [R10]
 
-- [ ] **N5.3 / Known Hazard and New-Model Soundness Closure.** `EXP-0134` freezes the composed supported-domain matrix: selector and executor share one typed current-generation domain; callback-visible authority is revalidated; acknowledgments cover only evaluated revisions; block rounds remain immutable; residence transfers linearize once; custody survives scheduling refusal; mandatory capacity is presecured; and event-only Park requires a host-certified closed mutation domain, otherwise deterministic timed review or explicit rejection. Implement its exact reference/independent-host, callback, wake, round, transfer, lifecycle, cleanup, capacity and compile-time old-path falsifiers with EXP-0133 resource owners. **Exit:** Zero unresolved known supported-domain safety/resource blockers, with exact reviewed executable outcomes rather than a claim that all imaginable future defects were disproved.
+Use `ED[a]` in the same asset units as `B_now[a]`: the host's native existential balance for native currency and the authoritative asset minimum for another asset. Never multiply native ED and compare it with an unrelated asset balance. No price oracle is needed to interpret the threshold unless a separate explicit value-based policy is approved.
 
-- [ ] **N5.4 / Physical Architecture Closure Gate.** `EXP-0135` freezes the compact physical design: one stable generation process; one actor-keyed intrusive Live/Pending ring; retained C32 deadline pages and paged min-heaps; revisioned Park/Pending wake plans; immutable block rounds; transactional residence; sealed cleanup; and separate Control, effect, settlement, collateral and debt owners. It records exact selected encodings and structurally eliminated old successor-publication operations without claiming a measured benefit. Complete the remaining exit gates through N6.5 residency/churn evidence and runtime/model/property/generated proof; the Synthesis owns no raw benchmarks. **Exit:** One production-capable model has measured ordinary, negative, delayed, burst and maintenance costs; no essential round, wake, capacity or Weight proof is deferred to 0.7.28.
+Unknown, zero, unrepresentable or changed asset minima need an explicit bounded admission/recertification outcome. Reject unsupported zero-floor profiles or require an explicitly governed positive floor; never silently admit a dust-sized threshold. Use checked/widened arithmetic, no unsigned underflow, silent saturation or overflow-to-zero. Bind configuration identity and define requalification when the minimum changes. On-chain configuration must never admit a threshold below the applicable floor.
 
-## N6 — Bounded Comparison, Residency Evidence and Final Decision
+The floor is a **wake magnitude**, not a fee, burned amount, storage deposit, proof of sender expenditure or guaranteed economic anti-spam cost. A party might recover transferred funds through an authored policy. Negative work, callbacks, notices and oscillation still need resource bounds and a payer.
 
-- [ ] **N6.1 / Economic Goals, Workloads and Materiality Freeze.** `EXP-0136` freezes twelve bounded workloads before current-lineage measurement: reference Fee Sink/Burn/liquidity and representative User goals; current-balance multi-Step runs; funded retry; recurrence; true/false churn; 10,000-identity sparse Park; paged wake storms; Sleep/reentry; owner mutation; heavy effects; blocked heads; and cleanup under demand. Exact populations, horizons, demand modes, outcome/censoring classes, equal-semantics versus H/L bridge boundaries, matched-noise rules and mechanism-sized materiality are fixed. Implement the named fixtures and instrumentation with N3–N6, without shrinking the matrix or moving its target after results. **Exit:** The finite matrix and executable fixtures detect moved polling/cleanup bills, lost work and order changes; no arbitrary universal rate or post-result target.
+### 2.3 Net change is not gross incoming value
 
-- [ ] **N6.2 / Minimal Necessary Physical Choices.** `EXP-0137` and its dated amendment retain one implementation baseline: stable process placement, actor-keyed intrusive Live/Pending ring, exact revisioned Park lookup, retained C32 deadline pages plus paged heaps, and sealed exact-handle reclamation. Route S requires correction of any evidenced boundedness, authority, wake, saturation/rollback or resource-soundness defect regardless of research allowance. Route P admits at most one performance-driven same-semantics alternative campaign only after a representative implementation misses a predeclared criterion or protected regression, complete applicable work identifies one causal physical owner, and one concrete alternative plus smallest falsifier are frozen; at most one bounded refinement is declared before measurement. Provisional Weight, stale coefficients and isolated large numbers do not qualify. If the baseline meets its criteria, stop; if the bounded alternative fails, record it and return the release decision without moving to another bottleneck. **Exit:** Every selected operation is executable over its complete legal domain, S remains mandatory, P is finite and evidence-qualified, and one implementation remains.
+The default compares against the fixed anchor, not against the most recent sample and not against a sum of absolute movements.
 
-- [ ] **N6.3 / Final Whole-Service Production Comparison.** Compare selected new geometry against a sound same-contract reference where meaningful, and against H/L by the declared economic-goal bridge. Use exact final production-Wasm and uninstrumented confirmation. Report effects, intended workflow completion, delays, service gaps, censored/pending work, notifications/negative checks, retries, User/effect/Control Weight, state and cleanup debt. Include N6.5 churn and round costs. Validate any fixed-trace sensitivity arithmetic; do not sum overlapping local improvements or treat charged counters as independent physical bounds. **Exit:** Declared materiality and protected regressions hold on the whole retained service, or the finite campaign records its exact obstruction without a false speedup or indefinite extension.
+Examples at `T = 100 * ED`:
 
-- [ ] **N6.4 / Design, Sacrifice and Release Freeze.** Publish the composed accepted decision: what Actor means, ring-order/Q1 boundaries, live versus delayed/parked residence, current reads, preserved retries, lost transient/provenance guarantees, recurrence, billing and generation-safe cleanup. Explain physical choice and the measured price of moving work. Obtain approval for residual changed guarantees beyond §1.2. Freeze one engine; transfer only a compact measured residual ledger to the later optimization portfolio. **Exit:** The semantic and physical decision is complete, useful performance is established, and no unselected alternative becomes an automatic new 0.7.27 campaign.
-
-- [ ] **N6.5 / Residency Benefit and Parking-Thrash Accounting.** Measure resident membership writes, round/header/guard cost, Step state persistence, park/sleep/live transfers, certificate and subscription churn, false wakes, wake latency, inactive-set traversal and sweeper debt. Compare long useful runs, repeated true/false conditions, bursty updates while pending, adjacent-block retries, long sleeps, interior cancellations and huge idle sets with a small live frontier. Track physical operations, not just status changes. The first operation ledger is V1 resident execution and reports useful effects, completed workflows, committed Steps, retries, latency, remaining work, membership allocation/unlink, successor publication, round/header/Q1 writes, logical keys/bytes, component-wise maximum/reservation/settlement and retained cleanup debt. V2 extends the same ledger through negative check, Park, source or timed review, coalesced Pending and Live return, including publication, scans, false wakes, revision churn and transfer refusal. These are scoped early witnesses, not the EXP-0136 matrix or sweeper closure. An instrumentation-only legacy reconstruction is not a claimed current benchmark. **Exit:** Stable residency demonstrably removes the targeted republishing cost without adding a larger ring/polling/index bill; parking wins or its precise break-even limits are declared, and ordinary Step accounting is never reduced to a fictitious one-header-write total.
-
-## N7 — Bind, Review and Publish the Actual Retained Design
-
-- [ ] **N7.1 / Final Cutover and Artifact Identity.** Remove losing runtime code and unapproved compatibility paths. Retain decision-bearing diagnostic/prototype provenance separately. Generate complete affected production Weight and consumers under the reassessment protocol; bind benchmark/production Wasm, runtime semantics/versions, metadata, ABI, plans/bounds, fees, observation/ingress and clients. Existing owners survive only with exact current applicability. Noise cannot justify an invalid old price; freshness cannot validate a bad new fit. **Exit:** One exact final artifact set implements the accepted contract and selected physical design across the declared host/feature boundary.
-
-- [ ] **N7.2 / Independent Round, Wake and Resource Review.** Independently challenge oracle and implementation: singleton/modified rounds, Q1 across phases, head refusal, reentry generations, lost wakeups, incomplete spendability hooks, dirty acknowledgment, stale loaded context, unauthorized revival, full-index transfers and update/sweep races. Review transferred hazards independently of optimization status. Test applicable cached/noncached paths for semantic equivalence without assuming equal Weight. Verify old-path elimination at all supported entrypoints. **Exit:** Every mandatory obligation has reviewed scoped closure and every unsupported profile is explicitly rejected; no previously missed domain is hidden by a successful common-path test.
-
-- [ ] **N7.3 / Exact-Tree Assurance and Durable Evidence.** Run required canonical full local validation, exact production replay, no-std, benchmark, TryRuntime/integrity, embedding, runtime/client and dependency/threat checks. Confirm diagnostic traces against the uninstrumented production path where identity may differ. Preserve decision-bearing raw samples, trace/model inputs and prototype patches; qualify unavailable old bytes. After fixes refresh affected proofs and final-head CI/review evidence, not old-head checkmarks. **Exit:** The final reviewed source and artifacts satisfy the release assurance contract; historical or diagnostic-only passes are not promoted to current acceptance.
-
-- [ ] **N7.4 / Public Truth and Guarded Publication.** Reconcile specs, architecture, integration, EN/RU Wiki, client authoring/status and release history. Explain the exact difference between old global ticket order and new persistent service order, between wake hint and executable condition, and between parked state and reclaimable state. State timing/load/provider assumptions, measured gains, retained retries, cleanup limits and lost historical causes. Follow current PR/release rules and obtain explicit publication authorization. **Exit:** v0.7.27 describes and publishes the actual reviewed model, with no claimed universal speed, perfect wake coverage on unsupported hosts or fixed latency under arbitrary load.
-
-## 5. Minimum Witness Matrix
-
-Rows below are acceptance coverage, not a mandatory one-EXP-per-test list. Reuse fixtures and parameterized/model tests when they prove the same claim. Build legal states through supported transitions, or establish an explicit construction equivalence before measuring a synthetic fixture.
-
-### Execution, recurrence and safety
-
-| Witness | Required observation |
+| Parked-period history | Default net-balance interpretation |
 | --- | --- |
-| Start condition becomes false after Step 0 | The existing Cycle still follows Step-local conditions; no accidental idle parking or restart. |
-| Top-up, fee/hold change or oracle update between Steps/retries | Fresh typed available amount and observation; no repeated committed prefix or retry reset. |
-| True condition after completion | Declared recurrence and minimum interval; no same-block second Cycle. |
-| Transient rise/fall or many changes while busy | Missed transient allowed; no fabricated historical crossing or next-Cycle latch. |
-| False/zero/unavailable/invalid input | Declared distinct outcomes; unknown observation does not prove permanent uselessness. |
-| No block Weight / insufficient service budget | Bounded paid prefix, no unadmitted effect, exact deferral/counter behavior. |
-| Retired/parked sovereign receives assets | Custody unchanged; only permitted wake/reactivation follows. |
-| Supported generic host/feature profile | Required semantics/coverage hold, otherwise admission rejects or selects documented timed review. |
+| `+60 ED`, then `+40 ED`, with no offsetting change | Qualifies at `+100 ED`; the first small update must not reset the baseline. |
+| `+60 ED`, then `-60 ED` before a sampled check | Net zero; no required activation. |
+| `+100 ED`, then a return to the anchor before any permitted observation | A transient may be missed in a declared sampled-current-state profile; do not claim historical-event detection. |
+| A qualifying observation already retained as Pending, then balance falls back | Keep the check obligation; revalidate current applicability before starting a Cycle. A stale positive does not authorize an effect. |
+| External funding during Running/retry | The Step sees current funds; no new balance activation, credit history or next-Cycle promise is created. |
 
-### Ring order and membership mutation
+With several watched assets, the first implementation should use bounded exact independent thresholds, with a declared `any qualified surface` rule unless the Contract explicitly requests a different bounded condition. Do not add quantities across unrelated assets. Shared hints must not activate unregistered assets/accounts.
 
-| Witness | Required observation |
+### 2.4 Consume qualifying checks without oscillation or lost growth
+
+A qualifying change creates **one** generation/episode-bound activation check. Repeated notices coalesce. The full current start condition is checked at its authoritative boundary; before Cycle start, revalidate it again or prove the carried facts remain fresh.
+
+The first implementation must choose and test one negative-check/rearm rule. Required properties:
+
+- An unchanged already-evaluated balance must not continuously enqueue checks merely because it remains outside the anchor threshold.
+- A failed check must not silently erase a later change or rebase the final-cycle anchor.
+- A further material balance movement that can enable the policy, or a separately watched condition becoming applicable, must get the promised reevaluation.
+- Any last-evaluated revision/watermark is distinct from `B_anchor`, bounded, and explicitly priced.
+- A transient threshold followed by a negative start result does not admit a second Cycle or reset retry history.
+
+Choose between bounded notification invalidation and paid timed reevaluation according to the declared profile. A blanket `last_checked = now` or `dirty = false` is not a lost-wakeup proof. Avoid adding a general historical event log to answer this one question.
+
+### 2.5 Timing and completeness under the revised contract
+
+Do not require invalidation on every change to every possible execution predicate merely to implement the parked-balance delta trigger. Prove completeness for the **chosen wake contract** and separately for any other authored wake obligations.
+
+A notification-driven implementation needs coverage of every supported mutation that changes the watched quantity. This may include direct transfers, protocol/Actor credits, XCM, issuance/burn, slashing, reaping/recreation or another asset-specific path. The list is closed by the actual host, not by a generic claim that every credit uses the same helper. No raw storage write may bypass a promised notification path.
+
+A bounded timed review may implement the **same fixed-anchor threshold** when hooks are incomplete. It can miss intermediate net states and adds latency and polling cost; those are declared properties, not silent equivalence to complete event delivery. It is acceptable only if it meets the frozen correctness and whole-cost criteria. It must not become whole-population per-block polling or reset the baseline on each review.
+
+### 2.6 Conditional fallback: verified parked-period credits with whitelist
+
+If fixed-anchor net tracking cannot provide useful, affordable and adequately reliable activation on the intended host, N3.9 selects verified incoming-credit activation. This alternative is expressly authorized by the task owner; it does **not** authorize restoring the old future-Cycle machine or `PercentageOfLastFunding`.
+
+For the fallback:
+
+1. Install a registration only for the idle parked generation/episode. A dormant, busy, retrying, disabled or retired Actor does not accumulate activation credits.
+2. Observe positive committed credits through certified host paths, including declared internal and cross-chain cases. A current net-balance difference cannot establish their source.
+3. Apply an exact asset and bounded source whitelist at that boundary. An absent source, spoofable payload or unknown upstream sender never satisfies a concrete whitelist entry. Declare whether identity means the immediate certified payer/producer, not an inferred original user through intermediaries.
+4. Reject duplicate/replayed callbacks and rollback all tentative activation evidence with the economic transaction. A self-transfer, charge/refund pair or balance-neutral ledger rearrangement must not become invented funding.
+5. Select one threshold rule before implementation. **Proposed economical default:** a bounded, threshold-capped sum of verified permitted credits during the current parked episode, with the same `100 × ED[a]` floor. Alternatively use a minimum per verified credit if ratified; these are not equivalent.
+6. Keep only the bounded eligibility accumulator/covered authority necessary for one coalesced check, never an unbounded credit history. No credits from an open Cycle leak into the next parked episode.
+7. Evaluate current conditions and spend current Available at execution. The whitelist governs **what wakes the Actor**, not ownership or earmarking of every token already at its sovereign account. A restricted-spending policy would be a separate feature.
+
+Whitelist fallback may be the only supported balance-activation mode for a host if net tracking fails the gate. Keep only the selected production mechanism unless distinct supported use cases justify both. If neither meets the declared contract, report the exact blocking choice to the task owner; do not ship a silent generic-polling substitute.
+
+---
+
+## 3. Delivery Milestones and Non-Negotiable Evidence
+
+### V1 — First ordinary canonical resident Actor (top priority)
+
+V1 is closed only when a production-shaped runtime fixture does all of the following:
+
+- Creates an ordinary **User** Actor through the real supported public dispatch, not direct insertion of `ActorProcesses`, ring nodes or semantic records.
+- Funds custody and service costs through supported ledger paths. Recipients and asset accounts satisfy their real minimum-balance rules; no failed Transfer is counted as useful completion.
+- Uses the real mandatory Actor service entrypoint with normal block/inherent context and generated path owners; no second test executor or `Weight::MAX` shortcut substitutes for admission.
+- Runs a bounded multi-Step Contract with current `Percent` inputs. A normal external balance/market change between Steps changes a later resolution as declared.
+- Produces a genuine supported temporary failure and then recovery through authoritative runtime state. Retry preserves cursor/Cycle/attempt counts and committed prefix. A mock-only synthetic success/failure switch is not sufficient for this integration claim.
+- Demonstrates at least one adjacent-round retry remaining resident and one successful interior-Step progression without node allocation, unlink/reinsert or successor publication. Long retry Sleep/return receives its own V1 extension before claiming that branch complete.
+- Completes the intended economic workflow with exact effects, fee outcomes and Q1/order trace; all lingering residence and cleanup work is reported.
+- Leaves no legacy locator/control-cell/Ready-ticket owner for the Actor and invokes no legacy scheduling fallback. The candidate build must not run a second scheduler beside it to complete the path.
+
+Choose the smallest existing Task/market fixture that supplies a real typed temporary failure; preserve its canonical adapter. Manual authorization or a positive supported current start check may start V1. **V1 does not depend on solving the parked-balance design first.**
+
+A narrowly supported candidate checkpoint may explicitly reject not-yet-connected configurations, but cannot claim them implemented or route them through the old engine. All promised release profiles still have to be connected before N7.
+
+### V2-B — Parked-balance round trip
+
+Extend the actual V1 machinery, not a separate demo:
+
+```text
+last successful Step and fees
+-> fixed final B_anchor and valid parking episode
+-> subthreshold changes do not activate
+-> cumulative net change reaches the declared threshold
+-> one bounded check
+-> current condition admitted
+-> Live from the permitted next round
+-> successful new Cycle
+-> new final baseline
+```
+
+Include a deposit while busy, initial arming, a below-threshold negative review, a later qualifying change, Pending saturation, completion-to-park interleaving and generation replacement. If verified-credit fallback is selected, replace only the signal qualification step and add allowed/disallowed/unknown-source cases.
+
+### V2-O — Existing Oracle producer-to-consumer path
+
+Close one actual supported Oracle feed through registration, unchanged-value freshness update, value/lifecycle change, source scan, Pending, current check and Live return. Include false results and time/age expiry. Improving other Oracle cases may proceed after V1/V2-B, but every attached production callback must already preserve boundedness, transactionality and durable work.
+
+Do not attach a producer to an indefinitely undrained new source list. Either finish the necessary consumer or explicitly gate the new publication coherently while that path is unavailable. Capacity behavior must not silently lose checks or poison unrelated work; any intentional upstream refusal is named and tested.
+
+### Final release closure
+
+V1, V2-B and V2-O are scoped milestones. The remaining supported modes, full domain resource coverage, cleanup, client/API bindings, W1–W12 and final review still gate release. One passing vertical slice does not certify maximum population, general host completeness or full semantic conformance.
+
+---
+
+## N0 — Narrow Semantic Amendment and Executable Contract
+
+- [ ] **N0.1 / Intake and Explicit Supersession.** Reconcile the working branch against R1, preserve local changes and classify existing results as decision / implemented / production-reachable / behavior-tested / resource-bound / integrated. Adopt this continuation as the sole active plan. Record the exact cutover blocker and next executable outcome, not the count of helpers or commits. Reuse completed current-state work. **Exit:** one current status table, one active critical path and no competing backlog.
+
+- [ ] **N0.2 / Configuration, Ordering and Wake Decision Table.** Amend only the affected semantic decisions: parked-only balance monitoring; final baseline lifecycle; watched balance surface; net-change direction and inclusive threshold; per-asset ED/config changes; first-arm rule; negative-check rearm; periodic versus balance-gated recurrence; conditional permitted-credit threshold and whitelist meaning. Ratify the proposed defaults in §2 or name the exact approved alternative before code/measurements. Maintain `Fixed`/`Percent`, retry and no future Cycle. **Exit:** one finite behavior matrix; the `100 × ED` floor is enforced rather than a documentation hint; no undocumented fallback.
+
+- [ ] **N0.3 / Normative State Machine and Independent Oracle.** Resolve B2 with a semantic order decision and independent list model. Add partial-round admission/reentry, cursor/last/interior removal and generation replacement traces, plus the parked-balance state transitions. Preserve a model independent of storage layout and the runtime scheduler. Replace contradictory current summaries and affected specification text; do not require rewriting untouched history before V1. **Exit:** model and carrier agree on the newly distinguishing traces; specification authority is unambiguous for the paths entering production.
+
+## N1 — Evidence Continuity Without Another Research Migration
+
+- [ ] **N1.1 / Active Semantic Lineage Projection.** Keep EXP-0120–0137 and earlier records intact. Import unchanged ring, retry and custody claims at their real scope. Qualify EXP-0121–0124, EXP-0127 and their composed consumers where generic current-condition parking differs from the new parked-balance threshold. Add a small explicit semantic delta rather than automatically reopening every ancestor. **Exit:** current obligations and consumers can be found without reading the full historical corpus.
+
+- [ ] **N1.2 / Skill and Validator Boundaries.** Enforce that selected design, connected implementation, executable evidence and resource binding are separate states. Add only checks needed for this amendment; no new experiment bureaucracy or mandatory second prototype. Preserve same-host reassessment, exact artifacts and finite stopping. New decision-bearing evidence belongs in a bounded Leaf; the index and backlog contain pointers, not another diary. **Exit:** a record cannot count design acceptance as V1/V2 completion, and a new balance profile cannot inherit old numerical truth silently.
+
+- [ ] **N1.3 / Applicable Hazard Closure Routes.** Carry B1–B8 and the existing H1–H9 routes into N5.3. Distinguish a known legacy finding, an untested replacement hazard and a reproduced defect. A retained heap or fallback keeps deep/full obligations; actual elimination closes only the removed path and requires replacement coverage. **Exit:** each applicable hazard has one owner and falsifier; no correctness obligation is waived because an optimization candidate was rejected.
+
+## N2 — Complete the Actual Current-State Execution Path
+
+- [ ] **N2.1 / Minimal Canonical Continuation.** Connect the current Run/Cycle representation to ordinary new-engine execution. Prove Idle/open-run consistency, exact generation/Contract binding, cursor advancement, completion, zero-Step distinction and one current obligation. Keep independent semantic tests already passed; fill the missing production entrypoints. **Exit:** the V1 ordinary Actor advances and completes without direct test-state construction or legacy placement.
+
+- [ ] **N2.2 / Live Amount and Predicate Evaluation.** Retain the implemented current-only evaluator. Verify `Percent` and `Fixed` through V1 public execution, including balance changes between Attempts, fee-native reservations, protected minima, shares and non-native assets. Keep the parked balance anchor entirely outside Task amount resolution. Reject removed authoring forms rather than reinterpreting them; do not reintroduce Opening or LastFunding state. **Exit:** current economic results and boundary outcomes agree with the declared surfaces and independent expected arithmetic.
+
+- [ ] **N2.3 / Error Policy and Retry Continuity.** Connect all retained error policies to canonical residence transitions. Adjacent-round retries retain the member; later retries move through the paid deadline path. Neither busy credits, Manual requests, source updates nor parking metadata reset attempts. Admission/resource refusal does not consume an execution attempt. Preserve prefix effects and exact local/global exhaustion semantics. **Exit:** V1 retry succeeds after genuine recovery without repeating earlier effects; long-delay, abort, continue and permanent-error paths have their own executable closures.
+
+- [ ] **N2.4 / Loaded Transition Context and Economic Owners.** Finish the read/write cutover begun by `load_actor_semantic_state`. Inventory every semantic Publish/Replace/Remove owner and convert create, activate, update, deactivate, cancel, completion and terminal paths together with their resource composition. Use one stable semantic owner; derive cursor/resources from their selected owners rather than adding synchronized copies. Carry validated loaded authority until a relevant callback/mutation invalidates it. **Exit:** ordinary callers no longer recover semantic state from legacy placement; rollback restores the entire owned transition; no copied authority, unowned selector or stale cached balance exists.
+
+- [ ] **N2.5 / Certified Step and Wake Plans.** Reuse existing Contract/admission plans and add only the bounded information required for parked-balance activation: exact watched surfaces, mode, per-asset floor, direction, source capability and generation/config identity. Separate static plan, final parking baseline, acknowledged check metadata and current Step values. Do not require a general dependency solver or new VM. **Exit:** only configured surfaces are observed; the plan is not rebuilt on every Step and stale plans cannot authorize wakes/effects.
+
+- [ ] **N2.6 / Co-Access and Stable State Geometry.** Confirm the selected stable semantic/process, sparse Run and ring layout against actual V1 reads/writes. Close the existing writer split before considering alternative layouts. Bind parking metadata to the stable generation, not to a mutable queue position. Track the actual cost of semantic record plus process plus ring node; “one stable owner” is not automatically one read. **Exit:** one implemented layout, no Contract/custody copying on transfers, and an operation ledger adequate to detect duplicated loads or writes.
+
+## N3 — Connected Service, Parking and Wakeup
+
+- [ ] **N3.1 / Autonomous Discovery and Activation Checks.** Connect the minimum paid positive current check needed for V1 and then the negative/return paths for V2. Use actual runtime callers and ordinary mandatory service; no test-only alternative executor. Coalesce one generation-bound check, retain it under refusal, and distinguish applicability from permission to inspect. **Exit:** supported work is discovered and processed without external executors; every producer has a bounded reachable consumer or is explicitly gated.
+
+- [ ] **N3.2 / One Current Obligation and Residence Policy.** Implement Live/Sleep/Park/Pending transitions on the canonical process. A continuation due by the next permitted round remains resident; longer retry/deadline work Sleeps. An open Cycle never enters idle balance parking. Balance-mode completion captures the fixed anchor and ends busy monitoring before parking; no new Cycle is queued by its own effects. **Exit:** at every committed boundary exactly one current residence/terminal authority exists and no per-Step successor publication is needed for ordinary resident progress.
+
+- [ ] **N3.3 / Certified Parking and Wake Completeness.** Requalify completeness against the selected trigger, not every hypothetical mutation of Available. For net-balance mode prove notifications for the named balance or declare bounded threshold-preserving review. For credit mode prove committed-credit and source coverage. Independently preserve authored time/Oracle validity obligations. Registration and final-baseline installation cannot miss a post-completion change. **Exit:** no busy tracking, indefinite stale park or silent switch from balance delta to generic predicate polling.
+
+- [ ] **N3.4 / Negative Work, Fairness and Griefing Budget.** Price nonmatching, unparked, subthreshold, duplicate, negative, refused and cleanup paths as well as positive activation. Keep tiny updates on the smallest bounded lookup path; they must not decode the full Contract, append Pending work or charge another full activation fee. Preserve complete one-check paid authority where already selected, but review the actual payer and retention after the new threshold gate. Test refundable/circular deposits and repeated threshold oscillation: `100 × ED` is not a spam-proof fee. **Exit:** no free unbounded notices/polling, counter reset, starvation hidden by censoring or busy-state bookkeeping proportional to incoming events.
+
+- [ ] **N3.5 / One Concrete Ring/Sleep/Index Carrier.** Complete the coherent semantic writer + process/ring cutover on the selected doubly linked carrier and retained C32 deadline substrate. In one supported candidate build, no Actor executes through a parallel old scheduler. Convert the lifecycle closure, conditional initial service publication and generated callers as one coherent change; inert helpers are not its exit. Early unconnected profiles must reject explicitly and cannot be advertised as delivered. **Exit:** public-created V1 actors use canonical semantic/process/ring authority; empty/singleton/interior/full/deep/fragmented and rollback paths are bounded and priced.
+
+- [ ] **N3.6 / Block-Round Frontier and Persistent Ring Service.** Connect begin/probe/admit/advance to actual Prepass/Drain, sharing one immutable block-round identity. Resolve B2; preserve next-encounter order, Q1, non-consuming refusal and B+1 admission/reentry. Differentially compare mutable runtime traces to the corrected independent oracle, not just the existing fixed three-Actor trace. **Exit:** V1 Steps and adjacent retries retain membership; no duplicate, donated, skipped or recaptured turn; no production full-ring snapshot or unbounded wrap.
+
+- [ ] **N3.7 / Dependency-Keyed Parking and Lost-Wakeup Protocol.** Finish the existing revision/scan/Pending consumers, using exact source/generation/plan/parking-episode authority. Bound scan target and append horizon; retain newer work; acknowledge only after durable destination or exact stale proof. Complete one current Oracle path, including equal-value refresh, lifecycle and age expiry. Avoid introducing unneeded per-credit source registries when actor-local certified hooks suffice. **Exit:** V2-O and source/Pending saturation cannot lose work, grow undrained sources, duplicate residence or revive old generations; unrelated source updates remain isolated and charged.
+
+- [ ] **N3.8 / Membership Transfers, Arbitrary Control and Saturation.** Connect and prove arbitrary unlink, source-preserving refusal and atomic residence exchange. Secure a destination or bounded retained pending authority before removing the source; advance source/review cursors only after that commit. Mandatory revocation must remain possible at legal capacity. Include callbacks, partially served rounds, interior cancellation, replaced plans, event/time coincidence and exhausted identifiers. **Exit:** exactly one valid obligation survives success/refusal/rollback; full capacity is a defined backpressure case, not unexplained worker poisoning.
+
+- [ ] **N3.9 / Parked-Balance Mode Selection and Delivery.** Implement and measure the smallest fixed-anchor candidate of §2 on the intended native and one supported non-native surface. Freeze hook/review coverage, cost/latency criteria, all boundary semantics and inclusion rules first. Complete V2-B with public credits, no busy bookkeeping and a floor of at least `100 × ED[a]`. If it fails, record the exact blocking reason and activate the single verified-credit/whitelist fallback; no repeated polling redesign loop. Keep only the accepted mechanism unless distinct supported profiles justify both. **Exit:** one trustworthy, affordable parked-balance activation product is fully integrated, or the exact unresolvable tradeoff is returned to the task owner before release; neither mode restores LastFunding amounts or a busy future-Cycle latch.
+
+## N4 — Safe Revocation, Mutation and Asynchronous Cleanup
+
+- [ ] **N4.1 / Revocation and Authorized Revival.** Connect Serving/Disabled/Retired semantics to ordinary controls. Parked may be mutated rather than deleted. Explicit replacement binds a new semantic generation and invalidates the old baseline/registrations atomically; resume of the same generation preserves the declared retry and anchor rules instead of guessing from absence. Ordinary credits cannot revive owner-disabled/retired state. **Exit:** control rights, committed prefix and custody survive replacement, pause/resume and saturation without old-generation execution.
+
+- [ ] **N4.2 / Generation-Safe Owner and Protocol Cleanup.** Execute the selected sealed exact-handle reclamation plan in bounded quanta. Old Park anchors, credit accumulators if selected, event/time handles and Pending entries are included. Sweeps cannot delete a new generation or enumerate sovereign assets. Epoch/era timing can make work eligible, but cannot create an unbounded single-block purge. **Exit:** interrupted cleanup coexists with public replacement; all deleted keys are old-generation qualified; mandatory progress has a real budget and never depends solely on spare idle time.
+
+- [ ] **N4.3 / Retained State, Holds and Reclamation Debt.** Bind actual retained-byte and terminal-capacity costs, including baseline surfaces, whitelist/credit metadata, reverse handles and outstanding generations. A collateral deposit does not reserve future CPU/PoV. Secure mandatory revocation capacity at admission; cap debt and apply backpressure before ordinary creation/replacement can outgrow maintenance. **Exit:** no free cold state, unbounded old-generation growth or premature hold/slot release; reported performance includes debt arrival, service and drain time.
+
+## N5 — Removal and Complete Resource Closure
+
+- [ ] **N5.1 / Old-Path Reachability and Removal.** Hard-cut the supported build from legacy placement, tickets, future-Cycle latches, historical Crossing duties, Opening snapshots and LastFunding accumulation. Preserve effect/custody/credit-authentication boundaries. A newly selected parked-credit adapter may reuse a verified producer boundary, but not its old scheduling authority. Inspect dispatch, genesis, hooks, simulation, recovery, embedding and feature builds; no compatibility reader or dormant fallback may recreate legacy service. **Exit:** V1/V2 and every promised release profile are served by one engine; absence assertions and ordinary-path tests agree.
+
+- [ ] **N5.2 / Complete Weight Owners and Reachable State Domain.** Generate complete composed owners alongside caller conversion. Cover semantic publication/removal, ring rounds, actual Step/retry, all notice/check outcomes, final anchor capture, threshold arithmetic, whitelists/credits if selected, deadline extraction, scans, transfer refusal and cleanup. Reuse sound unchanged owners only with exact applicability. Include first/middle/last/full/fragmented/deep, cold/hit, selector/executor and rollback suffixes. Measure pure control flow and producer-side no-match work. **Exit:** every reachable production segment is owned; `actual <= reserved` is backed by a sound model, not two matching underestimates; no provisional Weight enters a release performance claim.
+
+- [ ] **N5.3 / Known Hazard and New-Model Soundness Closure.** Close B1–B8 and all applicable inherited hazards with executable evidence or proven elimination. Add fixed-anchor drift, below-floor wakes, per-asset unit confusion, credit duplication/source spoofing, lost completion-to-park changes, stale episode acknowledgment and busy-state accumulation. Complete the round/generation differential suite and full-capacity recovery. **Exit:** no known supported-domain correctness/resource blocker remains; a design-level Accepted record or green source-string test alone cannot close a behavioral claim.
+
+- [ ] **N5.4 / Physical Architecture Closure Gate.** Compose the actual retained semantic/process/ring/wake/deadline/cleanup implementation and its generated owners. Replace design-only closure labels with actual caller, test, binding and whole-operation evidence. Qualify physical choices if measured replacement costs contradict their purpose. **Exit:** one complete production-capable model; ordinary resident progress avoids the targeted republishing work, and no essential wake, capacity, cleanup or Weight proof is deferred to `0.7.28`.
+
+## N6 — Useful Measurements and Finite Design Choice
+
+- [ ] **N6.1 / Economic Goals, Workloads and Materiality Freeze.** Retain EXP-0136 W1–W12 where their premises survive. Before new decision runs, amend only the rows changed by parked-only `100 × ED` activation: recurrence, true/false churn, sparse Park, threshold/credit storms and balance review latency. Classify previously affordable subthreshold starts as intentionally outside the new promise, not missing successes. Preserve populations/horizons unless the accepted semantic change truly requires a documented revision. Freeze the V1/V2 fixture contracts before collecting their decision outputs. **Exit:** no post-result target adjustment; every sacrificed capability and cost transfer is visible.
+
+- [ ] **N6.2 / Minimal Necessary Physical Choices.** Continue EXP-0137's selected baseline and its latest S/P amendment. Safety defects require correction regardless of experiment budget. At most one qualified performance-driven physical alternative campaign with one predeclared refinement is admitted after a complete representative slice identifies a material owner. The explicitly authorized net-balance versus parked-credit decision is a bounded semantic-mode choice under N3.9, not permission for endless carrier alternatives. **Exit:** one retained implementation; no ritual second prototype, arbitrary coefficient trigger or premature physical freeze against contradictory evidence.
+
+- [ ] **N6.3 / Final Whole-Service Production Comparison.** Confirm final workloads on exact production Wasm with matched semantic/resource identities. Equal-new-semantics comparison is CS1/CS0 only; compare H/L separately by economic goal and declared changes. Include User fees, effects, rejection/censoring, notifications, review timers, residency, source lag and cleanup. Do not compare small deposits that intentionally no longer qualify as if the new engine had lost valid promised work. **Exit:** frozen useful materiality and protected limits hold, or a finite, honest negative result names the remaining decision; no fabricated universal speedup.
+
+- [ ] **N6.4 / Design, Sacrifice and Release Freeze.** Record the chosen balance quantity, direction, floor, baseline lifetime, mode and whitelist semantics; recurrence and round order; retained retries; missed transient states; fees; and generation cleanup. Distinguish free/total balance detection from Available-based spending. Freeze one design only after V1/V2 and resource/evidence closure. **Exit:** reviewers can state what this Actor guarantees, what it no longer promises and why the measured tradeoff is acceptable.
+
+- [ ] **N6.5 / Residency Benefit and Parking-Thrash Accounting.** Start instrumentation on V1, not another isolated helper. Count membership allocation/unlink, successor publication, semantic/process/node/header writes, input reads, retry transitions, effects, fees, time and remaining work. V2 adds final-baseline writes, per-credit no-match/subthreshold cost, negative checks, registration/acknowledgment changes, source scans, review timers and cleanup. Measure busy-credit storms and repeated unchanged reviews separately. **Exit:** saved republishing and avoided checks exceed their replacement costs on the claimed scope; no fictitious “one header write per Step” or free parked population.
+
+## N7 — Bind, Independently Review and Publish
+
+- [ ] **N7.1 / Final Cutover and Artifact Identity.** Bind the final source tree, benchmark Wasm, generated Actors and dependent Oracle/Router/effect weights, production Wasm, metadata, ABI/PAPI, bounds, cost/fee vectors and clients. Retain unchanged artifacts only with applicability evidence; incompatible authoring must be explicitly rejected/versioned. Ordinary public paths, independent embedding and all supported feature builds share the declared contract. **Exit:** one reproducible artifact set and no legacy/provisional numerical authority masquerading as final binding.
+
+- [ ] **N7.2 / Independent Round, Wake and Resource Review.** Reviewers attack B2's distinguishing order, source/consumer saturation, watched-balance definition, baseline races, tiny-credit griefing, fallback source identity, callback rollback, full/deep heaps and old-generation sweep. Derive expected traces independently of implementation. Fix findings in their owners and rerun affected proofs, not the entire corpus by reflex. **Exit:** every material finding is resolved or removed from the enforced supported scope with explicit authorization; no claim relies solely on tests generated from the same algorithm.
+
+- [ ] **N7.3 / Exact-Tree Assurance and Durable Evidence.** Run the repository's required full validation on the frozen final tree, plus the complete V1/V2 and supported-domain matrix. Retain decision-bearing raw outputs, commands, environment facts, benchmark and production identities, source manifests and regression seeds. Use the interactive-workstation reassessment protocol, not a quiet-host requirement. **Exit:** exact-tree assurance is reproducible, local versus external CI evidence is distinguished, and host noise is not used to excuse an unowned path.
+
+- [ ] **N7.4 / Public Truth and Guarded Publication.** Reconcile specification, architecture, embedding, Wiki EN/RU, authoring and release notes. Explain the parked-only threshold and selected fallback without advertising it as a sender-spending restriction or universal notification guarantee. Publish measured benefits and limitations, unsupported forms and remaining noncritical research. Use the existing release procedure only after explicit task-owner authorization. **Exit:** tagged code, claims, accepted decisions and final evidence describe the same system.
+
+---
+
+## 4. Required Proof Matrix
+
+Tests below are bounded witnesses, not mandatory new EXP IDs. Use the existing test/runtime infrastructure; retain current passing proofs only within their unchanged domain.
+
+### 4.1 Balance, baseline and fallback
+
+| Witness | Required result |
 | --- | --- |
-| Empty and singleton ring, large remaining budget | Empty terminates; singleton never executes twice by wrapping. |
-| Partial round stopped/resumed across Actor phases | One round and independent Q1 guard survive; no frontier recapture. |
-| Head/tail/interior cancellation during a partially served round | Surviving original members keep promised order; removed members' turns do not transfer to newcomers. |
-| Ring `[A,B,C]`: A served, B/C removed, new member added | Neither A nor new membership gets an extra current-round turn merely because saved length was three. |
-| Remove/reinsert or new Contract generation in the same block | Same-block protection survives; stale membership cannot authorize new-generation execution. |
-| Many joins while original members remain unserved | New admissions cannot steal the current frontier or starve old eligible members. |
-| Eligible head lacks only remaining Weight | Head priority preserved under the adopted contract; no cheap/privileged follower bypass. |
-| Head proves no present service before parking | Paid transfer is allowed only by the specified semantic rule, not a disguised resource bypass. |
-| Owner mutation of an arbitrary member | Bounded removal/repair, no whole-ring predecessor scan, valid round state. |
-| Resident next Step / adjacent-round retry | No successor enqueue/rematerialize merely for one-block progression; execution metadata remains correct. |
+| Deposit during Step execution or retry | Current economic reads see it; no balance-trigger state/credit sum/next-Cycle promise changes. |
+| Periodic Actor active between due points | Its own schedule remains authoritative; parked-balance notifications do not replace retry/cadence logic. |
+| Last effect + actual fee + released fee reservation | Anchor equals the declared final authoritative balance, not a provisional value. |
+| External credit between completion and Park installation | It is either included by the defined atomic snapshot boundary or remains visible relative to the retained completion anchor; never swallowed by a later reset. |
+| Delta `T-1`, `T`, `T+1` | Inclusive qualification at T under the ratified default; exactly one owed check, not one per callback. |
+| `+60 ED` then `+40 ED` with an intermediate negative review | Qualifies at the fixed-anchor total; review cannot drift the baseline. |
+| `+60 ED` then `-60 ED` before sampled observation | No gross-volume qualification in net mode. |
+| Decrease by T | Matches the explicitly frozen direction rule; no unsigned underflow. |
+| Same observed balance after a failed start check | No perpetual duplicate activation; later material growth or another promised dependency change still gets its check. |
+| Native and non-native assets | Correct minimum and units for each; no cross-asset sum or native-ED substitution. |
+| Zero/unknown ED, threshold overflow or config revision | Explicit supported-domain refusal/requalification; no zero/dust gate or stale policy. |
+| Hold/freeze/spendability change without watched-balance change | Does not pretend to be a deposit/balance movement; any independently promised wake remains covered. |
+| Tiny unrelated credits and unregistered assets | Only the priced minimal producer path; no full Actor/Contract evaluation, baseline rewrite or Pending growth. |
+| Pending already exists; newer change; destination full | Exactly one durable obligation survives; no blind acknowledgment or source loss. |
+| Pause/retire/update/recreate before callback | No unauthorized revival; new generation has fresh declared arm state; old callbacks and sweep cannot affect it. |
+| Fallback: allowed/disallowed/unknown source | Only certified whitelisted positive credits qualify; inference from transaction labels or net balance is forbidden. |
+| Fallback: repeated callback, outer rollback, self-transfer, refund | No duplicate/counterfeit credit and no state retained from rollback; qualification follows the exact certified policy. |
+| Fallback: several small permitted parked credits | Matches the selected aggregate/per-credit rule; no busy-period accumulation, unbounded history or LastFunding amount basis. |
 
-### Parking, notification and capacity
+### 4.2 Ring, continuation and ownership
 
-| Witness | Required observation |
+| Witness | Required result |
 | --- | --- |
-| Unrelated asset/feed changes | No unjustified Actor activation or full registry scan. |
-| Relevant balance/spendability/provider/time boundary | Complete-domain certificate invalidates, or the declared timed fallback discovers persistent eligibility. |
-| Update before/after registration and during negative check/acknowledgment | A newer change remains pending; no clear-dirty lost wakeup. |
-| Repeated updates while pending | One logical activation-check obligation; no per-cause history or duplicate ring membership. |
-| Shared-feed traversal interrupted by another revision or subscriber change | No skipped promised member; bounded restart/resumption without unbounded fanout. |
-| Notification arrives while Actor is Running/retrying/paused/retired | No future Cycle, retry reset or unauthorized revival. |
-| Pending/live/sleep destination full | Typed backpressure retains one durable obligation; no lost wake or unrelated worker poison. |
-| Certificate becomes stale after Contract/runtime/config update | Reject/recertify/review under a paid bounded path; never indefinite stale parking. |
-| Persistently false state with unchanged relevant dependencies | No repeated negative checks outside declared timed fallback; no pointless registration rewrite. |
-| Repeated Park/Live/Sleep transitions near a time/condition boundary | Counted movement and negative work remain bounded; residency policy avoids provable needless oscillation. |
-| Time wrap, overlapping wheel bucket or overdue backlog | No early retry, lost deadline, unbounded catch-up or hidden scan. |
+| A served; cursor B; new D; next block | Exact ratified distinguishing order; model and carrier agree. |
+| Empty/singleton/pair/interior/cursor removal and reinsertion | Bounded exact neighbor updates, no missing member or donated turn. |
+| Resource refusal in each Weight component | Same eligible head retains priority across passes/blocks; no execution attempt counted. |
+| Resident Step and adjacent retry | Same membership survives; current values are reloaded; cursor/attempt and prefix are correct. |
+| Long retry Sleep/return | One obligation, no early service, no generation loss, no future Cycle. |
+| Current start becomes false after first Step | The existing Cycle obeys Step conditions/error policies; it is not parked by reevaluating its original start gate. |
+| Public create/update/deactivate/close | One semantic owner and one residence/terminal authority; no legacy fallback or direct-fixture-only success. |
+| Atomic callback failure after tentative state/fee/index changes | Correct rollback of all owned state; the next Attempt cannot use abandoned cached authority. |
+| Oracle update during scan/negative acknowledgment | Covered revision only is consumed; newer promised work and bounded backpressure persist. |
+| New generation while old sweep runs | New code, custody, wake registration and same-block guards remain isolated. |
 
-### Storage, cleanup and physical evidence
+### 4.3 Resource and empirical distinctions
 
-| Witness | Required observation |
-| --- | --- |
-| Canonical state during Live/Park/Sleep transfer | Contract/custody not copied; single process/residence authority and generation-safe references. |
-| Rollback after tentative page/cache changes | No abandoned in-memory or index authority survives; next Attempt reads canonical state. |
-| Cached/compiled plan across relevant mutation | Freshness invalidated or recomputed; no stale condition authorizes spending. |
-| Bitmap/membership summary disagrees with cell | Typed integrity failure/recovery; not silent disappearance or double execution. |
-| Old generation partially swept while owner updates | New program, account and replay identity preserved; old cleanup cannot resurrect or remove new state. |
-| Full retirement reserve / prolonged churn | Required revocation remains bounded; state and cleanup debt have explicit enforced limits. |
-| Deep/max-population versus ordinary fixture | Resource model covers reachable worst cases, not just the successful shallow path. |
-| Traces versus exact production replay | Diagnostic counters/resources are scoped and linked; end-to-end effects, order and state agree. |
+Keep separate: raw benchmark samples, fitted RefTime, generated ProofSize, logical accesses, distinct keys, recorded root-inclusive proof, requested/outstanding reservation, settled Weight, token fees, state holds and cleanup debt. A lower settled charge does not prove a smaller physical proof. An additional shared key may invalidate a claimed bound even if a simple coefficient comparison looks favorable.
 
-A cold archived Contract still has a state cost; a bitmask still has update/proof cost; a generation still requires cleanup; a ring still needs admission and state persistence. No single representation substitutes for the above evidence.
+Measure selection before mutation, failed preflight, producer callbacks and rollback suffixes. Reuse is allowed only within the recorded scope. No new selector is free because it has no DB reads. No old coefficient is sound merely because a new workstation run is noisy.
 
-## 6. Comparison Metrics and Release Gates
+---
 
-### Minimum measured report
+## 5. Evidence, Comparisons and Stopping
 
-Report useful outcomes and the work required to sustain them, using the fixed N6.1 populations/horizons:
+### 5.1 Existing results
 
-| Domain | Required metrics / distinctions |
-| --- | --- |
-| Useful service | Successful effects, intended workflows/Cycles, distinct progressed Actors, committed Steps with their semantic meaning, detection/first-Step/completion latency, service gaps and censored/pending work. |
-| Residency | Live/parked/sleeping/pending occupancy; useful turns per live visit; residency lengths; membership inserts/unlinks and successor publications per useful Step. |
-| Parking | Notifications/source updates, relevant/irrelevant/coalesced checks, certificate refreshes, false wakes, registry writes, time-to-wake and timed fallback checks. |
-| Movement | Live/Park/Sleep/Pending transitions, same-condition oscillations, capacity refusals, cancellation/repair cost and stale references traversed. |
-| Resources | RefTime and ProofSize separately; requested versus outstanding maximum, actual settlement, logical accesses, distinct keys, encoded value bytes and recorded root-inclusive proof. |
-| Lifecycle | Create/certify/update cost, retained bytes/holds, old generations, cleanup debt/rate and time to bounded recovery after an arrival burst. |
-| Contention | Actor Control/effect/User use, head-resource refusals, negative-check budget, wake/maintenance share, sustained overload behavior and ordering changes. |
+- Preserve EXP-0120–0137 and earlier sealed observations. Add dated applicability amendments or a newly earned bounded claim only where this request changes meaning.
+- Keep the existing correction for `cancel_run`; qualify its resource composition when lifecycle changes.
+- The reported partial-round discrepancy is an open model/carrier consistency finding until the executable trace closes it. Do not describe it as an exploited released-runtime bug.
+- Retained deadline heaps keep deep/full/fragmentation obligations. Dropping old Cadenced semantics alone does not remove them.
+- The old due-frontier experiment already showed isolation from added non-due identities in its scope. Do not sell parking as though legacy execution necessarily scanned every Actor.
 
-Do not invent a universal weighted score. A lower parked count or a shorter ring is not itself a win. A gain in live-Step rate that leaves wake discovery or cleanup indefinitely behind is not an end-to-end gain. Workload proportions matter; report where the design does not break even.
+### 5.2 W1–W12 amendment discipline
 
-Sparse-population comparisons must acknowledge existing legacy due-frontier isolation. Establish newly removed negative-check, topology or publication cost instead of claiming that only the new scheduler scales with active work. Constant rounds/summaries or block baselines are separately attributable shared work, not an unbounded scan hidden in “fixed overhead.”
+EXP-0136 remains the starting twelve-workload contract, not a claimed set of completed current-engine runs. Amend the exact affected semantic premises before measurements. [R7]
 
-### Gate ownership
+Add parked-balance witnesses as explicit extensions to recurrence/churn/sparse/wake rows, not as a second independent mega-suite. A sparse event-Parked population must use a domain with actually proved notification coverage; do not manufacture 9,872 event-complete balance Actors if the host only supports timed review. Change a semantically impossible setup through an explicit pre-measurement amendment, preserving its economic purpose and publishing the distinction.
 
-| Gate | Required closure |
-| --- | --- |
-| **Contract gate — N0** | Exact new states, ring ordering, Q1, block frontier, recurrence, retry and parking/reclaim rights. |
-| **Service gate — N2/N3/N4** | One current-state executor and complete bounded live/sleep/park/pending/reclaim operation. |
-| **Safety/resource gate — N5** | Every reachable owner and transferred hazard closed on the selected representation. |
-| **Performance/design gate — N6** | Predeclared useful result, total costs/tradeoffs and one accepted retained design; no cherry-picking or moved workload. |
-| **Release gate — N7** | Exact artifact identities, independent review and final-tree assurance with accurate public claims and explicit publication authorization. |
+V1/V2 may establish scoped early results before the entire matrix. They cannot make a release claim without final binding and protected mixed-service/maintenance checks. Benchmark setup may create large fixtures through controlled helpers when clearly labelled, but the first ordinary-Actor integration witness must use normal public paths.
 
-These gates do not require serializing all development; their proofs develop with their owning paths. A newly found safety issue cannot be deferred as optional tuning even after the finite candidate set is exhausted.
+### 5.3 Success and finite fallback
 
-## 7. Migration and Preservation of Previous Work
+- V1 success is real canonical execution with full resource ownership, not a throughput target.
+- Net-balance mode success requires correct final-anchor semantics, supported coverage or explicit sampled review, bounded producer/check costs, declared acceptable latency and no busy-state activation work.
+- If net mode fails, record the exact failure and run the one authorized verified-credit/whitelist alternative. Do not endlessly tune generic polling or expand all Oracle coverage before deciding this mode.
+- Performance acceptance remains the predeclared whole-service materiality, with explicit tradeoffs. No mandatory `100 Actors/block`, `2×` or universal percentage is introduced.
+- Safety correction never expires with a research allowance. Conversely, an attractive unrelated optimization does not extend the release automatically.
+- If neither activation mode or the complete engine meets the agreed contract, return the exact unresolved decision. Do not silently weaken thresholds, drop unfinished Actors, count failed effects or publish design-only success.
 
-This is the only proposed active root backlog. The earlier planning files remain provenance, not parallel specifications.
+### 5.4 Compact milestone report
 
-| Prior task or decision | Current treatment |
-| --- | --- |
-| Original G0–G7 soundness/redesign plan | Relevant hazards, raw-evidence hygiene, sacrifice decisions and release checks retained. No universal requirement to repair a completely removed old engine. |
-| Revised current-state N0–N7 | All IDs preserved. No future-Cycle history, live amounts, retries, autonomous discovery and evidence applicability remain. |
-| Previous N2.4–N2.6 physical closure | Strengthened for stable process ownership and certified Step/Wake plans; no presumption that a new VM or global cache is required. |
-| Previous N3.1–N3.5 generic service choice | Now implements the selected persistent-residency/parking design, with logical wake/activation separated from the chosen carrier. |
-| **New N3.6** | Owns mutable block-round/frontier correctness and no per-Step membership republishing. |
-| **New N3.7** | Owns dependency-keyed parking, complete/timed wake plans and lost-wakeup closure. |
-| **New N3.8** | Owns atomic residence transfers, arbitrary removal and full-capacity preservation. |
-| Previous N4 parking/cleanup | Retained; Parked is explicitly not reclaimable, generation isolation and capacity backpressure cover the new indexes. |
-| Previous N5.4 physical gate | Adds exact ring, wake, transfer and whole-maintenance closure. |
-| **New N6.5** | Owns proof of residence savings and anti-thrashing break-even, feeding final N6.3. |
-| Previous N6.4 deferred FIFO decision | User-selected cyclic residency is now the design direction; exact difference from old global FIFO must be ratified in N0, not presented as automatic equivalence. |
-| Previous N7 | Retained with stronger independent round, wake, pointer, capacity and state/currentness challenges. |
-| Conversational singly linked ring sketch | Candidate only; arbitrary removal, singleton behavior, mutable-round safety and real storage costs decide implementation. |
+For each V1/V2 handoff report only:
 
-Verified work may satisfy an unchanged subclaim. A previously completed task whose domain has changed is qualified, not silently rechecked or blindly restarted. Keep accepted historical observations intact and show only the new obligations on the active graph.
+```text
+exact commit/tree and runtime identities
+public entrypoint and supported Actor profile
+connected path and remaining blockers
+actual executed tests and commands (not merely test source presence)
+semantic/economic outcomes and chronological trace
+complete resource owners plus remaining qualified domains
+operation ledger, pending work and maintenance debt
+next smallest connected deliverable
+```
 
-## 8. Deferred Work and Non-Goals
+There is no additional report per helper. The next report should demonstrate a closed behavior, not another inventory of inert types.
 
-### Proposed 0.7.28 physical-efficiency portfolio — inactive here
+---
 
-After a sound viable 0.7.27 design exists, the next campaign may compare broader ring/page layouts, bitmap widths, cache scopes, timing-wheel/radix variants, data packing, key ordering/hashers, shared immutable programs and additional Step shapes. Admission changes or resource redistribution require their own domain and policy decision.
-
-Do not deliberately leave obvious redundant reads/writes in the new kernel for a later optimization release. Remove locally proved waste when it lies inside scope and is fully covered. Conversely, “another encoding might be faster” does not authorize an endless present sweep. The installed design's required bounds and cold/full/failure coverage are never optional.
-
-### Other retained programmes
+## 6. Deferred Work and Retained Programmes
 
 | Programme | Disposition |
 | --- | --- |
-| Full Local Causal Introspection | Deferred. Its old causal vocabulary needs requalification; ordinary harness diagnostics here do not implement it. |
-| Network Physiology | Deferred. Historical cost anatomy is not automatically a measurement of this model. |
-| CB2 / CG and other old candidate queues | Historical conditional evidence, not automatically N6 candidates or release dependencies. |
-| Universal obligation registry / secondary scheduler | Not introduced merely by naming a logical obligation or wake plan. Reuse one current service owner. |
-| Whole-program atomic recipes / Q1 relaxation / cost-priority bypass | Not selected. Require a separate semantic decision rather than a carrier shortcut. |
+| Broad page/fanout/bitmap/hash/key-layout/cache sweeps, shared immutable programs and speculative fast paths | Proposed `0.7.28` portfolio after one sound, measured current engine. Local redundant work can still be removed when equivalence and coverage are clear. |
+| Timing-wheel/radix replacement by preference alone | Not active. The selected carrier gets one implementation; a bounded qualified S/P route can reopen it. |
+| Full Local Causal Introspection / Network Physiology | Deferred; new diagnostics do not instantiate either programme. |
+| General future-Cycle event history, LastFunding amount mode and a second scheduler | Excluded. The permitted parked-credit fallback is a narrow activation qualifier only. |
+| Whole-program atomic recipes, Q1 relaxation and cost-priority bypass | Not selected; require separate semantic approval. |
+| Universal event-complete balance/spendability interface for every host | Not required. Ship the explicitly supported net/review or verified-credit profile and do not overstate its guarantees. |
+| Further Oracle feature expansion | Improve after the connected required paths; existing supported reachable callbacks still need full correctness and pricing. |
+| Complete migration/renumbering of historical EXP files | Not required; qualify consumed claims only. |
 | External keepers or intents | Excluded as a requirement for ordinary Actor progress. |
-| Complete historical experiment migration | Not required; preserve old records and qualify consumed claims only. |
-| Old-line remediation | Independent scope if needed. A defect eliminated in the new engine is not retroactively fixed in the old release. |
-| `$BLDR` capital bridge, builder invoice settlement, User creation gate, vacant-slot custody claim and broader framework work | Preserve historical task contracts at [S10]; no automatic import into current-state service. |
-| Broader emergency-breaker programme | Separate scope; actual reachable breaker/control/custody behavior still requires release coverage. |
-| New signing/binary distribution platform | No invented gate. Essential durable evidence and exact production identity remain required. |
+| `$BLDR` capital bridge, builder invoice settlement, User creation gate, vacant-slot custody claim, obligation identity and capacity-release scheduling | Preserve the historical task contracts and entry conditions; no automatic import into this release. [R11] |
+| Broader emergency-breaker work | Separate scope, but actual reachable breaker/revocation/custody behavior remains in release coverage. |
+| New signing/distribution platform | Not an invented release prerequisite; exact artifacts and essential durable evidence remain required. |
 
-No deferred heading can absorb an unresolved supported-domain safety or coverage blocker.
+No deferred heading may absorb a supported-domain safety or resource blocker. Historical remediation for an old release is distinct from eliminating the path in this fresh-genesis release.
 
-## 9. Final Closure Statement
+## 7. Final Release Statement
 
-The final Synthesis must answer all of the following without adding raw measurement branches:
+Before publication, the final Synthesis must answer:
 
-1. Which current-state capabilities remain, which historical causes were removed, and how are incompatible old Contracts rejected?
-2. Do multi-block Steps, current percentages/all-available, same-cursor retries and committed prefixes work without external executors or future-Cycle latches?
-3. What exact order does the ring promise, what differs from the old FIFO, and how is a single block-round enforced despite membership changes and multiple Actor passes?
-4. Which common Steps remain resident; what state actually changes; what old publication work was removed rather than shifted?
-5. What constitutes a valid park reason, which dependency domains have complete wake coverage and which have explicit timed review?
-6. How are negative checks, duplicate source updates and pending checks coalesced without a lost wake or unbounded fanout?
-7. Where is canonical Actor data stored, how do membership indexes reference it and how are arbitrary owner controls bounded?
-8. What happens when any destination or cleanup structure is full, and why does exactly one service obligation survive refusal/rollback?
-9. How do generation-safe mutation and asynchronous cleanup protect new state and custody while bounding holds and debt?
-10. What paid owners cover selectors, rounds, transfers, cache freshness, full/deep structures, effects and cleanup?
-11. Which historical claims were imported, which hazards transferred and which removed mechanisms were eliminated by proof?
-12. What whole-service improvement was established, under which population/load/horizon, and where do wake/polling/movement/cleanup costs limit it?
-13. Which timing/order/state/economic tradeoffs were accepted, and which follow-up optimizations are truly optional?
-14. Do source, accepted semantics, tests, Weight/Wasm, clients, public documentation and reviewed release identities agree?
+1. Does an ordinary publicly created User Actor run entirely on the new semantic/process/ring owners, including retry and completion?
+2. Which per-Step membership operations actually disappeared, and what operations replaced them?
+3. What exact parked-balance quantity, direction, baseline boundary and `100 × ED` rule shipped?
+4. Was fixed-anchor net mode retained, or was verified-credit/whitelist mode selected, and why?
+5. How are busy periods, subthreshold changes, negative checks, late credits and configuration changes handled without lost wakes or baseline drift?
+6. Are all attached Oracle/balance publishers matched by bounded paid consumers or explicit support gating?
+7. Are Sleep, mutation, arbitrary unlink, full capacity and old-generation cleanup correct under the final resource model?
+8. Which end-to-end economic result improved, under which changed guarantees, and with what latency, state and maintenance tradeoffs?
+9. Which exact artifact/test/review identities support each of those claims?
 
-**Ordinary acceptance requires semantic closure, physical closure, supported-domain soundness, the predeclared useful complete-path result and final assurance.** A semantic-only or correctness-only checkpoint is a different disposition requiring explicit task-owner acceptance.
+The required conclusion is a working, measured machine with a precise activation product. It is not “all design experiments are Accepted.”
 
-“All gaps closed” means all known supported-domain safety/resource gaps and decision-critical unknowns have reviewed scoped outcomes. It does not promise to prove every possible future theorem or turn every old experiment into mandatory work.
+---
 
-## Source Register and Handoff
+## Sources and Provenance
 
-This is a consolidation of the supplied planning files and the latest conversation. N0.1 verified refs, post-release progress and current implementation shape only; N0.2/N0.3 and N1 still own semantic decisions, supported-configuration closure and evidence applicability. Source links below are inherited historical provenance, not automatic authority over the new semantic mandate.
+These links identify the inspected source basis, not files to overwrite. Read the working tree first. The task owner's latest parked-balance clarification supersedes conflicting planning premises, but does not assert that the new behavior already exists.
 
-The latest live-ring proposal supplies the design direction. The following are explicitly added design-closure requirements, not source-derived measured findings: robust mutable-round accounting rather than a length-only loop; bounded arbitrary unlink rather than an assumed free singly-linked removal; exact lost-wakeup/acknowledgment rules; separation of parked nonterminal state from reclaimable generations; and whole-service validation of residence savings. None claims that a particular carrier has already passed a benchmark.
-
-| Planning input | SHA-256 | Treatment |
-| --- | --- | --- |
-| `DEOS_BACKLOG_0.7.27.md` | `68c5c6d8f87da26e295d777c94fc42dee40f3fff8e06e69831e7d496fe58f9bf` | Original G-plan superseded; applicable hazards and deferred-programme provenance retained. |
-| `DEOS_BACKLOG_0.7.27_REVISED.md` | `113c6a1ccb0f2dc26c11fb949ca18d6dc0b2d08021726648bcf406565372226b` | Current-state mandate and historical applicability retained; service architecture now explicit. |
-| `DEOS_BACKLOG_0.7.27_FINAL.md` | `73f6f00528cdd71a1bf808f5e772a938a699df2f91cae8b78c7002e46f7f8976` | All 32 N-task IDs preserved; generic service plan replaced by the selected persistent-residency/parking closure, with four new tasks. |
-
-All previous N0–N7 task IDs are retained. N0.1 is complete; historical implementation and evidence may satisfy only explicitly requalified subclaims, while every remaining checkbox is unverified work. Do not add the supplied planning artifacts to runtime/build dependencies or maintain a second active backlog.
-
-[S1]: https://github.com/atmo-network/deos/releases/tag/v0.7.26
-[S2]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/template/pallets/actors/docs/specification.en.md
-[S3]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/.agents/skills/architecture-experiments/SKILL.md
-[S4]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/.agents/skills/architecture-experiments/tracks/actors/EXP-0117.md
-[S5]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/.agents/skills/architecture-experiments/tracks/actors/EXP-0118.md
-[S6]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/.agents/skills/architecture-experiments/tracks/actors/experiments.md
-[S7]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/.agents/skills/release-assurance/evidence/candidate-attestation.md
-[S8]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/BACKLOG.md
-[S9]: https://github.com/atmo-network/deos/blob/c16675edf03e3af0d6dcf3080a31c64b49765a5b/AGENTS.md
-[S10]: https://github.com/atmo-network/deos/blob/e449d20fd57aff48945663d974d0d4e8f0faffeb/BACKLOG.md
-
-**First actions:** N0.2/N0.3 fix the finite ring/current-state contract; N1 imports applicable hazards and N6.1 declares measurements. Build the current-balance multi-Step/retry slice while independently testing ring rounds and parked-wake handoff. Then choose one co-access-informed carrier and close its resources. Do not begin with a whole-corpus migration, a large actor scan disguised as parking or a catalogue of low-level tricks.
-
-**Governing rule:** keep useful continuations resident; park only with a complete wake or timed-review contract; move membership rather than the Actor; coalesce checks rather than preserve causes; preserve exactly one obligation under every mutation; price all work; measure the complete service; stop after the selected design closes.
+- **R1 — inspected branch/commit:** `0.7.27` at `6d44e92d75e7334b5763a6684c62e5279c39725f`, tree `7807ddb705ef885d9ee02d2c83714a412fb9e1f1`. [Commit](https://github.com/atmo-network/deos/commit/6d44e92d75e7334b5763a6684c62e5279c39725f).
+- **R2 — checkpoint backlog and blocker map:** [BACKLOG.md at the inspected commit](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/BACKLOG.md).
+- **R3 — current normative amendment:** [Actors specification §2.3 at the inspected commit](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/template/pallets/actors/docs/specification.en.md).
+- **R4 — independent round oracle:** [current_state_semantic_oracle.rs](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/template/pallets/actors/tests/current_state_semantic_oracle.rs).
+- **R5 — selected carrier and semantic loading code:** [actors/src/lib.rs](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/template/pallets/actors/src/lib.rs); [scheduler types](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/template/pallets/actors/src/types/scheduler.rs).
+- **R6 — current lineage and hazard routes:** [Actors experiments index](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/.agents/skills/architecture-experiments/tracks/actors/experiments.md); [EXP-0135](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/.agents/skills/architecture-experiments/tracks/actors/EXP-0135.md).
+- **R7 — existing workload/materiality contract:** [EXP-0136](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/.agents/skills/architecture-experiments/tracks/actors/EXP-0136.md).
+- **R8 — physical-choice baseline and S/P amendment:** [EXP-0137](https://github.com/atmo-network/deos/blob/6d44e92d75e7334b5763a6684c62e5279c39725f/.agents/skills/architecture-experiments/tracks/actors/EXP-0137.md).
+- **R9 — lifecycle close-allowance correction:** [commit 2d7b6f96](https://github.com/atmo-network/deos/commit/2d7b6f96e28d5a17dbf395ca4bcb7c459f1f37f0).
+- **R10 — SDK background only:** official [`fungibles::Inspect`](https://paritytech.github.io/substrate/master/frame_support/traits/tokens/fungibles/trait.Inspect.html) distinguishes per-asset minimum, balance, total balance and reducible balance; official [`with_transaction`](https://paritytech.github.io/polkadot-sdk/master/frame_support/storage/transactional/fn.with_transaction.html) documents rollback and parent-transaction commit. These general APIs motivate the distinctions above; verify the actual pinned SDK and host adapter rather than importing a different version's behavior.
+- **R11 — historical outstanding programmes:** [published v0.7.26 backlog](https://github.com/atmo-network/deos/blob/v0.7.26/BACKLOG.md), including its retained-programme references to earlier task contracts.
+- **Planning provenance:** the previously supplied `DEOS_BACKLOG_0.7.27_LIVE_RING_FINAL.md` supplied the N-task identities. The working branch's already selected `Fixed`/`Percent` contract, completed narrow claims and current blockers take precedence over stale statements in that planning file.
