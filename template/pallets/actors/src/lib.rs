@@ -921,6 +921,55 @@ pub mod pallet {
     pub last_cycle_block: Option<BlockNumber>,
   }
 
+  /// Non-placement semantic authority prepared for the atomic scheduler cutover. Cursor,
+  /// eligibility, and current-Step resources are intentionally absent: the run record owns the
+  /// first two while contract geometry at that cursor owns the last.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub struct ActorSemanticRecord<Identity, Hot, Admission> {
+    pub identity: Identity,
+    pub hot: Hot,
+    pub admission: Admission,
+  }
+
+  /// Storage-free projection of fields currently duplicated by placement cells.
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  pub struct ActorSemanticExecutionProjection<BlockNumber> {
+    pub cursor: u32,
+    pub eligible_at: Option<BlockNumber>,
+    pub resources: ActorStepResourceEnvelope,
+  }
+
+  #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+  pub enum ActorSemanticProjectionError {
+    RunStateMismatch,
+    CurrentStepMissing,
+  }
+
+  /// Projects execution fields from their existing canonical owners without making the semantic
+  /// record a second cursor or resource authority.
+  pub fn project_actor_semantic_execution<BlockNumber: Copy>(
+    cycle_state: CycleState,
+    run: Option<(u32, BlockNumber)>,
+    current_step_resources: Option<ActorStepResourceEnvelope>,
+  ) -> Result<ActorSemanticExecutionProjection<BlockNumber>, ActorSemanticProjectionError> {
+    let (cursor, eligible_at) = match (cycle_state, run) {
+      (CycleState::Idle, None) => (0, None),
+      (CycleState::Running | CycleState::Suspended, Some((cursor, eligible_at))) => {
+        (cursor, Some(eligible_at))
+      }
+      _ => return Err(ActorSemanticProjectionError::RunStateMismatch),
+    };
+    let resources =
+      current_step_resources.ok_or(ActorSemanticProjectionError::CurrentStepMissing)?;
+    Ok(ActorSemanticExecutionProjection {
+      cursor,
+      eligible_at,
+      resources,
+    })
+  }
+
   /// Canonical single-owner control cell.
   #[derive(
     Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
@@ -935,6 +984,12 @@ pub mod pallet {
     pub admission: Admission,
     pub resources: ActorStepResourceEnvelope,
   }
+
+  pub type ActorSemanticRecordOf<T> = ActorSemanticRecord<
+    ActorControlIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>,
+    ActorControlHotState<BlockNumberFor<T>>,
+    ActorAdmissionCertificateOf<T>,
+  >;
 
   pub type ActorControlCellOf<T> = ActorControlCell<
     <T as frame_system::Config>::AccountId,

@@ -1,29 +1,30 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
-  ActorRef, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
-  DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
-  DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
-  DependencyPlanMutation, DependencyPlanSource, DependencyPlans, DependencyPublicationError,
-  DependencyPublicationMutation, DependencyRegistrationError, DependencyRegistrationFreePositions,
-  DependencyRegistrationHandle, DependencyRegistrationHeaders, DependencyRegistrationMutation,
-  DependencyRegistrationPages, DependencyRegistrationPosition, DependencyRegistrationPositions,
-  DependencyRegistrations, DependencyRevisionError, DependencyRevisionMutation,
-  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
-  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
-  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
-  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
-  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
-  DependencyTimedReviewMutation, DependencyTimedReviews, LegacyProcessPlacement,
-  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
-  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
-  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ServiceHeader,
-  ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind,
-  ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError,
-  SuspendedProcessBasis, UnsignaledProcessEvidence, compile_legacy_process,
-  plan_legacy_process_transition,
+  ActorRef, ActorSemanticExecutionProjection, ActorSemanticProjectionError, ActorSemanticRecord,
+  ActorStepResourceEnvelope, ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles,
+  DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages,
+  DeadlineIndexPositions, DeadlineMutationError, DeadlinePages, DependencyDueReviewError,
+  DependencyDueReviewMutation, DependencyPlanMutation, DependencyPlanSource, DependencyPlans,
+  DependencyPublicationError, DependencyPublicationMutation, DependencyRegistrationError,
+  DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
+  DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
+  DependencyRegistrationPositions, DependencyRegistrations, DependencyRevisionError,
+  DependencyRevisionMutation, DependencyRevisionState, DependencyRevisions, DependencyScanError,
+  DependencyScanMutation, DependencyScanSourceError, DependencyScanSourceList,
+  DependencyScanSourceListState, DependencyScanSourceMutation, DependencyScanSourceNode,
+  DependencyScanSourceNodes, DependencySourceAllocator, DependencySourceAllocatorState,
+  DependencySourceError, DependencySourceMutation, DependencySourceObservations,
+  DependencyTimedReview, DependencyTimedReviewMutation, DependencyTimedReviews,
+  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes,
+  ServicePublicationError, ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError,
+  ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
+  compile_legacy_process, plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -47,6 +48,60 @@ fn process_skeleton_uses_generation_bound_references() {
       actor_id: 7,
       generation: 12
     }
+  );
+}
+
+#[test]
+fn semantic_record_owns_only_non_derivable_state_and_projects_execution_geometry() {
+  let record = ActorSemanticRecord {
+    identity: 11u32,
+    hot: 12u32,
+    admission: 13u32,
+  };
+  assert_eq!(
+    (record.identity, record.hot, record.admission),
+    (11, 12, 13)
+  );
+
+  let resources = ActorStepResourceEnvelope {
+    control: Weight::from_parts(17, 19),
+    effect: Weight::from_parts(23, 29),
+  };
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Idle, None::<(u32, u32)>, Some(resources)),
+    Ok(ActorSemanticExecutionProjection {
+      cursor: 0,
+      eligible_at: None,
+      resources,
+    })
+  );
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Running, Some((3, 31u32)), Some(resources)),
+    Ok(ActorSemanticExecutionProjection {
+      cursor: 3,
+      eligible_at: Some(31),
+      resources,
+    })
+  );
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Suspended, Some((4, 37u32)), Some(resources)),
+    Ok(ActorSemanticExecutionProjection {
+      cursor: 4,
+      eligible_at: Some(37),
+      resources,
+    })
+  );
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Idle, Some((0, 31u32)), Some(resources)),
+    Err(ActorSemanticProjectionError::RunStateMismatch)
+  );
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Running, None::<(u32, u32)>, Some(resources)),
+    Err(ActorSemanticProjectionError::RunStateMismatch)
+  );
+  assert_eq!(
+    project_actor_semantic_execution(CycleState::Running, Some((3, 31u32)), None),
+    Err(ActorSemanticProjectionError::CurrentStepMissing)
   );
 }
 
