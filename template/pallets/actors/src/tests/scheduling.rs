@@ -1177,6 +1177,81 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
 }
 
 #[test]
+fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomically() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor = crate::ActorRef {
+      actor_id,
+      generation: crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|semantic| match semantic {
+          crate::ActorSemanticState::Active(record) => Some(record.generation),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("active generation"),
+    };
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    let semantic = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(mut record) => {
+          record.hot = state.hot.clone();
+          record.admission = admission;
+          Some(record)
+        }
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("active semantic record");
+    crate::ActorSemanticStates::<Test>::insert(
+      actor_id,
+      crate::ActorSemanticState::Active(semantic),
+    );
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+
+    Actors::test_publish_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      0,
+    )
+    .expect("complete canonical publication commits");
+
+    let process_handle =
+      crate::DeadlineHandles::<Test>::get(actor_id).expect("suspended process owns Block deadline");
+    let trigger_handle = crate::TriggerDeadlineHandles::<Test>::get(actor_id)
+      .expect("Cadenced Trigger owns independent Tick deadline");
+    assert!(matches!(process_handle.key, WakeupKey::Block(_)));
+    assert!(matches!(trigger_handle.key, WakeupKey::Tick(_)));
+    assert_eq!(process_handle.actor, trigger_handle.actor);
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("semantic Hot remains active");
+    assert_eq!(
+      hot.trigger_wakeup_pointer,
+      Some(crate::TriggerWakeupPointer {
+        tick: match trigger_handle.key {
+          WakeupKey::Tick(tick) => tick,
+          WakeupKey::Block(_) => unreachable!("Trigger deadline uses Tick clock"),
+        },
+        page_id: trigger_handle.page,
+        slot: u32::from(trigger_handle.slot),
+      })
+    );
+  });
+}
+
+#[test]
 fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);

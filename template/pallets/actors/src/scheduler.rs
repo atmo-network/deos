@@ -8793,6 +8793,81 @@ impl<T: Config> Pallet<T> {
     Self::plan_actor_publication(actor, state, supplied_run, resources, now, cutoff)
   }
 
+  /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
+  /// independent temporal Trigger deadline. Production callers remain on the legacy carrier until
+  /// the complete create/resume and mandatory-service cutover can enter this boundary together.
+  #[allow(
+    dead_code,
+    reason = "composite publication remains inert until the atomic carrier cutover"
+  )]
+  fn publish_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        let publication =
+          Self::preflight_actor_publication(actor, state, supplied_run, resources, now, cutoff)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        semantic.hot = publication.hot;
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+
+        let process = match publication.process {
+          PlannedProcessDestination::Disabled(process) => process,
+          PlannedProcessDestination::Service { process, .. } => process,
+          PlannedProcessDestination::Deadline { process, .. } => process,
+        };
+        ActorProcesses::<T>::insert(actor.actor_id, process);
+
+        match publication.process {
+          PlannedProcessDestination::Disabled(_) => {}
+          PlannedProcessDestination::Service {
+            process,
+            admission_round,
+          } => {
+            let Some(ProcessResidence::Service(kind)) = process.residence else {
+              return Err(EnqueueOutcome::CorruptedTopology);
+            };
+            Self::insert_service_member(actor, kind, admission_round)
+              .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          PlannedProcessDestination::Deadline { handle, .. } => {
+            Self::insert_deadline_member(handle).map_err(|error| match error {
+              DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+                EnqueueOutcome::WakeupCapacityExhausted
+              }
+              _ => EnqueueOutcome::CorruptedTopology,
+            })?;
+          }
+        }
+        if let Some(handle) = publication.trigger_deadline {
+          Self::insert_trigger_deadline_member(handle).map_err(|error| match error {
+            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+              EnqueueOutcome::WakeupCapacityExhausted
+            }
+            _ => EnqueueOutcome::CorruptedTopology,
+          })?;
+        }
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8904,6 +8979,24 @@ impl<T: Config> Pallet<T> {
       ServiceCutoff::Snapshotted,
     )
     .map(|_| ())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_publish_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::publish_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
   }
 
   #[cfg(test)]

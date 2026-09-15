@@ -4118,6 +4118,24 @@ pub mod pallet {
     pub(crate) fn insert_deadline_member(
       handle: DeadlineHandleOf<T>,
     ) -> Result<(), DeadlineMutationError> {
+      Self::insert_deadline_member_for_owner(handle, false)
+    }
+
+    /// Inserts one independent temporal Trigger obligation into the shared deadline carrier.
+    #[allow(
+      dead_code,
+      reason = "temporal Trigger carrier remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn insert_trigger_deadline_member(
+      handle: DeadlineHandleOf<T>,
+    ) -> Result<(), DeadlineMutationError> {
+      Self::insert_deadline_member_for_owner(handle, true)
+    }
+
+    fn insert_deadline_member_for_owner(
+      handle: DeadlineHandleOf<T>,
+      trigger_owner: bool,
+    ) -> Result<(), DeadlineMutationError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(DeadlineMutationError::TransactionRequired);
       }
@@ -4126,12 +4144,38 @@ pub mod pallet {
       {
         return Err(DeadlineMutationError::LegacyAuthorityPresent);
       }
-      let process = ActorProcesses::<T>::get(handle.actor.actor_id)
-        .ok_or(DeadlineMutationError::ProcessMissing)?;
-      if !Self::deadline_handle_matches_process(handle, &process) {
-        return Err(DeadlineMutationError::ProcessResidenceMismatch);
+      if trigger_owner {
+        let Some(ActorSemanticState::Active(semantic)) =
+          ActorSemanticStates::<T>::get(handle.actor.actor_id)
+        else {
+          return Err(DeadlineMutationError::ProcessMissing);
+        };
+        let expected_pointer = match handle.key {
+          WakeupKey::Tick(tick) => Some(TriggerWakeupPointer {
+            tick,
+            page_id: handle.page,
+            slot: u32::from(handle.slot),
+          }),
+          WakeupKey::Block(_) => return Err(DeadlineMutationError::InvalidDestination),
+        };
+        if semantic.generation != handle.actor.generation
+          || semantic.hot.trigger_wakeup_pointer != expected_pointer
+        {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        }
+      } else {
+        let process = ActorProcesses::<T>::get(handle.actor.actor_id)
+          .ok_or(DeadlineMutationError::ProcessMissing)?;
+        if !Self::deadline_handle_matches_process(handle, &process) {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        }
       }
-      if DeadlineHandles::<T>::contains_key(handle.actor.actor_id) {
+      let reverse_exists = if trigger_owner {
+        TriggerDeadlineHandles::<T>::contains_key(handle.actor.actor_id)
+      } else {
+        DeadlineHandles::<T>::contains_key(handle.actor.actor_id)
+      };
+      if reverse_exists {
         return Err(DeadlineMutationError::MemberAlreadyExists);
       }
       let slot = usize::from(handle.slot);
@@ -4218,7 +4262,11 @@ pub mod pallet {
       }
       let header = header.ok_or(DeadlineMutationError::CorruptCarrier)?;
       DeadlineHeaders::<T>::insert(handle.key, header);
-      DeadlineHandles::<T>::insert(handle.actor.actor_id, handle);
+      if trigger_owner {
+        TriggerDeadlineHandles::<T>::insert(handle.actor.actor_id, handle);
+      } else {
+        DeadlineHandles::<T>::insert(handle.actor.actor_id, handle);
+      }
       if creates_bucket {
         Self::insert_deadline_index(handle.key)?;
       } else {
