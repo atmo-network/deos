@@ -47,8 +47,8 @@ struct PreparedReadyPublication<T: Config> {
   cell: ActorControlCellOf<T>,
 }
 
-/// Carrier-neutral semantic result of one effectful Step attempt. The legacy
-/// FIFO adapter consumes this result and owns all subsequent residence
+/// Carrier-neutral semantic result and next-residence intent of one effectful
+/// Step attempt. The legacy FIFO adapter consumes this result and owns physical
 /// placement; the execution core does not publish scheduler authority.
 struct EffectfulStepTransition<T: Config> {
   state: ActiveActorStateOf<T>,
@@ -58,10 +58,14 @@ struct EffectfulStepTransition<T: Config> {
   control_context: StepControlWeightContext,
   reserved_control_weight: Weight,
   reserved_effect_weight: Weight,
-  retry_attempt_limit_reached: bool,
   effect_execution: super::TaskEffectExecution,
   disposition: AttemptDisposition,
-  outcomes: OutcomeTotals,
+  attempt: ActorAttemptEvidence,
+  placement_run: Option<ActorRunStateOf<T>>,
+  placement_resources: ActorStepResourceEnvelope,
+  placement_instance: ActiveActorViewOf<T>,
+  unsignaled_hot: ActorHotStateOf<T>,
+  close_reason: Option<CloseReason>,
   eligible_at: Option<BlockNumberFor<T>>,
 }
 
@@ -1447,52 +1451,10 @@ impl<T: Config> Pallet<T> {
         Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot, None)?;
     }
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
-    let (plan, effect_execution, disposition, outcomes, eligible_at) =
+    let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
       Self::execute_loaded_single_step_core(actor_id, &execution_instance, plan, now, step_count)?;
-    Ok(EffectfulStepTransition {
-      state,
-      plan,
-      execution_instance,
-      step,
-      control_context,
-      reserved_control_weight,
-      reserved_effect_weight,
-      retry_attempt_limit_reached,
-      effect_execution,
-      disposition,
-      outcomes,
-      eligible_at,
-    })
-  }
-
-  fn finalize_effectful_step_on_legacy_fifo(
-    actor_id: ActorId,
-    transition: EffectfulStepTransition<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
-    let EffectfulStepTransition {
-      mut state,
-      mut plan,
-      execution_instance,
-      step,
-      control_context,
-      reserved_control_weight,
-      reserved_effect_weight,
-      retry_attempt_limit_reached,
-      effect_execution,
-      disposition,
-      outcomes,
-      eligible_at,
-    } = transition;
-    let actual_effect_weight =
-      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
-        .ok_or(AttemptTransactionError::Invariant)?;
-    if !actual_effect_weight.all_lte(reserved_effect_weight) {
-      return Err(AttemptTransactionError::Invariant);
-    }
     let placement_run = plan.run.take();
-    let mut attempt = Self::step_simulation_evidence(
+    let attempt = Self::step_simulation_evidence(
       plan.ticket.cycle_nonce,
       plan.loaded_step.cursor,
       disposition,
@@ -1516,7 +1478,6 @@ impl<T: Config> Pallet<T> {
       state.contract.clone(),
     );
     let unsignaled_hot = plan.hot.clone();
-    let mut closed_for_exhaustion = false;
     let failure_close_reason = if disposition != AttemptDisposition::Failed {
       None
     } else if retry_attempt_limit_reached {
@@ -1539,7 +1500,58 @@ impl<T: Config> Pallet<T> {
         .filter(|target_nonce| plan.identity.cycle_nonce >= *target_nonce)
         .map(|_| CloseReason::AutoCloseNonceReached)
     };
-    let placement = if let Some(close_reason) = failure_close_reason.or(successful_close_reason) {
+    Ok(EffectfulStepTransition {
+      state,
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      reserved_effect_weight,
+      effect_execution,
+      disposition,
+      attempt,
+      placement_run,
+      placement_resources,
+      placement_instance,
+      unsignaled_hot,
+      close_reason: failure_close_reason.or(successful_close_reason),
+      eligible_at,
+    })
+  }
+
+  fn finalize_effectful_step_on_legacy_fifo(
+    actor_id: ActorId,
+    transition: EffectfulStepTransition<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let EffectfulStepTransition {
+      mut state,
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      reserved_effect_weight,
+      effect_execution,
+      disposition,
+      mut attempt,
+      placement_run,
+      placement_resources,
+      placement_instance,
+      unsignaled_hot,
+      close_reason,
+      eligible_at,
+    } = transition;
+    let actual_effect_weight =
+      T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
+        .ok_or(AttemptTransactionError::Invariant)?;
+    if !actual_effect_weight.all_lte(reserved_effect_weight) {
+      return Err(AttemptTransactionError::Invariant);
+    }
+    let mut closed_for_exhaustion = false;
+    let placement = if let Some(close_reason) = close_reason {
       state.identity = plan.identity.clone();
       state.hot = plan.hot.clone();
       state.run_state = placement_run;
