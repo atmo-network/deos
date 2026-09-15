@@ -641,6 +641,76 @@ fn canonical_service_semantics_reject_stale_generation_and_residence_without_mut
 }
 
 #[test]
+fn retained_service_attempt_commits_semantics_before_advance_and_preserves_refusals() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(2).expect("round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    let header_before_refusal = ServiceHeader::<Test>::get();
+    let node_before_refusal = ServiceNodes::<Test>::get(actor_id).unwrap();
+    let mut replacement = record.hot.clone();
+    replacement.unsuccessful_attempt_streak = 11;
+    assert_eq!(
+      Actors::commit_retained_service_attempt(
+        actor,
+        ServiceResidenceKind::Pending,
+        replacement.clone(),
+        2,
+      ),
+      Err(ServiceRoundError::ProcessResidenceMismatch)
+    );
+    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot));
+    assert_eq!(ServiceHeader::<Test>::get(), header_before_refusal);
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id),
+      Some(node_before_refusal)
+    );
+
+    assert_eq!(
+      Actors::commit_retained_service_attempt(
+        actor,
+        ServiceResidenceKind::Live,
+        replacement.clone(),
+        2,
+      ),
+      Ok(())
+    );
+    assert_eq!(Actors::load_control_hot(actor_id), Some(replacement));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).unwrap().last_considered,
+      2
+    );
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id)
+        .unwrap()
+        .last_attempted,
+      Some(2)
+    );
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      assert_eq!(
+        Actors::consider_service_head(2),
+        Ok(ServiceRoundEncounter::Closed)
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
+    });
+  });
+}
+
+#[test]
 fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process() {
   new_test_ext().execute_with(|| {
     let members = [

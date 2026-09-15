@@ -5137,6 +5137,36 @@ pub mod pallet {
       Ok(record)
     }
 
+    /// Atomically commits one retained canonical Service attempt before advancing its ring head.
+    /// Any semantic or frontier refusal rolls back both owners and leaves the member retryable.
+    #[allow(
+      dead_code,
+      reason = "canonical service consumer remains staged behind the atomic publication cutover"
+    )]
+    pub(crate) fn commit_retained_service_attempt(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+      hot: ActorHotStateOf<T>,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRoundError> {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          if Self::consider_service_head(now)? != ServiceRoundEncounter::Eligible(actor) {
+            return Err(ServiceRoundError::CorruptRing);
+          }
+          Self::try_store_service_control_hot(actor, kind, hot)
+            .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+          Self::advance_service_head(actor, now)
+        })();
+        match result {
+          Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Stores Hot directly through the canonical semantic owner. Canonical service mutation never
     /// recreates or updates a legacy control cell and fails closed on stale residence authority.
     #[allow(
