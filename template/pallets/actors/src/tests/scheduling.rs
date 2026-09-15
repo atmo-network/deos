@@ -940,6 +940,74 @@ fn retained_ingress_rejects_incomplete_authority_without_writes() {
 }
 
 #[test]
+fn next_work_plan_types_unsignaled_process_authority_without_writes() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    let mut paused = state.clone();
+    paused.hot.lifecycle = crate::ActiveLifecycle::Paused;
+    paused.contract.window = None;
+    let expected_not_before = paused
+      .run_state
+      .as_ref()
+      .expect("suspended Run authority")
+      .eligible_at;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&paused, paused.run_state.as_ref(), 0),
+      Ok((
+        crate::StepControlPlacement::None,
+        None,
+        Some(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::OwnerPaused,
+          revival_authority: crate::ProcessRevivalAuthority::Owner,
+          basis: crate::SuspendedProcessBasis::Suspended {
+            not_before: expected_not_before,
+          },
+        }),
+        None,
+      ))
+    );
+
+    let mut unlatched = state;
+    unlatched.hot.lifecycle = crate::ActiveLifecycle::Active;
+    unlatched.hot.cycle_state = crate::CycleState::Idle;
+    unlatched.hot.pending_signal = false;
+    unlatched.contract.window = None;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&unlatched, None, 0),
+      Ok((
+        crate::StepControlPlacement::None,
+        None,
+        Some(crate::ProcessDisablement {
+          cause: crate::ProcessDisableCause::Protocol,
+          revival_authority: crate::ProcessRevivalAuthority::Protocol,
+          basis: crate::SuspendedProcessBasis::Idle,
+        }),
+        None,
+      ))
+    );
+    let mut pending = unlatched;
+    pending.hot.pending_signal = true;
+    assert_eq!(
+      Actors::test_plan_next_work_source(&pending, None, 0),
+      Ok((
+        crate::StepControlPlacement::Queue,
+        None,
+        None,
+        Some(crate::ServiceResidenceKind::Pending),
+      ))
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "typed process planning must remain storage-free"
+    );
+  });
+}
+
+#[test]
 fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
@@ -963,7 +1031,12 @@ fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption()
       .expect("suspended Run has exact eligibility");
     assert_eq!(
       Actors::test_plan_next_work_source(&state, state.run_state.as_ref(), 0),
-      Ok((crate::StepControlPlacement::Wakeup, Some(expected_wakeup)))
+      Ok((
+        crate::StepControlPlacement::Wakeup,
+        Some(expected_wakeup),
+        None,
+        None,
+      ))
     );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),

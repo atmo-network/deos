@@ -24,8 +24,8 @@ enum QueueMutation {
 /// same current-state decision without transiently creating dual authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum NextWorkPlan<BlockNumber> {
-  None,
-  Queue,
+  Disabled(ProcessDisablement<BlockNumber>),
+  Service(ServiceResidenceKind),
   Wakeup(BlockNumber),
 }
 
@@ -8500,33 +8500,65 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     cutoff: ServiceCutoff,
   ) -> Result<NextWorkPlan<BlockNumberFor<T>>, EnqueueOutcome> {
+    let disabled_basis = || match instance.cycle_state {
+      CycleState::Idle => Ok(SuspendedProcessBasis::Idle),
+      CycleState::Running => {
+        let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+        if !run.running_is_coherent() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        Ok(SuspendedProcessBasis::Running {
+          eligible_at: run.eligible_at,
+        })
+      }
+      CycleState::Suspended => {
+        let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+        Ok(SuspendedProcessBasis::Suspended {
+          not_before: Self::retry_eligible_at_loaded(instance, run)?,
+        })
+      }
+    };
     if instance.lifecycle.is_paused() {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map(NextWorkPlan::Wakeup)
-          .unwrap_or(NextWorkPlan::None),
+      return Self::window_expiry_wakeup(instance).map_or_else(
+        || {
+          Ok(NextWorkPlan::Disabled(ProcessDisablement {
+            cause: ProcessDisableCause::OwnerPaused,
+            revival_authority: ProcessRevivalAuthority::Owner,
+            basis: disabled_basis()?,
+          }))
+        },
+        |at| Ok(NextWorkPlan::Wakeup(at)),
       );
     }
-    let eligible_at = if matches!(
+    let (eligible_at, kind) = if matches!(
       instance.cycle_state,
       CycleState::Running | CycleState::Suspended
     ) {
       let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
-      if instance.cycle_state == CycleState::Running {
+      let eligible_at = if instance.cycle_state == CycleState::Running {
         if !run.running_is_coherent() {
           return Err(EnqueueOutcome::CorruptedTopology);
         }
         run.eligible_at
       } else {
         Self::retry_eligible_at_loaded(instance, run)?
-      }
+      };
+      (eligible_at, ServiceResidenceKind::Live)
     } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now)?
+      (
+        Self::next_eligible_at(instance, now)?,
+        ServiceResidenceKind::Pending,
+      )
     } else {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map(NextWorkPlan::Wakeup)
-          .unwrap_or(NextWorkPlan::None),
+      return Self::window_expiry_wakeup(instance).map_or_else(
+        || {
+          Ok(NextWorkPlan::Disabled(ProcessDisablement {
+            cause: ProcessDisableCause::Protocol,
+            revival_authority: ProcessRevivalAuthority::Protocol,
+            basis: SuspendedProcessBasis::Idle,
+          }))
+        },
+        |at| Ok(NextWorkPlan::Wakeup(at)),
       );
     };
     let wakeup_at = instance.window.map_or(eligible_at, |window| {
@@ -8537,7 +8569,7 @@ impl<T: Config> Pallet<T> {
       .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
     Ok(
       if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff.is_snapshotted() {
-        NextWorkPlan::Queue
+        NextWorkPlan::Service(kind)
       } else {
         NextWorkPlan::Wakeup(wakeup_at)
       },
@@ -8558,8 +8590,8 @@ impl<T: Config> Pallet<T> {
     cutoff: ServiceCutoff,
   ) -> Result<StepControlPlacement, EnqueueOutcome> {
     match Self::plan_next_work_loaded(instance, loaded_authority.2, now, cutoff)? {
-      NextWorkPlan::None => Ok(StepControlPlacement::None),
-      NextWorkPlan::Queue => Ok(StepControlPlacement::Queue),
+      NextWorkPlan::Disabled(_) => Ok(StepControlPlacement::None),
+      NextWorkPlan::Service(_) => Ok(StepControlPlacement::Queue),
       NextWorkPlan::Wakeup(wakeup_at) => {
         let (hot, identity, run_state, admission, resources) = loaded_authority;
         Self::defer_wakeup_with_authority(
@@ -8582,7 +8614,15 @@ impl<T: Config> Pallet<T> {
     state: &ActiveActorStateOf<T>,
     supplied_run: Option<&ActorRunStateOf<T>>,
     now: BlockNumberFor<T>,
-  ) -> Result<(StepControlPlacement, Option<BlockNumberFor<T>>), EnqueueOutcome> {
+  ) -> Result<
+    (
+      StepControlPlacement,
+      Option<BlockNumberFor<T>>,
+      Option<ProcessDisablement<BlockNumberFor<T>>>,
+      Option<ServiceResidenceKind>,
+    ),
+    EnqueueOutcome,
+  > {
     let instance = Self::derive_active_actor_view(
       state.identity.clone(),
       state.hot.clone(),
@@ -8590,9 +8630,11 @@ impl<T: Config> Pallet<T> {
     );
     Self::plan_next_work_loaded(&instance, supplied_run, now, ServiceCutoff::Snapshotted).map(
       |plan| match plan {
-        NextWorkPlan::None => (StepControlPlacement::None, None),
-        NextWorkPlan::Queue => (StepControlPlacement::Queue, None),
-        NextWorkPlan::Wakeup(at) => (StepControlPlacement::Wakeup, Some(at)),
+        NextWorkPlan::Disabled(disablement) => {
+          (StepControlPlacement::None, None, Some(disablement), None)
+        }
+        NextWorkPlan::Service(kind) => (StepControlPlacement::Queue, None, None, Some(kind)),
+        NextWorkPlan::Wakeup(at) => (StepControlPlacement::Wakeup, Some(at), None, None),
       },
     )
   }
