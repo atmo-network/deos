@@ -1712,6 +1712,34 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `Actors::DependencyRevisions` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrationHeaders` (r:1 w:0)
+	/// Storage: `Actors::DependencyScanSourceNodes` (r:1 w:1)
+	/// Storage: `Actors::DependencyScanSourceListState` (r:1 w:1)
+	fn dependency_publication_begun_empty_source_list() -> Weight {
+		Weight::from_parts(22_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3523))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	/// Storage: `Actors::DependencyRevisions` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrationHeaders` (r:1 w:0)
+	/// Storage: `Actors::DependencyScanSourceNodes` (r:2 w:2)
+	/// Storage: `Actors::DependencyScanSourceListState` (r:1 w:1)
+	fn dependency_publication_begun_populated_source_list() -> Weight {
+		Weight::from_parts(26_750_000, 0)
+			.saturating_add(Weight::from_parts(0, 6020))
+			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	/// Storage: `Actors::DependencyRevisions` (r:1 w:1)
+	/// Storage: `Actors::DependencyScanSourceNodes` (r:1 w:0)
+	fn dependency_publication_coalesced_active_source() -> Weight {
+		Weight::from_parts(17_041_000, 0)
+			.saturating_add(Weight::from_parts(0, 3523))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
 	/// Storage: `Actors::ActorControlLocators` (r:1 w:0)
 	/// Proof: `Actors::ActorControlLocators` (`max_values`: None, `max_size`: Some(43), added: 2518, mode: `Measured`)
 	/// Storage: `Actors::ActorUnsignaledControlCells` (r:1 w:0)

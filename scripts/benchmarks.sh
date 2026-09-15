@@ -397,6 +397,9 @@ verify_weight_file_contract() {
 
     local required_runtime_benchmarks=(
         "scheduler_actor_state_probe"
+        "dependency_publication_begun_empty_source_list"
+        "dependency_publication_begun_populated_source_list"
+        "dependency_publication_coalesced_active_source"
         "scheduler_paged_append_existing_page"
         "scheduler_paged_append_new_page"
         "scheduler_wakeup_append_existing_page"

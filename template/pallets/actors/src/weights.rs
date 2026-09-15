@@ -126,6 +126,9 @@ pub trait WeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
   fn materialization_coordinator_base() -> Weight;
+  fn dependency_publication_begun_empty_source_list() -> Weight;
+  fn dependency_publication_begun_populated_source_list() -> Weight;
+  fn dependency_publication_coalesced_active_source() -> Weight;
   fn scheduler_paged_append_existing_page() -> Weight;
   fn scheduler_paged_append_new_page() -> Weight;
   fn scheduler_wakeup_append_existing_page() -> Weight;
@@ -555,6 +558,18 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn dependency_publication_begun_empty_source_list() -> Weight {
+    Weight::from_parts(100_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(5, 3))
+  }
+
+  fn dependency_publication_begun_populated_source_list() -> Weight {
+    Weight::from_parts(150_000_000, 24_000).saturating_add(T::DbWeight::get().reads_writes(7, 5))
+  }
+
+  fn dependency_publication_coalesced_active_source() -> Weight {
+    Weight::from_parts(75_000_000, 12_000).saturating_add(T::DbWeight::get().reads_writes(3, 1))
+  }
+
   fn scheduler_paged_append_existing_page() -> Weight {
     Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 3))
   }
@@ -938,6 +953,9 @@ impl WeightInfo for TestWeightInfo {
   fn scheduler_on_initialize_cutoff() -> Weight { Weight::from_parts(7_543_000, 1_493) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
   fn materialization_coordinator_base() -> Weight { Weight::from_parts(20_000_000, 4_000) }
+  fn dependency_publication_begun_empty_source_list() -> Weight { Weight::from_parts(100_000_000, 16_000) }
+  fn dependency_publication_begun_populated_source_list() -> Weight { Weight::from_parts(150_000_000, 24_000) }
+  fn dependency_publication_coalesced_active_source() -> Weight { Weight::from_parts(75_000_000, 12_000) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }

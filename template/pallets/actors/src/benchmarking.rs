@@ -4412,6 +4412,62 @@ mod benches {
   }
 
   #[benchmark]
+  fn dependency_publication_begun_empty_source_list() {
+    let source = 9_100;
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("empty-list publication retains its source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 1);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
+  fn dependency_publication_begun_populated_source_list() {
+    let retained_source = 9_101;
+    let source = 9_102;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::publish_dependency_event_with_source_retention(retained_source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("fixture source is retained");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("populated-list publication retains its source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 2);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
+  fn dependency_publication_coalesced_active_source() {
+    let source = 9_103;
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+    })
+    .expect("fixture source is retained");
+    #[block]
+    {
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = Pallet::<T>::publish_dependency_event_with_source_retention(source);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(result)
+      })
+      .expect("coalesced publication preserves retained source");
+    }
+    assert_eq!(DependencyScanSourceListState::<T>::get().count, 1);
+    assert!(DependencyScanSourceNodes::<T>::contains_key(source));
+  }
+
+  #[benchmark]
   fn materialization_coordinator_base() {
     MaterializationFamilyCursor::<T>::put(0);
     let now = frame_system::Pallet::<T>::block_number();
