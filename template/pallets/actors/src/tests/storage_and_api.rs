@@ -2,7 +2,7 @@ use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorCostQuoteError, ActorProcess, ActorProcesses,
   ActorRef, ActorSemanticExecutionProjection, ActorSemanticMutation, ActorSemanticMutationError,
-  ActorSemanticProjectionError, ActorSemanticRecord, ActorStepResourceEnvelope,
+  ActorSemanticProjectionError, ActorSemanticRecord, ActorSemanticState, ActorStepResourceEnvelope,
   ActorWaitingOccupancies, CloseReason, DeadlineHandle, DeadlineHandles, DeadlineHeaders,
   DeadlineIndexLen, DeadlineIndexMutationError, DeadlineIndexPages, DeadlineIndexPositions,
   DeadlineMutationError, DeadlinePages, DependencyDueReviewError, DependencyDueReviewMutation,
@@ -108,69 +108,70 @@ fn semantic_record_owns_only_non_derivable_state_and_projects_execution_geometry
 
 #[test]
 fn semantic_mutation_is_complete_compare_and_replace_without_placement_authority() {
-  let original = ActorSemanticRecord {
-    identity: 1u32,
-    hot: 2u32,
-    admission: 3u32,
-  };
-  let replacement = ActorSemanticRecord {
+  let dormant = ActorSemanticState::Dormant(1u32);
+  let active = ActorSemanticState::Active(ActorSemanticRecord {
     identity: 1u32,
     hot: 4u32,
     admission: 5u32,
-  };
-  let stale = ActorSemanticRecord {
+  });
+  let stale = ActorSemanticState::Active(ActorSemanticRecord {
     identity: 9u32,
     hot: 9u32,
     admission: 9u32,
-  };
+  });
 
   assert_eq!(
-    apply_actor_semantic_mutation(None, &ActorSemanticMutation::Publish(original.clone()),),
-    Ok(Some(original.clone()))
+    apply_actor_semantic_mutation(None, &ActorSemanticMutation::Publish(dormant.clone()),),
+    Ok(Some(dormant.clone()))
   );
   assert_eq!(
     apply_actor_semantic_mutation(
-      Some(&original),
-      &ActorSemanticMutation::Publish(original.clone()),
+      Some(&dormant),
+      &ActorSemanticMutation::Publish(dormant.clone()),
     ),
     Err(ActorSemanticMutationError::AlreadyPublished)
   );
   assert_eq!(
     apply_actor_semantic_mutation(
-      Some(&original),
+      Some(&dormant),
       &ActorSemanticMutation::Replace {
-        expected: original.clone(),
-        replacement: replacement.clone(),
+        expected: dormant.clone(),
+        replacement: active.clone(),
       },
     ),
-    Ok(Some(replacement.clone()))
+    Ok(Some(active.clone()))
   );
   assert_eq!(
     apply_actor_semantic_mutation(
-      Some(&original),
+      Some(&dormant),
       &ActorSemanticMutation::Replace {
         expected: stale.clone(),
-        replacement: replacement.clone(),
+        replacement: active.clone(),
       },
     ),
     Err(ActorSemanticMutationError::Stale)
   );
   assert_eq!(
     apply_actor_semantic_mutation(
-      Some(&replacement),
+      Some(&active),
+      &ActorSemanticMutation::Replace {
+        expected: active.clone(),
+        replacement: dormant.clone(),
+      },
+    ),
+    Ok(Some(dormant.clone()))
+  );
+  assert_eq!(
+    apply_actor_semantic_mutation(
+      Some(&dormant),
       &ActorSemanticMutation::Remove {
-        expected: replacement.clone(),
+        expected: dormant.clone(),
       },
     ),
     Ok(None)
   );
   assert_eq!(
-    apply_actor_semantic_mutation(
-      None,
-      &ActorSemanticMutation::Remove {
-        expected: replacement,
-      },
-    ),
+    apply_actor_semantic_mutation(None, &ActorSemanticMutation::Remove { expected: dormant },),
     Err(ActorSemanticMutationError::Missing)
   );
 }

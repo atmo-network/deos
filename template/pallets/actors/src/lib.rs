@@ -933,6 +933,17 @@ pub mod pallet {
     pub admission: Admission,
   }
 
+  /// Complete lifecycle shape for the future actor-keyed semantic owner. Dormancy retains only
+  /// identity authority; active zero-Step Actors still use `Active` because they retain hot and
+  /// admission semantics even though execution projection has no current Step.
+  #[derive(
+    Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+  )]
+  pub enum ActorSemanticState<Identity, Hot, Admission> {
+    Dormant(Identity),
+    Active(ActorSemanticRecord<Identity, Hot, Admission>),
+  }
+
   /// Complete storage-neutral operation set for the future actor-keyed semantic owner. Every
   /// update is a compare-and-replace of the whole bounded record, so independently authored field
   /// patches cannot silently overwrite one another. Placement-only transitions need no operation.
@@ -1036,6 +1047,11 @@ pub mod pallet {
   }
 
   pub type ActorSemanticRecordOf<T> = ActorSemanticRecord<
+    ActorControlIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>,
+    ActorControlHotState<BlockNumberFor<T>>,
+    ActorAdmissionCertificateOf<T>,
+  >;
+  pub type ActorSemanticStateOf<T> = ActorSemanticState<
     ActorControlIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>,
     ActorControlHotState<BlockNumberFor<T>>,
     ActorAdmissionCertificateOf<T>,
