@@ -6129,6 +6129,86 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
 }
 
 #[test]
+fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    assert_eq!(step.on_error, StepErrorPolicy::AbortCycle);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let resources = Actors::load_current_step_service_state(actor_id)
+      .unwrap()
+      .2
+      .resources;
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+      <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+    );
+    let complete = selector
+      .saturating_add(resources.control)
+      .saturating_add(resources.effect)
+      .saturating_add(suffix);
+    let budget = <Test as crate::Config>::BlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(5);
+    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.open_external_phase());
+    assert_ok!(resource_state.begin_drain());
+    let resource_before = resource_state;
+    let mut meter = WeightMeter::with_limit(complete);
+
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut meter,
+        5,
+        &mut resource_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+
+    assert!(meter.consumed().all_lte(complete));
+    assert_ne!(resource_state.usage(), resource_before.usage());
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+      .expect("aborted cycle remains a live Service resident");
+    assert_eq!(stored.hot.cycle_state, CycleState::Idle);
+    assert_eq!(stored.hot.unsuccessful_attempt_streak, 0);
+    assert_eq!(stored.hot.last_cycle_block, Some(5));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id)
+        .unwrap()
+        .last_attempted,
+      Some(5)
+    );
+  });
+}
+
+#[test]
 fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(2);

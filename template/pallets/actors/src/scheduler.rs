@@ -1750,10 +1750,10 @@ impl<T: Config> Pallet<T> {
     Some((state, admission, plan))
   }
 
-  /// Executes one effectful completion or retry through canonical Service authority.
-  /// Retained and terminal completion commit semantic state before advancing or unlinking the ring;
-  /// adjacent retries retain Service residence, while a supplied later retry destination is
-  /// preflighted before the effect and atomically receives the committed suspended state.
+  /// Executes one effectful completion, abort, or retry through canonical Service authority.
+  /// Retained and terminal outcomes commit semantic state before advancing or unlinking the ring;
+  /// an aborted cycle and adjacent retry retain Service residence, while a supplied later retry
+  /// destination is preflighted before the effect and atomically receives the suspended state.
   #[allow(
     dead_code,
     reason = "canonical Service execution remains staged behind the atomic publication cutover"
@@ -1818,6 +1818,11 @@ impl<T: Config> Pallet<T> {
         } = transition;
         let later_retry_destination = match (disposition, eligible_at, deadline) {
           (AttemptDisposition::Completed, None, _) => None,
+          (AttemptDisposition::Failed, None, None)
+            if matches!(step.on_error, StepErrorPolicy::AbortCycle) =>
+          {
+            None
+          }
           (AttemptDisposition::Suspended, Some(eligible_at), None)
             if now.checked_add(&One::one()) == Some(eligible_at) =>
           {
@@ -1835,6 +1840,7 @@ impl<T: Config> Pallet<T> {
         let control_outcome = match disposition {
           AttemptDisposition::Completed => StepControlOutcome::Completed,
           AttemptDisposition::Suspended => StepControlOutcome::Suspended,
+          AttemptDisposition::Failed => StepControlOutcome::Failed,
           _ => return Err(AttemptTransactionError::Invariant),
         };
         let actual_effect_weight =
