@@ -21,6 +21,12 @@ enum Residence {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResourceDimension {
+  RefTime,
+  ProofSize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Process {
   Idle,
   Running { cursor: u8 },
@@ -42,6 +48,7 @@ struct Oracle {
   block: u32,
   ring: VecDeque<(ActorId, Generation)>,
   actors: BTreeMap<ActorId, Actor>,
+  cursor: Option<(ActorId, Generation)>,
   round: VecDeque<(ActorId, Generation)>,
 }
 
@@ -49,7 +56,9 @@ impl Oracle {
   fn insert(&mut self, id: ActorId, actor: Actor) {
     self.actors.insert(id, actor);
     if actor.residence == Residence::Live {
-      self.ring.push_back((id, actor.generation));
+      let member = (id, actor.generation);
+      self.ring.push_back(member);
+      self.cursor.get_or_insert(member);
     }
   }
 
@@ -57,11 +66,19 @@ impl Oracle {
     assert!(block > self.block);
     self.block = block;
     self.round = self.ring.iter().copied().collect();
+    if let Some(cursor) = self.cursor
+      && let Some(position) = self.round.iter().position(|member| *member == cursor)
+    {
+      self.round.rotate_left(position);
+    }
   }
 
-  fn next(&mut self) -> Option<ActorId> {
-    while let Some((id, generation)) = self.round.pop_front() {
-      let Some(actor) = self.actors.get_mut(&id) else {
+  /// Observes the next eligible candidate without consuming its turn or moving the cursor.
+  fn peek(&mut self) -> Option<ActorId> {
+    loop {
+      let (id, generation) = *self.round.front()?;
+      let Some(actor) = self.actors.get(&id) else {
+        self.round.pop_front();
         continue;
       };
       if actor.generation != generation
@@ -69,12 +86,41 @@ impl Oracle {
         || actor.admitted_in >= self.block
         || actor.last_turn == Some(self.block)
       {
+        self.round.pop_front();
         continue;
       }
-      actor.last_turn = Some(self.block);
       return Some(id);
     }
-    None
+  }
+
+  /// Commits one admitted semantic turn. Resource refusal calls only `peek` and changes nothing.
+  fn admit(&mut self, id: ActorId) {
+    let member = self
+      .round
+      .pop_front()
+      .expect("admission requires a candidate");
+    assert_eq!(member.0, id, "admission must consume the observed head");
+    let actor = self.actors.get_mut(&id).expect("candidate remains current");
+    assert_eq!(actor.generation, member.1);
+    assert_eq!(actor.residence, Residence::Live);
+    assert_ne!(actor.last_turn, Some(self.block));
+    actor.last_turn = Some(self.block);
+    self.cursor = self.successor(member);
+  }
+
+  fn next(&mut self) -> Option<ActorId> {
+    let id = self.peek()?;
+    self.admit(id);
+    Some(id)
+  }
+
+  fn refuse(&mut self, id: ActorId, _: ResourceDimension) {
+    assert_eq!(self.peek(), Some(id));
+  }
+
+  fn successor(&self, member: (ActorId, Generation)) -> Option<(ActorId, Generation)> {
+    let position = self.ring.iter().position(|entry| *entry == member)?;
+    self.ring.get((position + 1) % self.ring.len()).copied()
   }
 
   fn commit_step(&mut self, id: ActorId, next_cursor: u8) {
@@ -89,14 +135,19 @@ impl Oracle {
   }
 
   fn retry(&mut self, id: ActorId, cursor: u8, due: u32, attempts: u8) {
-    self.detach(id);
+    let adjacent_round = due <= self.block.saturating_add(1);
+    if !adjacent_round {
+      self.detach(id);
+    }
     let actor = self.actors.get_mut(&id).unwrap();
     actor.process = Process::Retry {
       cursor,
       due,
       attempts,
     };
-    actor.residence = Residence::Sleeping { due };
+    if !adjacent_round {
+      actor.residence = Residence::Sleeping { due };
+    }
   }
 
   fn complete_level_sensitive(&mut self, id: ActorId, still_true: bool, revision: u32) {
@@ -193,7 +244,9 @@ impl Oracle {
         last_commit: None,
       },
     );
-    self.ring.push_back((id, generation));
+    let member = (id, generation);
+    self.ring.push_back(member);
+    self.cursor.get_or_insert(member);
   }
 
   fn reclaim(&mut self, id: ActorId, generation: Generation) -> bool {
@@ -215,8 +268,15 @@ impl Oracle {
   }
 
   fn detach(&mut self, id: ActorId) {
-    let generation = self.actors[&id].generation;
-    self.ring.retain(|member| *member != (id, generation));
+    let member = (id, self.actors[&id].generation);
+    if self.cursor == Some(member) {
+      self.cursor = if self.ring.len() == 1 {
+        None
+      } else {
+        self.successor(member)
+      };
+    }
+    self.ring.retain(|entry| *entry != member);
   }
 }
 
@@ -253,7 +313,59 @@ fn mutable_round_preserves_survivor_order_and_defers_new_or_reentered_members() 
   assert_eq!(o.next(), Some(3));
   assert_eq!(o.next(), None);
   o.begin_block(2);
-  assert_eq!([o.next(), o.next(), o.next()], [Some(3), Some(5), Some(1)]);
+  assert_eq!([o.next(), o.next(), o.next()], [Some(5), Some(1), Some(3)]);
+}
+
+#[test]
+fn partial_round_continues_from_the_next_encounter_across_blocks() {
+  let mut o = Oracle::default();
+  for id in 1..=3 {
+    o.insert(id, live(0));
+  }
+
+  o.begin_block(1);
+  assert_eq!(o.next(), Some(1));
+  o.begin_block(2);
+  assert_eq!(o.next(), Some(2));
+  o.begin_block(3);
+  assert_eq!(o.next(), Some(3));
+  o.begin_block(4);
+  assert_eq!(o.next(), Some(1));
+}
+
+#[test]
+fn partial_round_continues_between_passes_without_reopening_the_block() {
+  let mut o = Oracle::default();
+  for id in 1..=3 {
+    o.insert(id, live(0));
+  }
+
+  o.begin_block(1);
+  assert_eq!(o.next(), Some(1));
+  // A later pass in the same immutable round resumes from the retained snapshot frontier.
+  assert_eq!(o.next(), Some(2));
+  assert_eq!(o.next(), Some(3));
+  assert_eq!(o.next(), None);
+}
+
+#[test]
+fn resource_refusal_preserves_the_candidate_and_next_round_priority() {
+  for dimension in [ResourceDimension::RefTime, ResourceDimension::ProofSize] {
+    let mut o = Oracle::default();
+    for id in 1..=3 {
+      o.insert(id, live(0));
+    }
+    o.begin_block(1);
+    assert_eq!(o.next(), Some(1));
+    assert_eq!(o.peek(), Some(2));
+    o.refuse(2, dimension);
+    assert_eq!(o.peek(), Some(2), "same-block pass cannot bypass B");
+
+    o.begin_block(2);
+    assert_eq!(o.peek(), Some(2), "next block cannot begin at C");
+    o.admit(2);
+    assert_eq!(o.next(), Some(3));
+  }
 }
 
 #[test]
@@ -274,7 +386,29 @@ fn resident_multiblock_pipeline_and_level_recurrence_obey_q1() {
 }
 
 #[test]
-fn retry_sleeps_then_returns_without_resetting_cursor_or_attempts() {
+fn adjacent_round_retry_remains_resident_with_the_same_cursor_and_attempt_count() {
+  let mut o = Oracle::default();
+  o.insert(1, live(0));
+  o.insert(2, live(0));
+  o.begin_block(1);
+  assert_eq!(o.next(), Some(1));
+  o.retry(1, 2, 2, 1);
+  assert_eq!(o.actors[&1].residence, Residence::Live);
+  assert_eq!(o.next(), Some(2));
+  o.begin_block(2);
+  assert_eq!(o.next(), Some(1));
+  assert_eq!(
+    o.actors[&1].process,
+    Process::Retry {
+      cursor: 2,
+      due: 2,
+      attempts: 1,
+    }
+  );
+}
+
+#[test]
+fn later_retry_sleeps_then_returns_without_resetting_cursor_or_attempts() {
   let mut o = Oracle::default();
   o.insert(1, live(0));
   o.begin_block(1);

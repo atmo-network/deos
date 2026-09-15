@@ -144,7 +144,7 @@ Invalidation records only that recheck is owed. Repeated updates coalesce. Regis
 
 Each transition pre-admits its complete multidimensional Weight and economic charge before semantic mutation. Notification/invalidation, current activation checks, residence transfer, Attempt/effect, resource refusal, and reclamation are independently priced owners. No fee reserves future capacity or buys a second Cycle. A failed transfer preserves exactly one source or destination obligation. Cleanup revokes execution before bounded reclamation and never mutates sovereign custody.
 
-The independent executable reference is `tests/current_state_semantic_oracle.rs`. It imports no pallet scheduler type and covers mutable rounds, resident multi-block Q1, retry sleep/return, level recurrence, lost-wakeup revision acknowledgment, disablement, and stale retired generations. It decides semantics, not storage geometry.
+The independent executable reference is `tests/current_state_semantic_oracle.rs`. It imports no pallet scheduler type and keeps a semantic next-encounter position across partial rounds. Candidate observation is non-consuming; only admitted semantic turns move the cursor, while component-wise resource refusal preserves the same head across later passes and the next block. It covers mutable rounds, resident adjacent-round retry, later retry sleep/return, multi-block Q1, level recurrence, lost-wakeup revision acknowledgment, disablement, and stale retired generations. It decides semantics, not storage geometry; bounded differential traces compare outcomes rather than storage shape.
 
 Existing test requirements are classified as follows:
 
