@@ -51,7 +51,6 @@ struct PreparedReadyPublication<T: Config> {
 /// Step attempt. The legacy FIFO adapter consumes this result and owns physical
 /// placement; the execution core does not publish scheduler authority.
 struct EffectfulStepTransition<T: Config> {
-  state: ActiveActorStateOf<T>,
   plan: CurrentStepPlanOf<T>,
   execution_instance: ActiveActorViewOf<T>,
   step: StepOf<T>,
@@ -61,28 +60,37 @@ struct EffectfulStepTransition<T: Config> {
   effect_execution: super::TaskEffectExecution,
   disposition: AttemptDisposition,
   attempt: ActorAttemptEvidence,
-  placement_run: Option<ActorRunStateOf<T>>,
-  placement_resources: ActorStepResourceEnvelope,
-  placement_instance: ActiveActorViewOf<T>,
-  unsignaled_hot: ActorHotStateOf<T>,
-  close_reason: Option<CloseReason>,
+  next_residence: NextResidence<T>,
   eligible_at: Option<BlockNumberFor<T>>,
+}
+
+/// Carrier-neutral intent selected after a semantic transition. The legacy
+/// FIFO adapter may realize this intent physically or fail closed when its
+/// scheduler namespace is exhausted.
+enum NextResidence<T: Config> {
+  Close {
+    state: ActiveActorStateOf<T>,
+    reason: CloseReason,
+  },
+  Publish {
+    state: ActiveActorStateOf<T>,
+    instance: ActiveActorViewOf<T>,
+    resources: ActorStepResourceEnvelope,
+  },
 }
 
 /// Carrier-neutral semantic result of completing an admitted empty Contract.
 /// The legacy FIFO adapter decides whether the still-live Actor is closed or
 /// republished after the semantic cycle has completed.
 struct ZeroStepTransition<T: Config> {
-  state: ActiveActorStateOf<T>,
+  next_residence: NextResidence<T>,
   cycle_nonce: u64,
-  resources: ActorStepResourceEnvelope,
 }
 
 /// Carrier-neutral semantic result of completing StopCycle from either an
 /// Opening or Running frame. The legacy FIFO finalizer owns republication,
 /// fees, holds, and physical StepCommitEvidence.
 struct StopCycleTransition<T: Config> {
-  state: ActiveActorStateOf<T>,
   execution_instance: ActiveActorViewOf<T>,
   step: StepOf<T>,
   control_context: StepControlWeightContext,
@@ -93,7 +101,7 @@ struct StopCycleTransition<T: Config> {
   cycle_nonce: u64,
   cursor: u32,
   phase: StepControlPhase,
-  next_resources: ActorStepResourceEnvelope,
+  next_residence: NextResidence<T>,
 }
 
 #[derive(Clone, Copy)]
@@ -855,13 +863,34 @@ impl<T: Config> Pallet<T> {
       result: CycleResult::Completed,
       outcomes: OutcomeTotals::default(),
     });
+    let resources = ActorStepResourceEnvelope {
+      control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+      effect: Weight::zero(),
+    };
+    let next_residence = if state
+      .contract
+      .auto_close_at_cycle_nonce
+      .is_some_and(|target| cycle_nonce >= target)
+    {
+      NextResidence::Close {
+        state,
+        reason: CloseReason::AutoCloseNonceReached,
+      }
+    } else {
+      let instance = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
+      NextResidence::Publish {
+        state,
+        instance,
+        resources,
+      }
+    };
     Ok(ZeroStepTransition {
-      state,
+      next_residence,
       cycle_nonce,
-      resources: ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      },
     })
   }
 
@@ -872,82 +901,19 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> Result<ActorAttemptEvidence, AttemptTransactionError> {
     let ZeroStepTransition {
-      state,
+      next_residence,
       cycle_nonce,
-      resources,
     } = transition;
-    if state
-      .contract
-      .auto_close_at_cycle_nonce
-      .is_some_and(|target| cycle_nonce >= target)
-    {
-      Self::finalize_actor_from_consumed_state(
-        actor_id,
-        state,
-        admission,
-        CloseReason::AutoCloseNonceReached,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?;
-      return Ok(Self::step_simulation_evidence(
-        cycle_nonce,
-        0,
-        AttemptDisposition::Closed(CloseReason::AutoCloseNonceReached),
-        OutcomeTotals::default(),
-        None,
-        None,
-      ));
+    let (_, status, _) =
+      Self::finalize_next_residence_on_legacy_fifo(actor_id, next_residence, admission, now)?;
+    if ActorControlLocators::<T>::contains_key(actor_id) {
+      Self::reconcile_actor_state_hold_with_authority(actor_id)
+        .map_err(|_| AttemptTransactionError::StateHold)?;
     }
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let unsignaled_hot = state.hot.clone();
-    match Self::schedule_next_work_with_authority(
-      actor_id,
-      &instance,
-      state.hot.clone(),
-      &state.identity,
-      None,
-      admission,
-      resources,
-      now,
-      ServiceCutoff::Snapshotted,
-    ) {
-      Ok(StepControlPlacement::None) => Self::restore_unsignaled_from_authority(
-        actor_id,
-        unsignaled_hot,
-        &state.identity,
-        None,
-        admission,
-        resources,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?,
-      Ok(_) => {}
-      Err(_) => {
-        Self::finalize_actor_from_consumed_state(
-          actor_id,
-          state,
-          admission,
-          CloseReason::SchedulerIndexExhausted,
-        )
-        .map_err(|_| AttemptTransactionError::Invariant)?;
-        return Ok(Self::step_simulation_evidence(
-          cycle_nonce,
-          0,
-          AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
-          OutcomeTotals::default(),
-          None,
-          None,
-        ));
-      }
-    }
-    Self::reconcile_actor_state_hold_with_authority(actor_id)
-      .map_err(|_| AttemptTransactionError::StateHold)?;
     Ok(Self::step_simulation_evidence(
       cycle_nonce,
       0,
-      AttemptDisposition::Completed,
+      status,
       OutcomeTotals::default(),
       None,
       None,
@@ -966,80 +932,69 @@ impl<T: Config> Pallet<T> {
     Self::finalize_zero_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
-  fn finalize_stop_cycle_residence_on_legacy_fifo(
+  fn finalize_next_residence_on_legacy_fifo(
     actor_id: ActorId,
-    state: &ActiveActorStateOf<T>,
+    next_residence: NextResidence<T>,
     admission: &ActorAdmissionCertificateOf<T>,
-    resources: ActorStepResourceEnvelope,
     now: BlockNumberFor<T>,
   ) -> Result<(StepControlPlacement, AttemptDisposition, bool), AttemptTransactionError> {
-    let cycle_nonce = state.identity.cycle_nonce;
-    if state
-      .contract
-      .auto_close_at_cycle_nonce
-      .is_some_and(|target| cycle_nonce >= target)
-    {
-      Self::finalize_actor_from_consumed_state(
-        actor_id,
-        state.clone(),
-        admission,
-        CloseReason::AutoCloseNonceReached,
-      )
-      .map_err(|_| AttemptTransactionError::Invariant)?;
-      return Ok((
-        StepControlPlacement::None,
-        AttemptDisposition::Closed(CloseReason::AutoCloseNonceReached),
-        false,
-      ));
-    }
-    let placement_instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let unsignaled_hot = state.hot.clone();
-    match Self::schedule_next_work_with_authority(
-      actor_id,
-      &placement_instance,
-      state.hot.clone(),
-      &state.identity,
-      None,
-      admission,
-      resources,
-      now,
-      ServiceCutoff::Snapshotted,
-    ) {
-      Ok(placement) => {
-        if placement == StepControlPlacement::None {
-          Self::restore_unsignaled_from_authority(
-            actor_id,
-            unsignaled_hot,
-            &state.identity,
-            None,
-            admission,
-            resources,
-          )
+    match next_residence {
+      NextResidence::Close { state, reason } => {
+        Self::finalize_actor_from_consumed_state(actor_id, state, admission, reason)
           .map_err(|_| AttemptTransactionError::Invariant)?;
-        }
-        Ok((placement, AttemptDisposition::Completed, false))
-      }
-      Err(error) => {
-        if !Self::scheduler_index_is_exhausted(error) {
-          return Err(AttemptTransactionError::Invariant);
-        }
-        Self::finalize_actor_from_consumed_state(
-          actor_id,
-          state.clone(),
-          admission,
-          CloseReason::SchedulerIndexExhausted,
-        )
-        .map_err(|_| AttemptTransactionError::Invariant)?;
         Ok((
           StepControlPlacement::None,
-          AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
-          true,
+          AttemptDisposition::Closed(reason),
+          false,
         ))
       }
+      NextResidence::Publish {
+        state,
+        instance,
+        resources,
+      } => match Self::schedule_next_work_with_authority(
+        actor_id,
+        &instance,
+        state.hot.clone(),
+        &state.identity,
+        state.run_state.as_ref(),
+        admission,
+        resources,
+        now,
+        ServiceCutoff::Snapshotted,
+      ) {
+        Ok(placement) => {
+          if placement == StepControlPlacement::None {
+            Self::restore_unsignaled_from_authority(
+              actor_id,
+              state.hot,
+              &state.identity,
+              state.run_state.as_ref(),
+              admission,
+              resources,
+            )
+            .map_err(|_| AttemptTransactionError::Invariant)?;
+          }
+          Ok((placement, AttemptDisposition::Completed, false))
+        }
+        Err(error) => {
+          if !Self::scheduler_index_is_exhausted(error) {
+            return Err(AttemptTransactionError::Invariant);
+          }
+          Self::finalize_actor_from_consumed_state(
+            actor_id,
+            state,
+            admission,
+            CloseReason::SchedulerIndexExhausted,
+          )
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+          Ok((
+            StepControlPlacement::None,
+            AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted),
+            true,
+          ))
+        }
+      },
     }
   }
 
@@ -1050,7 +1005,6 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
     let StopCycleTransition {
-      state,
       execution_instance,
       step,
       control_context,
@@ -1061,16 +1015,10 @@ impl<T: Config> Pallet<T> {
       cycle_nonce,
       cursor,
       phase,
-      next_resources,
+      next_residence,
     } = transition;
     let (placement, attempt_status, closed_for_exhaustion) =
-      Self::finalize_stop_cycle_residence_on_legacy_fifo(
-        actor_id,
-        &state,
-        admission,
-        next_resources,
-        now,
-      )?;
+      Self::finalize_next_residence_on_legacy_fifo(actor_id, next_residence, admission, now)?;
     let actual_effect_weight =
       T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
         .ok_or(AttemptTransactionError::Invariant)?;
@@ -1237,7 +1185,6 @@ impl<T: Config> Pallet<T> {
     });
 
     Ok(StopCycleTransition {
-      state,
       execution_instance: instance,
       step,
       control_context,
@@ -1248,7 +1195,27 @@ impl<T: Config> Pallet<T> {
       cycle_nonce,
       cursor: 0,
       phase: StepControlPhase::Opening,
-      next_resources: commit_plan.loaded_step.resources,
+      next_residence: if state
+        .contract
+        .auto_close_at_cycle_nonce
+        .is_some_and(|target| cycle_nonce >= target)
+      {
+        NextResidence::Close {
+          state,
+          reason: CloseReason::AutoCloseNonceReached,
+        }
+      } else {
+        let placement_instance = Self::derive_active_actor_view(
+          state.identity.clone(),
+          state.hot.clone(),
+          state.contract.clone(),
+        );
+        NextResidence::Publish {
+          state,
+          instance: placement_instance,
+          resources: commit_plan.loaded_step.resources,
+        }
+      },
     })
   }
 
@@ -1361,7 +1328,6 @@ impl<T: Config> Pallet<T> {
       .map(|loaded| loaded.resources)
       .ok_or(AttemptTransactionError::Invariant)?;
     Ok(StopCycleTransition {
-      state,
       execution_instance: instance,
       step,
       control_context,
@@ -1372,7 +1338,27 @@ impl<T: Config> Pallet<T> {
       cycle_nonce,
       cursor,
       phase: StepControlPhase::Running,
-      next_resources,
+      next_residence: if state
+        .contract
+        .auto_close_at_cycle_nonce
+        .is_some_and(|target| cycle_nonce >= target)
+      {
+        NextResidence::Close {
+          state,
+          reason: CloseReason::AutoCloseNonceReached,
+        }
+      } else {
+        let placement_instance = Self::derive_active_actor_view(
+          state.identity.clone(),
+          state.hot.clone(),
+          state.contract.clone(),
+        );
+        NextResidence::Publish {
+          state,
+          instance: placement_instance,
+          resources: next_resources,
+        }
+      },
     })
   }
 
@@ -1477,7 +1463,6 @@ impl<T: Config> Pallet<T> {
       plan.hot.clone(),
       state.contract.clone(),
     );
-    let unsignaled_hot = plan.hot.clone();
     let failure_close_reason = if disposition != AttemptDisposition::Failed {
       None
     } else if retry_attempt_limit_reached {
@@ -1500,8 +1485,18 @@ impl<T: Config> Pallet<T> {
         .filter(|target_nonce| plan.identity.cycle_nonce >= *target_nonce)
         .map(|_| CloseReason::AutoCloseNonceReached)
     };
+    state.identity = plan.identity.clone();
+    state.hot = plan.hot.clone();
+    state.run_state = placement_run;
+    let next_residence = match failure_close_reason.or(successful_close_reason) {
+      Some(reason) => NextResidence::Close { state, reason },
+      None => NextResidence::Publish {
+        state,
+        instance: placement_instance,
+        resources: placement_resources,
+      },
+    };
     Ok(EffectfulStepTransition {
-      state,
       plan,
       execution_instance,
       step,
@@ -1511,11 +1506,7 @@ impl<T: Config> Pallet<T> {
       effect_execution,
       disposition,
       attempt,
-      placement_run,
-      placement_resources,
-      placement_instance,
-      unsignaled_hot,
-      close_reason: failure_close_reason.or(successful_close_reason),
+      next_residence,
       eligible_at,
     })
   }
@@ -1527,7 +1518,6 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
     let EffectfulStepTransition {
-      mut state,
       plan,
       execution_instance,
       step,
@@ -1537,11 +1527,7 @@ impl<T: Config> Pallet<T> {
       effect_execution,
       disposition,
       mut attempt,
-      placement_run,
-      placement_resources,
-      placement_instance,
-      unsignaled_hot,
-      close_reason,
+      next_residence,
       eligible_at,
     } = transition;
     let actual_effect_weight =
@@ -1550,65 +1536,13 @@ impl<T: Config> Pallet<T> {
     if !actual_effect_weight.all_lte(reserved_effect_weight) {
       return Err(AttemptTransactionError::Invariant);
     }
-    let mut closed_for_exhaustion = false;
-    let placement = if let Some(close_reason) = close_reason {
-      state.identity = plan.identity.clone();
-      state.hot = plan.hot.clone();
-      state.run_state = placement_run;
-      Self::finalize_actor_from_consumed_state(actor_id, state, admission, close_reason)
-        .map_err(|_| AttemptTransactionError::Invariant)?;
-      attempt.status = AttemptDisposition::Closed(close_reason);
+    let (placement, residence_status, closed_for_exhaustion) =
+      Self::finalize_next_residence_on_legacy_fifo(actor_id, next_residence, admission, now)?;
+    if matches!(residence_status, AttemptDisposition::Closed(_)) {
+      attempt.status = residence_status;
       attempt.run_cursor = None;
       attempt.unsuccessful_attempts_at_cursor = None;
-      StepControlPlacement::None
-    } else {
-      match Self::schedule_next_work_with_authority(
-        actor_id,
-        &placement_instance,
-        plan.hot.clone(),
-        &plan.identity,
-        placement_run.as_ref(),
-        admission,
-        placement_resources,
-        now,
-        ServiceCutoff::Snapshotted,
-      ) {
-        Ok(placement) => {
-          if placement == StepControlPlacement::None {
-            Self::restore_unsignaled_from_authority(
-              actor_id,
-              unsignaled_hot,
-              &plan.identity,
-              placement_run.as_ref(),
-              admission,
-              placement_resources,
-            )
-            .map_err(|_| AttemptTransactionError::Invariant)?;
-          }
-          placement
-        }
-        Err(error) => {
-          if !Self::scheduler_index_is_exhausted(error) {
-            return Err(AttemptTransactionError::Invariant);
-          }
-          state.identity = plan.identity.clone();
-          state.hot = plan.hot.clone();
-          state.run_state = placement_run;
-          Self::finalize_actor_from_consumed_state(
-            actor_id,
-            state,
-            admission,
-            CloseReason::SchedulerIndexExhausted,
-          )
-          .map_err(|_| AttemptTransactionError::Invariant)?;
-          closed_for_exhaustion = true;
-          attempt.status = AttemptDisposition::Closed(CloseReason::SchedulerIndexExhausted);
-          attempt.run_cursor = None;
-          attempt.unsuccessful_attempts_at_cursor = None;
-          StepControlPlacement::None
-        }
-      }
-    };
+    }
     let control_outcome = match disposition {
       AttemptDisposition::Completed => StepControlOutcome::Completed,
       AttemptDisposition::Continued => StepControlOutcome::Continued,
