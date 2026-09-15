@@ -1811,10 +1811,17 @@ impl<T: Config> Pallet<T> {
           reserved_effect_weight,
           effect_execution,
           disposition,
-          attempt,
+          mut attempt,
           next_residence,
           eligible_at,
         } = transition;
+        let local_retry_exhausted = matches!(
+          &next_residence,
+          NextResidence::Close {
+            reason: CloseReason::RetryAttemptsExhausted,
+            ..
+          }
+        );
         let later_retry_destination = match (disposition, eligible_at, deadline) {
           (AttemptDisposition::Completed, None, _) => None,
           (AttemptDisposition::Continued, Some(eligible_at), None)
@@ -1826,12 +1833,13 @@ impl<T: Config> Pallet<T> {
           (AttemptDisposition::Failed, None, None)
             if matches!(step.on_error, StepErrorPolicy::AbortCycle)
               || matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
-                && attempt.step.as_ref().is_some_and(|record| {
-                  matches!(
-                    record.outcome,
-                    StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
-                  )
-                }) =>
+                && (local_retry_exhausted
+                  || attempt.step.as_ref().is_some_and(|record| {
+                    matches!(
+                      record.outcome,
+                      StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
+                    )
+                  })) =>
           {
             None
           }
@@ -1879,6 +1887,9 @@ impl<T: Config> Pallet<T> {
               .map_err(|_| AttemptTransactionError::Invariant)?;
             Self::retire_service_member(actor, reason)
               .map_err(|_| AttemptTransactionError::Invariant)?;
+            attempt.status = AttemptDisposition::Closed(reason);
+            attempt.run_cursor = None;
+            attempt.unsuccessful_attempts_at_cursor = None;
             StepControlPlacement::None
           }
         };
@@ -1925,7 +1936,7 @@ impl<T: Config> Pallet<T> {
           );
         }
         Ok(StepCommitEvidence {
-          closed_for_exhaustion: false,
+          closed_for_exhaustion: local_retry_exhausted,
           actual_control_weight,
           actual_effect_weight,
           attempt,
