@@ -946,6 +946,7 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
     let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     let mut paused = state.clone();
     paused.hot.lifecycle = crate::ActiveLifecycle::Paused;
     paused.contract.window = None;
@@ -970,7 +971,7 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
       ))
     );
 
-    let mut unlatched = state;
+    let mut unlatched = state.clone();
     unlatched.hot.lifecycle = crate::ActiveLifecycle::Active;
     unlatched.hot.cycle_state = crate::CycleState::Idle;
     unlatched.hot.pending_signal = false;
@@ -988,6 +989,22 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
         None,
       ))
     );
+    let (disabled, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &unlatched, None, 0)
+        .expect("unlatched Actor has a complete disabled destination");
+    assert_eq!(disabled.generation, actor.generation);
+    assert!(matches!(
+      disabled.status,
+      crate::ProcessStatus::Disabled(crate::ProcessDisablement {
+        cause: crate::ProcessDisableCause::Protocol,
+        ..
+      })
+    ));
+    assert_eq!(
+      (disabled.residence, admission_round, deadline),
+      (None, None, None)
+    );
+
     let mut pending = unlatched;
     pending.hot.pending_signal = true;
     assert_eq!(
@@ -999,10 +1016,39 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
         Some(crate::ServiceResidenceKind::Pending),
       ))
     );
+    let (service, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &pending, None, 0)
+        .expect("pending Actor has a complete Service destination");
+    assert_eq!(
+      (service.generation, service.status, service.residence),
+      (
+        actor.generation,
+        crate::ProcessStatus::Serving,
+        Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending,
+        )),
+      )
+    );
+    assert_eq!((admission_round, deadline), (Some(0), None));
+
+    let (sleeping, admission_round, deadline) =
+      Actors::test_plan_process_destination(actor, &state, state.run_state.as_ref(), 0)
+        .expect("suspended Actor has a complete Deadline destination");
+    let deadline = deadline.expect("exact Deadline handle");
+    assert_eq!(admission_round, None);
+    assert_eq!(deadline.actor, actor);
+    assert_eq!(
+      sleeping.residence,
+      Some(crate::ProcessResidence::Deadline {
+        key: deadline.key,
+        page: deadline.page,
+        slot: deadline.slot,
+      })
+    );
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
       before,
-      "typed process planning must remain storage-free"
+      "typed process and destination planning must remain storage-free"
     );
   });
 }

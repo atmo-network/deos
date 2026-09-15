@@ -29,6 +29,25 @@ enum NextWorkPlan<BlockNumber> {
   Wakeup(BlockNumber),
 }
 
+/// Complete generation-bound destination selected before the atomic carrier
+/// cut. This plan owns no storage and cannot become a second committer.
+#[allow(
+  dead_code,
+  reason = "destination plan remains inert until the atomic carrier cutover"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlannedProcessDestination<BlockNumber> {
+  Disabled(ActorProcess<BlockNumber>),
+  Service {
+    process: ActorProcess<BlockNumber>,
+    admission_round: BlockNumber,
+  },
+  Deadline {
+    process: ActorProcess<BlockNumber>,
+    handle: DeadlineHandle<BlockNumber>,
+  },
+}
+
 struct QueueTopology {
   head: QueueTicket,
   tail: QueueTicket,
@@ -8576,6 +8595,84 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  #[allow(
+    dead_code,
+    reason = "destination materialization remains inert until the atomic carrier cutover"
+  )]
+  fn plan_process_destination(
+    actor: ActorRef,
+    plan: NextWorkPlan<BlockNumberFor<T>>,
+    now: BlockNumberFor<T>,
+    last_attempted: Option<BlockNumberFor<T>>,
+  ) -> Result<PlannedProcessDestination<BlockNumberFor<T>>, EnqueueOutcome> {
+    let process = |status, residence| ActorProcess {
+      generation: actor.generation,
+      last_attempted,
+      status,
+      residence,
+    };
+    match plan {
+      NextWorkPlan::Disabled(disablement) => Ok(PlannedProcessDestination::Disabled(process(
+        ProcessStatus::Disabled(disablement),
+        None,
+      ))),
+      NextWorkPlan::Service(kind) => {
+        if ActorProcesses::<T>::contains_key(actor.actor_id)
+          || ServiceNodes::<T>::contains_key(actor.actor_id)
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let header = ServiceHeader::<T>::get();
+        if header.count >= T::MaxActiveActors::get() {
+          return Err(EnqueueOutcome::CapacityUnavailable);
+        }
+        match (header.count, header.cursor) {
+          (0, None) => {}
+          (0, Some(_)) | (_, None) => return Err(EnqueueOutcome::CorruptedTopology),
+          (_, Some(cursor)) => {
+            let head = ServiceNodes::<T>::get(cursor.actor_id)
+              .filter(|node| node.generation == cursor.generation)
+              .ok_or(EnqueueOutcome::CorruptedTopology)?;
+            let tail = ServiceNodes::<T>::get(head.previous.actor_id)
+              .filter(|node| node.generation == head.previous.generation)
+              .ok_or(EnqueueOutcome::CorruptedTopology)?;
+            if tail.next != cursor {
+              return Err(EnqueueOutcome::CorruptedTopology);
+            }
+          }
+        }
+        Ok(PlannedProcessDestination::Service {
+          process: process(
+            ProcessStatus::Serving,
+            Some(ProcessResidence::Service(kind)),
+          ),
+          admission_round: now,
+        })
+      }
+      NextWorkPlan::Wakeup(at) => {
+        let handle = Self::plan_deadline_destination(actor, WakeupKey::Block(at)).map_err(
+          |error| match error {
+            DeadlineMutationError::CapacityExceeded | DeadlineMutationError::PageFull => {
+              EnqueueOutcome::WakeupCapacityExhausted
+            }
+            _ => EnqueueOutcome::CorruptedTopology,
+          },
+        )?;
+        Ok(PlannedProcessDestination::Deadline {
+          process: process(
+            ProcessStatus::Serving,
+            Some(ProcessResidence::Deadline {
+              key: handle.key,
+              page: handle.page,
+              slot: handle.slot,
+            }),
+          ),
+          handle,
+        })
+      }
+    }
+  }
+
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8637,6 +8734,37 @@ impl<T: Config> Pallet<T> {
         NextWorkPlan::Wakeup(at) => (StepControlPlacement::Wakeup, Some(at), None, None),
       },
     )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_process_destination(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+  ) -> Result<
+    (
+      ActorProcessOf<T>,
+      Option<BlockNumberFor<T>>,
+      Option<DeadlineHandleOf<T>>,
+    ),
+    EnqueueOutcome,
+  > {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let plan =
+      Self::plan_next_work_loaded(&instance, supplied_run, now, ServiceCutoff::Snapshotted)?;
+    Self::plan_process_destination(actor, plan, now, None).map(|destination| match destination {
+      PlannedProcessDestination::Disabled(process) => (process, None, None),
+      PlannedProcessDestination::Service {
+        process,
+        admission_round,
+      } => (process, Some(admission_round), None),
+      PlannedProcessDestination::Deadline { process, handle } => (process, None, Some(handle)),
+    })
   }
 
   #[cfg(test)]
