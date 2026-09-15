@@ -754,6 +754,94 @@ fn canonical_zero_step_service_attempt_commits_semantics_before_ring_advance() {
 }
 
 #[test]
+fn canonical_effectful_completion_commits_before_service_advance() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![step]).expect("one-Step Contract"),
+    );
+    let sovereign = Actors::actor_identity(actor_id)
+      .expect("active identity")
+      .sovereign_account;
+    set_asset_balance(&sovereign, TestAsset::Local(1), 10);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let now = frame_system::Pallet::<Test>::block_number();
+    let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
+      .expect("legacy source exposes the complete admitted Step");
+    let ticket = Actors::build_actor_step_ticket(
+      actor_id,
+      state.hot.queue_ticket.expect("triggered Actor is Ready"),
+      now,
+      &state.identity,
+      &state.hot,
+      state.run_state.as_ref(),
+      &admission,
+    )
+    .expect("opening ticket");
+    let maximum_fee = Actors::maximum_current_action_fee(
+      ActorType::System,
+      &loaded_step.step,
+      loaded_step.resources,
+    )
+    .expect("System fee envelope");
+    let plan = Actors::build_current_step_plan(
+      actor_id,
+      state.identity.clone(),
+      state.hot.clone(),
+      state.run_state.clone(),
+      admission.clone(),
+      ticket,
+      loaded_step,
+      maximum_fee,
+    )
+    .expect("coherent opening plan");
+    let generation =
+      match ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists") {
+        ActorSemanticState::Active(record) => record.generation,
+        ActorSemanticState::Dormant(_) => panic!("created Actor is active"),
+      };
+    let actor = actor_ref(actor_id, generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(now).expect("round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+
+    Actors::execute_completed_effectful_step_on_service(
+      actor,
+      ServiceResidenceKind::Live,
+      state,
+      plan,
+      &admission,
+      now,
+    )
+    .expect("effectful completion commits");
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+      .expect("retained semantic owner remains loadable");
+    assert_eq!(stored.identity.cycle_nonce, 1);
+    assert_eq!(stored.hot.last_cycle_block, Some(now));
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).unwrap().last_considered,
+      now
+    );
+  });
+}
+
+#[test]
 fn canonical_zero_step_terminal_attempt_cleans_before_service_unlink() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(2);

@@ -1673,6 +1673,119 @@ impl<T: Config> Pallet<T> {
     Self::finalize_effectful_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
+  /// Executes one effectful completion through canonical Service authority. This first adapter is
+  /// intentionally narrower than the carrier-neutral transition: retry, continuation, deadline,
+  /// and terminal destinations remain refused until their atomic residence commits exist.
+  #[allow(
+    dead_code,
+    reason = "canonical Service execution remains staged behind the atomic publication cutover"
+  )]
+  pub(crate) fn execute_completed_effectful_step_on_service(
+    actor: ActorRef,
+    kind: ServiceResidenceKind,
+    state: ActiveActorStateOf<T>,
+    plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = (|| {
+        let semantic = Self::load_service_actor_semantic_state(actor, kind)
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        if semantic.identity != state.identity
+          || semantic.hot != state.hot
+          || semantic.admission != *admission
+          || Self::load_actor_contract(actor.actor_id).as_ref() != Some(&state.contract)
+        {
+          return Err(AttemptTransactionError::Invariant);
+        }
+        let transition =
+          Self::execute_effectful_step_transition(actor.actor_id, state, plan, admission, now)?;
+        let EffectfulStepTransition {
+          plan,
+          execution_instance,
+          step,
+          control_context,
+          reserved_control_weight,
+          reserved_effect_weight,
+          effect_execution,
+          disposition,
+          attempt,
+          next_residence,
+          eligible_at,
+        } = transition;
+        if disposition != AttemptDisposition::Completed || eligible_at.is_some() {
+          return Err(AttemptTransactionError::Invariant);
+        }
+        let NextResidence::Publish { state, .. } = next_residence else {
+          return Err(AttemptTransactionError::Invariant);
+        };
+        let actual_effect_weight =
+          T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
+            .filter(|actual| actual.all_lte(reserved_effect_weight))
+            .ok_or(AttemptTransactionError::Invariant)?;
+        Self::commit_retained_service_attempt(actor, kind, state.identity, state.hot, now)
+          .map_err(|_| AttemptTransactionError::Invariant)?;
+        let actual_fee = Self::maximum_current_action_fee(
+          execution_instance.actor_class.actor_type(),
+          &step,
+          ActorStepResourceEnvelope {
+            control: Weight::zero(),
+            effect: actual_effect_weight,
+          },
+        )
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+        let action_fee_collected = execution_instance.actor_class.actor_type() == ActorType::User
+          && !actual_fee.total_fee.is_zero();
+        let actual_control_weight = T::StepControlWeight::actual_control_weight(
+          control_context,
+          &step,
+          reserved_control_weight,
+          StepControlExecution {
+            phase: match execution_instance.cycle_state {
+              CycleState::Idle => StepControlPhase::Opening,
+              CycleState::Running => StepControlPhase::Running,
+              CycleState::Suspended => StepControlPhase::Suspended,
+            },
+            outcome: StepControlOutcome::Completed,
+            placement: StepControlPlacement::Queue,
+            task_effect: effect_execution,
+            action_fee_collected,
+          },
+        )
+        .filter(|actual| actual.all_lte(reserved_control_weight))
+        .ok_or(AttemptTransactionError::Invariant)?;
+        if action_fee_collected {
+          Self::collect_user_step_fee(&execution_instance.sovereign_account, actual_fee.total_fee)
+            .map_err(|_| AttemptTransactionError::FeeCollection)?;
+        }
+        if matches!(effect_execution, super::TaskEffectExecution::Invoked) {
+          Self::deposit_action_fee_receipt(
+            actor.actor_id,
+            plan.ticket.cycle_nonce,
+            plan.loaded_step.cursor,
+            actual_effect_weight,
+            actual_fee.effect_fee,
+          );
+        }
+        Ok(StepCommitEvidence {
+          closed_for_exhaustion: false,
+          actual_control_weight,
+          actual_effect_weight,
+          attempt,
+        })
+      })();
+      match result {
+        Ok(evidence) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(evidence))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
   pub(crate) fn execute_current_step_and_place(
     actor_id: ActorId,
     state: &ActiveActorStateOf<T>,
