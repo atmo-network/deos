@@ -5523,6 +5523,50 @@ pub mod pallet {
       })
     }
 
+    /// Interprets one exact Pending review whose complete retained plan consists of typed Oracle
+    /// availability sources. Every source is read exactly once: all available sources wake the
+    /// Actor, any unavailable source re-arms it, and an uninitialized or corrupt mapping preserves
+    /// the Pending review and Park residence.
+    #[allow(
+      dead_code,
+      reason = "observation due-review interpretation remains staged behind the weighted consumer cutover"
+    )]
+    pub(crate) fn interpret_pending_observation_availability_review(
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyReviewMutation, DependencyRegistrationError> {
+      Self::interpret_pending_dependency_review(
+        expected,
+        evidence,
+        kind,
+        now,
+        next_review,
+        |snapshot| {
+          let mut interpretation = DependencyReviewInterpretation::Positive;
+          for observed in snapshot {
+            let feed = DependencySourceObservations::<T>::get(observed.source)
+              .ok_or(DependencyRegistrationError::StoredPlanMismatch)?;
+            if ObservationDependencySources::<T>::get(feed) != Some(observed.source) {
+              return Err(DependencyRegistrationError::StoredPlanMismatch);
+            }
+            match T::ObservationProvider::current(&feed) {
+              crate::CanonicalObservationState::Available { .. } => {}
+              crate::CanonicalObservationState::Unavailable => {
+                interpretation = DependencyReviewInterpretation::Negative;
+              }
+              crate::CanonicalObservationState::Uninitialized => {
+                return Err(DependencyRegistrationError::SourceUninitialized);
+              }
+            }
+          }
+          Ok(interpretation)
+        },
+      )
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(
