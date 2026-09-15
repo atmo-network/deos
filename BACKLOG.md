@@ -88,7 +88,7 @@ The cutover inventory has one semantic writer cohort, not one storage declaratio
 | Remove active | Owner close, sweep, expiry, completion, apoptosis and every terminal execution path converging on `finalize_actor_loaded_inner` | `close_dispatch_weight_upper` and the initiating dispatch/prepass/service owner |
 | Remove dormant | Dormant close through `close_inactive_actor` | `close_dispatch_weight_upper` |
 
-The semantic map, compare-and-replace writer, lifecycle callers, loader and try-state guards have crossed over, but active physical cells deliberately retain mirrored Identity/Hot/admission until the service carrier and generated resource owners replace that projection coherently. The remaining executable cut is process/ring publication → mandatory service and all residence mutations → legacy scheduler retirement → physical-field removal → benchmarks and generated bindings. Intermediate helper-only states do not close N2.1 or N3.5.
+The semantic map, compare-and-replace writer, lifecycle callers, loader and try-state guards have crossed over, but active physical cells deliberately retain mirrored Identity/Hot/admission until the service carrier and generated resource owners replace that projection coherently. Effectful Step execution now returns one carrier-neutral typed transition before the legacy FIFO finalizer owns close or republication; StopCycle and zero-Step finalization remain carrier-bound. The remaining executable cut is process/ring publication → mandatory service and all residence mutations → legacy scheduler retirement → physical-field removal → benchmarks and generated bindings. Intermediate helper-only states do not close N2.1 or N3.5.
 
 ---
 

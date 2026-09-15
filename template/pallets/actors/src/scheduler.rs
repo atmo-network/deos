@@ -2,8 +2,8 @@ use super::pallet::*;
 use super::{
   AddressEvent, AssetOps, BlockResourceDomain, BlockResourceLimits, BlockResourceState,
   CanonicalObservationState, IngressFailure, ObservationProvider, StepControlExecution,
-  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightProvider as _,
-  TaskEffectWeightProvider as _, weights::WeightInfo,
+  StepControlOutcome, StepControlPhase, StepControlPlacement, StepControlWeightContext,
+  StepControlWeightProvider as _, TaskEffectWeightProvider as _, weights::WeightInfo,
 };
 #[cfg(test)]
 use alloc::vec;
@@ -45,6 +45,24 @@ pub(crate) struct QueueAppendPlan<T: Config> {
 struct PreparedReadyPublication<T: Config> {
   ticket: QueueTicket,
   cell: ActorControlCellOf<T>,
+}
+
+/// Carrier-neutral semantic result of one effectful Step attempt. The legacy
+/// FIFO adapter consumes this result and owns all subsequent residence
+/// placement; the execution core does not publish scheduler authority.
+struct EffectfulStepTransition<T: Config> {
+  state: ActiveActorStateOf<T>,
+  plan: CurrentStepPlanOf<T>,
+  execution_instance: ActiveActorViewOf<T>,
+  step: StepOf<T>,
+  control_context: StepControlWeightContext,
+  reserved_control_weight: Weight,
+  reserved_effect_weight: Weight,
+  retry_attempt_limit_reached: bool,
+  effect_execution: super::TaskEffectExecution,
+  disposition: AttemptDisposition,
+  outcomes: OutcomeTotals,
+  eligible_at: Option<BlockNumberFor<T>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1333,13 +1351,13 @@ impl<T: Config> Pallet<T> {
     })
   }
 
-  fn execute_effectful_step_from_consumed_frame(
+  fn execute_effectful_step_transition(
     actor_id: ActorId,
     mut state: ActiveActorStateOf<T>,
     mut plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+  ) -> Result<EffectfulStepTransition<T>, AttemptTransactionError> {
     let header =
       ActorContractHeads::<T>::get(actor_id).ok_or(AttemptTransactionError::Invariant)?;
     if header.header.admission_identity != admission.admission_identity {
@@ -1396,8 +1414,44 @@ impl<T: Config> Pallet<T> {
         Self::prepare_opening_rearm_hot(actor_id, &execution_instance, admission, plan.hot, None)?;
     }
     Self::charge_pipeline_opening(actor_id, &execution_instance)?;
-    let (mut plan, effect_execution, disposition, outcomes, eligible_at) =
+    let (plan, effect_execution, disposition, outcomes, eligible_at) =
       Self::execute_loaded_single_step_core(actor_id, &execution_instance, plan, now, step_count)?;
+    Ok(EffectfulStepTransition {
+      state,
+      plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      reserved_effect_weight,
+      retry_attempt_limit_reached,
+      effect_execution,
+      disposition,
+      outcomes,
+      eligible_at,
+    })
+  }
+
+  fn finalize_effectful_step_on_legacy_fifo(
+    actor_id: ActorId,
+    transition: EffectfulStepTransition<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let EffectfulStepTransition {
+      mut state,
+      mut plan,
+      execution_instance,
+      step,
+      control_context,
+      reserved_control_weight,
+      reserved_effect_weight,
+      retry_attempt_limit_reached,
+      effect_execution,
+      disposition,
+      outcomes,
+      eligible_at,
+    } = transition;
     let actual_effect_weight =
       T::TaskEffectWeight::actual_effect_weight(&step.task, effect_execution)
         .ok_or(AttemptTransactionError::Invariant)?;
@@ -1576,6 +1630,18 @@ impl<T: Config> Pallet<T> {
       actual_effect_weight,
       attempt,
     })
+  }
+
+  fn execute_effectful_step_from_consumed_frame(
+    actor_id: ActorId,
+    state: ActiveActorStateOf<T>,
+    plan: CurrentStepPlanOf<T>,
+    admission: &ActorAdmissionCertificateOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
+    let transition =
+      Self::execute_effectful_step_transition(actor_id, state, plan, admission, now)?;
+    Self::finalize_effectful_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
   pub(crate) fn execute_current_step_and_place(
