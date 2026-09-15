@@ -956,6 +956,20 @@ fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption()
       )
     };
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let expected_wakeup = state
+      .run_state
+      .as_ref()
+      .map(|run| run.eligible_at)
+      .expect("suspended Run has exact eligibility");
+    assert_eq!(
+      Actors::test_plan_next_work_source(&state, state.run_state.as_ref(), 0),
+      Ok((crate::StepControlPlacement::Wakeup, Some(expected_wakeup)))
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "residence planning must not publish scheduler authority"
+    );
     Actors::test_fail_wakeup_placement_with_capacity();
     assert_eq!(
       invoke(),

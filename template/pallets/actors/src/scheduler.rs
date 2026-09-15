@@ -19,6 +19,16 @@ enum QueueMutation {
   Head,
 }
 
+/// Storage-free classification of the next physical residence. Publication is
+/// deliberately separate so canonical and legacy carriers can consume the
+/// same current-state decision without transiently creating dual authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NextWorkPlan<BlockNumber> {
+  None,
+  Queue,
+  Wakeup(BlockNumber),
+}
+
 struct QueueTopology {
   head: QueueTicket,
   tail: QueueTicket,
@@ -7694,33 +7704,6 @@ impl<T: Config> Pallet<T> {
       .map(|window| Self::window_terminal_at(&window))
   }
 
-  fn schedule_window_expiry_with_authority(
-    actor_id: ActorId,
-    instance: &ActiveActorViewOf<T>,
-    loaded_authority: (
-      &ActorHotStateOf<T>,
-      &ActorIdentityOf<T>,
-      Option<&ActorRunStateOf<T>>,
-      &ActorAdmissionCertificateOf<T>,
-      ActorStepResourceEnvelope,
-    ),
-  ) -> Result<(), EnqueueOutcome> {
-    let Some(expiry) = Self::window_expiry_wakeup(instance) else {
-      return Ok(());
-    };
-    let (hot, identity, run_state, admission, resources) = loaded_authority;
-    Self::defer_wakeup_with_authority(
-      actor_id,
-      expiry,
-      instance,
-      hot.clone(),
-      identity,
-      run_state,
-      admission,
-      resources,
-    )
-  }
-
   #[cfg(test)]
   pub(crate) fn test_fail_wakeup_placement_with_capacity() {
     FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.set(true));
@@ -8511,6 +8494,56 @@ impl<T: Config> Pallet<T> {
     Ok(run_state.eligible_at)
   }
 
+  fn plan_next_work_loaded(
+    instance: &ActiveActorViewOf<T>,
+    run_state: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<NextWorkPlan<BlockNumberFor<T>>, EnqueueOutcome> {
+    if instance.lifecycle.is_paused() {
+      return Ok(
+        Self::window_expiry_wakeup(instance)
+          .map(NextWorkPlan::Wakeup)
+          .unwrap_or(NextWorkPlan::None),
+      );
+    }
+    let eligible_at = if matches!(
+      instance.cycle_state,
+      CycleState::Running | CycleState::Suspended
+    ) {
+      let run = run_state.ok_or(EnqueueOutcome::CorruptedTopology)?;
+      if instance.cycle_state == CycleState::Running {
+        if !run.running_is_coherent() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        run.eligible_at
+      } else {
+        Self::retry_eligible_at_loaded(instance, run)?
+      }
+    } else if instance.pending_signal {
+      Self::next_eligible_at(instance, now)?
+    } else {
+      return Ok(
+        Self::window_expiry_wakeup(instance)
+          .map(NextWorkPlan::Wakeup)
+          .unwrap_or(NextWorkPlan::None),
+      );
+    };
+    let wakeup_at = instance.window.map_or(eligible_at, |window| {
+      eligible_at.min(Self::window_terminal_at(&window))
+    });
+    let exact_next_block = now
+      .checked_add(&One::one())
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    Ok(
+      if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff.is_snapshotted() {
+        NextWorkPlan::Queue
+      } else {
+        NextWorkPlan::Wakeup(wakeup_at)
+      },
+    )
+  }
+
   fn schedule_next_work_loaded(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8524,65 +8557,44 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     cutoff: ServiceCutoff,
   ) -> Result<StepControlPlacement, EnqueueOutcome> {
-    if instance.lifecycle.is_paused() {
-      return Self::schedule_window_expiry_with_authority(actor_id, instance, loaded_authority)
-        .map(|()| {
-          if instance.window.is_some() {
-            StepControlPlacement::Wakeup
-          } else {
-            StepControlPlacement::None
-          }
-        });
-    }
-    let eligible_at = if matches!(
-      instance.cycle_state,
-      CycleState::Running | CycleState::Suspended
-    ) {
-      let run = loaded_authority
-        .2
-        .ok_or(EnqueueOutcome::CorruptedTopology)?;
-      if instance.cycle_state == CycleState::Running {
-        if !run.running_is_coherent() {
-          return Err(EnqueueOutcome::CorruptedTopology);
-        }
-        run.eligible_at
-      } else {
-        Self::retry_eligible_at_loaded(instance, run)?
+    match Self::plan_next_work_loaded(instance, loaded_authority.2, now, cutoff)? {
+      NextWorkPlan::None => Ok(StepControlPlacement::None),
+      NextWorkPlan::Queue => Ok(StepControlPlacement::Queue),
+      NextWorkPlan::Wakeup(wakeup_at) => {
+        let (hot, identity, run_state, admission, resources) = loaded_authority;
+        Self::defer_wakeup_with_authority(
+          actor_id,
+          wakeup_at,
+          instance,
+          hot.clone(),
+          identity,
+          run_state,
+          admission,
+          resources,
+        )
+        .map(|()| StepControlPlacement::Wakeup)
       }
-    } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now)?
-    } else {
-      return Self::schedule_window_expiry_with_authority(actor_id, instance, loaded_authority)
-        .map(|()| {
-          if instance.window.is_some() {
-            StepControlPlacement::Wakeup
-          } else {
-            StepControlPlacement::None
-          }
-        });
-    };
-    let wakeup_at = instance.window.map_or(eligible_at, |window| {
-      eligible_at.min(Self::window_terminal_at(&window))
-    });
-    let exact_next_block = now
-      .checked_add(&One::one())
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff.is_snapshotted() {
-      Ok(StepControlPlacement::Queue)
-    } else {
-      let (hot, identity, run_state, admission, resources) = loaded_authority;
-      Self::defer_wakeup_with_authority(
-        actor_id,
-        wakeup_at,
-        instance,
-        hot.clone(),
-        identity,
-        run_state,
-        admission,
-        resources,
-      )
-      .map(|()| StepControlPlacement::Wakeup)
     }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_plan_next_work_source(
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    now: BlockNumberFor<T>,
+  ) -> Result<(StepControlPlacement, Option<BlockNumberFor<T>>), EnqueueOutcome> {
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    Self::plan_next_work_loaded(&instance, supplied_run, now, ServiceCutoff::Snapshotted).map(
+      |plan| match plan {
+        NextWorkPlan::None => (StepControlPlacement::None, None),
+        NextWorkPlan::Queue => (StepControlPlacement::Queue, None),
+        NextWorkPlan::Wakeup(at) => (StepControlPlacement::Wakeup, Some(at)),
+      },
+    )
   }
 
   #[cfg(test)]
