@@ -5576,13 +5576,13 @@ pub mod pallet {
     )]
     pub(crate) fn process_due_observation_availability_review(
       meter: &mut WeightMeter,
-      weight: Weight,
       expected: DependencyTimedReview<BlockNumberFor<T>>,
       evidence: ParkEvidence<BlockNumberFor<T>>,
       kind: ServiceResidenceKind,
       now: BlockNumberFor<T>,
       next_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
+      let weight = T::WeightInfo::process_due_observation_availability_review();
       if !meter.can_consume(weight) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }

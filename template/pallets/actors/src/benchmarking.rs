@@ -2025,6 +2025,95 @@ mod benches {
   }
 
   #[benchmark]
+  fn process_due_observation_availability_review() -> Result<(), BenchmarkError> {
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    let owner_account: T::AccountId = account("due-observation-review", 0, 0);
+    Pallet::<T>::create_system_actor(
+      RawOrigin::Root.into(),
+      owner_account,
+      Mutability::Mutable,
+      system_contract::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 0,
+        },
+        make_inert_contract_steps::<T>(),
+      ),
+    )?;
+    let actor_id = NextActorId::<T>::get().saturating_sub(1);
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Actor owns semantic state")
+    else {
+      panic!("benchmark Actor is active")
+    };
+    let actor = ActorRef {
+      actor_id,
+      generation: record.generation,
+    };
+    ActorControlLocators::<T>::remove(actor_id);
+    ActorUnsignaledControlCells::<T>::remove(actor_id);
+    Pallet::<T>::publish_service_member(actor, ServiceResidenceKind::Live, 1u32.into())
+      .expect("benchmark Actor enters canonical Service");
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)?
+      .into_iter()
+      .next()
+      .expect("one benchmark observation feed exists");
+    let source = 1;
+    let CanonicalObservationState::Available { revision, .. } =
+      T::ObservationProvider::current(&feed)
+    else {
+      panic!("benchmark observation feed is available")
+    };
+    ObservationDependencySources::<T>::insert(feed, source);
+    DependencySourceObservations::<T>::insert(source, feed);
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 1,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2u32.into()),
+    };
+    Pallet::<T>::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision: revision,
+      }],
+      Some(WakeupKey::Block(2u32.into())),
+    )
+    .expect("benchmark Actor enters canonical Park");
+    let review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(2u32.into()),
+    };
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+
+    #[block]
+    {
+      Pallet::<T>::process_due_observation_availability_review(
+        &mut meter,
+        review,
+        evidence,
+        ServiceResidenceKind::Live,
+        2u32.into(),
+        None,
+      )
+      .expect("available observation wakes benchmark Actor");
+    }
+
+    assert!(ServiceNodes::<T>::contains_key(actor_id));
+    assert!(!DependencyTimedReviews::<T>::contains_key(actor_id));
+    Ok(())
+  }
+
+  #[benchmark]
   fn clear_crossing_worker_fault() {
     CrossingWorkerFaultState::<T>::put(CrossingWorkerFault {
       feed: observation_feed_pool::<T>(1)[0],

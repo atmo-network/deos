@@ -1145,12 +1145,11 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
       owner,
       deadline: WakeupKey::Block(2),
     };
-    let weight = Weight::from_parts(10, 0);
+    let weight = <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::process_due_observation_availability_review();
     let mut meter = WeightMeter::with_limit(weight);
     assert_eq!(
       Actors::process_due_observation_availability_review(
         &mut meter,
-        weight,
         review,
         evidence,
         ServiceResidenceKind::Live,
@@ -1170,7 +1169,6 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     assert_eq!(
       Actors::process_due_observation_availability_review(
         &mut no_weight,
-        weight,
         review,
         evidence,
         ServiceResidenceKind::Live,
@@ -1185,7 +1183,6 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     assert!(matches!(
       Actors::process_due_observation_availability_review(
         &mut admitted,
-        weight,
         review,
         evidence,
         ServiceResidenceKind::Live,
@@ -1219,7 +1216,6 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     assert_eq!(
       Actors::process_due_observation_availability_review(
         &mut occupied,
-        weight,
         next,
         evidence,
         ServiceResidenceKind::Live,
@@ -1239,7 +1235,6 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     assert_eq!(
       Actors::process_due_observation_availability_review(
         &mut refused,
-        weight,
         next,
         evidence,
         ServiceResidenceKind::Live,
@@ -1264,7 +1259,6 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     assert_eq!(
       Actors::process_due_observation_availability_review(
         &mut wake,
-        weight,
         next,
         evidence,
         ServiceResidenceKind::Live,

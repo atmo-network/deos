@@ -1025,6 +1025,36 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_deos_actors::WeightInfo for S
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	/// Storage: `Actors::PendingCheckOwners` (r:1 w:1)
+	/// Storage: `Actors::PendingDependencyEvents` (r:1 w:0)
+	/// Storage: `Actors::PendingDependencyReviews` (r:1 w:1)
+	/// Storage: `Actors::DependencyTimedReviews` (r:1 w:1)
+	/// Storage: `Actors::ActorProcesses` (r:1 w:1)
+	/// Storage: `Actors::DependencyPlans` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrations` (r:1 w:1)
+	/// Storage: `Actors::DependencyRevisions` (r:1 w:0)
+	/// Storage: `Actors::DependencySourceObservations` (r:1 w:0)
+	/// Storage: `Actors::ObservationDependencySources` (r:1 w:0)
+	/// Storage: `Oracle::Feeds` (r:1 w:0)
+	/// Storage: `Oracle::Observations` (r:1 w:0)
+	/// Storage: `Actors::DependencyRegistrationPositions` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrationPages` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrationHeaders` (r:1 w:1)
+	/// Storage: `Actors::ActorControlLocators` (r:1 w:0)
+	/// Storage: `Actors::ActorUnsignaledControlCells` (r:1 w:0)
+	/// Storage: `Actors::ServiceNodes` (r:1 w:1)
+	/// Storage: `Actors::ServiceHeader` (r:1 w:1)
+	/// Storage: `Actors::DependencyRegistrationFreePositions` (r:0 w:1)
+	fn process_due_observation_availability_review() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `2263`
+		//  Estimated: `4570`
+		// Minimum execution time: 139_545_000 picoseconds.
+		Weight::from_parts(146_320_000, 0)
+			.saturating_add(Weight::from_parts(0, 4570))
+			.saturating_add(T::DbWeight::get().reads(19))
+			.saturating_add(T::DbWeight::get().writes(12))
+	}
 	/// Storage: `Actors::CrossingWorkerFaultState` (r:1 w:1)
 	/// Proof: `Actors::CrossingWorkerFaultState` (`max_values`: Some(1), `max_size`: Some(44), added: 539, mode: `MaxEncodedLen`)
 	fn clear_crossing_worker_fault() -> Weight {
