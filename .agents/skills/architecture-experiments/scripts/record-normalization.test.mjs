@@ -93,7 +93,7 @@ export function selfTest(realSkillDir) {
     const large = validate(skill, options); assert.equal(large.errors.length, 0); assert(large.warnings.some((w) => w.includes('large record'))); count++;
 
     const backlogFile = path.join(temp, 'BACKLOG.md');
-    const activeLineage = `\n## 0.7.27 Active Current-State Lineage\n\n### Machine-Checkable Current Lineage\n\n| Lineage ID | Source claim | Applicability | Current consumers | Required proof | Closure owner |\n| --- | --- | --- | --- | --- | --- |\n| CL-01 | ${link(childId)} | Qualified | N1.2 | Round/wake proof | N1.3 |\n\n### Deliberate Claim Imports\n\n- ${link(childId)}: Qualified transfer.\n\n### Historical Lineages\n\nHistorical fixture.\n`;
+    const activeLineage = `\n## 0.7.27 Active Current-State Lineage\n\n### Machine-Checkable Current Lineage\n\n| Lineage ID | Source claim | Applicability | Current consumers | Required proof | Closure owner |\n| --- | --- | --- | --- | --- | --- |\n| CL-01 | ${link(childId)} | Qualified | N1.2 | Round/wake proof | N1.3 |\n\n### Machine-Checkable Numerical Authority\n\n| Profile | Numerical authority |\n| --- | --- |\n| parked-balance-v1 | None |\n\n### Deliberate Claim Imports\n\n- ${link(childId)}: Qualified transfer.\n\n### Historical Lineages\n\nHistorical fixture.\n`;
     reset();
     fs.writeFileSync(backlogFile, '- [ ] **N1.2 / Fixture.** Current consumer.\n- [ ] **N1.3 / Fixture.** Closure owner.\n');
     fs.appendFileSync(indexFile, activeLineage);
@@ -101,6 +101,11 @@ export function selfTest(realSkillDir) {
     rejects('unqualified current lineage', () => { fs.appendFileSync(indexFile, activeLineage); change(indexFile, '| Qualified | N1.2 |', '| Historical | N1.2 |'); }, /unqualified applicability/);
     rejects('dangling current transfer', () => { fs.appendFileSync(indexFile, activeLineage); change(indexFile, '| N1.2 | Round\/wake proof |', '| N9.9 | Round\/wake proof |'); }, /dangling current task/);
     rejects('missing imported source qualification', () => { fs.appendFileSync(indexFile, activeLineage.replace(`- ${link(childId)}: Qualified transfer.`, `- ${link(parentId)}: Unqualified transfer.`)); }, /unqualified current use/);
+    rejects('silent numerical inheritance', () => { fs.appendFileSync(indexFile, activeLineage); change(indexFile, '| parked-balance-v1 | None |', '| parked-balance-v1 | Inherited |'); }, /silent or malformed numerical authority/);
+    reset();
+    fs.writeFileSync(backlogFile, '- [ ] **N1.2 / Fixture.** Current consumer.\n- [ ] **N1.3 / Fixture.** Closure owner.\n');
+    fs.appendFileSync(indexFile, activeLineage.replace('| parked-balance-v1 | None |', `| parked-balance-v1 | Exact bridge: ${'a'.repeat(40)}/${'b'.repeat(64)} |`));
+    assert.deepEqual(validate(skill, options).errors, []); count++;
     fs.rmSync(backlogFile);
 
     // Former identity checks use an actual frozen baseline buffer, never the live file.

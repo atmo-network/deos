@@ -40,7 +40,7 @@ This projection is the decision-facing entrypoint for the current-state/live-res
 
 ### Machine-Checkable Current Lineage
 
-This table normalizes transfers only. Its proof labels identify the evidence class still required from the named owner; they do not certify semantic, wake, physical, or resource closure.
+This table normalizes transfers only. Its proof labels identify the evidence class still required from the named owner; they do not certify semantic, wake, physical, or resource closure. In particular, an Accepted source can select a design without proving connected V1/V2 implementation, executable end-to-end behavior, or generated resource binding.
 
 | Lineage ID | Source claim | Applicability | Current consumers | Required proof | Closure owner |
 | --- | --- | --- | --- | --- | --- |
@@ -66,6 +66,14 @@ This table normalizes transfers only. Its proof labels identify the evidence cla
 | CL-20 | [EXP-0135](./EXP-0135.md) | Current | N3.1–N5.4, N6.1–N6.5, N7.1–N7.4 | Physical closure | N5.4 |
 | CL-21 | [EXP-0136](./EXP-0136.md) | Current | N6.1–N6.5, N7.1–N7.4 | Resource closure | N6.1 |
 | CL-22 | [EXP-0137](./EXP-0137.md) | Current | N3.1–N5.4, N6.2–N6.5, N7.1–N7.2 | Physical closure | N6.2 |
+
+### Machine-Checkable Numerical Authority
+
+`None` is an explicit denial of inherited numerical authority, not missing evidence. A future bridge must bind the exact source commit and artifact hash; its applicability remains a separate evidence decision.
+
+| Profile | Numerical authority |
+| --- | --- |
+| parked-balance-v1 | None |
 
 ### Current Hazard Closure Routes
 

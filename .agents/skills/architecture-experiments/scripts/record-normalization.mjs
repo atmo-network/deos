@@ -13,6 +13,7 @@ const dispositionStatuses = ['Authoritative', 'Qualified', 'Historical', 'Supers
 const graphPattern = /<!-- experiment-dependencies:start -->[\s\S]*?<!-- experiment-dependencies:end -->/;
 const currentLineageFields = ['Lineage ID', 'Source claim', 'Applicability', 'Current consumers', 'Required proof', 'Closure owner'];
 const currentLineageApplicability = new Set(['Qualified', 'Confirmed', 'Current']);
+const exactNumericalBridge = /^Exact bridge: [0-9a-f]{40}\/[0-9a-f]{64}$/;
 const currentLineageProofs = new Set(['Semantic oracle', 'Round/wake proof', 'Physical closure', 'Resource closure']);
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cells = (line) => line.split(/(?<!\\)\|/).slice(1, -1).map((s) => s.trim());
@@ -109,6 +110,13 @@ export function validate(skillDir, { writeIndex = false, repoFiles, gitRead } = 
     const active = activeHeading ? section(index.source, activeHeading) : '';
     if (active) {
       const lineage = subsection(active, 'Machine-Checkable Current Lineage');
+      const authority = subsection(active, 'Machine-Checkable Numerical Authority');
+      const authorityTable = authority.match(/^\| Profile \| Numerical authority \|\n\| --- \| --- \|\n((?:\|.*\n?)+)/m);
+      if (!authorityTable) fail(index.file, 'active current lineage requires a Machine-Checkable Numerical Authority table');
+      else for (const row of authorityTable[1].trimEnd().split('\n').map(cells)) {
+        if (row.length !== 2 || !row[0] || !row[1]) fail(index.file, 'incomplete numerical-authority row');
+        else if (row[1] !== 'None' && !exactNumericalBridge.test(row[1])) fail(index.file, `${row[0]} has silent or malformed numerical authority ${row[1]}`);
+      }
       const table = lineage.match(/^\|.*\n\|[^\n]+\n((?:\|.*\n?)+)/m);
       const header = lineage.split('\n').find((line) => line.startsWith('|'));
       if (!table || !header) fail(index.file, 'active current lineage requires a Machine-Checkable Current Lineage table');
