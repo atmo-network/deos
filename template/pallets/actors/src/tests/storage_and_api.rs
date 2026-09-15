@@ -931,10 +931,18 @@ fn canonical_effectful_adjacent_retry_commits_and_reenters_next_round() {
 
     let retry_at = now + 1;
     frame_system::Pallet::<Test>::set_block_number(retry_at);
-    set_asset_balance(&sovereign, TestAsset::Local(1), 1);
-    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+    set_asset_balance(&sovereign, TestAsset::Local(1), 10);
+    let mut semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
       .expect("retry semantic owner remains loadable");
     assert_eq!(semantic.hot.cycle_state, CycleState::Suspended);
+    semantic.hot.queue_ticket = None;
+    Actors::try_store_service_control_state(
+      actor,
+      ServiceResidenceKind::Live,
+      semantic.identity,
+      semantic.hot,
+    )
+    .expect("canonical retry no longer needs the legacy FIFO ticket");
     let stored_run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run stays stored");
     assert_eq!(stored_run.cursor, retry_run.cursor);
     assert_eq!(stored_run.eligible_at, retry_run.eligible_at);
@@ -946,13 +954,32 @@ fn canonical_effectful_adjacent_retry_commits_and_reenters_next_round() {
       Actors::begin_service_round(retry_at).expect("retry round begins");
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
     });
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      assert_eq!(
-        Actors::consider_service_head(retry_at),
-        Ok(ServiceRoundEncounter::Eligible(actor))
-      );
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(())
-    });
+    let (retry_state, retry_admission, retry_plan) =
+      Actors::build_due_retry_service_plan(actor, ServiceResidenceKind::Live, retry_at)
+        .expect("canonical due retry plan binds the recovered next-round member");
+    assert_eq!(
+      retry_plan
+        .run
+        .as_ref()
+        .expect("retry plan keeps stored Run")
+        .unsuccessful_attempts_at_cursor,
+      1
+    );
+    Actors::execute_completed_effectful_step_on_service(
+      actor,
+      ServiceResidenceKind::Live,
+      retry_state,
+      retry_plan,
+      &retry_admission,
+      retry_at,
+    )
+    .expect("recovered canonical retry completes");
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    assert!(
+      Actors::build_due_retry_service_plan(actor, ServiceResidenceKind::Live, retry_at).is_none(),
+      "the consumed due retry cannot execute twice"
+    );
   });
 }
 
