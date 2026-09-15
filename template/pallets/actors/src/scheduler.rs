@@ -1815,13 +1815,14 @@ impl<T: Config> Pallet<T> {
           next_residence,
           eligible_at,
         } = transition;
-        let local_retry_exhausted = matches!(
-          &next_residence,
+        let exhaustion_reason = match &next_residence {
           NextResidence::Close {
-            reason: CloseReason::RetryAttemptsExhausted,
+            reason:
+              reason @ (CloseReason::RetryAttemptsExhausted | CloseReason::ConsecutiveFailures),
             ..
-          }
-        );
+          } => Some(*reason),
+          _ => None,
+        };
         let later_retry_destination = match (disposition, eligible_at, deadline) {
           (AttemptDisposition::Completed, None, _) => None,
           (AttemptDisposition::Continued, Some(eligible_at), None)
@@ -1830,16 +1831,21 @@ impl<T: Config> Pallet<T> {
           {
             None
           }
+          (AttemptDisposition::Failed, None, _)
+            if matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
+              && exhaustion_reason.is_some() =>
+          {
+            None
+          }
           (AttemptDisposition::Failed, None, None)
             if matches!(step.on_error, StepErrorPolicy::AbortCycle)
               || matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
-                && (local_retry_exhausted
-                  || attempt.step.as_ref().is_some_and(|record| {
-                    matches!(
-                      record.outcome,
-                      StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
-                    )
-                  })) =>
+                && attempt.step.as_ref().is_some_and(|record| {
+                  matches!(
+                    record.outcome,
+                    StepOutcome::Failed(ref failure) if failure.retry == RetryClass::Permanent
+                  )
+                }) =>
           {
             None
           }
@@ -1936,7 +1942,7 @@ impl<T: Config> Pallet<T> {
           );
         }
         Ok(StepCommitEvidence {
-          closed_for_exhaustion: local_retry_exhausted,
+          closed_for_exhaustion: exhaustion_reason.is_some(),
           actual_control_weight,
           actual_effect_weight,
           attempt,

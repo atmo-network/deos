@@ -6469,6 +6469,175 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
 }
 
 #[test]
+fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    set_max_consecutive_failures(2);
+    setup_temporary_retry_pool();
+    set_temporary_dex_failure(true);
+    let mut step = make_step(Task::SwapIn {
+      asset_in: TestAsset::Native,
+      asset_out: TestAsset::Local(77),
+      amount_in: AmountResolution::Fixed(10),
+      slippage_tolerance: Perbill::one(),
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    fund_native(actor_id, 100);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let resources = Actors::load_current_step_service_state(actor_id)
+      .unwrap()
+      .2
+      .resources;
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+      <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+    );
+    let complete = selector
+      .saturating_add(resources.control)
+      .saturating_add(resources.effect)
+      .saturating_add(suffix);
+    let budget = <Test as crate::Config>::BlockResourceBudget::get();
+    let mut first_state = crate::BlockResourceState::new(5);
+    assert_ok!(first_state.begin_prepass());
+    assert_ok!(first_state.open_external_phase());
+    assert_ok!(first_state.begin_drain());
+    let mut first_meter = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut first_meter,
+        5,
+        &mut first_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert_eq!(first_state.outstanding_reservations(), 0);
+    let first_run = ActorRunStateStore::<Test>::get(actor_id)
+      .expect("first failure remains below the global limit");
+    assert_eq!(first_run.unsuccessful_attempts_at_cursor, 1);
+    let ActorSemanticState::Active(first_semantic) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("first failure retains semantic state")
+    else {
+      panic!("first failure keeps active semantics");
+    };
+    assert_eq!(first_semantic.hot.unsuccessful_attempt_streak, 1);
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    let before_header = ServiceHeader::<Test>::get();
+    let before_semantic = ActorSemanticStates::<Test>::get(actor_id).unwrap();
+    let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
+    let before_run = ActorRunStateStore::<Test>::get(actor_id).unwrap();
+    let before_run_coordinates = (
+      before_run.cycle_nonce,
+      before_run.cursor,
+      before_run.eligible_at,
+      before_run.unsuccessful_attempts_at_cursor,
+      before_run.cumulative_outcomes,
+    );
+    let mut resource_refused = crate::BlockResourceState::new(6);
+    assert_ok!(resource_refused.begin_prepass());
+    assert_ok!(resource_refused.open_external_phase());
+    assert_ok!(resource_refused.begin_drain());
+    let mut exhausted = resource_refused
+      .reserve(
+        budget.limits(),
+        crate::BlockResourceDomain::ActorControl,
+        budget.limits().actor_control(),
+      )
+      .expect("test exhausts ActorControl");
+    assert_ok!(resource_refused.settle(&mut exhausted, budget.limits().actor_control()));
+    let resource_refused_before = resource_refused;
+    let mut refused_meter = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut refused_meter,
+        6,
+        &mut resource_refused,
+        budget.limits(),
+      ),
+      Err(ServiceRoundError::ResourceUnavailable)
+    );
+    assert_eq!(refused_meter.consumed(), Weight::zero());
+    assert_eq!(resource_refused, resource_refused_before);
+    assert_eq!(ServiceHeader::<Test>::get(), before_header);
+    assert_eq!(
+      ActorSemanticStates::<Test>::get(actor_id),
+      Some(before_semantic)
+    );
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
+    let retained_run = ActorRunStateStore::<Test>::get(actor_id).unwrap();
+    assert_eq!(
+      (
+        retained_run.cycle_nonce,
+        retained_run.cursor,
+        retained_run.eligible_at,
+        retained_run.unsuccessful_attempts_at_cursor,
+        retained_run.cumulative_outcomes,
+      ),
+      before_run_coordinates
+    );
+
+    let mut resource_state = crate::BlockResourceState::new(6);
+    assert_ok!(resource_state.begin_prepass());
+    assert_ok!(resource_state.open_external_phase());
+    assert_ok!(resource_state.begin_drain());
+    let resource_before = resource_state;
+    let mut meter = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head_with_resources(
+        &mut meter,
+        6,
+        &mut resource_state,
+        budget.limits(),
+      ),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+
+    assert!(meter.consumed().all_lte(complete));
+    assert_ne!(resource_state.usage(), resource_before.usage());
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id)
+        .expect("terminal global-exhaustion evidence remains queryable")
+        .last_attempted,
+      Some(5)
+    );
+    assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(ServiceHeader::<Test>::get().count, 0);
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed {
+        actor_id: id,
+        reason: CloseReason::ConsecutiveFailures,
+      } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
 fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
