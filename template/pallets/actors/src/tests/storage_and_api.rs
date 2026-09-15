@@ -6015,6 +6015,81 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_zero_step_head() {
 }
 
 #[test]
+fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(1),
+      amount: AmountResolution::Fixed(1),
+    });
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      BoundedVec::try_from(vec![step]).unwrap(),
+    );
+    let sovereign = Actors::actor_identity(actor_id).unwrap().sovereign_account;
+    set_asset_balance(&sovereign, TestAsset::Local(1), 10);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    let resources = Actors::load_current_step_service_state(actor_id)
+      .unwrap()
+      .2
+      .resources;
+    ActorControlLocators::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    let before_header = ServiceHeader::<Test>::get();
+    let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
+    let recipient_before = asset_balance(&BOB, TestAsset::Local(1));
+    let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
+      .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
+    let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
+      <Test as crate::Config>::WeightInfo::service_member_retire_interior()
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_pair_cursor())
+        .max(<Test as crate::Config>::WeightInfo::service_member_retire_singleton()),
+    );
+    let complete = selector
+      .saturating_add(resources.control)
+      .saturating_add(resources.effect)
+      .saturating_add(suffix);
+    let mut refused = WeightMeter::with_limit(complete.saturating_sub(Weight::from_parts(1, 0)));
+    assert_eq!(
+      Actors::service_canonical_round_head(&mut refused, 5),
+      Err(ServiceRoundError::InsufficientWeight)
+    );
+    assert_eq!(refused.consumed(), Weight::zero());
+    assert_eq!(ServiceHeader::<Test>::get(), before_header);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(before_process));
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), recipient_before);
+
+    let mut admitted = WeightMeter::with_limit(complete);
+    assert_eq!(
+      Actors::service_canonical_round_head(&mut admitted, 5),
+      Ok(ServiceRoundEncounter::Eligible(actor))
+    );
+    assert!(admitted.consumed().all_lte(complete));
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Local(1)),
+      recipient_before + 1
+    );
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id)
+        .unwrap()
+        .last_attempted,
+      Some(5)
+    );
+  });
+}
+
+#[test]
 fn canonical_service_round_matches_the_independent_semantic_trace() {
   new_test_ext().execute_with(|| {
     let members = [actor_ref(120, 1), actor_ref(121, 1), actor_ref(122, 1)];

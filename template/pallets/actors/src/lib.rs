@@ -5931,10 +5931,11 @@ pub mod pallet {
       Ok(DueDeadlineServicePass { block, tick })
     }
 
-    /// Opens one canonical Service round and executes an eligible zero-Step head under one
-    /// pre-admitted selector/execution envelope. Effectful heads remain captured for the later
-    /// complete effect budget; they are not marked attempted or advanced. Weight, state, or
-    /// invariant refusal leaves the prior round, member, process, and cursor untouched.
+    /// Opens one canonical Service round and executes an eligible zero-Step or successful
+    /// effectful head under one pre-admitted selector/execution envelope. Effectful failure and
+    /// retry placement remain captured for the later complete deadline/resource suffix; they are
+    /// not marked attempted or advanced. Weight, fee, state, or invariant refusal leaves the prior
+    /// round, member, process, and cursor untouched.
     pub(crate) fn service_canonical_round_head(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
@@ -5952,12 +5953,12 @@ pub mod pallet {
       if !meter.can_consume(complete_envelope) {
         return Err(ServiceRoundError::InsufficientWeight);
       }
-      let (encounter, executed_zero_step) =
+      let (encounter, execution_weight) =
         polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
           let result = (|| {
             Self::begin_service_round(now)?;
             let encounter = Self::consider_service_head(now)?;
-            let mut executed_zero_step = false;
+            let mut execution_weight = Weight::zero();
             if let ServiceRoundEncounter::Eligible(actor) = encounter {
               let semantic =
                 Self::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
@@ -5969,7 +5970,73 @@ pub mod pallet {
                 semantic.admission,
               )
               .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-              if loaded_step.is_none() {
+              if let Some(loaded_step) = loaded_step {
+                let resources = loaded_step.resources;
+                let effectful_envelope = resources
+                  .control
+                  .saturating_add(resources.effect)
+                  .saturating_add(
+                    T::WeightInfo::service_round_admit_eligible().max(
+                      T::WeightInfo::service_member_retire_interior()
+                        .max(T::WeightInfo::service_member_retire_pair_cursor())
+                        .max(T::WeightInfo::service_member_retire_singleton()),
+                    ),
+                  );
+                if !meter.can_consume(selector_envelope.saturating_add(effectful_envelope)) {
+                  return Err(ServiceRoundError::InsufficientWeight);
+                }
+                let queue_ticket = state
+                  .hot
+                  .queue_ticket
+                  .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+                let eligible_at = state.run_state.as_ref().map_or(now, |run| run.eligible_at);
+                let ticket = Self::build_actor_step_ticket(
+                  actor.actor_id,
+                  queue_ticket,
+                  eligible_at,
+                  &state.identity,
+                  &state.hot,
+                  state.run_state.as_ref(),
+                  &admission,
+                )
+                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+                let maximum_fee = Self::maximum_current_action_fee(
+                  state.identity.actor_class.actor_type(),
+                  &loaded_step.step,
+                  resources,
+                )
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+                let plan = Self::build_current_step_plan(
+                  actor.actor_id,
+                  state.identity.clone(),
+                  state.hot.clone(),
+                  state.run_state.clone(),
+                  admission.clone(),
+                  ticket,
+                  loaded_step,
+                  maximum_fee,
+                )
+                .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+                let evidence = Self::execute_completed_effectful_step_on_service(
+                  actor,
+                  ServiceResidenceKind::Live,
+                  state,
+                  plan,
+                  &admission,
+                  now,
+                )
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+                execution_weight = evidence
+                  .actual_control_weight
+                  .saturating_add(evidence.actual_effect_weight)
+                  .saturating_add(
+                    T::WeightInfo::service_round_admit_eligible().max(
+                      T::WeightInfo::service_member_retire_interior()
+                        .max(T::WeightInfo::service_member_retire_pair_cursor())
+                        .max(T::WeightInfo::service_member_retire_singleton()),
+                    ),
+                  );
+              } else {
                 Self::execute_zero_step_on_service(
                   actor,
                   ServiceResidenceKind::Live,
@@ -5979,10 +6046,10 @@ pub mod pallet {
                   None,
                 )
                 .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
-                executed_zero_step = true;
+                execution_weight = zero_step_envelope;
               }
             }
-            Ok((encounter, executed_zero_step))
+            Ok((encounter, execution_weight))
           })();
           match result {
             Ok(outcome) => {
@@ -5994,9 +6061,7 @@ pub mod pallet {
           }
         })?;
       meter.consume(selector_envelope);
-      if executed_zero_step {
-        meter.consume(zero_step_envelope);
-      }
+      meter.consume(execution_weight);
       Ok(encounter)
     }
 
