@@ -5567,6 +5567,50 @@ pub mod pallet {
       )
     }
 
+    /// Resource-admits and atomically carries one exact due Oracle review from retained deadline
+    /// publication through current-state interpretation. Every admitted refusal rolls back the
+    /// publication, preserving the timed review and complete Park authority for a later attempt.
+    #[allow(
+      dead_code,
+      reason = "bounded due-review worker remains staged behind deadline traversal cutover"
+    )]
+    pub(crate) fn process_due_observation_availability_review(
+      meter: &mut WeightMeter,
+      weight: Weight,
+      expected: DependencyTimedReview<BlockNumberFor<T>>,
+      evidence: ParkEvidence<BlockNumberFor<T>>,
+      kind: ServiceResidenceKind,
+      now: BlockNumberFor<T>,
+      next_review: Option<WakeupKey<BlockNumberFor<T>>>,
+    ) -> Result<DependencyReviewMutation, DependencyReviewWorkerError> {
+      if !meter.can_consume(weight) {
+        return Err(DependencyReviewWorkerError::InsufficientWeight);
+      }
+      meter.consume(weight);
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        let result = (|| {
+          Self::publish_due_dependency_review(expected)
+            .map_err(DependencyReviewWorkerError::Publication)?;
+          Self::interpret_pending_observation_availability_review(
+            expected,
+            evidence,
+            kind,
+            now,
+            next_review,
+          )
+          .map_err(DependencyReviewWorkerError::Interpretation)
+        })();
+        match result {
+          Ok(mutation) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
     #[allow(

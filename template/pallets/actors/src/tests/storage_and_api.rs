@@ -13,23 +13,23 @@ use crate::{
   DependencyRegistrationFreePositions, DependencyRegistrationHandle, DependencyRegistrationHeaders,
   DependencyRegistrationMutation, DependencyRegistrationPages, DependencyRegistrationPosition,
   DependencyRegistrationPositions, DependencyRegistrations, DependencyReviewMutation,
-  DependencyRevisionError, DependencyRevisionMutation, DependencyRevisionState,
-  DependencyRevisions, DependencyScanError, DependencyScanMutation, DependencyScanSourceError,
-  DependencyScanSourceList, DependencyScanSourceListState, DependencyScanSourceMutation,
-  DependencyScanSourceNode, DependencyScanSourceNodes, DependencySourceAllocator,
-  DependencySourceAllocatorState, DependencySourceError, DependencySourceMutation,
-  DependencySourceObservations, DependencyTimedReview, DependencyTimedReviewMutation,
-  DependencyTimedReviews, DormantActorSemanticRecord, LegacyProcessPlacement,
-  LegacyProcessTransition, ObservationDependencySources, ParkEvidence, ParkNegativeReason,
-  PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent, PendingDependencyEvents,
-  PendingDependencyReviews, PipelineMachineFeeStrategy, ProcessCompileError, ProcessDisableCause,
-  ProcessDisablement, ProcessPublicationError, ProcessResidence, ProcessRevivalAuthority,
-  ProcessStatus, ProcessTransitionError, ProcessTransitionObligation, ScalarObservationState,
-  ServiceHeader, ServiceHeaderRecord, ServiceNode, ServiceNodes, ServicePublicationError,
-  ServiceResidenceKind, ServiceRetirementError, ServiceRingMutationError, ServiceRoundEncounter,
-  ServiceRoundError, SuspendedProcessBasis, UnsignaledProcessEvidence,
-  apply_actor_semantic_mutation, compile_legacy_process, next_actor_generation,
-  plan_legacy_process_transition, project_actor_semantic_execution,
+  DependencyReviewWorkerError, DependencyRevisionError, DependencyRevisionMutation,
+  DependencyRevisionState, DependencyRevisions, DependencyScanError, DependencyScanMutation,
+  DependencyScanSourceError, DependencyScanSourceList, DependencyScanSourceListState,
+  DependencyScanSourceMutation, DependencyScanSourceNode, DependencyScanSourceNodes,
+  DependencySourceAllocator, DependencySourceAllocatorState, DependencySourceError,
+  DependencySourceMutation, DependencySourceObservations, DependencyTimedReview,
+  DependencyTimedReviewMutation, DependencyTimedReviews, DormantActorSemanticRecord,
+  LegacyProcessPlacement, LegacyProcessTransition, ObservationDependencySources, ParkEvidence,
+  ParkNegativeReason, PendingCheckOwner, PendingCheckOwners, PendingDependencyEvent,
+  PendingDependencyEvents, PendingDependencyReviews, PipelineMachineFeeStrategy,
+  ProcessCompileError, ProcessDisableCause, ProcessDisablement, ProcessPublicationError,
+  ProcessResidence, ProcessRevivalAuthority, ProcessStatus, ProcessTransitionError,
+  ProcessTransitionObligation, ScalarObservationState, ServiceHeader, ServiceHeaderRecord,
+  ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
+  ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
+  UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
+  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -1097,6 +1097,184 @@ fn positive_due_review_wakes_only_the_exact_current_park_episode() {
       ),
       Err(DependencyRegistrationError::PendingReviewMissing)
     );
+  });
+}
+
+#[test]
+fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let actor = actor_ref(actor_id, record.generation);
+    ActorControlLocators::<Test>::remove(actor_id);
+    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    let source = 30;
+    let feed = 8;
+    ObservationDependencySources::<Test>::insert(feed, source);
+    DependencySourceObservations::<Test>::insert(source, feed);
+    set_observation(feed, ScalarObservationState::Unavailable);
+    let owner = PendingCheckOwner {
+      actor,
+      plan_revision: 12,
+    };
+    let evidence = ParkEvidence {
+      plan_identity: record.admission.admission_identity,
+      reason: ParkNegativeReason::SourceUnavailable,
+      review_at: Some(2),
+    };
+    Actors::transfer_service_member_to_park(
+      actor,
+      ServiceResidenceKind::Live,
+      owner.plan_revision,
+      evidence.reason,
+      evidence.review_at,
+      &[DependencyPlanSource {
+        source,
+        observed_revision: 0,
+      }],
+      Some(WakeupKey::Block(2)),
+    )
+    .unwrap();
+    let review = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(2),
+    };
+    let weight = Weight::from_parts(10, 0);
+    let mut meter = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_due_observation_availability_review(
+        &mut meter,
+        weight,
+        review,
+        evidence,
+        ServiceResidenceKind::Live,
+        1,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::Publication(
+        DependencyDueReviewError::NotDue
+      ))
+    );
+    assert_eq!(meter.consumed(), weight);
+    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(review));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut no_weight = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      Actors::process_due_observation_availability_review(
+        &mut no_weight,
+        weight,
+        review,
+        evidence,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Err(DependencyReviewWorkerError::InsufficientWeight)
+    );
+    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(review));
+
+    let mut admitted = WeightMeter::with_limit(weight);
+    assert!(matches!(
+      Actors::process_due_observation_availability_review(
+        &mut admitted,
+        weight,
+        review,
+        evidence,
+        ServiceResidenceKind::Live,
+        2,
+        Some(WakeupKey::Block(3)),
+      ),
+      Ok(DependencyReviewMutation::Rearmed(_))
+    ));
+    assert_eq!(
+      DependencyTimedReviews::<Test>::get(actor_id),
+      Some(DependencyTimedReview {
+        owner,
+        deadline: WakeupKey::Block(3),
+      })
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    let next = DependencyTimedReview {
+      owner,
+      deadline: WakeupKey::Block(3),
+    };
+    PendingDependencyEvents::<Test>::insert(
+      actor_id,
+      PendingDependencyEvent {
+        owner,
+        source,
+        revision: 0,
+      },
+    );
+    let mut occupied = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_due_observation_availability_review(
+        &mut occupied,
+        weight,
+        next,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::Publication(
+        DependencyDueReviewError::DestinationOccupied
+      ))
+    );
+    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(next));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+    PendingDependencyEvents::<Test>::remove(actor_id);
+
+    set_observation(feed, ScalarObservationState::Uninitialized);
+    let mut refused = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_due_observation_availability_review(
+        &mut refused,
+        weight,
+        next,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Err(DependencyReviewWorkerError::Interpretation(
+        DependencyRegistrationError::SourceUninitialized
+      ))
+    );
+    assert_eq!(DependencyTimedReviews::<Test>::get(actor_id), Some(next));
+    assert!(!PendingDependencyReviews::<Test>::contains_key(actor_id));
+
+    set_observation(
+      feed,
+      ScalarObservationState::Fresh {
+        value: 1,
+        observed_at: 3,
+      },
+    );
+    let mut wake = WeightMeter::with_limit(weight);
+    assert_eq!(
+      Actors::process_due_observation_availability_review(
+        &mut wake,
+        weight,
+        next,
+        evidence,
+        ServiceResidenceKind::Live,
+        3,
+        None,
+      ),
+      Ok(DependencyReviewMutation::Woke)
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!DependencyTimedReviews::<Test>::contains_key(actor_id));
   });
 }
 

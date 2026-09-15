@@ -291,6 +291,14 @@ pub enum DependencyDueReviewError {
   ClockUnavailable,
 }
 
+/// Refusal from one resource-admitted due-review publication and interpretation attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DependencyReviewWorkerError {
+  InsufficientWeight,
+  Publication(DependencyDueReviewError),
+  Interpretation(DependencyRegistrationError),
+}
+
 /// Result supplied by one bounded current-state interpretation of a Pending due review.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DependencyReviewInterpretation {
