@@ -880,7 +880,6 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
         &sovereign,
         breakdown,
         state.clone(),
-        cell.resources,
         1,
       ),
       Error::<Test>::InsufficientFee
@@ -902,7 +901,6 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
         &sovereign,
         breakdown,
         state,
-        cell.resources,
         1,
       ),
       Ok(crate::scheduler::ActivationOutcome::Latched)
@@ -928,6 +926,74 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
         fee,
       } if *id == actor_id && *fee == manual_trigger_fee()
     )));
+  });
+}
+
+#[test]
+fn canonical_park_occurrence_rollback_restores_dependency_authority() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let state = Actors::active_actor_state(actor_id).expect("unlatched active Actor");
+    let actor = Actors::load_actor_ref(actor_id).expect("generation-bound Actor reference");
+    let sovereign = sovereign_account(actor_id);
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    crate::ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::publish_service_member(actor, crate::ServiceResidenceKind::Live, 1)
+      .expect("canonical Service carrier publishes");
+    let source = 29;
+    let desired = [crate::DependencyPlanSource {
+      source,
+      observed_revision: 0,
+    }];
+    let evidence = crate::ParkEvidence {
+      plan_identity: Actors::build_admission_certificate(&state.contract)
+        .expect("admissible Contract")
+        .admission_identity,
+      reason: crate::ParkNegativeReason::SourceUnavailable,
+      review_at: Some(3),
+    };
+    assert!(
+      Actors::transfer_service_member_to_park(
+        actor,
+        crate::ServiceResidenceKind::Live,
+        7,
+        evidence.reason,
+        evidence.review_at,
+        &desired,
+        Some(crate::WakeupKey::Block(3)),
+      )
+      .is_ok()
+    );
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    set_fail_fee_sink_transfer(true);
+    assert_noop!(
+      Actors::commit_canonical_trigger_occurrence_with_authority(
+        actor,
+        ActorType::User,
+        &sovereign,
+        crate::TriggerFeeBreakdown {
+          trigger_family: TriggerFamily::Manual,
+          trigger_fee: manual_trigger_fee(),
+        },
+        state,
+        1,
+      ),
+      Error::<Test>::InsufficientFee
+    );
+    set_fail_fee_sink_transfer(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late fee refusal restores Park plan, registrations, review, semantic Hot, and process",
+    );
   });
 }
 

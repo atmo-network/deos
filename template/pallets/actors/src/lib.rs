@@ -10759,7 +10759,6 @@ pub mod pallet {
       sovereign_account: &T::AccountId,
       breakdown: TriggerFeeBreakdown<T::Balance>,
       state: ActiveActorStateOf<T>,
-      resources: ActorStepResourceEnvelope,
       now: BlockNumberFor<T>,
     ) -> Result<crate::scheduler::ActivationOutcome, DispatchError> {
       polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -10772,18 +10771,98 @@ pub mod pallet {
             Error::<T>::ActorInvariant
           );
 
-          let mut successor = state.clone();
-          successor.hot.pending_signal = true;
-          Self::transition_actor_publication_to_successor(
-            actor,
-            &state,
-            &successor,
-            state.run_state.as_ref(),
-            resources,
+          let admission =
+            Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
+          let expected_semantic = ActorSemanticState::Active(ActorSemanticRecord {
+            generation: actor.generation,
+            identity: state.identity.clone(),
+            hot: state.hot.clone(),
+            admission,
+          });
+          ensure!(
+            ActorSemanticStates::<T>::get(actor.actor_id) == Some(expected_semantic.clone())
+              && ActorRunStateStore::<T>::get(actor.actor_id)
+                .as_ref()
+                .map(|run| run.encode())
+                == state.run_state.as_ref().map(|run| run.encode())
+              && !ActorControlLocators::<T>::contains_key(actor.actor_id)
+              && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
+            Error::<T>::ActorInvariant
+          );
+          let process = ActorProcesses::<T>::get(actor.actor_id)
+            .filter(|process| process.generation == actor.generation)
+            .ok_or(Error::<T>::ActorInvariant)?;
+          let plan = plan_canonical_occurrence(
+            state.hot.cycle_state,
+            state.hot.pending_signal,
+            process,
             now,
-            crate::scheduler::ServiceCutoff::Open,
           )
-          .map_err(Self::placement_error)?;
+          .map_err(|_| Error::<T>::ActorInvariant)?
+          .ok_or(Error::<T>::ActorInvariant)?;
+
+          let mut successor = state.clone();
+          successor.hot.pending_signal = plan.pending_signal;
+          if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+            Self::remove_trigger_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+            successor.hot.trigger_wakeup_pointer = None;
+          } else {
+            ensure!(
+              successor.hot.trigger_wakeup_pointer.is_none(),
+              Error::<T>::ActorInvariant
+            );
+          }
+
+          match plan.publication {
+            CanonicalOccurrencePublication::PreserveResidence => {
+              ensure!(plan.process == process, Error::<T>::ActorInvariant);
+            }
+            CanonicalOccurrencePublication::PublishPending { eligible_from } => {
+              match process.residence {
+                Some(ProcessResidence::Deadline { .. }) => {
+                  Self::remove_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+                  ActorProcesses::<T>::insert(actor.actor_id, plan.process);
+                  Self::insert_service_member(actor, ServiceResidenceKind::Pending, now)
+                    .map_err(|_| Error::<T>::ActorInvariant)?;
+                }
+                Some(ProcessResidence::Parked(evidence)) => {
+                  let owner = PendingCheckOwners::<T>::get(actor.actor_id)
+                    .ok_or(Error::<T>::ActorInvariant)?;
+                  Self::wake_parked_member_to_service(
+                    actor,
+                    ServiceResidenceKind::Pending,
+                    owner,
+                    evidence,
+                    eligible_from,
+                  )
+                  .map_err(|_| Error::<T>::ActorInvariant)?;
+                  ensure!(
+                    ActorProcesses::<T>::get(actor.actor_id) == Some(plan.process),
+                    Error::<T>::ActorInvariant
+                  );
+                }
+                None if matches!(process.status, ProcessStatus::Disabled(_)) => {
+                  ActorProcesses::<T>::insert(actor.actor_id, plan.process);
+                  Self::insert_service_member(actor, ServiceResidenceKind::Pending, now)
+                    .map_err(|_| Error::<T>::ActorInvariant)?;
+                }
+                _ => return Err(Error::<T>::ActorInvariant.into()),
+              }
+            }
+          }
+
+          let ActorSemanticState::Active(mut replacement) = expected_semantic.clone() else {
+            return Err(Error::<T>::ActorInvariant.into());
+          };
+          replacement.hot = successor.hot;
+          Self::mutate_actor_semantic_state(
+            actor.actor_id,
+            ActorSemanticMutation::Replace {
+              expected: expected_semantic,
+              replacement: ActorSemanticState::Active(replacement),
+            },
+          )
+          .map_err(|_| Error::<T>::ActorInvariant)?;
           Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown)?;
           Self::deposit_event(Event::TriggerOccurrenceProcessed {
             actor_id: actor.actor_id,
