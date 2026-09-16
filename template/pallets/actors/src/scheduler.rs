@@ -7783,12 +7783,29 @@ impl<T: Config> Pallet<T> {
         anchor_tick,
         consumed: false,
       } => {
-        state.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
+        let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(DispatchError::Other("AtTime semantic authority is missing"));
+        };
+        if current.identity != state.identity
+          || current.hot != state.hot
+          || current.admission != admission
+        {
+          return Err(DispatchError::Other("AtTime semantic authority is corrupt"));
+        }
+        let mut replacement = current.clone();
+        replacement.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
           anchor_tick,
           consumed: true,
         };
-        Self::try_store_control_hot_with_authority(actor_id, state.hot)
-          .map_err(|_| DispatchError::Other("AtTime progression commit failed"))?;
+        Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Replace {
+            expected: ActorSemanticState::Active(current),
+            replacement: ActorSemanticState::Active(replacement),
+          },
+        )
+        .map_err(|_| DispatchError::Other("AtTime progression commit failed"))?;
       }
       TriggerRuntimeState::Cadenced { .. } => {
         let next_due_tick = next_cadence_due_tick(anchor_tick, delay_ticks, now_tick)
@@ -7881,15 +7898,20 @@ impl<T: Config> Pallet<T> {
         close_result.map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
         return Ok(true);
       }
-      if !Self::try_charge_prechecked_automatic_trigger_occurrence(
+      let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+        "AtTime generation authority is missing",
+      ))?;
+      let sovereign_account = state.identity.sovereign_account.clone();
+      return Self::commit_canonical_trigger_occurrence_with_authority(
+        actor,
         actor_type,
-        &state.identity.sovereign_account,
+        &sovereign_account,
         breakdown,
+        state,
+        frame_system::Pallet::<T>::block_number(),
       )
-      .map_err(|_| DispatchError::Other("temporal collection failed"))?
-      {
-        return Err(DispatchError::Other("temporal fee collection failed"));
-      }
+      .map(|_| false)
+      .map_err(|_| DispatchError::Other("temporal canonical publication failed"));
     } else if !Self::try_charge_automatic_trigger_occurrence(
       actor_type,
       &state.identity.sovereign_account,

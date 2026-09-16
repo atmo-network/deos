@@ -10954,6 +10954,10 @@ pub mod pallet {
       })
     }
 
+    #[allow(
+      dead_code,
+      reason = "legacy control-reference profiles retain prechecked Trigger collection"
+    )]
     pub(crate) fn try_charge_prechecked_automatic_trigger_occurrence(
       actor_type: ActorType,
       sovereign_account: &T::AccountId,

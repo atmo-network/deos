@@ -8646,22 +8646,17 @@ mod benches {
     .expect("AtTime benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
     seed_actor_for_cycle::<T>(actor_id);
-    Pallet::<T>::trigger_wakeup_substrate_invalidate_inner(actor_id)
-      .expect("initial AtTime pointer is coherent")
-      .expect("initial AtTime pointer exists");
-    benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-      hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
+    ActorSemanticStates::<T>::mutate(actor_id, |stored| {
+      let Some(ActorSemanticState::Active(record)) = stored else {
+        panic!("AtTime semantic authority exists");
+      };
+      record.hot.trigger_runtime_state = TriggerRuntimeState::AtTime {
         anchor_tick: Some(0),
         consumed: false,
       };
     });
-    Pallet::<T>::benchmark_defer_tick_wakeup(actor_id, 1).expect("due AtTime occurrence fits");
-    benchmark_fixture_publish_trigger_waiting::<T>(actor_id, 1);
-    let (mut ready, stats) = Pallet::<T>::wakeup_substrate_drain_key(WakeupKey::Tick(1), 1);
-    assert_eq!(stats.entries_scanned, 1);
-    let (_, state, admission, loaded_step) = ready
-      .pop()
-      .expect("due AtTime source authority is consumed");
+    let (state, admission, loaded_step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("due AtTime semantic authority is loaded");
     #[block]
     {
       assert_eq!(
@@ -8675,14 +8670,22 @@ mod benches {
         Ok(false)
       );
     }
-    let actor = Pallet::<T>::active_actor_view(actor_id).expect("AtTime Actor remains active");
-    assert!(actor.pending_signal);
-    assert!(actor.queue_ticket.is_some());
-    assert!(actor.trigger_wakeup_pointer.is_none());
-    assert!(matches!(
-      actor.trigger_runtime_state,
-      TriggerRuntimeState::AtTime { consumed: true, .. }
-    ));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && hot.trigger_wakeup_pointer.is_none()
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::AtTime { consumed: true, .. }
+          )
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   /// Measures one due User Cadenced occurrence independently from timestamp inherent work:
