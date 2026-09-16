@@ -1679,34 +1679,57 @@ impl<T: Config> Pallet<T> {
             generation: candidate.member.generation,
           },
         );
-        Self::try_mutate_control_hot_with_authority(
+        let LoadedActorStateOf::Active(mut loaded) =
+          Self::load_actor_state(candidate.member.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let admission =
+          Self::build_admission_certificate(&loaded.contract).ok_or(Error::<T>::ActorInvariant)?;
+        let expected = ActorSemanticState::Active(ActorSemanticRecord {
+          generation: candidate.member.generation,
+          identity: loaded.identity.clone(),
+          hot: loaded.hot.clone(),
+          admission: admission.clone(),
+        });
+        let TriggerRuntimeState::ObservationCrossing {
+          installed_at_revision,
+          ..
+        } = loaded.hot.trigger_runtime_state
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        loaded.hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
+          phase: CrossingPhase::WaitingForRearm,
+          installed_at_revision,
+        };
+        let replacement = ActorSemanticState::Active(ActorSemanticRecord {
+          generation: candidate.member.generation,
+          identity: loaded.identity,
+          hot: loaded.hot,
+          admission,
+        });
+        Self::mutate_actor_semantic_state(
           candidate.member.actor_id,
-          Error::<T>::ActorInvariant,
-          |hot| -> DispatchResult {
-            let TriggerRuntimeState::ObservationCrossing {
-              installed_at_revision,
-              ..
-            } = hot.trigger_runtime_state
-            else {
-              return Err(Error::<T>::ActorInvariant.into());
-            };
-            hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-              phase: CrossingPhase::WaitingForRearm,
-              installed_at_revision,
-            };
-            Ok(())
+          ActorSemanticMutation::Replace {
+            expected,
+            replacement,
           },
-        )?;
+        )
+        .map_err(|_| Error::<T>::ActorInvariant)?;
         state.member_count = state
           .member_count
           .checked_add(1)
           .ok_or(Error::<T>::CrossingIndexCapacityExceeded)?;
         user_count = user_count.saturating_add(u32::from(matches!(
-          Self::load_control_authority_with_authority(candidate.member.actor_id,)
-            .ok_or(Error::<T>::ActorInvariant)?
-            .0
-            .actor_class,
-          ActorClass::User { .. }
+          Self::load_actor_state(candidate.member.actor_id),
+          LoadedActorStateOf::Active(ActiveActorState {
+            identity: ActorIdentity {
+              actor_class: ActorClass::User { .. },
+              ..
+            },
+            ..
+          })
         )));
         processed[index] = true;
       }
@@ -1736,6 +1759,7 @@ impl<T: Config> Pallet<T> {
   fn commit_non_tail_placed_cohort_authority(
     mut authority: CrossingPlacedCohortAuthority<T>,
   ) -> DispatchResult {
+    use crate::weights::WeightInfo as _;
     let tail_refill = authority
       .tail_refill
       .take()
@@ -1779,15 +1803,12 @@ impl<T: Config> Pallet<T> {
       .candidates
       .iter(/* deos-bypass: bounded-iter */)
       .try_fold(0u32, |users, candidate| -> Result<u32, DispatchError> {
-        let is_user = matches!(
-          Self::load_control_authority_with_authority(
-            candidate.member.actor_id,
-          )
-          .ok_or(Error::<T>::ActorInvariant)?
-          .0
-          .actor_class,
-          ActorClass::User { .. }
-        );
+        let LoadedActorStateOf::Active(loaded) =
+          Self::load_actor_state(candidate.member.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let is_user = matches!(loaded.identity.actor_class, ActorClass::User { .. });
         Ok(users.saturating_add(u32::from(is_user)))
       })?;
     CrossingUserFeedMembershipCount::<T>::try_mutate(source.key.feed, |users| -> DispatchResult {
@@ -1797,7 +1818,34 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })?;
     Self::insert_crossing_destination_cohort(&authority.candidates, &authority.crossings)?;
-    Self::commit_paged_enqueue(authority.queue_plan).map_err(|_| Error::<T>::ActorInvariant)?;
+    for candidate in &authority.candidates {
+      let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(candidate.member.actor_id)
+      else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      let actor_type = loaded.identity.actor_class.actor_type();
+      let sovereign_account = loaded.identity.sovereign_account.clone();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      );
+      ensure!(
+        Self::commit_canonical_trigger_occurrence_with_authority(
+          ActorRef {
+            actor_id: candidate.member.actor_id,
+            generation: candidate.member.generation,
+          },
+          actor_type,
+          &sovereign_account,
+          breakdown,
+          loaded,
+          polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        )? == crate::scheduler::ActivationOutcome::Latched,
+        Error::<T>::ActorInvariant
+      );
+      IndexedTriggerDetectionDisabled::<T>::insert(candidate.member.actor_id, ());
+    }
     Ok(())
   }
 

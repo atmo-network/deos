@@ -14600,6 +14600,10 @@ mod benches {
   #[benchmark]
   fn crossing_placed_non_tail_emptied_unit() {
     let actors = prepare_non_tail_crossing_batch::<T>(CROSSING_NON_TAIL_BENCHMARK_MAX);
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlaced
+    );
     #[block]
     {
       Pallet::<T>::crossing_placed_batch_work_unit(CROSSING_COHORT_BENCHMARK_MAX)
@@ -14610,9 +14614,23 @@ mod benches {
       .take(CROSSING_NON_TAIL_BENCHMARK_MAX as usize)
     {
       assert!(
-        benchmark_fixture_hot::<T>(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
       );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
