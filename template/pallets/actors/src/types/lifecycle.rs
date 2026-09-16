@@ -197,6 +197,88 @@ pub enum ProcessPublicationError {
   Transition(ProcessTransitionError),
 }
 
+/// Carrier mutation required after one useful Trigger occurrence has been accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalOccurrencePublication<BlockNumber> {
+  /// Idle readiness leaves its Park/Deadline source and enters Pending service at B+1.
+  PublishPending { eligible_from: BlockNumber },
+  /// A busy occurrence is only a deferred semantic latch; its current residence is retained.
+  PreserveResidence,
+}
+
+/// Storage-neutral successor shared by every Trigger-family writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalOccurrencePlan<BlockNumber> {
+  pub process: ActorProcess<BlockNumber>,
+  pub pending_signal: bool,
+  pub publication: CanonicalOccurrencePublication<BlockNumber>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalOccurrenceError {
+  InvalidProcess,
+  InvalidResidence,
+  BlockNumberOverflow,
+}
+
+/// Plans the common occurrence transition without reading or writing storage. Duplicate latched
+/// occurrences are rejected by the caller before matching/charging and therefore return no plan.
+/// Idle readiness always enters Pending at B+1; Running/Suspended work preserves its exact current
+/// Service or Deadline residence and changes only the deferred semantic latch.
+pub fn plan_canonical_occurrence<BlockNumber>(
+  cycle_state: CycleState,
+  pending_signal: bool,
+  process: ActorProcess<BlockNumber>,
+  now: BlockNumber,
+) -> Result<Option<CanonicalOccurrencePlan<BlockNumber>>, CanonicalOccurrenceError>
+where
+  BlockNumber: Copy + CheckedAdd + One,
+{
+  if pending_signal {
+    return Ok(None);
+  }
+  if !matches!(process.status, ProcessStatus::Serving) || process.residence.is_none() {
+    return Err(CanonicalOccurrenceError::InvalidProcess);
+  }
+
+  let (process, publication) = match cycle_state {
+    CycleState::Idle => {
+      if !matches!(
+        process.residence,
+        Some(ProcessResidence::Deadline { .. } | ProcessResidence::Parked(_))
+      ) {
+        return Err(CanonicalOccurrenceError::InvalidResidence);
+      }
+      let eligible_from = now
+        .checked_add(&One::one())
+        .ok_or(CanonicalOccurrenceError::BlockNumberOverflow)?;
+      (
+        ActorProcess {
+          residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+          ..process
+        },
+        CanonicalOccurrencePublication::PublishPending { eligible_from },
+      )
+    }
+    CycleState::Running | CycleState::Suspended => {
+      if !matches!(
+        process.residence,
+        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+          | Some(ProcessResidence::Deadline { .. })
+      ) {
+        return Err(CanonicalOccurrenceError::InvalidResidence);
+      }
+      (process, CanonicalOccurrencePublication::PreserveResidence)
+    }
+  };
+
+  Ok(Some(CanonicalOccurrencePlan {
+    process,
+    pending_signal: true,
+    publication,
+  }))
+}
+
 /// Pure compiler used to prove the legacy-to-process mapping before any storage authority moves.
 pub fn compile_legacy_process<BlockNumber>(
   generation: ActorGeneration,

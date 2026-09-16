@@ -6,7 +6,8 @@ use crate::{
   ActorRef, ActorSemanticExecutionProjection, ActorSemanticLoadError, ActorSemanticMutation,
   ActorSemanticMutationError, ActorSemanticProjectionError, ActorSemanticRecord,
   ActorSemanticState, ActorSemanticStates, ActorStepResourceEnvelope, ActorUnsignaledControlCells,
-  ActorWaitingOccupancies, CloseReason, CompletionPolicy, DeadlineHandle, DeadlineHandles,
+  ActorWaitingOccupancies, CanonicalOccurrenceError, CanonicalOccurrencePlan,
+  CanonicalOccurrencePublication, CloseReason, CompletionPolicy, DeadlineHandle, DeadlineHandles,
   DeadlineHeader, DeadlineHeaders, DeadlineIndexLen, DeadlineIndexMutationError,
   DeadlineIndexPages, DeadlineIndexPositions, DeadlineMutationError, DeadlinePages,
   DependencyDueReviewError, DependencyDueReviewMutation, DependencyPlanMutation,
@@ -31,7 +32,8 @@ use crate::{
   ServiceNode, ServiceNodes, ServicePublicationError, ServiceResidenceKind, ServiceRetirementError,
   ServiceRingMutationError, ServiceRoundEncounter, ServiceRoundError, SuspendedProcessBasis,
   UnsignaledProcessEvidence, apply_actor_semantic_mutation, compile_legacy_process,
-  next_actor_generation, plan_legacy_process_transition, project_actor_semantic_execution,
+  next_actor_generation, plan_canonical_occurrence, plan_legacy_process_transition,
+  project_actor_semantic_execution,
 };
 use frame::traits::ConstU32;
 use std::collections::BTreeMap;
@@ -290,6 +292,86 @@ fn legacy_process_compiler_maps_exact_placements_and_refuses_unsignaled_guessing
   assert_eq!(
     compile_legacy_process::<u32>(11, None, LegacyProcessPlacement::Unsignaled(None)),
     Err(ProcessCompileError::AmbiguousUnsignaled)
+  );
+}
+
+#[test]
+fn canonical_occurrence_planner_publishes_idle_pending_and_preserves_busy_residence() {
+  let parked = ParkEvidence {
+    plan_identity: [3; 32],
+    reason: ParkNegativeReason::PredicateFalse,
+    review_at: Some(12u32),
+  };
+  let idle = ActorProcess {
+    generation: 11,
+    last_attempted: Some(7),
+    status: ProcessStatus::Serving,
+    residence: Some(ProcessResidence::Parked(parked)),
+  };
+  assert_eq!(
+    plan_canonical_occurrence(CycleState::Idle, false, idle, 20),
+    Ok(Some(CanonicalOccurrencePlan {
+      process: ActorProcess {
+        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+        ..idle
+      },
+      pending_signal: true,
+      publication: CanonicalOccurrencePublication::PublishPending { eligible_from: 21 },
+    }))
+  );
+
+  for (cycle_state, residence) in [
+    (
+      CycleState::Running,
+      ProcessResidence::Service(ServiceResidenceKind::Live),
+    ),
+    (
+      CycleState::Suspended,
+      ProcessResidence::Deadline {
+        key: WakeupKey::Block(31),
+        page: 2,
+        slot: 3,
+      },
+    ),
+  ] {
+    let busy = ActorProcess {
+      residence: Some(residence),
+      ..idle
+    };
+    assert_eq!(
+      plan_canonical_occurrence(cycle_state, false, busy, 20),
+      Ok(Some(CanonicalOccurrencePlan {
+        process: busy,
+        pending_signal: true,
+        publication: CanonicalOccurrencePublication::PreserveResidence,
+      }))
+    );
+  }
+
+  assert_eq!(
+    plan_canonical_occurrence(CycleState::Idle, true, idle, 20),
+    Ok(None)
+  );
+  assert_eq!(
+    plan_canonical_occurrence(CycleState::Running, false, idle, 20),
+    Err(CanonicalOccurrenceError::InvalidResidence)
+  );
+  assert_eq!(
+    plan_canonical_occurrence(CycleState::Idle, false, idle, u32::MAX),
+    Err(CanonicalOccurrenceError::BlockNumberOverflow)
+  );
+  assert_eq!(
+    plan_canonical_occurrence(
+      CycleState::Idle,
+      false,
+      ActorProcess {
+        status: ProcessStatus::Retired(CloseReason::OwnerInitiated),
+        residence: None,
+        ..idle
+      },
+      20,
+    ),
+    Err(CanonicalOccurrenceError::InvalidProcess)
   );
 }
 
