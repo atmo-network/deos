@@ -10896,38 +10896,6 @@ pub mod pallet {
       })
     }
 
-    fn commit_trigger_occurrence_with_authority(
-      actor_id: ActorId,
-      actor_type: ActorType,
-      sovereign_account: &T::AccountId,
-      breakdown: TriggerFeeBreakdown<T::Balance>,
-      state: ActiveActorStateOf<T>,
-    ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
-      if state.hot.pending_signal {
-        return Ok(None);
-      }
-      Self::ensure_trigger_occurrence_capacity(actor_type, sovereign_account, breakdown)?;
-      ensure!(
-        state.identity.actor_class.actor_type() == actor_type
-          && state.identity.sovereign_account == *sovereign_account,
-        Error::<T>::ActorInvariant
-      );
-
-      let plan = Self::preflight_activation_loaded(actor_id, state)
-        .map_err(Self::activation_failure_error)?;
-      let outcome = Self::commit_activation_plan(plan).map_err(Self::activation_failure_error)?;
-      if matches!(outcome, crate::scheduler::ActivationOutcome::Closed) {
-        return Ok(None);
-      }
-      Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown)?;
-      Self::deposit_event(Event::TriggerOccurrenceProcessed {
-        actor_id,
-        trigger_family: breakdown.trigger_family,
-        fee: breakdown.trigger_fee,
-      });
-      Ok(Some(outcome))
-    }
-
     pub(crate) fn commit_frame_trigger_occurrence(
       actor_id: ActorId,
       actor_type: ActorType,
@@ -10935,14 +10903,25 @@ pub mod pallet {
       breakdown: TriggerFeeBreakdown<T::Balance>,
       _cause_provenance: TriggerCauseProvenance,
     ) -> Result<Option<crate::scheduler::ActivationOutcome>, DispatchError> {
-      let state = Self::active_actor_state_for_frame_control(actor_id)?;
-      Self::commit_trigger_occurrence_with_authority(
+      let mut state = Self::active_actor_state_for_frame_control(actor_id)?;
+      let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id) else {
+        return Err(Error::<T>::ActorInvariant.into());
+      };
+      state.identity = record.identity.clone();
+      state.hot = record.hot.clone();
+      let actor = ActorRef {
         actor_id,
+        generation: record.generation,
+      };
+      Self::commit_canonical_trigger_occurrence_with_authority(
+        actor,
         actor_type,
         sovereign_account,
         breakdown,
         state,
+        frame_system::Pallet::<T>::block_number(),
       )
+      .map(Some)
     }
 
     pub(crate) fn try_commit_frame_automatic_trigger_occurrence(

@@ -1303,9 +1303,17 @@ mod benches {
       Pallet::<T>::notify_address_event(actor_id, T::FeeNativeAssetId::get(), One::one(), &caller)
         .expect("matched AddressEvent occurrence commits");
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("AddressEvent Actor remains active");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    let semantic = ActorSemanticStates::<T>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("AddressEvent semantic authority remains active");
+    assert!(semantic.hot.pending_signal);
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
   }
 
   /// Measures the exact lifecycle-only cleanup selected when an Idle User cannot admit a paid

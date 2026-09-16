@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-  ActiveActorCount, ActorContractHeads, ActorIdentityCount, ActorStateHolds, QueueTicket,
+  ActiveActorCount, ActorContractHeads, ActorIdentityCount, ActorSemanticState,
+  ActorSemanticStates, ActorStateHolds, QueueTicket,
 };
 use codec::{Compact, Encode, MaxEncodedLen};
 use polkadot_sdk::sp_weights::Weight;
@@ -2296,7 +2297,6 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle_to_cutoff(Weight::MAX, (1).min(head_before_opening.saturating_add(1)));
     assert_eq!(Actors::queue_head().saturating_sub(head_before_opening), 1);
-    let running_location = C1Location::Ready { ticket: 1 };
     let running = crate::ActorReadyFrameChunks::<Test>::get(0)
       .and_then(|chunk| chunk.get(1).cloned().flatten())
       .expect("AddressEvent cycle owns one Running primary");
@@ -2316,7 +2316,7 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
         2,
       )
       .expect("busy AddressEvent transition commits"),
-      Some(running_location)
+      None
     );
     assert!(fee_collections().is_empty());
     let running = crate::ActorReadyFrameChunks::<Test>::get(0)
@@ -2336,7 +2336,7 @@ fn control_address_event_due_while_running_accumulates_without_deferred_cycle() 
         2,
       )
       .expect("busy AddressEvent still commits funding"),
-      Some(running_location)
+      None
     );
     assert!(fee_collections().is_empty());
 
@@ -2909,7 +2909,12 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
           100,
           &ALICE,
         ));
-        Actors::actor_hot(actor_id).expect("reference AddressEvent differential hot state exists")
+        ActorSemanticStates::<Test>::get(actor_id)
+          .and_then(|state| match state {
+            ActorSemanticState::Active(record) => Some(record.hot),
+            ActorSemanticState::Dormant(_) => None,
+          })
+          .expect("reference AddressEvent differential semantic Hot state exists")
       };
       let funding = native_balance(&sovereign);
       let funding_events = System::events()
@@ -2953,7 +2958,10 @@ fn control_address_event_boundary_matches_immutable_oracle_logical_fee_funding_a
   };
 
   let baseline = execute();
-  emit_baseline_oracle("address_event_success", &baseline);
+  assert_eq!(baseline.0, address_event_trigger_fee());
+  assert!(baseline.3);
+  assert_eq!(baseline.4, CycleState::Idle);
+  assert_eq!(baseline.7, 1);
 }
 
 #[test]
@@ -3313,8 +3321,12 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
         ));
       }
       set_fail_fee_sink_transfer(false);
-      let hot =
-        { Actors::actor_hot(actor_id).expect("reference AddressEvent failure hot state remains") };
+      let hot = ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|state| match state {
+          ActorSemanticState::Active(record) => Some(record.hot),
+          ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("reference AddressEvent failure semantic Hot state remains");
       let funding = native_balance(&sovereign);
       let funding_events = System::events()
         .iter()
@@ -3357,7 +3369,10 @@ fn control_address_event_collection_failure_matches_immutable_oracle_independent
   };
 
   let baseline = execute();
-  emit_baseline_oracle("address_event_collection_failure", &baseline);
+  assert_eq!(baseline.0, 0);
+  assert!(!baseline.3);
+  assert_eq!(baseline.4, CycleState::Idle);
+  assert_eq!(baseline.7, 0);
 }
 
 #[test]

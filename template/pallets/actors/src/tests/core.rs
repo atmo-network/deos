@@ -1,4 +1,5 @@
 use super::*;
+use crate::{ActorProcesses, ActorSemanticState, ActorSemanticStates};
 
 #[test]
 fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
@@ -681,7 +682,7 @@ fn create_rejects_invalid_at_time_delay_and_block_schedule_policy() {
 }
 
 #[test]
-fn address_event_waits_through_cooldown_without_second_signal() {
+fn address_event_cooldown_consumes_one_latch_without_duplicate_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
@@ -693,15 +694,15 @@ fn address_event_waits_through_cooldown_without_second_signal() {
       Mutability::Mutable,
       schedule,
       None,
-      transfer_contract_steps(BOB, 10),
+      contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    fund_native(actor_id, 2_000);
     assert_ok!(Actors::notify_address_event(
       actor_id,
       TestAsset::Native,
       100,
       &ALICE
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -709,25 +710,32 @@ fn address_event_waits_through_cooldown_without_second_signal() {
         .cycle_nonce,
       1
     );
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    run_idle(Weight::MAX);
     assert_ok!(Actors::notify_address_event(
       actor_id,
       TestAsset::Native,
       100,
       &ALICE
     ));
+    frame_system::Pallet::<Test>::set_block_number(5);
     run_idle(Weight::MAX);
-    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(6));
-    frame_system::Pallet::<Test>::set_block_number(6);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      2
+    assert!(
+      !ActorSemanticStates::<Test>::get(actor_id).is_some_and(|state| matches!(
+        state,
+        ActorSemanticState::Active(record) if record.hot.pending_signal
+      ))
     );
-    assert!(!Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(_),
+        ..
+      })
+    ));
   });
 }
 
@@ -1228,6 +1236,7 @@ fn address_event_during_suspension_does_not_create_a_later_run() {
       1,
       &ALICE
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -1242,12 +1251,10 @@ fn address_event_during_suspension_does_not_create_a_later_run() {
       1
     );
     assert!(!Actors::pending_signal(actor_id));
-    let retry_ticket = Actors::actor_hot(actor_id)
-      .expect("suspended actor")
-      .queue_ticket;
-    assert!(retry_ticket.is_some());
+    let suspended_process =
+      ActorProcesses::<Test>::get(actor_id).expect("suspended Actor retains Service authority");
+    assert!(suspended_process.residence.is_some());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::notify_address_event(
       actor_id,
       TestAsset::Native,
@@ -1256,12 +1263,11 @@ fn address_event_during_suspension_does_not_create_a_later_run() {
     ));
     assert!(!Actors::pending_signal(actor_id));
     assert_eq!(
-      Actors::actor_hot(actor_id)
-        .expect("suspended actor")
-        .queue_ticket,
-      retry_ticket
+      ActorProcesses::<Test>::get(actor_id),
+      Some(suspended_process)
     );
     set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
 
     let after_retry = Actors::active_actor_view(actor_id).expect("retry completes");

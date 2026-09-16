@@ -540,6 +540,7 @@ fn on_address_event_asset_filter_is_enforced() {
       100,
       &ALICE
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(10));
   });

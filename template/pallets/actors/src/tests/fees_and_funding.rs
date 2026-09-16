@@ -1,5 +1,8 @@
 use super::*;
-use crate::FeeAssetClass;
+use crate::{
+  ActorProcesses, ActorSemanticState, ActorSemanticStates, FeeAssetClass, ProcessResidence,
+  ProcessStatus, ServiceHeader, ServiceNodes, ServiceResidenceKind,
+};
 
 #[test]
 fn actor_state_hold_prices_exact_contract_geometry_and_releases_on_close() {
@@ -1208,6 +1211,24 @@ fn address_event_charges_occurrence_before_pipeline_opening() {
     assert!(instance.pending_signal);
     assert_eq!(instance.cycle_nonce, 0);
     assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
+    let generation = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.generation),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("AddressEvent retains active generation");
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert_eq!(
+      ServiceNodes::<Test>::get(actor_id).map(|node| (
+        node.generation,
+        node.kind,
+        node.eligible_from
+      )),
+      Some((generation, ServiceResidenceKind::Pending, 2))
+    );
     assert!(has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed {
@@ -1239,9 +1260,12 @@ fn repeated_pending_address_event_is_latched_without_trigger_fee() {
       1,
       &ALICE,
     ));
-    let ticket = Actors::actor_hot(actor_id)
-      .expect("Actor hot state")
-      .queue_ticket;
+    let hot_before_duplicate = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Actor semantic Hot state");
     assert_ok!(Actors::notify_address_event(
       actor_id,
       TestAsset::Native,
@@ -1250,9 +1274,19 @@ fn repeated_pending_address_event_is_latched_without_trigger_fee() {
     ));
 
     assert_eq!(fee_collections(), vec![address_event_trigger_fee()]);
-    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    let hot = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Actor semantic Hot state");
     assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, ticket);
+    assert_eq!(hot, hot_before_duplicate);
+    assert_eq!(ServiceHeader::<Test>::get().count, 1);
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
     assert_eq!(
       System::events()
         .iter()
@@ -1301,8 +1335,10 @@ fn busy_address_event_neither_charges_nor_latches_a_future_pipeline() {
       1,
       &ALICE,
     ));
-    Actors::on_idle(1, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
+    let process_before = ActorProcesses::<Test>::get(actor_id).expect("busy Service authority");
     clear_fee_collections();
     frame_system::Pallet::<Test>::reset_events();
 
@@ -1318,12 +1354,19 @@ fn busy_address_event_neither_charges_nor_latches_a_future_pipeline() {
       event,
       Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
-    let hot = Actors::actor_hot(actor_id).expect("Actor hot state");
+    let hot = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Actor semantic Hot state");
     assert_eq!(hot.cycle_state, CycleState::Running);
     assert!(!hot.pending_signal);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(process_before));
+    assert_eq!(ServiceHeader::<Test>::get().count, 1);
   });
 }
 
@@ -1352,9 +1395,22 @@ fn underfunded_address_event_advances_without_fee_readiness_or_apoptosis() {
 
     assert!(fee_collections().is_empty());
     assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    let hot = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("process remains live");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
     assert!(Actors::active_actor_view(actor_id).is_some());
   });
 }
@@ -1385,9 +1441,23 @@ fn address_event_collection_failure_preserves_source_progress_without_readiness(
 
     assert_eq!(native_balance(&sovereign), sovereign_before);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
-    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    let hot = ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|state| match state {
+        ActorSemanticState::Active(record) => Some(record.hot),
+        ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("process remains live");
     assert!(!hot.pending_signal);
     assert!(hot.queue_ticket.is_none());
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
+    assert_eq!(ServiceHeader::<Test>::get().count, 0);
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
@@ -3471,7 +3541,12 @@ fn unrelated_asset_credit_can_trigger_address_event_schedule() {
       &ALICE,
     ));
 
-    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
+    assert!(
+      ActorSemanticStates::<Test>::get(actor_id).is_some_and(|state| matches!(
+        state,
+        ActorSemanticState::Active(record) if record.hot.pending_signal
+      ))
+    );
   });
 }
 
