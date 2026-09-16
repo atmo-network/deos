@@ -14427,22 +14427,45 @@ mod benches {
 
   #[benchmark]
   fn crossing_placed_unit() {
-    let (_, actor_id) = prepare_crossing_work::<T>(2);
+    let (feed, actor_id) = prepare_crossing_work::<T>(2);
+    CrossingRangeCursors::<T>::insert(
+      feed,
+      CrossingRangeCursor {
+        revision: 2,
+        traversal: CrossingTraversal::Upward,
+        search_bound: 2,
+        current_threshold: Some(2),
+        page: 0,
+        offset: 0,
+        exhausted: false,
+      },
+    );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlaced
+    );
     #[block]
     {
       Pallet::<T>::crossing_work_unit().expect("placed Crossing fire must succeed");
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-      hot.pending_signal
-        && hot.queue_ticket.is_some()
-        && matches!(
-          hot.trigger_runtime_state,
-          TriggerRuntimeState::ObservationCrossing {
-            phase: CrossingPhase::WaitingForRearm,
-            ..
-          }
-        )
-    }));
+    assert!(
+      benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+        hot.pending_signal
+          && matches!(
+            hot.trigger_runtime_state,
+            TriggerRuntimeState::ObservationCrossing {
+              phase: CrossingPhase::WaitingForRearm,
+              ..
+            }
+          )
+      })
+    );
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
