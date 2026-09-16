@@ -8900,6 +8900,95 @@ impl<T: Config> Pallet<T> {
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
   }
 
+  /// Atomically replaces one canonical publication with a validated lifecycle successor. The
+  /// source semantic record and process residence remain authoritative until their exact carrier
+  /// members have been removed; any refusal restores the complete canonical root.
+  #[allow(
+    dead_code,
+    reason = "canonical lifecycle transition remains inert until all production paths cut over"
+  )]
+  fn transition_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        if ActorControlLocators::<T>::contains_key(actor.actor_id)
+          || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
+          || successor.contract != source.contract
+          || successor.identity.sovereign_account != source.identity.sovereign_account
+          || successor.identity.owner != source.identity.owner
+          || successor.identity.actor_class != source.identity.actor_class
+          || successor.identity.mutability != source.identity.mutability
+          || successor.identity.cycle_nonce != source.identity.cycle_nonce
+          || source.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+          || successor.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let admission = Self::build_admission_certificate(&source.contract)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        if semantic.generation != actor.generation
+          || semantic.identity != source.identity
+          || semantic.hot != source.hot
+          || semantic.admission != admission
+          || Self::build_admission_certificate(&successor.contract) != Some(admission.clone())
+          || ActorRunStateStore::<T>::get(actor.actor_id)
+            .as_ref()
+            .map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        let process = ActorProcesses::<T>::get(actor.actor_id)
+          .filter(|process| process.generation == actor.generation)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+
+        if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        } else if source.hot.trigger_wakeup_pointer.is_some() {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        match process.residence {
+          Some(ProcessResidence::Service(_)) => {
+            Self::remove_service_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Deadline { .. }) => {
+            Self::remove_deadline_member(actor).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+          }
+          Some(ProcessResidence::Parked(_)) => return Err(EnqueueOutcome::CorruptedTopology),
+          None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+          None => return Err(EnqueueOutcome::CorruptedTopology),
+        }
+        ActorProcesses::<T>::remove(actor.actor_id);
+        semantic.identity = successor.identity.clone();
+        semantic.hot = successor.hot.clone();
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+        Self::publish_actor_publication(actor, successor, supplied_run, resources, now, cutoff)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
   /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
   /// independent temporal Trigger deadline. Production callers remain on the legacy carrier until
   /// the complete create/resume and mandatory-service cutover can enter this boundary together.
@@ -9116,6 +9205,26 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> Result<(), EnqueueOutcome> {
     Self::handoff_actor_publication_to_successor(
+      actor,
+      source,
+      successor,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_transition_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::transition_actor_publication_to_successor(
       actor,
       source,
       successor,
