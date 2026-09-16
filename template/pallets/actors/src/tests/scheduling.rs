@@ -3397,6 +3397,65 @@ fn mandatory_hook_preserves_public_retry_prefix_and_canonical_residence() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
+fn mandatory_hook_resolves_percent_against_current_balance_between_adjacent_steps() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let percentage = AmountResolution::Percent(Perbill::from_percent(50));
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Local(77),
+        amount: percentage,
+      }),
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Local(77),
+        amount: percentage,
+      }),
+    ])
+    .expect("two percent Steps fit");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    let sovereign = sovereign_account(actor_id);
+    set_asset_balance(&sovereign, TestAsset::Local(77), 1_000);
+    let bob_before = asset_balance(&BOB, TestAsset::Local(77));
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    // The first Step resolves half of the current tracked balance after its action fee.
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(77)), bob_before + 499);
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 501);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("first Step commits a running cursor")
+        .cursor,
+      1,
+    );
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    // A normal external credit between Steps raises the later resolution's current input.
+    set_asset_balance(&sovereign, TestAsset::Local(77), 400);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(77)), bob_before + 499 + 450);
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 451);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
 fn frame_only_expired_manual_activation_closes_from_retained_unsignaled_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
