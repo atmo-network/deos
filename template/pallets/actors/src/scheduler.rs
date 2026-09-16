@@ -477,6 +477,14 @@ enum HeadDiscovery<BlockNumber> {
   InvariantStall,
 }
 
+#[derive(Clone, Copy)]
+enum ServiceHeadDiscovery {
+  Empty,
+  Eligible(ActorRef, ServiceResidenceKind),
+  Closed,
+  InvariantStall,
+}
+
 impl<T: Config> Pallet<T> {
   pub fn next_queue_ticket() -> QueueTicket {
     ActorReadyTail::<T>::get()
@@ -570,6 +578,57 @@ impl<T: Config> Pallet<T> {
     let mut effect_reconciliation_uncertain = false;
     let mut starved = false;
     while executed < max_executions && scanned < max_scanned {
+      match Self::current_service_head(now) {
+        ServiceHeadDiscovery::Empty => {}
+        ServiceHeadDiscovery::Eligible(_actor, _kind) => {
+          let result = match resources.as_mut() {
+            Some((state, limits, _, _)) => {
+              let control_before = state.usage().actor_control_used();
+              let effect_before = state.usage().actor_effect_used();
+              let result = Self::service_canonical_round_head_with_resources(
+                &mut cycle_meter,
+                now,
+                &mut **state,
+                *limits,
+              );
+              if result.is_ok() {
+                let control = state
+                  .usage()
+                  .actor_control_used()
+                  .saturating_sub(control_before);
+                let effect = state
+                  .usage()
+                  .actor_effect_used()
+                  .saturating_sub(effect_before);
+                if let Some(meter) = control_meter.as_mut() {
+                  meter.consume(control);
+                }
+                effect_consumed.saturating_accrue(effect);
+              }
+              result
+            }
+            None => Self::service_canonical_round_head(&mut cycle_meter, now),
+          };
+          match result {
+            Ok(ServiceRoundEncounter::Eligible(_)) => {
+              scanned = scanned.saturating_add(1);
+              executed = executed.saturating_add(1);
+              continue;
+            }
+            Ok(ServiceRoundEncounter::Empty | ServiceRoundEncounter::Closed) => break,
+            Ok(ServiceRoundEncounter::AlreadyAttempted(_)) => break,
+            Err(_) => {
+              starved = executed == 0;
+              break;
+            }
+          }
+        }
+        ServiceHeadDiscovery::Closed => break,
+        ServiceHeadDiscovery::InvariantStall => {
+          starved = executed == 0;
+          break;
+        }
+      }
       let head = Self::live_queue_head(
         cutoff,
         &mut cycle_meter,
@@ -634,6 +693,47 @@ impl<T: Config> Pallet<T> {
       }
     }
     pass
+  }
+
+  fn current_service_head(now: BlockNumberFor<T>) -> ServiceHeadDiscovery {
+    let header = ServiceHeader::<T>::get();
+    let Some(actor) = header.cursor else {
+      return if header.count == 0 {
+        ServiceHeadDiscovery::Empty
+      } else {
+        ServiceHeadDiscovery::InvariantStall
+      };
+    };
+    if header.count == 0 {
+      return ServiceHeadDiscovery::InvariantStall;
+    }
+    let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      let result = Self::begin_service_round(now).and_then(|_| Self::consider_service_head(now));
+      match result {
+        Ok(encounter) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(encounter))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    });
+    match result {
+      Ok(ServiceRoundEncounter::Empty) => ServiceHeadDiscovery::Empty,
+      Ok(ServiceRoundEncounter::Eligible(found)) if found == actor => {
+        match ServiceNodes::<T>::get(actor.actor_id) {
+          Some(node) if node.generation == actor.generation => {
+            ServiceHeadDiscovery::Eligible(actor, node.kind)
+          }
+          _ => ServiceHeadDiscovery::InvariantStall,
+        }
+      }
+      Ok(ServiceRoundEncounter::AlreadyAttempted(found)) if found == actor => {
+        ServiceHeadDiscovery::Closed
+      }
+      Ok(ServiceRoundEncounter::Closed) => ServiceHeadDiscovery::Closed,
+      _ => ServiceHeadDiscovery::InvariantStall,
+    }
   }
 
   /// Sole cheap readiness-presence seam for block hooks and FIFO classification. frame replaces the
@@ -1480,6 +1580,7 @@ impl<T: Config> Pallet<T> {
     mut plan: CurrentStepPlanOf<T>,
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
+    requires_detached_primary: bool,
   ) -> Result<EffectfulStepTransition<T>, AttemptTransactionError> {
     let header =
       ActorContractHeads::<T>::get(actor_id).ok_or(AttemptTransactionError::Invariant)?;
@@ -1498,7 +1599,7 @@ impl<T: Config> Pallet<T> {
         | StepErrorPolicy::AbortCycle
         | StepErrorPolicy::RetryLater { .. }
     );
-    if ActorControlLocators::<T>::contains_key(actor_id)
+    if requires_detached_primary && ActorControlLocators::<T>::contains_key(actor_id)
       || plan.identity != state.identity
       || plan.hot != state.hot
       || plan.admission != *admission
@@ -1713,7 +1814,7 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
   ) -> Result<StepCommitEvidence, AttemptTransactionError> {
     let transition =
-      Self::execute_effectful_step_transition(actor_id, state, plan, admission, now)?;
+      Self::execute_effectful_step_transition(actor_id, state, plan, admission, now, true)?;
     Self::finalize_effectful_step_on_legacy_fifo(actor_id, transition, admission, now)
   }
 
@@ -1844,8 +1945,14 @@ impl<T: Config> Pallet<T> {
           Self::probe_service_member_to_deadline(actor, destination)
             .map_err(|_| AttemptTransactionError::Invariant)?;
         }
-        let transition =
-          Self::execute_effectful_step_transition(actor.actor_id, state, plan, admission, now)?;
+        let transition = Self::execute_effectful_step_transition(
+          actor.actor_id,
+          state,
+          plan,
+          admission,
+          now,
+          false,
+        )?;
         let EffectfulStepTransition {
           plan,
           execution_instance,
@@ -1870,8 +1977,7 @@ impl<T: Config> Pallet<T> {
         let later_retry_destination = match (disposition, eligible_at, deadline) {
           (AttemptDisposition::Completed, None, _) => None,
           (AttemptDisposition::Continued, Some(eligible_at), None)
-            if matches!(step.on_error, StepErrorPolicy::ContinueNextStep)
-              && now.checked_add(&One::one()) == Some(eligible_at) =>
+            if now.checked_add(&One::one()) == Some(eligible_at) =>
           {
             None
           }
@@ -4106,6 +4212,7 @@ impl<T: Config> Pallet<T> {
     QUEUE_APPEND_COMMITS.with(core::cell::Cell::get)
   }
 
+  #[cfg(any(test, feature = "runtime-benchmarks"))]
   pub(crate) fn update_existing_frame_control_identity(
     actor_id: ActorId,
     identity: &ActorIdentityOf<T>,
@@ -7465,93 +7572,6 @@ impl<T: Config> Pallet<T> {
     result.ok()
   }
 
-  pub(crate) fn prime_initial_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let Some((mut state, admission, loaded_step)) = Self::load_frame_actor_service_state(actor_id)
-    else {
-      return match (
-        Self::control_identity_exists(actor_id),
-        Self::control_hot_exists(actor_id),
-        ActorContractHeads::<T>::contains_key(actor_id),
-        Self::control_admission_exists(actor_id),
-        ActorRunStateStore::<T>::contains_key(actor_id),
-      ) {
-        (false, false, false, false, false) | (true, false, false, false, false) => Ok(()),
-        _ => Err(EnqueueOutcome::CorruptedTopology),
-      };
-    };
-    let instance = Self::derive_active_actor_view(
-      state.identity.clone(),
-      state.hot.clone(),
-      state.contract.clone(),
-    );
-    let resources = if state.contract.steps.is_empty() {
-      ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      }
-    } else {
-      loaded_step
-        .ok_or(EnqueueOutcome::CorruptedTopology)?
-        .resources
-    };
-    let now = frame_system::Pallet::<T>::block_number();
-    if !instance.lifecycle.is_paused() && instance.trigger_wakeup_pointer.is_none() {
-      if let Some(due_tick) = Self::initial_trigger_wakeup_tick(&instance)? {
-        #[cfg(test)]
-        if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
-          return Err(EnqueueOutcome::WakeupCapacityExhausted);
-        }
-        match Self::try_wakeup_substrate_schedule_transition_with_authority(
-          actor_id,
-          WakeupKey::Tick(due_tick),
-          state.hot.clone(),
-          &state.identity,
-          state.run_state.as_ref().map_or(0, |run| run.cursor),
-          &admission,
-          resources,
-        ) {
-          Ok(()) | Err(EnqueueOutcome::AlreadyLive) => {}
-          Err(error) => return Err(error),
-        }
-        let (_, _, hot, _) =
-          Self::load_frame_control_authority(actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
-        state.hot = hot;
-      }
-    }
-    let placement = Self::publish_active_state_on_legacy_fifo(
-      actor_id,
-      &state,
-      &admission,
-      resources,
-      now,
-      ServiceCutoff::Open,
-    )?;
-    if placement == StepControlPlacement::None
-      && Self::load_frame_control_authority(actor_id).is_none()
-    {
-      return Err(EnqueueOutcome::CorruptedTopology);
-    }
-    Ok(())
-  }
-
-  pub(crate) fn demote_ready_frame_to_unsignaled(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
-    let (location, mut cell) =
-      Self::load_primary_control_cell(actor_id).map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    if !matches!(location, ActorControlLocation::Ready { .. })
-      || cell.hot.cycle_state != CycleState::Idle
-    {
-      return Ok(());
-    }
-    Self::remove_primary_control_cell_inner(actor_id)
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-    cell.eligible_at = None;
-    ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-    let destination = ActorControlLocation::Unsignaled;
-    ActorControlLocators::<T>::insert(actor_id, destination);
-    Self::replace_active_semantics_from_primary(actor_id, destination)
-      .map_err(|_| EnqueueOutcome::CorruptedTopology)
-  }
-
   pub(crate) fn prime_frame_actor_schedule(actor_id: ActorId) -> Result<(), EnqueueOutcome> {
     let Some((state, admission, loaded_step)) = Self::load_frame_actor_service_state(actor_id)
     else {
@@ -7625,45 +7645,6 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-  }
-
-  pub(crate) fn publish_resumed_frame(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    admission: ActorAdmissionCertificateOf<T>,
-    loaded_step: Option<LoadedActorStepOf<T>>,
-  ) -> Result<(), EnqueueOutcome> {
-    let resources = if state.contract.steps.is_empty() {
-      ActorStepResourceEnvelope {
-        control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-        effect: Weight::zero(),
-      }
-    } else {
-      loaded_step
-        .as_ref()
-        .map(|loaded| loaded.resources)
-        .ok_or(EnqueueOutcome::CorruptedTopology)?
-    };
-    let placement = Self::publish_active_state_on_legacy_fifo(
-      actor_id,
-      &state,
-      &admission,
-      resources,
-      frame_system::Pallet::<T>::block_number(),
-      ServiceCutoff::Open,
-    )?;
-    if placement == StepControlPlacement::None {
-      Self::restore_unsignaled_from_authority(
-        actor_id,
-        state.hot,
-        &state.identity,
-        state.run_state.as_ref(),
-        &admission,
-        resources,
-      )?;
-      Self::prime_frame_actor_schedule(actor_id)?;
-    }
-    Ok(())
   }
 
   fn preflight_prime_schedule_loaded(
@@ -9084,7 +9065,7 @@ impl<T: Config> Pallet<T> {
     dead_code,
     reason = "composite publication remains inert until the atomic carrier cutover"
   )]
-  fn publish_actor_publication(
+  pub(crate) fn publish_actor_publication(
     actor: ActorRef,
     state: &ActiveActorStateOf<T>,
     supplied_run: Option<&ActorRunStateOf<T>>,

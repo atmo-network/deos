@@ -495,7 +495,7 @@ pub mod pallet {
     RetryClass, SovereignAccountDeriver as _, SovereignAccountPolicy, StakingOps as _,
     SystemActorContractValidator as _,
   };
-  use crate::scheduler::CyclePass;
+  use crate::scheduler::{CyclePass, ServiceCutoff};
   use alloc::vec::Vec;
   use frame::prelude::*;
   use polkadot_sdk::{
@@ -1411,6 +1411,12 @@ pub mod pallet {
       } else {
         let actor_type = Self::load_frame_control_authority(actor_id)
           .map(|(_, identity, _, _)| identity.actor_class.actor_type())
+          .or_else(|| match ActorSemanticStates::<T>::get(actor_id) {
+            Some(ActorSemanticState::Active(record)) => {
+              Some(record.identity.actor_class.actor_type())
+            }
+            _ => None,
+          })
           .ok_or(Error::<T>::ActorInvariant)?;
         Self::insert_admitted_contract_geometry_with_actor_type(
           actor_id,
@@ -1423,9 +1429,13 @@ pub mod pallet {
       if CrossingMemberships::<T>::contains_key(actor_id)
         && let Some(crossing) = Self::crossing_from_trigger(&contract.trigger)
       {
-        let phase = match Self::load_frame_control_authority(actor_id)
+        let runtime_state = Self::load_frame_control_authority(actor_id)
           .map(|(_, _, hot, _)| hot.trigger_runtime_state)
-        {
+          .or_else(|| match ActorSemanticStates::<T>::get(actor_id) {
+            Some(ActorSemanticState::Active(record)) => Some(record.hot.trigger_runtime_state),
+            _ => None,
+          });
+        let phase = match runtime_state {
           Some(TriggerRuntimeState::ObservationCrossing { phase, .. }) => phase,
           _ => return Err(Error::<T>::ActorInvariant.into()),
         };
@@ -4742,48 +4752,6 @@ pub mod pallet {
       })
     }
 
-    pub(crate) fn insert_unsignaled_control_authority(
-      actor_id: ActorId,
-      identity: ActorIdentityOf<T>,
-      hot: ActorHotStateOf<T>,
-      admission: ActorAdmissionCertificateOf<T>,
-      resources: ActorStepResourceEnvelope,
-    ) -> bool {
-      if ActorControlLocators::<T>::contains_key(actor_id)
-        || ActorUnsignaledControlCells::<T>::contains_key(actor_id)
-        || hot.cycle_state != CycleState::Idle
-        || (hot.pending_signal && !hot.lifecycle.is_paused())
-        || hot.queue_ticket.is_some()
-        || hot.wakeup_pointer.is_some()
-        || !admission.has_valid_identity()
-      {
-        return false;
-      }
-      let Some(control_identity) = Self::control_identity_from_scalar(identity.clone()) else {
-        return false;
-      };
-      let cell = ActorControlCell {
-        actor_id,
-        identity: control_identity,
-        hot: Self::control_hot_from_scalar(hot.clone()),
-        pipeline_service_identity: pipeline_service_identity(admission.admission_identity),
-        cursor: 0,
-        eligible_at: None,
-        admission: admission.clone(),
-        resources,
-      };
-      ActorUnsignaledControlCells::<T>::insert(actor_id, cell);
-      ActorControlLocators::<T>::insert(actor_id, ActorControlLocation::Unsignaled);
-      Self::load_frame_control_authority(actor_id).is_some_and(
-        |(location, restored_identity, restored_hot, restored_admission)| {
-          location == ActorControlLocation::Unsignaled
-            && restored_identity == identity
-            && restored_hot == hot
-            && restored_admission == admission
-        },
-      )
-    }
-
     pub(crate) fn load_frame_control_authority(
       actor_id: ActorId,
     ) -> Option<(
@@ -6767,16 +6735,20 @@ pub mod pallet {
       let current = ActorSemanticStates::<T>::get(actor_id).ok_or(missing)?;
       match current.clone() {
         ActorSemanticState::Active(mut record) => {
-          let output = mutate(&mut record.identity)?;
-          Self::update_existing_frame_control_identity(actor_id, &record.identity)
-            .map_err(|_| Error::<T>::ActorInvariant)?;
           ensure!(
-            matches!(
-              ActorSemanticStates::<T>::get(actor_id),
-              Some(ActorSemanticState::Active(stored)) if stored == record
-            ),
+            !ActorControlLocators::<T>::contains_key(actor_id)
+              && !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
             Error::<T>::ActorInvariant
           );
+          let output = mutate(&mut record.identity)?;
+          Self::mutate_actor_semantic_state(
+            actor_id,
+            ActorSemanticMutation::Replace {
+              expected: current,
+              replacement: ActorSemanticState::Active(record),
+            },
+          )
+          .map_err(|_| Error::<T>::ActorInvariant)?;
           Ok(output)
         }
         ActorSemanticState::Dormant(mut record) => {
@@ -6944,26 +6916,34 @@ pub mod pallet {
       let state = ActorSemanticStates::<T>::get(actor_id);
       let location = ActorControlLocators::<T>::get(actor_id);
       let dormant_identity = ActorIdentities::<T>::get(actor_id);
-      let has_active_partition = ActorUnsignaledControlCells::<T>::contains_key(actor_id)
-        || ActorContractHeads::<T>::contains_key(actor_id)
+      let has_contract_or_run = ActorContractHeads::<T>::contains_key(actor_id)
         || ActorActivationAuthorities::<T>::contains_key(actor_id)
         || ActorRunStateStore::<T>::contains_key(actor_id)
         || ActorRunHeads::<T>::contains_key(actor_id)
         || ActorRunPayloads::<T>::contains_key(actor_id);
-      match (&state, location, dormant_identity.as_ref()) {
-        (Some(ActorSemanticState::Dormant(record)), None, Some(stored_identity))
-          if &record.identity == stored_identity && !has_active_partition => {}
-        (Some(ActorSemanticState::Active(_)), Some(_), None) => {}
-        (None, None, None) if !has_active_partition => {}
+      let has_legacy_authority =
+        location.is_some() || ActorUnsignaledControlCells::<T>::contains_key(actor_id);
+      match (&state, dormant_identity.as_ref()) {
+        (Some(ActorSemanticState::Dormant(record)), Some(stored_identity))
+          if &record.identity == stored_identity
+            && !has_contract_or_run
+            && !has_legacy_authority
+            && !ActorProcesses::<T>::contains_key(actor_id) => {}
+        (Some(ActorSemanticState::Active(record)), None)
+          if !has_legacy_authority
+            && has_contract_or_run
+            && Self::load_canonical_actor_semantic_state(ActorRef {
+              actor_id,
+              generation: record.generation,
+            })
+            .is_ok() => {}
+        (None, None)
+          if !has_contract_or_run
+            && !has_legacy_authority
+            && !ActorProcesses::<T>::contains_key(actor_id) => {}
         _ => return Err(ActorSemanticLoadError::Corrupt),
       }
-      Ok(state.map(|state| {
-        let location = match state {
-          ActorSemanticState::Dormant(_) => None,
-          ActorSemanticState::Active(_) => ActorControlLocators::<T>::get(actor_id),
-        };
-        (state, location)
-      }))
+      Ok(state.map(|state| (state, None)))
     }
 
     pub(crate) fn load_actor_state_with_admission(
@@ -6977,9 +6957,9 @@ pub mod pallet {
         Ok(Some((ActorSemanticState::Dormant(record), None))) => {
           (LoadedActorStateOf::Dormant(record.identity), None)
         }
-        Ok(Some((ActorSemanticState::Active(record), Some(location)))) => {
+        Ok(Some((ActorSemanticState::Active(record), None))) => {
           let admission = record.admission.clone();
-          let state = Self::load_active_actor_state(actor_id, location, record);
+          let state = Self::load_active_actor_state(actor_id, record);
           match state {
             LoadedActorStateOf::Active(_) => (state, Some(admission)),
             _ => (state, None),
@@ -7004,69 +6984,21 @@ pub mod pallet {
 
     fn load_active_actor_state(
       actor_id: ActorId,
-      location: ActorControlLocation<BlockNumberFor<T>>,
       record: ActorSemanticRecordOf<T>,
     ) -> LoadedActorStateOf<T> {
       let ActorSemanticRecord {
         identity,
-        generation: _,
+        generation,
         hot,
         admission: frame_admission,
       } = record;
-      let Some((physical_location, physical_identity, physical_hot, physical_admission)) =
-        Self::load_frame_control_authority(actor_id)
-      else {
-        return LoadedActorStateOf::Corrupt;
-      };
-      if physical_location != location
-        || physical_identity != identity
-        || physical_hot != hot
-        || physical_admission != frame_admission
+      if Self::load_canonical_actor_semantic_state(ActorRef {
+        actor_id,
+        generation,
+      })
+      .is_err()
       {
         return LoadedActorStateOf::Corrupt;
-      }
-      // Full classification validates temporal references; hot head admission does not load them.
-      let pointers = [
-        hot.wakeup_pointer,
-        hot.trigger_wakeup_pointer.map(|pointer| WakeupPointer {
-          block: WakeupKey::Tick(pointer.tick),
-          page_id: pointer.page_id,
-          slot: pointer.slot,
-        }),
-      ];
-      if let ActorControlLocation::Waiting { key, page, slot } = location {
-        if !pointers.contains(&Some(WakeupPointer {
-          block: key,
-          page_id: page,
-          slot: u32::from(slot),
-        })) {
-          return LoadedActorStateOf::Corrupt;
-        }
-      }
-      for pointer in pointers.into_iter().flatten() {
-        let Some(page) = ActorWaitingFrameChunks::<T>::get((pointer.block, pointer.page_id)) else {
-          return LoadedActorStateOf::Corrupt;
-        };
-        let coherent = match page
-          .entries
-          .get(pointer.slot as usize)
-          .and_then(Option::as_ref)
-        {
-          Some(ActorWaitingEntry::Reference(reference)) => {
-            reference.actor_id == actor_id
-              && reference.admission_identity == frame_admission.admission_identity
-          }
-          Some(ActorWaitingEntry::Primary(primary)) => {
-            primary.actor_id == actor_id
-              && primary.admission.admission_identity == frame_admission.admission_identity
-              && matches!(location, ActorControlLocation::Waiting { key, page, slot }
-                if key == pointer.block && page == pointer.page_id && u32::from(slot) == pointer.slot)
-          }
-          None => false,
-        };
-        if !coherent {
-          return LoadedActorStateOf::Corrupt;
-        }
       }
       let Some(contract) = Self::load_contract_geometry_with_admission(actor_id, &frame_admission)
       else {
@@ -7670,12 +7602,25 @@ pub mod pallet {
       };
       Self::mutate_actor_semantic_state(actor_id, semantic_mutation)
         .map_err(|_| Error::<T>::ActorInvariant)?;
-      ensure!(
-        Self::insert_unsignaled_control_authority(actor_id, identity, hot, admission, resources,),
-        Error::<T>::ActorInvariant
-      );
+      Self::store_actor_contract(actor_id, contract.clone())?;
       ActorIdentities::<T>::remove(actor_id);
-      Self::store_actor_contract(actor_id, contract)
+      Self::publish_actor_publication(
+        ActorRef {
+          actor_id,
+          generation,
+        },
+        &ActiveActorState {
+          identity,
+          hot,
+          contract,
+          run_state: None,
+        },
+        None,
+        resources,
+        frame_system::Pallet::<T>::block_number(),
+        ServiceCutoff::Open,
+      )
+      .map_err(Self::placement_error)
     }
 
     fn provisional_trigger_runtime_state(
@@ -8450,11 +8395,6 @@ pub mod pallet {
           ActorIdentityCount::<T>::get() <= T::MaxActorIdentities::get(),
           "genesis actor identity capacity exceeded at actor_id={actor_id}"
         );
-        Pallet::<T>::prime_initial_actor_schedule(actor_id).unwrap_or_else(|error| {
-          panic!(
-            "genesis placement preserves readiness (spec 8.1.4) at actor_id={actor_id}: {error:?}"
-          )
-        });
       }
       for (actor_id, owner, mutability) in T::GenesisSystemActors::dormant_system_actors() {
         assert!(
@@ -9572,8 +9512,12 @@ pub mod pallet {
     #[pallet::weight(T::WeightInfo::pause_actor().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_actor(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResult {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
-      let continuation = state.run_state;
-      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+      let continuation = state.run_state.clone();
+      let snapshot = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
@@ -9589,22 +9533,41 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
-        Self::try_mutate_control_hot_with_authority(
+        let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let actor = ActorRef {
           actor_id,
-          Error::<T>::ActorNotFound,
-          |inst| -> DispatchResult {
-            ensure!(
-              snapshot.mutability == Mutability::Mutable,
-              Error::<T>::ImmutableActor
-            );
-            inst.lifecycle = ActiveLifecycle::Paused;
-            Self::record_control_mutation_with_authority(actor_id, now)?;
-            Self::deposit_event(Event::ActorPaused { actor_id });
-            Ok(())
-          },
-        )?;
-        Self::demote_ready_frame_to_unsignaled(actor_id).map_err(Self::placement_error)?;
-        Self::prime_frame_actor_schedule(actor_id).map_err(Self::placement_error)
+          generation: record.generation,
+        };
+        let resources = if state.contract.steps.is_empty() {
+          ActorStepResourceEnvelope {
+            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+            effect: Weight::zero(),
+          }
+        } else {
+          let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+          Self::derive_step_resource_envelopes(&state.contract)
+            .and_then(|envelopes| envelopes.get(cursor as usize).copied())
+            .ok_or(Error::<T>::ActorInvariant)?
+        };
+        let mut paused = state.clone();
+        paused.identity.last_control_mutation_block = now;
+        paused.hot.lifecycle = ActiveLifecycle::Paused;
+        paused.hot.queue_ticket = None;
+        Self::transition_actor_publication_to_successor(
+          actor,
+          &state,
+          &paused,
+          paused.run_state.as_ref(),
+          resources,
+          now,
+          ServiceCutoff::Open,
+        )
+        .map_err(Self::placement_error)?;
+        Self::deposit_event(Event::ActorPaused { actor_id });
+        Ok(())
       })
     }
 
@@ -9615,8 +9578,7 @@ pub mod pallet {
         !ActorIdentities::<T>::contains_key(actor_id),
         Error::<T>::ActorInvariant
       );
-      let (state, admission, loaded_step) =
-        Self::load_frame_actor_service_state(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+      let state = Self::active_actor_state_for_frame_control(actor_id)?;
       ensure!(
         state.hot.cycle_state != CycleState::Idle
           || (!ActorRunHeads::<T>::contains_key(actor_id)
@@ -9644,17 +9606,47 @@ pub mod pallet {
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
-        Self::record_control_mutation_with_authority(actor_id, now)?;
-        let (_, identity, _, _) =
-          Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
+        let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let actor = ActorRef {
+          actor_id,
+          generation: record.generation,
+        };
+        let (_, process) = Self::load_canonical_actor_semantic_state(actor)
+          .map_err(|_| Error::<T>::ActorInvariant)?;
+        let resources = if state.contract.steps.is_empty() {
+          ActorStepResourceEnvelope {
+            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
+            effect: Weight::zero(),
+          }
+        } else {
+          let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
+          Self::derive_step_resource_envelopes(&state.contract)
+            .and_then(|envelopes| envelopes.get(cursor as usize).copied())
+            .ok_or(Error::<T>::ActorInvariant)?
+        };
         let mut resumed = state.clone();
-        resumed.identity = identity;
+        resumed.identity.last_control_mutation_block = now;
         resumed.hot.lifecycle = ActiveLifecycle::Active;
         resumed.hot.queue_ticket = None;
-        Self::detach_primary_for_successor(actor_id, &resumed.hot)
-          .map_err(Self::placement_error)?;
-        Self::publish_resumed_frame(actor_id, resumed, admission.clone(), loaded_step.clone())
-          .map_err(Self::placement_error)?;
+        Self::transition_actor_publication_to_successor(
+          actor,
+          &state,
+          &resumed,
+          resumed.run_state.as_ref(),
+          resources,
+          now,
+          ServiceCutoff::Open,
+        )
+        .map_err(Self::placement_error)?;
+        ensure!(
+          ActorProcesses::<T>::get(actor_id).is_some_and(|successor| {
+            successor.generation == actor.generation && successor != process
+          }),
+          Error::<T>::ActorInvariant
+        );
         Self::deposit_event(Event::ActorResumed { actor_id });
         Ok(())
       })
@@ -9664,8 +9656,12 @@ pub mod pallet {
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, actor_id: ActorId) -> DispatchResultWithPostInfo {
       let state = Self::active_actor_state_for_frame_control(actor_id)?;
-      let continuation = state.run_state;
-      let snapshot = Self::derive_active_actor_view(state.identity, state.hot, state.contract);
+      let continuation = state.run_state.clone();
+      let snapshot = Self::derive_active_actor_view(
+        state.identity.clone(),
+        state.hot.clone(),
+        state.contract.clone(),
+      );
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::expiry_substitution_due_loaded(&snapshot, continuation.as_ref())? {
@@ -9690,16 +9686,22 @@ pub mod pallet {
       );
       let mut trigger_processed = false;
       Self::with_control_transaction(|| {
-        let Some(outcome) = Self::commit_frame_trigger_occurrence(
+        let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        let actor = ActorRef {
           actor_id,
+          generation: record.generation,
+        };
+        let outcome = Self::commit_canonical_trigger_occurrence_with_authority(
+          actor,
           actor_type,
           &snapshot.sovereign_account,
           breakdown,
-          TriggerCauseProvenance::ExternalPhase,
-        )?
-        else {
-          return Ok(());
-        };
+          state,
+          frame_system::Pallet::<T>::block_number(),
+        )?;
         if matches!(outcome, crate::scheduler::ActivationOutcome::Latched) {
           Self::deposit_event(Event::ManualTriggerSet { actor_id });
         }
@@ -10627,11 +10629,27 @@ pub mod pallet {
           !ActorUnsignaledControlCells::<T>::contains_key(actor_id),
           Error::<T>::StateHoldInvariant
         );
-        match Self::load_control_identity(actor_id) {
-          Some(identity) if identity.actor_class.actor_type() == ActorType::User => Some((
-            identity.owner.clone(),
-            Self::derive_actor_state_hold_with_authority(actor_id, &identity, None)?,
-          )),
+        match ActorSemanticStates::<T>::get(actor_id) {
+          Some(ActorSemanticState::Active(record))
+            if record.identity.actor_class.actor_type() == ActorType::User =>
+          {
+            Some((
+              record.identity.owner.clone(),
+              Self::derive_actor_state_hold_with_authority(
+                actor_id,
+                &record.identity,
+                Some((&record.hot, &record.admission)),
+              )?,
+            ))
+          }
+          Some(ActorSemanticState::Dormant(record))
+            if record.identity.actor_class.actor_type() == ActorType::User =>
+          {
+            Some((
+              record.identity.owner.clone(),
+              Self::derive_actor_state_hold_with_authority(actor_id, &record.identity, None)?,
+            ))
+          }
           Some(_) | None => None,
         }
       };
@@ -10747,12 +10765,8 @@ pub mod pallet {
     }
 
     /// Atomically charges one useful Trigger occurrence and replaces an exact canonical
-    /// publication with its latched successor. This remains inert until the carrier cutover;
-    /// payment or publication refusal restores the complete storage root.
-    #[allow(
-      dead_code,
-      reason = "canonical fee-bearing activation remains inert until all production paths cut over"
-    )]
+    /// publication with its latched successor. Payment or publication refusal restores the
+    /// complete storage root.
     pub(crate) fn commit_canonical_trigger_occurrence_with_authority(
       actor: ActorRef,
       actor_type: ActorType,
@@ -11636,11 +11650,6 @@ pub mod pallet {
         if let Err(error) = crate::mock::control_atomicity_checkpoint(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        if let Err(error) =
-          Self::prime_initial_actor_schedule(actor_id).map_err(Self::placement_error)
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
         if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
@@ -11775,11 +11784,6 @@ pub mod pallet {
         Self::deposit_event(Event::ActorActivated { actor_id });
         #[cfg(test)]
         if let Err(error) = crate::mock::control_atomicity_checkpoint(actor_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        if let Err(error) =
-          Self::prime_initial_actor_schedule(actor_id).map_err(Self::placement_error)
-        {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         if let Err(error) = Self::reconcile_actor_state_hold_with_authority(actor_id) {
@@ -12323,16 +12327,11 @@ pub mod pallet {
       actor_id: ActorId,
       now: BlockNumberFor<T>,
     ) -> DispatchResult {
-      let (_, mut identity, _, _) =
-        Self::load_frame_control_authority(actor_id).ok_or(Error::<T>::ActorNotFound)?;
-      identity.last_control_mutation_block = now;
-      Self::update_existing_frame_control_identity(actor_id, &identity)
-        .map_err(|_| Error::<T>::ActorInvariant)?;
       let current = ActorSemanticStates::<T>::get(actor_id).ok_or(Error::<T>::ActorNotFound)?;
       let ActorSemanticState::Active(mut record) = current.clone() else {
         return Err(Error::<T>::ActorInvariant.into());
       };
-      record.identity = identity;
+      record.identity.last_control_mutation_block = now;
       Self::mutate_actor_semantic_state(
         actor_id,
         ActorSemanticMutation::Replace {

@@ -3074,35 +3074,35 @@ fn user_pause_resume_churn_is_limited_to_one_queue_mutation_per_block() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(Actors::queue_tail(), 1);
+    assert_eq!(Actors::service_header().count, 1);
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(
-      Actors::actor_hot(actor_id)
+      Actors::active_actor_view(actor_id)
         .expect("paused actor")
-        .queue_ticket
-        .is_none()
+        .lifecycle
+        .is_paused()
     );
     assert_noop!(
       Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ControlMutationRateLimited
     );
     assert_eq!(
-      Actors::queue_tail(),
-      1,
-      "rate-limited resume must not append"
+      Actors::service_header().count,
+      0,
+      "rate-limited resume must not republish service residence"
     );
 
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    assert_eq!(Actors::queue_tail(), 2);
+    assert_eq!(Actors::service_header().count, 1);
     assert_noop!(
       Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id),
       Error::<Test>::ControlMutationRateLimited
     );
     assert_eq!(
-      Actors::queue_tail(),
-      2,
-      "rate-limited pause must not create a tombstone"
+      Actors::service_header().count,
+      1,
+      "rate-limited pause must preserve service residence"
     );
   });
 }
@@ -3120,18 +3120,25 @@ fn successful_manual_execution_preserves_canonical_control() {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
-      run_idle(Weight::MAX);
+      frame_system::Pallet::<Test>::set_block_number(2);
+      let pass = Actors::execute_cycle(Weight::MAX);
+      assert!(!pass.starved);
+      assert_ne!(pass.consumed, Weight::zero());
 
       if predicate_stop {
-        assert!(has_actor_event(|event| matches!(
-          event,
-          Event::StepSkipped {
-            actor_id: id,
-            step_index: 0,
-            reason: StepSkippedReason::PreconditionFalse,
-            ..
-          } if *id == actor_id
-        )));
+        assert!(
+          has_actor_event(|event| matches!(
+            event,
+            Event::StepSkipped {
+              actor_id: id,
+              step_index: 0,
+              reason: StepSkippedReason::PreconditionFalse,
+              ..
+            } if *id == actor_id
+          )),
+          "canonical manual execution events: {:?}",
+          System::events(),
+        );
         assert!(!has_actor_event(|event| matches!(
           event,
           Event::CycleStopped { actor_id: id, .. } if *id == actor_id
@@ -3142,8 +3149,12 @@ fn successful_manual_execution_preserves_canonical_control() {
         Event::CycleSummary { actor_id: id, .. } if *id == actor_id
       )));
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_hot(actor_id).is_some());
-      assert!(Actors::actor_control_cell(actor_id).is_some());
+      let active = Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the active Actor");
+      assert_eq!(active.hot.cycle_state, CycleState::Idle);
+      assert!(Actors::actor_control_cell(actor_id).is_none());
+      assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
       #[cfg(feature = "try-runtime")]
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     });
@@ -3172,6 +3183,10 @@ fn canonical_execution_preserves_running_successor_and_q1() {
       actor_id
     ));
     Actors::on_idle(1, Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .unwrap_or_else(|| {
@@ -3185,12 +3200,20 @@ fn canonical_execution_preserves_running_successor_and_q1() {
     );
 
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    Actors::on_idle(1, Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the Running Actor")
+        .hot
+        .cycle_state,
+      CycleState::Running,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    Actors::execute_cycle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
-        .expect("same-block retry retains the Running successor")
+        .expect("same-round retry retains the Running successor")
         .cursor,
       1,
     );
@@ -3203,17 +3226,31 @@ fn canonical_execution_preserves_running_successor_and_q1() {
       } if *id == actor_id
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("same-round refusal retains canonical Running authority")
+        .hot
+        .cycle_state,
+      CycleState::Running,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("canonical process authority retains the completed Actor")
+        .hot
+        .cycle_state,
+      CycleState::Idle,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -6374,8 +6411,8 @@ fn next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_ticke
         .cycle_nonce,
       0
     );
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_idle(2, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_idle(3, Weight::MAX);
     let after_first = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(after_first.cycle_nonce, 1);
     assert!(after_first.queue_ticket.is_none());
