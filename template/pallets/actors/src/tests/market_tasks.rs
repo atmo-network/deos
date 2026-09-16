@@ -242,6 +242,7 @@ fn split_transfer_executes_and_remainder_is_retained() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
     assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(50));
@@ -299,6 +300,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&actor, asset), actor_before);
@@ -324,7 +326,7 @@ fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
       set_asset_balance(&recipient, asset, 1);
     }
     let retry_balances = recipients.map(|recipient| asset_balance(&recipient, asset));
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&actor, asset), actor_before - 80);
@@ -378,6 +380,7 @@ fn split_transfer_late_leg_failure_rolls_back_every_leg() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     set_fail_transfer_to(None);
     assert_eq!(native_balance(&actor), actor_before);
@@ -422,6 +425,7 @@ fn all_zero_split_transfer_total_is_an_explicit_resolution_skip() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     // No silent zero-leg transfer: the all-zero total resolves as a skip with no balance read,
     // preflight, or SplitTransferExecuted event, and the cycle continues.
@@ -471,6 +475,7 @@ fn split_transfer_rounding_skips_zero_distribution_and_allows_one_effective_leg(
       RuntimeOrigin::signed(ALICE),
       skipped
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -497,6 +502,7 @@ fn split_transfer_rounding_skips_zero_distribution_and_allows_one_effective_leg(
       RuntimeOrigin::signed(ALICE),
       one_effective,
     ));
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -787,6 +793,7 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
     set_asset_balance(&add_actor, TestAsset::Local(1), 10);
     set_asset_balance(&add_actor, TestAsset::Local(2), 10);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), add_id));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -826,6 +833,7 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
       RuntimeOrigin::signed(BOB),
       remove_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -870,6 +878,9 @@ fn liquidity_tasks_reject_adapter_outcomes_outside_authored_bounds() {
     );
 
     for (index, task) in tasks.into_iter().enumerate() {
+      let base = 1 + index as u64 * 2;
+      frame_system::Pallet::<Test>::set_block_number(base);
+      Actors::on_initialize(base);
       let actor_id = create_system_with(
         ALICE,
         manual_schedule(),
@@ -889,6 +900,8 @@ fn liquidity_tasks_reject_adapter_outcomes_outside_authored_bounds() {
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
+      frame_system::Pallet::<Test>::set_block_number(base + 1);
+      Actors::on_initialize(base + 1);
       run_idle(Weight::MAX);
       assert!(
         has_actor_event(|event| matches!(
@@ -973,6 +986,13 @@ fn market_tasks_dispatch_their_resolved_task_local_amounts_without_a_system_cap(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(5);
     run_idle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1044,6 +1064,7 @@ fn swap_out_live_market_mode_uses_preservable_capacity_and_emits_swap_event() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     let out_after = asset_balance(&sovereign, asset_out);
     assert!(out_after >= out_before.saturating_add(100));
@@ -1098,6 +1119,7 @@ fn swap_out_never_spends_above_explicit_input_cap() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert_eq!(asset_balance(&sovereign, asset_in), input_before);
@@ -1338,6 +1360,9 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(asset_balance(&actor, asset_out), 0);
@@ -1384,6 +1409,9 @@ fn preserve_spend_keeps_sufficient_asset_minimum() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 1);
     assert_eq!(asset_balance(&BOB, asset), 9);
@@ -1508,6 +1536,9 @@ fn stake_adapter_failure_can_continue_next_step() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 100);
     assert_eq!(staked_balance(actor, asset), 0);
@@ -1556,6 +1587,7 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 100);
     assert_eq!(unstaked_shares(actor, asset), 0);
@@ -1603,6 +1635,9 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(unstaked_shares(actor, asset), 0);
@@ -1719,6 +1754,7 @@ fn donate_liquidity_asset_b_debit_is_capped_at_preservable_capacity() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     let (used_a, used_b) = donated_liquidity(actor, asset_a, asset_b);
     assert!(
@@ -1766,6 +1802,9 @@ fn donate_liquidity_asset_b_cap_keeps_capped_task_continuing() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     // The asset-b debit cap caps the balanced donation at the smaller preservable side instead
     // of overdrawing; the capped task succeeds and the cycle continues to the next step.
@@ -1830,6 +1869,9 @@ fn add_liquidity_late_failure_rolls_back_partial_debit() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), actor_native_before - 10);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1881,6 +1923,9 @@ fn remove_liquidity_late_failure_rolls_back_partial_credit() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), actor_native_before - 10);
     assert_eq!(asset_balance(&actor, lp_asset), 100);
@@ -1925,6 +1970,7 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset_a), 100);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1977,6 +2023,9 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(asset_balance(&actor, asset_b), 100);
@@ -1998,11 +2047,11 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
 }
 
 #[test]
-fn user_dca_swap_then_cold_storage_transfer() {
+fn user_swap_then_cold_storage_transfer() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cold_wallet: AccountId = 9999;
-    let schedule = timer_schedule(5);
+    let schedule = manual_schedule();
     let foreign = TestAsset::Local(1);
     // Seed mock AMM pool for swap
     setup_pool(foreign, TestAsset::Native, 10_000, 10_000);
@@ -2043,11 +2092,13 @@ fn user_dca_swap_then_cold_storage_transfer() {
     set_asset_balance(&actor, foreign, 1000);
     fund_native(actor_id, 5000);
     let cold_before = native_balance(&cold_wallet);
-    frame_system::Pallet::<Test>::set_block_number(6);
-    Actors::on_initialize(6);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(7);
-    Actors::on_initialize(7);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert!(
       native_balance(&cold_wallet) > cold_before,
