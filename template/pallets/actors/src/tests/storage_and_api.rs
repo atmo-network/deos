@@ -2414,32 +2414,23 @@ fn canonical_zero_step_terminal_attempt_cleans_before_service_unlink() {
       Mutability::Mutable,
       Some(contract),
     ));
-    age_fixture_control_clock(actor_id);
-    let state = Actors::active_actor_state(actor_id).expect("active zero-Step state");
-    let ActorSemanticState::Active(record) =
-      ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists")
-    else {
-      panic!("created Actor is active");
-    };
-    let actor = actor_ref(actor_id, record.generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
-      .expect("canonical Service carrier publishes");
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::begin_service_round(2).expect("round begins");
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let admission_block = frame_system::Pallet::<Test>::block_number();
+    Actors::on_idle(admission_block, Weight::MAX);
+    let now = admission_block + 1;
+    frame_system::Pallet::<Test>::set_block_number(now);
+    let generation =
+      match ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists") {
+        ActorSemanticState::Active(record) => record.generation,
+        ActorSemanticState::Dormant(_) => panic!("created Actor is active"),
+      };
+    let actor = actor_ref(actor_id, generation);
+    assert_eq!(ServiceHeader::<Test>::get().cursor, Some(actor));
 
-    Actors::execute_zero_step_on_service(
-      actor,
-      ServiceResidenceKind::Live,
-      state,
-      &record.admission,
-      2,
-      None,
-    )
-    .expect("terminal zero-Step attempt commits");
+    Actors::execute_cycle(Weight::MAX);
     assert!(!ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(!ServiceNodes::<Test>::contains_key(actor_id));
     assert_eq!(
