@@ -14470,12 +14470,30 @@ mod benches {
 
   #[benchmark]
   fn crossing_placed_pair_unit() {
-    let (feed, first_actor) = prepare_crossing_work::<T>(2);
-    let second_owner: T::AccountId = account("crossing-pair-unit", 0, 0);
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("Crossing benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one Crossing benchmark feed is required");
+    let first_owner: T::AccountId = account("crossing-pair-unit", 0, 0);
+    let first_actor = bench_create_user_with_trigger::<T>(
+      first_owner,
+      Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
+    );
+    let second_owner: T::AccountId = account("crossing-pair-unit", 1, 0);
     let second_actor = bench_create_user_with_trigger::<T>(
       second_owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
+    Pallet::<T>::note_observation_transition(
+      feed,
+      ObservationTransition {
+        revision: 2,
+        previous: Some(1),
+        current: 2,
+      },
+    )
+    .expect("Crossing benchmark transition must be admitted");
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -14488,22 +14506,33 @@ mod benches {
         exhausted: false,
       },
     );
+    assert_eq!(
+      Pallet::<T>::classify_crossing_work(),
+      CrossingWorkPlan::FireCohortPlacedBatch
+    );
     #[block]
     {
       Pallet::<T>::crossing_placed_batch_work_unit(2).expect("placed Crossing pair must succeed");
     }
     for actor_id in [first_actor, second_actor] {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal
-          && hot.queue_ticket.is_some()
-          && matches!(
-            hot.trigger_runtime_state,
-            TriggerRuntimeState::ObservationCrossing {
-              phase: CrossingPhase::WaitingForRearm,
-              ..
-            }
-          )
-      }));
+      assert!(
+        benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
+          hot.pending_signal
+            && matches!(
+              hot.trigger_runtime_state,
+              TriggerRuntimeState::ObservationCrossing {
+                phase: CrossingPhase::WaitingForRearm,
+                ..
+              }
+            )
+        })
+      );
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 

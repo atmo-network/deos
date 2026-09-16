@@ -1025,6 +1025,8 @@ impl<T: Config> Pallet<T> {
   }
 
   fn commit_placed_pair_authority(authority: CrossingPlacedCohortAuthority<T>) -> DispatchResult {
+    use crate::weights::WeightInfo as _;
+
     ensure!(
       authority.candidates.len() == 2,
       Error::<T>::CrossingIndexInvariant
@@ -1033,11 +1035,20 @@ impl<T: Config> Pallet<T> {
     let tail = authority.candidates[1];
     let first_crossing = authority.crossings[0].clone();
     let tail_crossing = authority.crossings[1].clone();
-    Self::move_crossing_membership_with_authority(
-      first.member.actor_id,
+    let LoadedActorStateOf::Active(mut first_loaded) =
+      Self::load_actor_state(first.member.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    Self::move_crossing_membership_with_canonical_authority(
+      ActorRef {
+        actor_id: first.member.actor_id,
+        generation: first.member.generation,
+      },
       first_crossing,
       CrossingPhase::WaitingForRearm,
       first.locator,
+      &mut first_loaded,
     )?;
     let derived_tail = CrossingMemberships::<T>::get(tail.member.actor_id)
       .ok_or(Error::<T>::CrossingIndexInvariant)?;
@@ -1048,13 +1059,44 @@ impl<T: Config> Pallet<T> {
         && derived_tail.generation == tail.member.generation,
       Error::<T>::CrossingIndexInvariant
     );
-    Self::move_crossing_membership_with_authority(
-      tail.member.actor_id,
+    let LoadedActorStateOf::Active(mut tail_loaded) = Self::load_actor_state(tail.member.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    Self::move_crossing_membership_with_canonical_authority(
+      ActorRef {
+        actor_id: tail.member.actor_id,
+        generation: tail.member.generation,
+      },
       tail_crossing,
       CrossingPhase::WaitingForRearm,
       derived_tail,
+      &mut tail_loaded,
     )?;
-    Self::commit_paged_enqueue(authority.queue_plan).map_err(|_| Error::<T>::ActorInvariant)?;
+    for (candidate, loaded) in [(first, first_loaded), (tail, tail_loaded)] {
+      let actor_type = loaded.identity.actor_class.actor_type();
+      let sovereign_account = loaded.identity.sovereign_account.clone();
+      let breakdown = Self::trigger_fee_for_weight(
+        actor_type,
+        TriggerFamily::ObservationCrossing,
+        T::WeightInfo::observation_crossing_trigger_occurrence(),
+      );
+      ensure!(
+        Self::commit_canonical_trigger_occurrence_with_authority(
+          ActorRef {
+            actor_id: candidate.member.actor_id,
+            generation: candidate.member.generation,
+          },
+          actor_type,
+          &sovereign_account,
+          breakdown,
+          loaded,
+          polkadot_sdk::frame_system::Pallet::<T>::block_number(),
+        )? == crate::scheduler::ActivationOutcome::Latched,
+        Error::<T>::ActorInvariant
+      );
+      IndexedTriggerDetectionDisabled::<T>::insert(candidate.member.actor_id, ());
+    }
     Ok(())
   }
 
@@ -2542,9 +2584,10 @@ impl<T: Config> Pallet<T> {
   ) -> Result<Option<crate::TriggerFeeBreakdown<T::Balance>>, DispatchError> {
     use crate::weights::WeightInfo as _;
 
-    let (identity, _, _) =
-      Self::load_control_authority_with_authority(actor_id).ok_or(Error::<T>::ActorInvariant)?;
-    let actor_type = identity.actor_class.actor_type();
+    let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(actor_id) else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    let actor_type = loaded.identity.actor_class.actor_type();
     let breakdown = Self::trigger_fee_for_weight(
       actor_type,
       TriggerFamily::ObservationCrossing,
@@ -2552,7 +2595,7 @@ impl<T: Config> Pallet<T> {
     );
     Self::try_charge_automatic_trigger_occurrence(
       actor_type,
-      &identity.sovereign_account,
+      &loaded.identity.sovereign_account,
       breakdown,
     )
     .map(|charged| charged.then_some(breakdown))
@@ -3051,7 +3094,9 @@ impl<T: Config> Pallet<T> {
       .current_threshold
       .ok_or(Error::<T>::CrossingIndexInvariant)?;
     let key = authority.candidates[0].locator.key;
-    Self::charge_crossing_placed_cohort(&authority)?;
+    if count != 2 {
+      Self::charge_crossing_placed_cohort(&authority)?;
+    }
     if authority.tail_refill.is_some() {
       Self::commit_non_tail_placed_cohort_authority(authority)?;
     } else if count == 2 {
