@@ -639,6 +639,7 @@ fn dex_adapter_receives_authoritative_actor_type() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(last_dex_actor_type(), Some(ActorType::User));
   });
@@ -652,6 +653,7 @@ fn dex_adapter_receives_authoritative_actor_type() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(last_dex_actor_type(), Some(ActorType::System));
   });
@@ -682,6 +684,7 @@ fn full_slippage_cannot_accept_zero_swap_output() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
 
     assert!(!has_actor_event(|event| matches!(
@@ -1403,6 +1406,7 @@ fn stake_task_delegates_to_staking_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 80);
     assert_eq!(staked_balance(actor, asset), 120);
@@ -1430,6 +1434,7 @@ fn unstake_task_delegates_to_staking_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 25);
     assert_eq!(unstaked_shares(actor, asset), 50);
@@ -1461,6 +1466,13 @@ fn unstake_percentage_resolves_against_current_staking_shares() {
     let actor = sovereign_account(actor_id);
     set_asset_balance(&actor, asset, 100);
     signal_percentage_trigger(actor_id, asset);
+    // Canonical AddressEvent ingress publishes one Pending Service obligation at B+1, and each
+    // committed Step sets the adjacent-round successor eligible one block later.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert_eq!(asset_balance(&actor, asset), 75);
+    assert_eq!(unstaked_shares(actor, asset), 25);
+    frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset), 38);
     assert_eq!(unstaked_shares(actor, asset), 62);
@@ -1630,6 +1642,7 @@ fn donate_liquidity_task_delegates_to_liquidity_donation_adapter() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(asset_balance(&actor, asset_a), 60);
     assert_eq!(asset_balance(&actor, asset_b), 50);
@@ -1674,6 +1687,7 @@ fn donate_liquidity_percentage_resolves_only_against_asset_a() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(donated_liquidity(actor, asset_a, asset_b), (50, 50));
     assert_eq!(asset_balance(&actor, asset_a), 51);
