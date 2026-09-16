@@ -2995,8 +2995,12 @@ fn control_observation_change_boundary_matches_immutable_oracle_logical_fee_and_
       let hot = {
         assert_ok!(Actors::note_observation_changed(feed, 1));
         assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-        Actors::actor_hot(actor_id)
-          .expect("reference ObservationChange differential hot state exists")
+        crate::ActorSemanticStates::<Test>::get(actor_id)
+          .and_then(|state| match state {
+            crate::ActorSemanticState::Active(record) => Some(record.hot),
+            crate::ActorSemanticState::Dormant(_) => None,
+          })
+          .expect("reference ObservationChange differential semantic Hot state exists")
       };
       let trigger_events = System::events()
         .iter()
@@ -3407,9 +3411,12 @@ fn control_observation_change_collection_failure_matches_immutable_oracle_detect
         assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
       }
       set_fail_fee_sink_transfer(false);
-      let hot = {
-        Actors::actor_hot(actor_id).expect("reference ObservationChange failure hot state remains")
-      };
+      let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+        .and_then(|state| match state {
+          crate::ActorSemanticState::Active(record) => Some(record.hot),
+          crate::ActorSemanticState::Dormant(_) => None,
+        })
+        .expect("reference ObservationChange failure semantic Hot state remains");
       (
         custody_before.saturating_sub(native_balance(&sovereign)),
         fee_collections(),

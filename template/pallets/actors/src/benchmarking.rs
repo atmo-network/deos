@@ -486,6 +486,13 @@ mod benches {
     Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
   }
 
+  fn benchmark_fixture_semantic_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
+    ActorSemanticStates::<T>::get(actor_id).and_then(|state| match state {
+      ActorSemanticState::Active(record) => Some(record.hot),
+      ActorSemanticState::Dormant(_) => None,
+    })
+  }
+
   fn benchmark_fixture_scalar_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
     benchmark_fixture_hot::<T>(actor_id)
   }
@@ -13370,9 +13377,18 @@ mod benches {
         .expect("ObservationChange occurrence commits")
       );
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("ObservationChange Actor remains active");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    let semantic = Pallet::<T>::load_canonical_actor_semantic_state(crate::ActorRef {
+      actor_id,
+      generation: 1,
+    })
+    .expect("ObservationChange canonical semantic state remains active");
+    assert!(semantic.0.hot.pending_signal);
+    assert_eq!(
+      crate::ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(crate::ProcessResidence::Service(
+        crate::ServiceResidenceKind::Pending,
+      ))
+    );
   }
 
   #[benchmark]
@@ -13458,7 +13474,11 @@ mod benches {
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     assert_eq!(DirtyObservationListState::<T>::get().count, 2);
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 
@@ -13472,12 +13492,9 @@ mod benches {
     let mut actors = alloc::vec::Vec::new();
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-wakeup", index, 0);
-      let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 100);
-      benchmark_fixture_mutate_hot::<T>(actor_id, |hot| {
-        hot.last_cycle_block = Some(One::one());
-      });
-      benchmark_fixture_align_primary_control::<T>(actor_id);
-      actors.push(actor_id);
+      actors.push(bench_create_user_observation_with_cooldown::<T>(
+        owner, feed, 100,
+      ));
     }
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
@@ -13488,9 +13505,11 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
-      }));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 
@@ -13505,8 +13524,15 @@ mod benches {
     for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-coalesced", index, 0);
       let actor_id = bench_create_user_observation_with_cooldown::<T>(owner, feed, 0);
-      Pallet::<T>::request_observation_activation_compact(actor_id, feed)
-        .expect("initial observation activation must succeed");
+      assert!(
+        Pallet::<T>::signal_observation_subscriber(
+          actor_id,
+          feed,
+          TriggerCauseProvenance::Deferred,
+          0,
+        )
+        .expect("initial observation activation must succeed")
+      );
       actors.push(actor_id);
     }
     Pallet::<T>::note_observation_changed(feed, 1)
@@ -13518,9 +13544,10 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(
-        benchmark_fixture_hot::<T>(actor_id)
-          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_some() })
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
       );
     }
   }
@@ -13537,19 +13564,17 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(end.saturating_add(One::one()));
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
-    Pallet::<T>::do_fanout_dirty_observation_page()
-      .expect("ordinary turn must persist terminal branch");
-    assert!(
-      DirtyObservationFeeds::<T>::get(feed)
-        .is_some_and(|state| { state.next_subscriber_branch == ObservationFanoutBranch::Terminal })
-    );
     #[block]
     {
       Pallet::<T>::do_fanout_dirty_observation_page()
-        .expect("terminal observation fanout must succeed");
+        .expect("terminal observation fanout must publish canonical Service");
     }
-    assert!(benchmark_fixture_hot::<T>(actor_id).is_none());
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
   }
 
   #[benchmark]
@@ -13576,9 +13601,11 @@ mod benches {
     }
     assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
     for actor_id in actors {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
-        hot.pending_signal && hot.queue_ticket.is_none() && hot.wakeup_pointer.is_some()
-      }));
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| hot.pending_signal));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
   }
 

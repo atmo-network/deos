@@ -1,5 +1,18 @@
 use super::*;
 use crate::scheduler::ActivationOutcome;
+use crate::{
+  ActorHotStateOf, ActorProcesses, ActorSemanticState, ActorSemanticStates, ProcessResidence,
+  ProcessStatus, ServiceHeader, ServiceResidenceKind,
+};
+
+fn observation_semantic_hot(actor_id: ActorId) -> ActorHotStateOf<Test> {
+  ActorSemanticStates::<Test>::get(actor_id)
+    .and_then(|state| match state {
+      ActorSemanticState::Active(record) => Some(record.hot),
+      ActorSemanticState::Dormant(_) => None,
+    })
+    .expect("ObservationChange semantic Hot state")
+}
 
 fn observation_activation_placement_snapshot(
   compact: bool,
@@ -1380,9 +1393,12 @@ fn observation_change_charges_occurrence_before_pipeline_opening() {
     let fee = observation_change_trigger_fee();
     assert_eq!(fee_collections(), vec![fee]);
     assert_eq!(native_balance(&sovereign), before - fee);
-    let hot = Actors::actor_hot(actor_id).expect("active Actor");
+    let hot = observation_semantic_hot(actor_id);
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
     assert_eq!(
       Actors::actor_identity(actor_id)
         .expect("identity remains")
@@ -1416,9 +1432,8 @@ fn repeated_pending_observation_change_is_latched_without_trigger_fee() {
 
     assert_ok!(Actors::note_observation_changed(32, 1));
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    let ticket = Actors::actor_hot(actor_id)
-      .expect("active Actor")
-      .queue_ticket;
+    let process_before =
+      ActorProcesses::<Test>::get(actor_id).expect("pending ObservationChange process");
     assert_eq!(
       Actors::indexed_trigger_detection_disabled(actor_id),
       Some(())
@@ -1427,9 +1442,10 @@ fn repeated_pending_observation_change_is_latched_without_trigger_fee() {
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
 
     assert_eq!(fee_collections(), vec![observation_change_trigger_fee()]);
-    let hot = Actors::actor_hot(actor_id).expect("active Actor");
+    let hot = observation_semantic_hot(actor_id);
     assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, ticket);
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), Some(process_before));
+    assert_eq!(ServiceHeader::<Test>::get().count, 1);
     assert_eq!(
       System::events()
         .iter()
@@ -1444,7 +1460,8 @@ fn repeated_pending_observation_change_is_latched_without_trigger_fee() {
         .count(),
       1
     );
-    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     assert_eq!(Actors::indexed_trigger_detection_disabled(actor_id), None);
   });
 }
@@ -1476,7 +1493,8 @@ fn busy_observation_change_is_ignored_without_fee_or_future_pipeline() {
     fund_native(actor_id, 1_000_000);
     assert_ok!(Actors::note_observation_changed(33, 1));
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    Actors::on_idle(1, Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
     frame_system::Pallet::<Test>::reset_events();
@@ -1490,7 +1508,7 @@ fn busy_observation_change_is_ignored_without_fee_or_future_pipeline() {
       Event::TriggerOccurrenceProcessed { actor_id: id, .. }
         | Event::PipelineFeeCharged { actor_id: id, .. } if *id == actor_id
     )));
-    let hot = Actors::actor_hot(actor_id).expect("active Actor");
+    let hot = observation_semantic_hot(actor_id);
     assert_eq!(hot.cycle_state, CycleState::Running);
     assert!(!hot.pending_signal);
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
@@ -1520,9 +1538,16 @@ fn underfunded_observation_change_advances_without_fee_readiness_or_apoptosis() 
 
     assert!(fee_collections().is_empty());
     assert_eq!(native_balance(&sovereign), TestMinUserBalance::get());
-    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    let hot = observation_semantic_hot(actor_id);
     assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
     assert!(Actors::dirty_observation_feeds(34).is_none());
     assert!(Actors::active_actor_view(actor_id).is_some());
   });
@@ -1548,9 +1573,16 @@ fn observation_change_collection_failure_advances_without_readiness() {
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
-    let hot = Actors::actor_hot(actor_id).expect("process remains live");
+    let hot = observation_semantic_hot(actor_id);
     assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
+    assert!(matches!(
+      ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
     assert!(Actors::dirty_observation_feeds(35).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -1631,7 +1663,7 @@ fn mixed_observation_page_commits_each_contiguous_queue_cohort_once() {
 }
 
 #[test]
-fn contiguous_observation_wakeup_run_commits_once() {
+fn contiguous_observation_cooldown_run_publishes_pending_service() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
@@ -1641,22 +1673,17 @@ fn contiguous_observation_wakeup_run_commits_once() {
     let actors = (0..3)
       .map(|_| create_system_with(ALICE, schedule.clone(), None, inert_contract_steps()))
       .collect::<Vec<_>>();
-    for actor_id in &actors {
-      mutate_actor_hot_coherent(*actor_id, |hot| hot.last_cycle_block = Some(1));
-    }
     assert_ok!(Actors::note_observation_changed(24, 1));
-    Actors::test_reset_observation_wakeup_cohort_commits();
 
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    assert_eq!(Actors::test_observation_wakeup_cohort_commits(), 1);
     assert!(Actors::dirty_observation_feeds(24).is_none());
+    assert_eq!(ServiceHeader::<Test>::get().count, 3);
     for actor_id in actors {
-      let hot = Actors::actor_hot(actor_id).expect("active actor");
+      let hot = observation_semantic_hot(actor_id);
       assert!(hot.pending_signal);
-      assert!(hot.queue_ticket.is_none());
       assert_eq!(
-        hot.wakeup_pointer.map(|pointer| pointer.block),
-        Some(WakeupKey::Block(101))
+        ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
       );
     }
   });
@@ -1664,7 +1691,7 @@ fn contiguous_observation_wakeup_run_commits_once() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn observation_wakeup_cohort_preserves_absent_scalar_control() {
+fn observation_service_publication_preserves_absent_scalar_control() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
@@ -1674,22 +1701,16 @@ fn observation_wakeup_cohort_preserves_absent_scalar_control() {
     let actors = (0..3)
       .map(|_| create_system_with(ALICE, schedule.clone(), None, inert_contract_steps()))
       .collect::<Vec<_>>();
-    for actor_id in &actors {
-      mutate_actor_hot_coherent(*actor_id, |hot| hot.last_cycle_block = Some(1));
-    }
     assert_ok!(Actors::note_observation_changed(24, 1));
-    Actors::test_reset_observation_wakeup_cohort_commits();
 
     assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    assert_eq!(Actors::test_observation_wakeup_cohort_commits(), 1);
     assert!(Actors::dirty_observation_feeds(24).is_none());
+    assert_eq!(ServiceHeader::<Test>::get().count, 3);
     for actor_id in actors {
-      let state = Actors::active_actor_state(actor_id).expect("Waiting primary remains active");
-      assert!(state.hot.pending_signal);
-      assert!(state.hot.queue_ticket.is_none());
+      assert!(observation_semantic_hot(actor_id).pending_signal);
       assert_eq!(
-        state.hot.wakeup_pointer.map(|pointer| pointer.block),
-        Some(WakeupKey::Block(101))
+        ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
       );
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     }
