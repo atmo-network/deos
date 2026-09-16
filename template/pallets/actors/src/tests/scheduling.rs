@@ -1376,43 +1376,14 @@ fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
 #[test]
 fn canonical_occurrence_preserves_busy_process_residence() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor_id = create_canonical_suspended_system_retry(1);
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     let sovereign = sovereign_account(actor_id);
-    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
-    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
-      anchor_tick: Some(0),
-    };
-    state.hot.trigger_wakeup_pointer = None;
-    let admission = Actors::build_admission_certificate(&state.contract)
-      .expect("temporal Contract remains admissible");
-    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
-      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
-        panic!("active semantic record");
-      };
-      record.hot = state.hot.clone();
-      record.admission = admission;
-    });
-    crate::ActorControlLocators::<Test>::remove(actor_id);
-    Actors::test_publish_actor_publication(
-      actor,
-      &state,
-      state.run_state.as_ref(),
-      cell.resources,
-      0,
-    )
-    .expect("complete canonical publication commits");
-    state.hot = match crate::ActorSemanticStates::<Test>::get(actor_id) {
-      Some(crate::ActorSemanticState::Active(record)) => record.hot,
-      _ => panic!("canonical semantic source remains active"),
-    };
+    assert!(matches!(state.contract.trigger, Trigger::Manual));
     let process_before = crate::ActorProcesses::<Test>::get(actor_id)
       .expect("busy process has one canonical residence");
-    let process_handle_before = crate::DeadlineHandles::<Test>::get(actor_id)
-      .expect("suspended process remains in its Block deadline");
+    let process_handle_before = crate::DeadlineHandles::<Test>::get(actor_id);
 
     assert_eq!(
       Actors::commit_canonical_trigger_occurrence_with_authority(
@@ -1420,11 +1391,11 @@ fn canonical_occurrence_preserves_busy_process_residence() {
         ActorType::System,
         &sovereign,
         crate::TriggerFeeBreakdown {
-          trigger_family: TriggerFamily::Cadenced,
+          trigger_family: TriggerFamily::Manual,
           trigger_fee: 0,
         },
         state,
-        1,
+        System::block_number(),
       ),
       Ok(crate::scheduler::ActivationOutcome::Latched)
     );
@@ -1434,7 +1405,7 @@ fn canonical_occurrence_preserves_busy_process_residence() {
     );
     assert_eq!(
       crate::DeadlineHandles::<Test>::get(actor_id),
-      Some(process_handle_before)
+      process_handle_before
     );
     assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
       actor_id

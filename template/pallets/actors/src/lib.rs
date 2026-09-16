@@ -6138,7 +6138,7 @@ pub mod pallet {
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
-      Self::service_canonical_round_head_inner(meter, now, None)
+      Self::service_canonical_round_head_inner(meter, now, None).map(|(encounter, _)| encounter)
     }
 
     pub(crate) fn service_canonical_round_head_with_resources(
@@ -6148,16 +6148,23 @@ pub mod pallet {
       limits: BlockResourceLimits,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
       Self::service_canonical_round_head_inner(meter, now, Some((state, limits)))
+        .map(|(encounter, _)| encounter)
     }
 
-    fn service_canonical_round_head_inner(
+    pub(crate) fn service_canonical_round_head_inner(
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
       mut resource_authority: Option<(
         &mut BlockResourceState<BlockNumberFor<T>>,
         BlockResourceLimits,
       )>,
-    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+    ) -> Result<
+      (
+        ServiceRoundEncounter,
+        Option<crate::scheduler::ActorAttemptEvidence>,
+      ),
+      ServiceRoundError,
+    > {
       let resource_before = resource_authority.as_ref().map(|(state, _)| **state);
       let selector_envelope = T::WeightInfo::service_round_begin_populated()
         .saturating_add(T::WeightInfo::service_round_probe_eligible());
@@ -6177,6 +6184,7 @@ pub mod pallet {
           Self::begin_service_round(now)?;
           let encounter = Self::consider_service_head(now)?;
           let mut execution_weight = Weight::zero();
+          let mut attempt = None;
           if let ServiceRoundEncounter::Eligible(actor) = encounter {
             let (semantic, service_kind) = Self::load_service_actor_semantic_state_with_kind(actor)
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
@@ -6271,6 +6279,7 @@ pub mod pallet {
                 retry_deadline,
               )
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              attempt = Some(evidence.attempt);
               let actual_control = selector_envelope
                 .saturating_add(evidence.actual_control_weight)
                 .saturating_add(suffix);
@@ -6299,8 +6308,17 @@ pub mod pallet {
                 } else {
                   None
                 };
-              Self::execute_zero_step_on_service(actor, service_kind, state, &admission, now, None)
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              attempt = Some(
+                Self::execute_zero_step_on_service(
+                  actor,
+                  service_kind,
+                  state,
+                  &admission,
+                  now,
+                  None,
+                )
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?,
+              );
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())
               {
@@ -6325,7 +6343,7 @@ pub mod pallet {
               .settle(&mut reservation, selector_envelope)
               .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
           }
-          Ok((encounter, execution_weight))
+          Ok((encounter, execution_weight, attempt))
         })();
         match result {
           Ok(outcome) => {
@@ -6336,7 +6354,7 @@ pub mod pallet {
           }
         }
       });
-      let (encounter, execution_weight) = match result {
+      let (encounter, execution_weight, attempt) = match result {
         Ok(outcome) => outcome,
         Err(error) => {
           if let (Some((state, _)), Some(before)) = (resource_authority, resource_before) {
@@ -6347,7 +6365,7 @@ pub mod pallet {
       };
       meter.consume(selector_envelope);
       meter.consume(execution_weight);
-      Ok(encounter)
+      Ok((encounter, attempt))
     }
 
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.

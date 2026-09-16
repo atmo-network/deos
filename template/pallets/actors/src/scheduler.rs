@@ -2831,6 +2831,57 @@ impl<T: Config> Pallet<T> {
         .checked_add(&budget.shared_economic)
         .ok_or(SimulationError::InvalidBudget)?,
     );
+    if !ActorControlLocators::<T>::contains_key(actor_id) {
+      let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return Err(SimulationError::Classification(
+          ActorClassificationError::ActorInvariant,
+        ));
+      };
+      let actor = ActorRef {
+        actor_id,
+        generation: semantic.generation,
+      };
+      let (_, process) = Self::load_canonical_actor_semantic_state(actor)
+        .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
+      match process.residence {
+        Some(ProcessResidence::Deadline {
+          key: WakeupKey::Block(due),
+          ..
+        }) if due <= now => {
+          Self::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, now)
+            .map_err(|_| {
+              SimulationError::Classification(ActorClassificationError::ActorInvariant)
+            })?;
+        }
+        Some(ProcessResidence::Deadline { .. }) => return Err(SimulationError::NotReady),
+        Some(ProcessResidence::Service(_)) => {}
+        _ => return Err(SimulationError::NotReady),
+      }
+      Self::begin_service_round(now)
+        .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
+      if Self::consider_service_head(now)
+        .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?
+        != ServiceRoundEncounter::Eligible(actor)
+      {
+        return Err(SimulationError::NotReady);
+      }
+      let (encounter, attempt) =
+        Self::service_canonical_round_head_inner(&mut cycle_meter, now, None).map_err(|error| {
+          match error {
+            ServiceRoundError::InsufficientWeight | ServiceRoundError::ResourceUnavailable => {
+              SimulationError::ResourceDeferred
+            }
+            _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
+          }
+        })?;
+      if encounter != ServiceRoundEncounter::Eligible(actor) {
+        return Err(SimulationError::NotReady);
+      }
+      return attempt
+        .map(Self::simulation_attempt_result)
+        .ok_or(SimulationError::NotReady);
+    }
     let (location, cell) = Self::load_primary_control_cell(actor_id)
       .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
     let (terminal_state, terminal_admission, _) = Self::load_frame_actor_service_state(actor_id)
@@ -3008,6 +3059,18 @@ impl<T: Config> Pallet<T> {
     Self::simulation_service_result(result)
   }
 
+  fn simulation_attempt_result(attempt: ActorAttemptEvidence) -> SimulationResult {
+    SimulationResult {
+      status: attempt.status,
+      cycle_nonce: attempt.cycle_nonce,
+      start_cursor: attempt.start_cursor,
+      run_cursor: attempt.run_cursor,
+      unsuccessful_attempts_at_cursor: attempt.unsuccessful_attempts_at_cursor,
+      cumulative_outcomes: attempt.cumulative_outcomes,
+      steps: BoundedVec::truncate_from(attempt.step.into_iter().collect()),
+    }
+  }
+
   fn simulation_service_result(
     result: FifoStepResult,
   ) -> Result<SimulationResult, SimulationError> {
@@ -3015,15 +3078,7 @@ impl<T: Config> Pallet<T> {
       FifoStepResult::Progress {
         attempt: Some(attempt),
         ..
-      } => Ok(SimulationResult {
-        status: attempt.status,
-        cycle_nonce: attempt.cycle_nonce,
-        start_cursor: attempt.start_cursor,
-        run_cursor: attempt.run_cursor,
-        unsuccessful_attempts_at_cursor: attempt.unsuccessful_attempts_at_cursor,
-        cumulative_outcomes: attempt.cumulative_outcomes,
-        steps: BoundedVec::truncate_from(attempt.step.into_iter().collect()),
-      }),
+      } => Ok(Self::simulation_attempt_result(attempt)),
       FifoStepResult::Blocked(BlockKind::Weight) => Err(SimulationError::ResourceDeferred),
       FifoStepResult::Blocked(BlockKind::FeeCollection) => {
         Err(SimulationError::FeeCollectionFailed)

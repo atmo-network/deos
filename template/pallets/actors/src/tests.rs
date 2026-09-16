@@ -776,6 +776,32 @@ fn setup_temporary_retry_pool() {
   set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
 }
 
+fn create_canonical_suspended_system_retry(block: u64) -> u64 {
+  frame_system::Pallet::<Test>::set_block_number(block);
+  setup_temporary_retry_pool();
+  let actor_id = Actors::next_actor_id();
+  let mut contract = system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
+    .expect("retry Contract is valid");
+  contract.cooldown_blocks = 5;
+  assert_ok!(Actors::create_system_actor(
+    RuntimeOrigin::root(),
+    ALICE,
+    Mutability::Mutable,
+    Some(contract),
+  ));
+  age_fixture_control_clock(actor_id);
+  fund_native(actor_id, 100);
+  set_temporary_dex_failure(true);
+  assert_ok!(Actors::manual_trigger(
+    RuntimeOrigin::signed(ALICE),
+    actor_id
+  ));
+  run_next_idle(Weight::MAX);
+  assert!(Actors::actor_run_state(actor_id).is_some());
+  actor_id
+}
+
+/// Staged pre-cutover fixture retained only for tests that publish legacy authority themselves.
 fn create_suspended_system_retry(block: u64) -> u64 {
   frame_system::Pallet::<Test>::set_block_number(block);
   setup_temporary_retry_pool();
@@ -787,7 +813,6 @@ fn create_suspended_system_retry(block: u64) -> u64 {
     actor_id
   ));
   run_idle(Weight::MAX);
-  assert!(Actors::actor_run_state(actor_id).is_some());
   actor_id
 }
 

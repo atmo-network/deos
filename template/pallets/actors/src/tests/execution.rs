@@ -6061,10 +6061,9 @@ fn running_simulation_obeys_q1_and_returns_only_the_current_step() {
 #[test]
 fn run_simulation_preserves_retry_position_and_committed_state() {
   new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
+    let actor_id = create_canonical_suspended_system_retry(1);
     let expected_contract =
-      system_active_contract(manual_schedule(), None, temporary_retry_swap_plan())
-        .expect("direct Actor Contract");
+      Actors::load_actor_contract(actor_id).expect("canonical retry Contract remains stored");
     let continuation_before = Actors::actor_run_state(actor_id).expect("Actor run exists");
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
