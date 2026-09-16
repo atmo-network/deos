@@ -6890,7 +6890,7 @@ pub mod pallet {
       .is_ok()
     }
 
-    fn mutate_actor_semantic_state(
+    pub(crate) fn mutate_actor_semantic_state(
       actor_id: ActorId,
       mutation: ActorSemanticMutation<ActorSemanticStateOf<T>>,
     ) -> Result<Option<ActorSemanticStateOf<T>>, ActorSemanticMutationError> {

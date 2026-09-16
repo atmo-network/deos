@@ -13677,9 +13677,15 @@ mod benches {
     {
       Pallet::<T>::crossing_work_unit().expect("Crossing occurrence commits");
     }
-    let hot = benchmark_fixture_hot::<T>(actor_id).expect("Crossing Actor remains active");
+    let hot = benchmark_fixture_semantic_hot::<T>(actor_id)
+      .expect("Crossing Actor remains canonically active");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    assert_eq!(
+      ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
   }
 
   #[benchmark]
