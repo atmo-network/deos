@@ -223,8 +223,9 @@ pub enum CanonicalOccurrenceError {
 
 /// Plans the common occurrence transition without reading or writing storage. Duplicate latched
 /// occurrences are rejected by the caller before matching/charging and therefore return no plan.
-/// Idle readiness always enters Pending at B+1; Running/Suspended work preserves its exact current
-/// Service or Deadline residence and changes only the deferred semantic latch.
+/// Idle readiness from a carrier-free Disabled process or a Deadline/Park residence always enters
+/// Pending at B+1; Running/Suspended work preserves its exact current Service or Deadline residence
+/// and changes only the deferred semantic latch.
 pub fn plan_canonical_occurrence<BlockNumber>(
   cycle_state: CycleState,
   pending_signal: bool,
@@ -237,15 +238,19 @@ where
   if pending_signal {
     return Ok(None);
   }
-  if !matches!(process.status, ProcessStatus::Serving) || process.residence.is_none() {
+  if matches!(process.status, ProcessStatus::Retired(_)) {
     return Err(CanonicalOccurrenceError::InvalidProcess);
   }
 
   let (process, publication) = match cycle_state {
     CycleState::Idle => {
       if !matches!(
-        process.residence,
-        Some(ProcessResidence::Deadline { .. } | ProcessResidence::Parked(_))
+        (process.status, process.residence),
+        (ProcessStatus::Disabled(_), None)
+          | (
+            ProcessStatus::Serving,
+            Some(ProcessResidence::Deadline { .. } | ProcessResidence::Parked(_)),
+          )
       ) {
         return Err(CanonicalOccurrenceError::InvalidResidence);
       }
@@ -254,6 +259,7 @@ where
         .ok_or(CanonicalOccurrenceError::BlockNumberOverflow)?;
       (
         ActorProcess {
+          status: ProcessStatus::Serving,
           residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
           ..process
         },
@@ -261,11 +267,13 @@ where
       )
     }
     CycleState::Running | CycleState::Suspended => {
-      if !matches!(
-        process.residence,
-        Some(ProcessResidence::Service(ServiceResidenceKind::Live))
-          | Some(ProcessResidence::Deadline { .. })
-      ) {
+      if !matches!(process.status, ProcessStatus::Serving)
+        || !matches!(
+          process.residence,
+          Some(ProcessResidence::Service(ServiceResidenceKind::Live))
+            | Some(ProcessResidence::Deadline { .. })
+        )
+      {
         return Err(CanonicalOccurrenceError::InvalidResidence);
       }
       (process, CanonicalOccurrencePublication::PreserveResidence)

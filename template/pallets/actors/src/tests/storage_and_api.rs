@@ -319,6 +319,27 @@ fn canonical_occurrence_planner_publishes_idle_pending_and_preserves_busy_reside
       publication: CanonicalOccurrencePublication::PublishPending { eligible_from: 21 },
     }))
   );
+  let disabled = ActorProcess {
+    status: ProcessStatus::Disabled(ProcessDisablement {
+      cause: ProcessDisableCause::Protocol,
+      revival_authority: ProcessRevivalAuthority::Protocol,
+      basis: SuspendedProcessBasis::Idle,
+    }),
+    residence: None,
+    ..idle
+  };
+  assert_eq!(
+    plan_canonical_occurrence(CycleState::Idle, false, disabled, 20),
+    Ok(Some(CanonicalOccurrencePlan {
+      process: ActorProcess {
+        status: ProcessStatus::Serving,
+        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
+        ..disabled
+      },
+      pending_signal: true,
+      publication: CanonicalOccurrencePublication::PublishPending { eligible_from: 21 },
+    }))
+  );
 
   for (cycle_state, residence) in [
     (
