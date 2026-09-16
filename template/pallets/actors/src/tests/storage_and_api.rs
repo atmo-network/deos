@@ -2239,63 +2239,18 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let now = frame_system::Pallet::<Test>::block_number();
-    let (state, admission, loaded_step) = Actors::load_current_step_service_state(actor_id)
-      .expect("legacy source exposes the admitted retry Step");
-    let queue_ticket = state.hot.queue_ticket.expect("triggered Actor is Ready");
-    let ticket = Actors::build_actor_step_ticket(
-      actor_id,
-      queue_ticket,
-      now,
-      &state.identity,
-      &state.hot,
-      state.run_state.as_ref(),
-      &admission,
-    )
-    .expect("opening retry ticket");
-    let maximum_fee = Actors::maximum_current_action_fee(
-      ActorType::System,
-      &loaded_step.step,
-      loaded_step.resources,
-    )
-    .expect("System retry fee envelope");
-    let plan = Actors::build_current_step_plan(
-      actor_id,
-      state.identity.clone(),
-      state.hot.clone(),
-      state.run_state.clone(),
-      admission.clone(),
-      ticket,
-      loaded_step,
-      maximum_fee,
-    )
-    .expect("coherent opening retry plan");
+    let admission_block = frame_system::Pallet::<Test>::block_number();
+    Actors::on_idle(admission_block, Weight::MAX);
+    let now = admission_block + 1;
+    frame_system::Pallet::<Test>::set_block_number(now);
+    Actors::execute_cycle(Weight::MAX);
     let generation =
       match ActorSemanticStates::<Test>::get(actor_id).expect("semantic owner exists") {
         ActorSemanticState::Active(record) => record.generation,
         ActorSemanticState::Dormant(_) => panic!("created Actor is active"),
       };
     let actor = actor_ref(actor_id, generation);
-    ActorControlLocators::<Test>::remove(actor_id);
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
-      .expect("canonical Service carrier publishes");
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::begin_service_round(now).expect("first round begins");
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-
     let retry_at = now + 3;
-    Actors::execute_effectful_step_on_service_with_deadline(
-      actor,
-      ServiceResidenceKind::Live,
-      state,
-      plan,
-      &admission,
-      now,
-      Some(WakeupKey::Block(retry_at)),
-    )
-    .expect("later retry commits into its canonically selected deadline residence");
     let retry_run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run remains");
     assert_eq!(retry_run.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(retry_run.eligible_at, retry_at);
@@ -2358,17 +2313,6 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
       Err(DeadlineMutationError::MemberMissing)
     ));
     set_asset_balance(&sovereign, TestAsset::Local(1), 10);
-    let mut semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
-      .expect("retry semantic owner remains loadable");
-    assert_eq!(semantic.hot.cycle_state, CycleState::Suspended);
-    semantic.hot.queue_ticket = None;
-    Actors::try_store_service_control_state(
-      actor,
-      ServiceResidenceKind::Live,
-      semantic.identity,
-      semantic.hot,
-    )
-    .expect("canonical retry no longer needs the legacy FIFO ticket");
     let stored_run = ActorRunStateStore::<Test>::get(actor_id).expect("retry Run stays stored");
     assert_eq!(stored_run.cursor, retry_run.cursor);
     assert_eq!(stored_run.eligible_at, retry_run.eligible_at);
@@ -2376,34 +2320,13 @@ fn canonical_effectful_later_retry_moves_through_deadline_and_reenters_once() {
       stored_run.unsuccessful_attempts_at_cursor,
       retry_run.unsuccessful_attempts_at_cursor
     );
-    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      Actors::begin_service_round(retry_at).expect("retry round begins");
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
-    });
-    let (retry_state, retry_admission, retry_plan) =
-      Actors::build_due_retry_service_plan(actor, ServiceResidenceKind::Live, retry_at)
-        .expect("canonical due retry plan binds the recovered next-round member");
-    assert_eq!(
-      retry_plan
-        .run
-        .as_ref()
-        .expect("retry plan keeps stored Run")
-        .unsuccessful_attempts_at_cursor,
-      1
-    );
-    Actors::execute_completed_effectful_step_on_service(
-      actor,
-      ServiceResidenceKind::Live,
-      retry_state,
-      retry_plan,
-      &retry_admission,
-      retry_at,
-    )
-    .expect("recovered canonical retry completes");
+    Actors::execute_cycle(Weight::MAX);
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 1);
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
-    assert!(
-      Actors::build_due_retry_service_plan(actor, ServiceResidenceKind::Live, retry_at).is_none(),
+    Actors::execute_cycle(Weight::MAX);
+    assert_eq!(
+      asset_balance(&BOB, TestAsset::Local(1)),
+      1,
       "the consumed due retry cannot execute twice"
     );
   });
