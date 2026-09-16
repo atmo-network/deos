@@ -14279,12 +14279,18 @@ mod benches {
     }
     for actor_id in [first_actor, second_actor] {
       assert!(matches!(
-        benchmark_fixture_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
+        benchmark_fixture_semantic_hot::<T>(actor_id).map(|hot| hot.trigger_runtime_state),
         Some(TriggerRuntimeState::ObservationCrossing {
           phase: CrossingPhase::Armed,
           ..
         })
       ));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
