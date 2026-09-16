@@ -3197,7 +3197,7 @@ fn successful_manual_execution_preserves_canonical_control() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn canonical_execution_preserves_running_successor_and_q1() {
+fn mandatory_hook_preserves_canonical_running_successor_and_q1() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let steps = BoundedVec::try_from(vec![
@@ -3209,8 +3209,14 @@ fn canonical_execution_preserves_running_successor_and_q1() {
       make_step(Task::StopCycle),
     ])
     .expect("two Steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    fund_native(actor_id, 10);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      steps,
+    );
+    fund_native(actor_id, 1_000_000_000_000_000_000);
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
@@ -3220,7 +3226,7 @@ fn canonical_execution_preserves_running_successor_and_q1() {
     assert!(Actors::actor_run_state(actor_id).is_none());
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::execute_cycle(Weight::MAX);
+    run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .unwrap_or_else(|| {
@@ -3244,7 +3250,7 @@ fn canonical_execution_preserves_running_successor_and_q1() {
     assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
     assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
-    Actors::execute_cycle(Weight::MAX);
+    run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("same-round retry retains the Running successor")
@@ -3272,7 +3278,7 @@ fn canonical_execution_preserves_running_successor_and_q1() {
     assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::execute_cycle(Weight::MAX);
+    run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert_eq!(
