@@ -5961,7 +5961,7 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
 }
 
 #[test]
-fn mandatory_service_frontier_pre_admits_and_executes_one_zero_step_head() {
+fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, Default::default());
@@ -5972,7 +5972,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_zero_step_head() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    Actors::publish_service_member(actor, ServiceResidenceKind::Pending, 4).unwrap();
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
@@ -6001,7 +6001,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_zero_step_head() {
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
     assert_eq!(admitted.consumed(), complete);
-    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Pending)
       .expect("retained zero-Step Actor remains canonical");
     assert_eq!(stored.identity.cycle_nonce, 1);
     assert_eq!(stored.hot.last_cycle_block, Some(5));

@@ -5275,16 +5275,12 @@ pub mod pallet {
       Self::load_frame_control_authority(actor_id).map(|(_, identity, hot, _)| (identity, hot))
     }
 
-    /// Loads one active semantic owner only when its generation and canonical Service residence
-    /// agree and no legacy control authority remains.
-    #[allow(
-      dead_code,
-      reason = "canonical service consumer remains staged behind the atomic publication cutover"
-    )]
-    pub(crate) fn load_service_actor_semantic_state(
+    /// Loads one active semantic owner and its exact canonical Service residence only when the
+    /// generation-bound process, ring node, and semantic owner agree and no legacy control
+    /// authority remains.
+    pub(crate) fn load_service_actor_semantic_state_with_kind(
       actor: ActorRef,
-      kind: ServiceResidenceKind,
-    ) -> Result<ActorSemanticRecordOf<T>, ActorSemanticLoadError> {
+    ) -> Result<(ActorSemanticRecordOf<T>, ServiceResidenceKind), ActorSemanticLoadError> {
       if ActorControlLocators::<T>::contains_key(actor.actor_id)
         || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
       {
@@ -5296,21 +5292,30 @@ pub mod pallet {
       };
       let process = ActorProcesses::<T>::get(actor.actor_id)
         .filter(|process| {
-          process.generation == actor.generation
-            && process.status == ProcessStatus::Serving
-            && process.residence == Some(ProcessResidence::Service(kind))
+          process.generation == actor.generation && process.status == ProcessStatus::Serving
         })
         .ok_or(ActorSemanticLoadError::Corrupt)?;
       let node = ServiceNodes::<T>::get(actor.actor_id)
-        .filter(|node| node.generation == actor.generation && node.kind == kind)
+        .filter(|node| node.generation == actor.generation)
         .ok_or(ActorSemanticLoadError::Corrupt)?;
       if record.generation != actor.generation
         || process.generation != record.generation
         || node.generation != record.generation
+        || process.residence != Some(ProcessResidence::Service(node.kind))
       {
         return Err(ActorSemanticLoadError::Corrupt);
       }
-      Ok(record)
+      Ok((record, node.kind))
+    }
+
+    pub(crate) fn load_service_actor_semantic_state(
+      actor: ActorRef,
+      kind: ServiceResidenceKind,
+    ) -> Result<ActorSemanticRecordOf<T>, ActorSemanticLoadError> {
+      let (record, actual_kind) = Self::load_service_actor_semantic_state_with_kind(actor)?;
+      (actual_kind == kind)
+        .then_some(record)
+        .ok_or(ActorSemanticLoadError::Corrupt)
     }
 
     /// Atomically commits one retained canonical Service attempt before advancing its ring head.
@@ -6147,9 +6152,8 @@ pub mod pallet {
           let encounter = Self::consider_service_head(now)?;
           let mut execution_weight = Weight::zero();
           if let ServiceRoundEncounter::Eligible(actor) = encounter {
-            let semantic =
-              Self::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+            let (semantic, service_kind) = Self::load_service_actor_semantic_state_with_kind(actor)
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
             let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
               actor.actor_id,
               semantic.identity,
@@ -6233,7 +6237,7 @@ pub mod pallet {
                 };
               let evidence = Self::execute_effectful_step_on_service_with_deadline(
                 actor,
-                ServiceResidenceKind::Live,
+                service_kind,
                 state,
                 plan,
                 &admission,
@@ -6269,15 +6273,8 @@ pub mod pallet {
                 } else {
                   None
                 };
-              Self::execute_zero_step_on_service(
-                actor,
-                ServiceResidenceKind::Live,
-                state,
-                &admission,
-                now,
-                None,
-              )
-              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              Self::execute_zero_step_on_service(actor, service_kind, state, &admission, now, None)
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())
               {
