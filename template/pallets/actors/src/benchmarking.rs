@@ -493,6 +493,41 @@ mod benches {
     })
   }
 
+  fn benchmark_latch_canonical_crossing<T: Config>(actor_id: ActorId) {
+    use crate::weights::WeightInfo as _;
+
+    let ActorSemanticState::Active(record) =
+      ActorSemanticStates::<T>::get(actor_id).expect("benchmark Crossing Actor owns semantic state")
+    else {
+      panic!("benchmark Crossing Actor is active")
+    };
+    let LoadedActorStateOf::Active(state) = Pallet::<T>::load_actor_state(actor_id) else {
+      panic!("benchmark Crossing Actor loads from canonical authority")
+    };
+    let actor_type = state.identity.actor_class.actor_type();
+    let sovereign_account = state.identity.sovereign_account.clone();
+    let breakdown = Pallet::<T>::trigger_fee_for_weight(
+      actor_type,
+      TriggerFamily::ObservationCrossing,
+      T::WeightInfo::observation_crossing_trigger_occurrence(),
+    );
+    assert_eq!(
+      Pallet::<T>::commit_canonical_trigger_occurrence_with_authority(
+        ActorRef {
+          actor_id,
+          generation: record.generation,
+        },
+        actor_type,
+        &sovereign_account,
+        breakdown,
+        state,
+        frame_system::Pallet::<T>::block_number(),
+      )
+      .expect("benchmark Crossing occurrence latches canonically"),
+      crate::scheduler::ActivationOutcome::Latched
+    );
+  }
+
   fn benchmark_fixture_scalar_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
     benchmark_fixture_hot::<T>(actor_id)
   }
@@ -14323,8 +14358,8 @@ mod benches {
       second_owner,
       Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
     );
-    Pallet::<T>::request_activation(first_actor).expect("first pair latch must succeed");
-    Pallet::<T>::request_activation(second_actor).expect("second pair latch must succeed");
+    benchmark_latch_canonical_crossing::<T>(first_actor);
+    benchmark_latch_canonical_crossing::<T>(second_actor);
     CrossingRangeCursors::<T>::insert(
       feed,
       CrossingRangeCursor {
@@ -14346,9 +14381,8 @@ mod benches {
       Pallet::<T>::crossing_pair_work_unit().expect("coalesced Crossing pair must succeed");
     }
     for actor_id in [first_actor, second_actor] {
-      assert!(benchmark_fixture_hot::<T>(actor_id).is_some_and(|hot| {
+      assert!(benchmark_fixture_semantic_hot::<T>(actor_id).is_some_and(|hot| {
         hot.pending_signal
-          && hot.queue_ticket.is_some()
           && matches!(
             hot.trigger_runtime_state,
             TriggerRuntimeState::ObservationCrossing {
@@ -14357,6 +14391,12 @@ mod benches {
             }
           )
       }));
+      assert_eq!(
+        ActorProcesses::<T>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
+      assert!(!ActorControlLocators::<T>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<T>::contains_key(actor_id));
     }
   }
 
