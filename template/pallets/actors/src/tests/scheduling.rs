@@ -1374,7 +1374,7 @@ fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
 }
 
 #[test]
-fn canonical_lifecycle_transition_atomically_pauses_deadline_and_trigger_authority() {
+fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authority() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
@@ -1457,6 +1457,37 @@ fn canonical_lifecycle_transition_atomically_pauses_deadline_and_trigger_authori
         residence: None,
         ..
       })
+    ));
+
+    let paused = successor;
+    let mut resumed = paused.clone();
+    resumed.hot.lifecycle = crate::ActiveLifecycle::Active;
+    resumed.hot.pending_signal = true;
+    Actors::test_transition_actor_publication_to_successor(
+      actor,
+      &paused,
+      &resumed,
+      resumed.run_state.as_ref(),
+      cell.resources,
+      2,
+    )
+    .expect("canonical resume and latched occurrence publish one Service residence");
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(_)),
+        ..
+      })
+    ));
+    assert!(matches!(
+      crate::ActorSemanticStates::<Test>::get(actor_id),
+      Some(crate::ActorSemanticState::Active(record))
+        if record.hot.lifecycle == crate::ActiveLifecycle::Active
+          && record.hot.pending_signal
     ));
   });
 }
