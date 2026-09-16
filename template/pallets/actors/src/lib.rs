@@ -4275,13 +4275,31 @@ pub mod pallet {
       Ok(())
     }
 
-    /// Removes exactly one generation-bound deadline member and unlinks an empty retained page.
+    /// Removes exactly one generation-bound process deadline and unlinks an empty retained page.
     #[allow(
       dead_code,
       reason = "deadline carrier remains unreachable until atomic cutover"
     )]
     pub(crate) fn remove_deadline_member(
       actor: ActorRef,
+    ) -> Result<DeadlineHandleOf<T>, DeadlineMutationError> {
+      Self::remove_deadline_member_for_owner(actor, false)
+    }
+
+    /// Removes the independent temporal Trigger deadline without changing process residence.
+    #[allow(
+      dead_code,
+      reason = "temporal Trigger carrier remains unreachable until atomic cutover"
+    )]
+    pub(crate) fn remove_trigger_deadline_member(
+      actor: ActorRef,
+    ) -> Result<DeadlineHandleOf<T>, DeadlineMutationError> {
+      Self::remove_deadline_member_for_owner(actor, true)
+    }
+
+    fn remove_deadline_member_for_owner(
+      actor: ActorRef,
+      trigger_owner: bool,
     ) -> Result<DeadlineHandleOf<T>, DeadlineMutationError> {
       if !polkadot_sdk::frame_support::storage::transactional::is_transactional() {
         return Err(DeadlineMutationError::TransactionRequired);
@@ -4291,15 +4309,43 @@ pub mod pallet {
       {
         return Err(DeadlineMutationError::LegacyAuthorityPresent);
       }
-      let process =
-        ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
-      let handle =
-        DeadlineHandles::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::MemberMissing)?;
-      if process.generation != actor.generation || handle.actor != actor {
+      let handle = if trigger_owner {
+        TriggerDeadlineHandles::<T>::get(actor.actor_id)
+      } else {
+        DeadlineHandles::<T>::get(actor.actor_id)
+      }
+      .ok_or(DeadlineMutationError::MemberMissing)?;
+      if handle.actor != actor {
         return Err(DeadlineMutationError::StaleGeneration);
       }
-      if !Self::deadline_handle_matches_process(handle, &process) {
-        return Err(DeadlineMutationError::ProcessResidenceMismatch);
+      if trigger_owner {
+        let Some(ActorSemanticState::Active(semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(DeadlineMutationError::ProcessMissing);
+        };
+        let expected_pointer = match handle.key {
+          WakeupKey::Tick(tick) => Some(TriggerWakeupPointer {
+            tick,
+            page_id: handle.page,
+            slot: u32::from(handle.slot),
+          }),
+          WakeupKey::Block(_) => return Err(DeadlineMutationError::InvalidDestination),
+        };
+        if semantic.generation != actor.generation
+          || semantic.hot.trigger_wakeup_pointer != expected_pointer
+        {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        }
+      } else {
+        let process =
+          ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
+        if process.generation != actor.generation {
+          return Err(DeadlineMutationError::StaleGeneration);
+        }
+        if !Self::deadline_handle_matches_process(handle, &process) {
+          return Err(DeadlineMutationError::ProcessResidenceMismatch);
+        }
       }
       let mut header =
         DeadlineHeaders::<T>::get(handle.key).ok_or(DeadlineMutationError::CorruptCarrier)?;
@@ -4319,7 +4365,11 @@ pub mod pallet {
         .count
         .checked_sub(1)
         .ok_or(DeadlineMutationError::CorruptCarrier)?;
-      DeadlineHandles::<T>::remove(actor.actor_id);
+      if trigger_owner {
+        TriggerDeadlineHandles::<T>::remove(actor.actor_id);
+      } else {
+        DeadlineHandles::<T>::remove(actor.actor_id);
+      }
       if page.live_entries > 0 {
         DeadlinePages::<T>::insert(handle.key, handle.page, page);
         DeadlineHeaders::<T>::insert(handle.key, header);

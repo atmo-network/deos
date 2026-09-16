@@ -1300,6 +1300,80 @@ fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomical
 }
 
 #[test]
+fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    let admission = Actors::build_admission_certificate(&state.contract)
+      .expect("temporal Contract remains admissible");
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+      let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+        panic!("active semantic record");
+      };
+      record.hot = state.hot.clone();
+      record.admission = admission;
+    });
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    Actors::test_publish_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      0,
+    )
+    .expect("complete canonical publication commits");
+
+    let process_before = crate::ActorProcesses::<Test>::get(actor_id)
+      .expect("suspended process remains independently resident");
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    let refused: Result<(), crate::DeadlineMutationError> =
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::remove_trigger_deadline_member(actor).expect("exact Trigger member removes");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          crate::DeadlineMutationError::InvalidDestination,
+        ))
+      });
+    assert_eq!(
+      refused,
+      Err(crate::DeadlineMutationError::InvalidDestination)
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "a later caller refusal must restore the complete Trigger carrier root"
+    );
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::remove_trigger_deadline_member(actor).expect("exact Trigger member removes");
+      crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
+        let Some(crate::ActorSemanticState::Active(record)) = semantic else {
+          panic!("active semantic record");
+        };
+        record.hot.trigger_wakeup_pointer = None;
+      });
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(process_before)
+    );
+    assert!(crate::DeadlineHandles::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
 fn legacy_handoff_atomically_rehomes_zero_step_service_authority() {
   new_test_ext().execute_with(|| {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
