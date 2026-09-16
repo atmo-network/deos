@@ -3456,6 +3456,70 @@ fn mandatory_hook_resolves_percent_against_current_balance_between_adjacent_step
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
+fn mandatory_hook_reresolves_percent_on_a_recovered_retry_attempt() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let task = Task::SwapIn {
+      asset_in: TestAsset::Native,
+      asset_out: TestAsset::Local(77),
+      amount_in: AmountResolution::Percent(Perbill::from_percent(50)),
+      slippage_tolerance: Perbill::one(),
+    };
+    let retry_step = StepOf::<Test> {
+      precondition: None,
+      task: task.clone(),
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+    };
+    let steps = BoundedVec::try_from(vec![retry_step]).expect("retry Step fits");
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
+    fund_native(actor_id, 1_000_000);
+    let sovereign = sovereign_account(actor_id);
+    let pool_before = native_balance(&u64::MAX);
+
+    // A genuine temporary effect failure suspends the Run without committing a resolved effect.
+    set_temporary_dex_failure(true);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("temporary failure suspends the Run");
+    assert_eq!(suspended.suspension, Some(crate::SuspensionReason::Temporary));
+    assert_eq!(native_balance(&u64::MAX), pool_before);
+
+    // A normal external credit between Attempts raises the later resolution's current input.
+    fund_native(actor_id, 10_000_000);
+    let before_recovery = native_balance(&sovereign);
+    let action_fee = <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(
+      &Actors::weight_upper_bound(&task),
+    );
+    let expected_in = Perbill::from_percent(50).mul_floor(
+      before_recovery
+        .saturating_sub(action_fee)
+        .saturating_sub(TestMinUserBalance::get()),
+    );
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert_eq!(
+      native_balance(&u64::MAX),
+      pool_before.saturating_add(expected_in),
+      "the recovered Attempt re-resolves Percent against the current tracked balance"
+    );
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
 fn frame_only_expired_manual_activation_closes_from_retained_unsignaled_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
