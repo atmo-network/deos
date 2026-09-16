@@ -5275,12 +5275,12 @@ pub mod pallet {
       Self::load_frame_control_authority(actor_id).map(|(_, identity, hot, _)| (identity, hot))
     }
 
-    /// Loads one active semantic owner and its exact canonical Service residence only when the
-    /// generation-bound process, ring node, and semantic owner agree and no legacy control
-    /// authority remains.
-    pub(crate) fn load_service_actor_semantic_state_with_kind(
+    /// Loads one active semantic owner and its exact canonical process carrier only when the
+    /// generation-bound process, concrete residence, and semantic owner agree and no legacy
+    /// control authority remains.
+    pub(crate) fn load_canonical_actor_semantic_state(
       actor: ActorRef,
-    ) -> Result<(ActorSemanticRecordOf<T>, ServiceResidenceKind), ActorSemanticLoadError> {
+    ) -> Result<(ActorSemanticRecordOf<T>, ActorProcessOf<T>), ActorSemanticLoadError> {
       if ActorControlLocators::<T>::contains_key(actor.actor_id)
         || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
       {
@@ -5291,21 +5291,79 @@ pub mod pallet {
         return Err(ActorSemanticLoadError::Corrupt);
       };
       let process = ActorProcesses::<T>::get(actor.actor_id)
-        .filter(|process| {
-          process.generation == actor.generation && process.status == ProcessStatus::Serving
-        })
+        .filter(|process| process.generation == actor.generation)
         .ok_or(ActorSemanticLoadError::Corrupt)?;
-      let node = ServiceNodes::<T>::get(actor.actor_id)
-        .filter(|node| node.generation == actor.generation)
-        .ok_or(ActorSemanticLoadError::Corrupt)?;
-      if record.generation != actor.generation
-        || process.generation != record.generation
-        || node.generation != record.generation
-        || process.residence != Some(ProcessResidence::Service(node.kind))
-      {
+      if record.generation != actor.generation {
         return Err(ActorSemanticLoadError::Corrupt);
       }
-      Ok((record, node.kind))
+
+      let service_node = ServiceNodes::<T>::get(actor.actor_id);
+      let deadline_handle = DeadlineHandles::<T>::get(actor.actor_id);
+      let pending_owner = PendingCheckOwners::<T>::get(actor.actor_id);
+      let deadline_slot_matches = |handle: DeadlineHandleOf<T>| {
+        DeadlinePages::<T>::get(handle.key, handle.page).is_some_and(|stored_page| {
+          stored_page
+            .entries
+            .get(usize::from(handle.slot))
+            .copied()
+            .flatten()
+            == Some(actor)
+        })
+      };
+      let carrier_is_coherent = match (process.status, process.residence) {
+        (ProcessStatus::Serving, Some(ProcessResidence::Service(kind))) => {
+          service_node.is_some_and(|node| node.generation == actor.generation && node.kind == kind)
+            && deadline_handle.is_none()
+            && pending_owner.is_none()
+        }
+        (ProcessStatus::Serving, Some(ProcessResidence::Deadline { key, page, slot })) => {
+          let expected = DeadlineHandle {
+            actor,
+            key,
+            page,
+            slot,
+          };
+          service_node.is_none()
+            && pending_owner.is_none()
+            && deadline_handle == Some(expected)
+            && deadline_slot_matches(expected)
+        }
+        (ProcessStatus::Serving, Some(ProcessResidence::Parked(evidence))) => {
+          let owner_matches = pending_owner.is_some_and(|owner| {
+            owner.actor == actor && evidence.plan_identity == record.admission.admission_identity
+          });
+          let deadline_matches = match DependencyTimedReviews::<T>::get(actor.actor_id) {
+            Some(review) => deadline_handle.is_some_and(|handle| {
+              Self::deadline_handle_matches_process(handle, &process)
+                && deadline_slot_matches(handle)
+                && handle.key == review.deadline
+                && pending_owner == Some(review.owner)
+                && matches!(handle.key, WakeupKey::Block(block) if evidence.review_at == Some(block))
+            }),
+            None => deadline_handle.is_none() && evidence.review_at.is_none(),
+          };
+          service_node.is_none() && owner_matches && deadline_matches
+        }
+        (ProcessStatus::Disabled(_), None) => {
+          service_node.is_none() && deadline_handle.is_none() && pending_owner.is_none()
+        }
+        (ProcessStatus::Retired(_), None) | (_, _) => false,
+      };
+      carrier_is_coherent
+        .then_some((record, process))
+        .ok_or(ActorSemanticLoadError::Corrupt)
+    }
+
+    /// Loads one active semantic owner and its exact canonical Service residence only when the
+    /// generation-bound process, ring node, and semantic owner agree.
+    pub(crate) fn load_service_actor_semantic_state_with_kind(
+      actor: ActorRef,
+    ) -> Result<(ActorSemanticRecordOf<T>, ServiceResidenceKind), ActorSemanticLoadError> {
+      let (record, process) = Self::load_canonical_actor_semantic_state(actor)?;
+      let Some(ProcessResidence::Service(kind)) = process.residence else {
+        return Err(ActorSemanticLoadError::Corrupt);
+      };
+      Ok((record, kind))
     }
 
     pub(crate) fn load_service_actor_semantic_state(

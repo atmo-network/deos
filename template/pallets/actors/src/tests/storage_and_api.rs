@@ -605,6 +605,20 @@ fn canonical_service_semantics_load_and_mutate_without_legacy_authority() {
     assert_eq!(Actors::load_control_hot(actor_id), Some(replacement));
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+    DeadlineHandles::<Test>::insert(
+      actor_id,
+      DeadlineHandle {
+        actor,
+        key: WakeupKey::Block(2),
+        page: 0,
+        slot: 0,
+      },
+    );
+    assert_eq!(
+      Actors::load_canonical_actor_semantic_state(actor),
+      Err(ActorSemanticLoadError::Corrupt),
+      "a Service process cannot retain a second process carrier"
+    );
   });
 }
 
@@ -782,7 +796,19 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
       ActorProcesses::<Test>::get(actor_id).map(|process| process.residence),
       Some(Some(ProcessResidence::Parked(evidence)))
     );
-    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot));
+    assert_eq!(Actors::load_control_hot(actor_id), Some(record.hot.clone()));
+    assert_eq!(
+      Actors::load_canonical_actor_semantic_state(actor),
+      Ok((
+        record,
+        ActorProcess {
+          generation: actor.generation,
+          last_attempted: None,
+          status: ProcessStatus::Serving,
+          residence: Some(ProcessResidence::Parked(evidence)),
+        },
+      ))
+    );
 
     let stale_evidence = ParkEvidence {
       plan_identity: [8; 32],
