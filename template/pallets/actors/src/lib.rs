@@ -5989,6 +5989,9 @@ pub mod pallet {
           )
           .map(|(actor, mutation)| DueBlockDeadlineMutation::ReviewProcessed(actor, mutation))
         }
+        DueBlockDeadlineBranch::TemporalTrigger(_) => Err(DependencyReviewWorkerError::Deadline(
+          DeadlineMutationError::InvalidDestination,
+        )),
       }
     }
 
@@ -6011,6 +6014,11 @@ pub mod pallet {
         .iter(/* deos-bypass: bounded-iter -- fixed C32 deadline page. */)
         .find_map(|entry| *entry)
         .ok_or(DeadlineMutationError::CorruptCarrier)?;
+      if TriggerDeadlineHandles::<T>::get(actor.actor_id)
+        .is_some_and(|handle| handle.actor == actor && handle.key == key)
+      {
+        return Ok(DueBlockDeadlineBranch::TemporalTrigger(actor));
+      }
       let process =
         ActorProcesses::<T>::get(actor.actor_id).ok_or(DeadlineMutationError::ProcessMissing)?;
       match process.residence {
@@ -6020,7 +6028,7 @@ pub mod pallet {
       }
     }
 
-    /// Processes one retained timed review from the independent Tick frontier. Selection is
+    /// Processes one retained timed review or temporal Trigger from the independent Tick frontier. Selection is
     /// admitted before inspection; the existing complete review owner admits the selected branch.
     /// Block-clock members and incoherent Tick retries remain untouched.
     pub(crate) fn process_next_due_tick_deadline(
@@ -6035,9 +6043,75 @@ pub mod pallet {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }
       meter.consume(selector_weight);
-      let DueBlockDeadlineBranch::Review(actor) = Self::classify_next_due_tick_deadline(now_tick)
-        .map_err(DependencyReviewWorkerError::Deadline)?
-      else {
+      let branch = Self::classify_next_due_tick_deadline(now_tick)
+        .map_err(DependencyReviewWorkerError::Deadline)?;
+      if let DueBlockDeadlineBranch::TemporalTrigger(actor) = branch {
+        let weight = T::WeightInfo::at_time_trigger_occurrence()
+          .max(T::WeightInfo::cadenced_trigger_occurrence());
+        if !meter.can_consume(weight) {
+          return Err(DependencyReviewWorkerError::InsufficientWeight);
+        }
+        meter.consume(weight);
+        let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+          let result = (|| {
+            let handle = TriggerDeadlineHandles::<T>::get(actor.actor_id).ok_or(
+              DependencyReviewWorkerError::Deadline(DeadlineMutationError::MemberMissing),
+            )?;
+            if handle.actor != actor
+              || !matches!(handle.key, WakeupKey::Tick(tick) if tick <= now_tick)
+            {
+              return Err(DependencyReviewWorkerError::Deadline(
+                DeadlineMutationError::ProcessResidenceMismatch,
+              ));
+            }
+            let Some(ActorSemanticState::Active(mut semantic)) =
+              ActorSemanticStates::<T>::get(actor.actor_id)
+            else {
+              return Err(DependencyReviewWorkerError::Deadline(
+                DeadlineMutationError::ProcessMissing,
+              ));
+            };
+            if semantic.generation != actor.generation {
+              return Err(DependencyReviewWorkerError::Deadline(
+                DeadlineMutationError::StaleGeneration,
+              ));
+            }
+            Self::remove_trigger_deadline_member(actor)
+              .map_err(DependencyReviewWorkerError::Deadline)?;
+            semantic.hot.trigger_wakeup_pointer = None;
+            ActorSemanticStates::<T>::insert(
+              actor.actor_id,
+              ActorSemanticState::Active(semantic.clone()),
+            );
+            let (state, admission, loaded_step) = Self::load_actor_service_state_with_control(
+              actor.actor_id,
+              semantic.identity,
+              semantic.hot,
+              semantic.admission,
+            )
+            .ok_or(DependencyReviewWorkerError::TemporalOccurrence)?;
+            Self::process_due_temporal_occurrence_loaded(
+              actor.actor_id,
+              state,
+              admission,
+              loaded_step,
+              now_tick,
+            )
+            .map_err(|_| DependencyReviewWorkerError::TemporalOccurrence)?;
+            Ok(DueTickDeadlineMutation::TemporalTriggerProcessed(actor))
+          })();
+          match result {
+            Ok(mutation) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(mutation))
+            }
+            Err(error) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+            }
+          }
+        });
+        return result;
+      }
+      let DueBlockDeadlineBranch::Review(actor) = branch else {
         return Err(DependencyReviewWorkerError::Deadline(
           DeadlineMutationError::ProcessResidenceMismatch,
         ));
@@ -6116,11 +6190,13 @@ pub mod pallet {
       next_tick_review: Option<WakeupKey<BlockNumberFor<T>>>,
     ) -> Result<DueDeadlineServicePass, DependencyReviewWorkerError> {
       let review = T::WeightInfo::process_due_observation_availability_review();
+      let temporal = T::WeightInfo::at_time_trigger_occurrence()
+        .max(T::WeightInfo::cadenced_trigger_occurrence());
       let block_branch = T::WeightInfo::return_due_block_deadline_to_service().max(review);
       let complete_envelope = T::WeightInfo::classify_due_block_deadline()
         .saturating_add(block_branch)
         .saturating_add(T::WeightInfo::classify_due_tick_deadline())
-        .saturating_add(review);
+        .saturating_add(review.max(temporal));
       if !meter.can_consume(complete_envelope) {
         return Err(DependencyReviewWorkerError::InsufficientWeight);
       }

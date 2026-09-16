@@ -1225,6 +1225,69 @@ fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
 }
 
 #[test]
+fn canonical_cadenced_deadline_publishes_pending_service() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      timer_schedule(1),
+      None,
+      inert_contract_steps(),
+    );
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Tick(2))
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    let pass = Actors::service_due_deadline_frontiers(
+      &mut meter,
+      crate::ServiceResidenceKind::Live,
+      2,
+      2,
+      Some(WakeupKey::Block(3)),
+      Some(WakeupKey::Tick(3)),
+    )
+    .expect("canonical deadline frontiers are admitted");
+    assert_eq!(
+      pass.tick,
+      Ok(crate::DueTickDeadlineMutation::TemporalTriggerProcessed(
+        actor
+      ))
+    );
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending
+        )),
+        ..
+      })
+    ));
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Cadenced semantic state survives");
+    assert!(hot.pending_signal);
+    assert!(hot.trigger_wakeup_pointer.is_none());
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
+    )));
+  });
+}
+
+#[test]
 fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomically() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);

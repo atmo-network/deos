@@ -7865,7 +7865,40 @@ impl<T: Config> Pallet<T> {
       TriggerRuntimeState::Cadenced { .. } => {
         let next_due_tick = next_cadence_due_tick(anchor_tick, delay_ticks, now_tick)
           .ok_or(DispatchError::Other("cadence deadline failed"))?;
-        let placement = {
+        let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+          && ActorProcesses::<T>::contains_key(actor_id);
+        let placement = if canonical {
+          let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+            "cadence generation authority is missing",
+          ))?;
+          let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(next_due_tick))
+            .map_err(|_| DispatchError::Other("cadence deadline planning failed"))?;
+          let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+          else {
+            return Err(DispatchError::Other(
+              "cadence semantic authority is missing",
+            ));
+          };
+          if current.generation != actor.generation
+            || current.identity != state.identity
+            || current.hot != state.hot
+            || current.admission != admission
+          {
+            return Err(DispatchError::Other(
+              "cadence semantic authority is corrupt",
+            ));
+          }
+          let mut replacement = current.clone();
+          replacement.hot.trigger_wakeup_pointer = Some(TriggerWakeupPointer {
+            tick: next_due_tick,
+            page_id: handle.page,
+            slot: u32::from(handle.slot),
+          });
+          ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+          Self::insert_trigger_deadline_member(handle)
+            .map_err(|_| EnqueueOutcome::CorruptedTopology)
+        } else {
           Self::try_wakeup_substrate_schedule_transition_with_authority(
             actor_id,
             WakeupKey::Tick(next_due_tick),
@@ -7936,37 +7969,52 @@ impl<T: Config> Pallet<T> {
     }
     let actor_type = state.identity.actor_class.actor_type();
     let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
-    if trigger_family == TriggerFamily::AtTime {
-      let temporal_capacity = Self::trigger_occurrence_capacity_sufficient(
-        actor_type,
-        &state.identity.sovereign_account,
-        breakdown,
-      )
-      .map_err(|_| DispatchError::Other("temporal capacity calculation failed"))?;
-      if !temporal_capacity {
-        let close_result = Self::finalize_actor_from_retained_state(
-          actor_id,
-          state,
-          &admission,
-          CloseReason::TriggerAdmissionInsufficient,
-        );
-        close_result.map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
-        return Ok(true);
+    let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+      && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      && ActorProcesses::<T>::contains_key(actor_id);
+    if trigger_family == TriggerFamily::AtTime || canonical {
+      if trigger_family == TriggerFamily::AtTime {
+        let temporal_capacity = Self::trigger_occurrence_capacity_sufficient(
+          actor_type,
+          &state.identity.sovereign_account,
+          breakdown,
+        )
+        .map_err(|_| DispatchError::Other("temporal capacity calculation failed"))?;
+        if !temporal_capacity {
+          let close_result = Self::finalize_actor_from_retained_state(
+            actor_id,
+            state,
+            &admission,
+            CloseReason::TriggerAdmissionInsufficient,
+          );
+          close_result
+            .map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
+          return Ok(true);
+        }
       }
       let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
-        "AtTime generation authority is missing",
+        "temporal generation authority is missing",
       ))?;
       let sovereign_account = state.identity.sovereign_account.clone();
-      return Self::commit_canonical_trigger_occurrence_with_authority(
+      return match Self::commit_canonical_trigger_occurrence_with_authority(
         actor,
         actor_type,
         &sovereign_account,
         breakdown,
         state,
         frame_system::Pallet::<T>::block_number(),
-      )
-      .map(|_| false)
-      .map_err(|_| DispatchError::Other("temporal canonical publication failed"));
+      ) {
+        Ok(_) => Ok(false),
+        Err(error)
+          if trigger_family == TriggerFamily::Cadenced
+            && error == Error::<T>::InsufficientFee.into() =>
+        {
+          Ok(false)
+        }
+        Err(_) => Err(DispatchError::Other(
+          "temporal canonical publication failed",
+        )),
+      };
     } else if !Self::try_charge_automatic_trigger_occurrence(
       actor_type,
       &state.identity.sovereign_account,

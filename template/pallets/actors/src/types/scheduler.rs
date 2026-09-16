@@ -300,6 +300,7 @@ pub enum DependencyReviewWorkerError {
   Deadline(DeadlineMutationError),
   Publication(DependencyDueReviewError),
   Interpretation(DependencyRegistrationError),
+  TemporalOccurrence,
 }
 
 /// One resource-classified member from the shared block-deadline frontier.
@@ -307,6 +308,7 @@ pub enum DependencyReviewWorkerError {
 pub enum DueBlockDeadlineBranch {
   Retry(ActorRef),
   Review(ActorRef),
+  TemporalTrigger(ActorRef),
 }
 
 /// One classified transition from the shared block-deadline frontier.
@@ -316,11 +318,12 @@ pub enum DueBlockDeadlineMutation {
   ReviewProcessed(ActorRef, DependencyReviewMutation),
 }
 
-/// One retained transition from the shared tick-deadline frontier. Tick deadlines currently own
-/// timed Park reviews only; execution retries remain block-clock members.
+/// One retained transition from the shared tick-deadline frontier. Tick deadlines own timed Park
+/// reviews and independent temporal Trigger occurrences; execution retries remain block-clock members.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DueTickDeadlineMutation {
   ReviewProcessed(ActorRef, DependencyReviewMutation),
+  TemporalTriggerProcessed(ActorRef),
 }
 
 /// One bounded mandatory-service pass over the independent Block and Tick deadline frontiers.
