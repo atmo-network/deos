@@ -8989,6 +8989,94 @@ impl<T: Config> Pallet<T> {
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
   }
 
+  /// Atomically removes one exact canonical active publication and converges on the existing
+  /// custody-neutral terminal finalizer. Trigger and process residence are independent; a refusal
+  /// after either removal restores the complete storage root.
+  #[allow(
+    dead_code,
+    reason = "canonical terminal removal remains inert until all production paths cut over"
+  )]
+  fn remove_actor_publication_and_finalize(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    reason: CloseReason,
+  ) -> DispatchResult {
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        ensure!(
+          !ActorControlLocators::<T>::contains_key(actor.actor_id)
+            && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
+          Error::<T>::ActorInvariant
+        );
+        let admission =
+          Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
+        let Some(ActorSemanticState::Active(semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        ensure!(
+          actor.generation != 0
+            && semantic.generation == actor.generation
+            && semantic.identity == state.identity
+            && semantic.hot == state.hot
+            && semantic.admission == admission
+            && state.run_state.as_ref().map(|run| run.encode())
+              == supplied_run.map(|run| run.encode())
+            && ActorRunStateStore::<T>::get(actor.actor_id)
+              .as_ref()
+              .map(|run| run.encode())
+              == supplied_run.map(|run| run.encode()),
+          Error::<T>::ActorInvariant
+        );
+        let process = ActorProcesses::<T>::get(actor.actor_id)
+          .filter(|process| process.generation == actor.generation)
+          .ok_or(Error::<T>::ActorInvariant)?;
+
+        let mut terminal_state = state;
+        if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+          Self::remove_trigger_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+          terminal_state.hot.trigger_wakeup_pointer = None;
+        } else {
+          ensure!(
+            terminal_state.hot.trigger_wakeup_pointer.is_none(),
+            Error::<T>::ActorInvariant
+          );
+        }
+        match process.residence {
+          Some(ProcessResidence::Service(_)) => {
+            Self::remove_service_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+          }
+          Some(ProcessResidence::Deadline { .. }) => {
+            Self::remove_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+            terminal_state.hot.wakeup_pointer = None;
+          }
+          None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+          _ => return Err(Error::<T>::ActorInvariant.into()),
+        }
+        ActorProcesses::<T>::remove(actor.actor_id);
+        let Some(ActorSemanticState::Active(mut terminal_semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(Error::<T>::ActorInvariant.into());
+        };
+        terminal_semantic.hot = terminal_state.hot.clone();
+        ActorSemanticStates::<T>::insert(
+          actor.actor_id,
+          ActorSemanticState::Active(terminal_semantic),
+        );
+        Self::finalize_actor_from_consumed_state(actor.actor_id, terminal_state, &admission, reason)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
   /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
   /// independent temporal Trigger deadline. Production callers remain on the legacy carrier until
   /// the complete create/resume and mandatory-service cutover can enter this boundary together.
@@ -9233,6 +9321,16 @@ impl<T: Config> Pallet<T> {
       now,
       ServiceCutoff::Snapshotted,
     )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_remove_actor_publication_and_finalize(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    reason: CloseReason,
+  ) -> DispatchResult {
+    Self::remove_actor_publication_and_finalize(actor, state, supplied_run, reason)
   }
 
   #[cfg(test)]

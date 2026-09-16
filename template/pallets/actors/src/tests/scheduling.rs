@@ -1473,7 +1473,9 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
     )
     .expect("canonical resume and latched occurrence publish one Service residence");
     assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
-    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
     assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
     assert!(matches!(
       crate::ActorProcesses::<Test>::get(actor_id),
@@ -1488,6 +1490,71 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
       Some(crate::ActorSemanticState::Active(record))
         if record.hot.lifecycle == crate::ActiveLifecycle::Active
           && record.hot.pending_signal
+    ));
+  });
+}
+
+#[test]
+fn canonical_terminal_removal_closes_service_authority_transactionally() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let mut state = Actors::active_actor_state(actor_id).expect("real latched Actor");
+    let (_, cell) =
+      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    Actors::test_publish_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      1,
+    )
+    .expect("complete canonical publication commits");
+    state.hot = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record.hot,
+      _ => panic!("canonical semantic source remains active"),
+    };
+
+    let active_count = crate::ActiveActorCount::<Test>::get();
+    crate::ActiveActorCount::<Test>::put(0);
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_noop!(
+      Actors::test_remove_actor_publication_and_finalize(
+        actor,
+        state.clone(),
+        state.run_state.as_ref(),
+        CloseReason::OwnerInitiated,
+      ),
+      crate::Error::<Test>::ActiveActorCountInvariant
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late terminal refusal restores semantic, process, and both deadline owners",
+    );
+    crate::ActiveActorCount::<Test>::put(active_count);
+
+    Actors::test_remove_actor_publication_and_finalize(
+      actor,
+      state.clone(),
+      state.run_state.as_ref(),
+      CloseReason::OwnerInitiated,
+    )
+    .expect("canonical terminal removal converges on ordinary finalization");
+    assert!(!crate::ActorSemanticStates::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::SovereignIndex::<Test>::contains_key(
+      state.identity.sovereign_account
     ));
   });
 }
