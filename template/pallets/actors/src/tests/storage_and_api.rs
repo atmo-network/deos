@@ -6250,7 +6250,7 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
 #[test]
 fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     setup_temporary_retry_pool();
     set_temporary_dex_failure(true);
     let mut step = make_step(Task::SwapIn {
@@ -6281,7 +6281,11 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
@@ -6416,7 +6420,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
 #[test]
 fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     set_max_consecutive_failures(2);
     setup_temporary_retry_pool();
     set_temporary_dex_failure(true);
@@ -6448,7 +6452,11 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).unwrap().residence,
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(

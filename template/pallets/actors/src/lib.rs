@@ -3995,11 +3995,7 @@ pub mod pallet {
     }
 
     /// Atomically unlinks one service member and irreversibly retires its canonical process.
-    /// No production caller reaches this owner before the complete carrier cutover.
-    #[allow(
-      dead_code,
-      reason = "atomic service retirement remains unreachable until supported callers cut over"
-    )]
+    /// Canonical zero-Step and effectful terminal outcomes use this owner after finalization.
     pub(crate) fn retire_service_member(
       actor: ActorRef,
       reason: CloseReason,

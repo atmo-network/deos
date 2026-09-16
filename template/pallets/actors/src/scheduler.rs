@@ -1865,27 +1865,6 @@ impl<T: Config> Pallet<T> {
     Some((state, admission, plan))
   }
 
-  /// Executes one effectful completion, abort, or retry through canonical Service authority.
-  /// Retained and terminal outcomes commit semantic state before advancing or unlinking the ring;
-  /// an aborted cycle and adjacent retry retain Service residence, while a supplied later retry
-  /// destination is preflighted before the effect and atomically receives the suspended state.
-  #[allow(
-    dead_code,
-    reason = "canonical Service execution remains staged behind the atomic publication cutover"
-  )]
-  pub(crate) fn execute_completed_effectful_step_on_service(
-    actor: ActorRef,
-    kind: ServiceResidenceKind,
-    state: ActiveActorStateOf<T>,
-    plan: CurrentStepPlanOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<StepCommitEvidence, AttemptTransactionError> {
-    Self::execute_effectful_step_on_service_with_deadline(
-      actor, kind, state, plan, admission, now, None,
-    )
-  }
-
   pub(crate) fn execute_effectful_step_on_service_with_deadline(
     actor: ActorRef,
     kind: ServiceResidenceKind,
