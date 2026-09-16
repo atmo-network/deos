@@ -8812,32 +8812,83 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     cutoff: ServiceCutoff,
   ) -> Result<(), EnqueueOutcome> {
+    Self::handoff_actor_publication_to_successor(
+      actor,
+      state,
+      state,
+      supplied_run,
+      resources,
+      now,
+      cutoff,
+    )
+  }
+
+  /// Atomically replaces one exact legacy primary with a validated semantic successor and its
+  /// complete canonical publication. This is the resume/update seam: successor identity and Hot
+  /// state may change, but Contract, admission, Run, generated resources, and generation cannot.
+  #[allow(
+    dead_code,
+    reason = "successor handoff remains inert until all production lifecycle paths cut over together"
+  )]
+  fn handoff_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let result = (|| -> Result<(), EnqueueOutcome> {
         let (location, cell) = Self::load_primary_control_cell(actor.actor_id)
           .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
         let (identity, hot, admission) =
           Self::project_control_cell(&cell, location).ok_or(EnqueueOutcome::CorruptedTopology)?;
-        let expected_admission = Self::build_admission_certificate(&state.contract)
+        let expected_admission = Self::build_admission_certificate(&source.contract)
           .ok_or(EnqueueOutcome::CorruptedTopology)?;
         if actor.generation == 0
-          || identity != state.identity
-          || hot != state.hot
+          || identity != source.identity
+          || hot != source.hot
           || admission != expected_admission
+          || successor.contract != source.contract
+          || successor.identity.sovereign_account != source.identity.sovereign_account
+          || successor.identity.owner != source.identity.owner
+          || successor.identity.actor_class != source.identity.actor_class
+          || successor.identity.mutability != source.identity.mutability
+          || successor.identity.cycle_nonce != source.identity.cycle_nonce
+          || Self::build_admission_certificate(&successor.contract) != Some(admission.clone())
           || cell.resources != resources
           || ActorRunStateStore::<T>::get(actor.actor_id)
             .as_ref()
             .map(|run| run.encode())
             != supplied_run.map(|run| run.encode())
-          || state.run_state.as_ref().map(|run| run.encode())
+          || source.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+          || successor.run_state.as_ref().map(|run| run.encode())
             != supplied_run.map(|run| run.encode())
         {
           return Err(EnqueueOutcome::CorruptedTopology);
         }
-        Self::preflight_actor_publication(actor, state, supplied_run, resources, now, cutoff)?;
+        let Some(ActorSemanticState::Active(mut semantic)) =
+          ActorSemanticStates::<T>::get(actor.actor_id)
+        else {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        };
+        if semantic.generation != actor.generation
+          || semantic.identity != source.identity
+          || semantic.hot != source.hot
+          || semantic.admission != admission
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        semantic.identity = successor.identity.clone();
+        semantic.hot = successor.hot.clone();
+        ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(semantic));
+        Self::preflight_actor_publication(actor, successor, supplied_run, resources, now, cutoff)?;
         Self::remove_primary_control_cell_inner(actor.actor_id)
           .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
-        Self::publish_actor_publication(actor, state, supplied_run, resources, now, cutoff)
+        Self::publish_actor_publication(actor, successor, supplied_run, resources, now, cutoff)
       })();
       match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
@@ -9048,6 +9099,26 @@ impl<T: Config> Pallet<T> {
     Self::handoff_actor_publication(
       actor,
       state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_handoff_actor_publication_to_successor(
+    actor: ActorRef,
+    source: &ActiveActorStateOf<T>,
+    successor: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::handoff_actor_publication_to_successor(
+      actor,
+      source,
+      successor,
       supplied_run,
       resources,
       now,

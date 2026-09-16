@@ -1325,6 +1325,69 @@ fn legacy_handoff_atomically_rehomes_zero_step_service_authority() {
 }
 
 #[test]
+fn legacy_handoff_atomically_publishes_a_validated_resume_successor() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
+    let source = Actors::active_actor_state(actor_id).expect("paused legacy authority");
+    assert!(source.hot.lifecycle.is_paused());
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("exact paused primary");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let mut successor = source.clone();
+    successor.hot.lifecycle = crate::ActiveLifecycle::Active;
+    successor.hot.queue_ticket = None;
+
+    let mut invalid = successor.clone();
+    invalid.contract.cooldown_blocks = invalid.contract.cooldown_blocks.saturating_add(1);
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    assert_eq!(
+      Actors::test_handoff_actor_publication_to_successor(
+        actor,
+        &source,
+        &invalid,
+        source.run_state.as_ref(),
+        cell.resources,
+        1,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "invalid successor restores the exact paused legacy root",
+    );
+
+    Actors::test_handoff_actor_publication_to_successor(
+      actor,
+      &source,
+      &successor,
+      source.run_state.as_ref(),
+      cell.resources,
+      1,
+    )
+    .expect("resume successor hands off atomically");
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::ActorSemanticStates::<Test>::get(actor_id).and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot.lifecycle),
+        crate::ActorSemanticState::Dormant(_) => None,
+      }),
+      Some(crate::ActiveLifecycle::Active),
+    );
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(crate::ProcessResidence::Service(
+        crate::ServiceResidenceKind::Pending
+      )),
+    );
+  });
+}
+
+#[test]
 fn legacy_handoff_rehomes_process_and_temporal_deadlines_and_rolls_back_failure() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
