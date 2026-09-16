@@ -3209,13 +3209,7 @@ fn mandatory_hook_preserves_canonical_running_successor_and_q1() {
       make_step(Task::StopCycle),
     ])
     .expect("two Steps fit");
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      steps,
-    );
+    let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000_000_000_000_000_000);
 
     assert_ok!(Actors::manual_trigger(
@@ -3291,6 +3285,111 @@ fn mandatory_hook_preserves_canonical_running_successor_and_q1() {
     assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
     assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn mandatory_hook_preserves_public_retry_prefix_and_canonical_residence() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut retry = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Local(77),
+      amount: AmountResolution::Fixed(10),
+    });
+    retry.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let steps = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(1),
+      }),
+      retry,
+    ])
+    .expect("prefix and retry Steps fit");
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      Schedule {
+        trigger: Trigger::manual(),
+        cooldown_blocks: 2,
+      },
+      None,
+      steps,
+    );
+    fund_native(actor_id, 1_000_000_000_000_000_000);
+    let sovereign = sovereign_account(actor_id);
+    let recipient_before = native_balance(&BOB);
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    Actors::on_idle(1, Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    let resident_node = crate::ServiceNodes::<Test>::get(actor_id)
+      .expect("successful prefix retains the canonical Service node");
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+    assert_eq!(
+      Actors::actor_run_state(actor_id)
+        .expect("prefix commits before the retry Step")
+        .cursor,
+      1,
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+
+    run_idle(Weight::MAX);
+    assert_eq!(
+      crate::ServiceNodes::<Test>::get(actor_id),
+      Some(resident_node)
+    );
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    run_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id)
+      .expect("missing tracked input produces a genuine suspended Run");
+    assert_eq!(suspended.cursor, 1);
+    assert_eq!(
+      suspended.suspension,
+      Some(crate::SuspensionReason::FundingUnavailable)
+    );
+    assert_eq!(suspended.eligible_at, 5);
+    assert!(!crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(5))
+    );
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+
+    set_asset_balance(&sovereign, TestAsset::Local(77), 1_000);
+    frame_system::Pallet::<Test>::set_block_number(5);
+    Actors::on_initialize(5);
+    run_idle(Weight::MAX);
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert_eq!(native_balance(&BOB), recipient_before + 1);
+    assert_eq!(asset_balance(&BOB, TestAsset::Local(77)), 10);
+    assert_eq!(asset_balance(&sovereign, TestAsset::Local(77)), 990);
+    assert_eq!(
+      Actors::active_actor_state(actor_id)
+        .expect("recovered Actor remains active")
+        .hot
+        .cycle_state,
+      CycleState::Idle,
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
