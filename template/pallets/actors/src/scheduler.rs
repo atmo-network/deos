@@ -8797,6 +8797,58 @@ impl<T: Config> Pallet<T> {
     Self::plan_actor_publication(actor, state, supplied_run, resources, now, cutoff)
   }
 
+  /// Atomically removes one exact legacy primary and publishes its complete canonical successor.
+  /// Planning occurs before either authority changes; any removal or canonical insertion failure
+  /// restores the legacy storage root exactly.
+  #[allow(
+    dead_code,
+    reason = "carrier handoff remains inert until all production lifecycle paths cut over together"
+  )]
+  fn handoff_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+    cutoff: ServiceCutoff,
+  ) -> Result<(), EnqueueOutcome> {
+    with_transaction_opaque_err(|| {
+      let result = (|| -> Result<(), EnqueueOutcome> {
+        let (location, cell) = Self::load_primary_control_cell(actor.actor_id)
+          .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        let (identity, hot, admission) =
+          Self::project_control_cell(&cell, location).ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let expected_admission = Self::build_admission_certificate(&state.contract)
+          .ok_or(EnqueueOutcome::CorruptedTopology)?;
+        if actor.generation == 0
+          || identity != state.identity
+          || hot != state.hot
+          || admission != expected_admission
+          || cell.resources != resources
+          || ActorRunStateStore::<T>::get(actor.actor_id)
+            .as_ref()
+            .map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+          || state.run_state.as_ref().map(|run| run.encode())
+            != supplied_run.map(|run| run.encode())
+        {
+          return Err(EnqueueOutcome::CorruptedTopology);
+        }
+        Self::preflight_actor_publication(actor, state, supplied_run, resources, now, cutoff)?;
+        Self::remove_primary_control_cell_inner(actor.actor_id)
+          .map_err(|_| EnqueueOutcome::CorruptedTopology)?;
+        Self::publish_actor_publication(actor, state, supplied_run, resources, now, cutoff)
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
+  }
+
   /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
   /// independent temporal Trigger deadline. Production callers remain on the legacy carrier until
   /// the complete create/resume and mandatory-service cutover can enter this boundary together.
@@ -8983,6 +9035,24 @@ impl<T: Config> Pallet<T> {
       ServiceCutoff::Snapshotted,
     )
     .map(|_| ())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_handoff_actor_publication(
+    actor: ActorRef,
+    state: &ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+    resources: ActorStepResourceEnvelope,
+    now: BlockNumberFor<T>,
+  ) -> Result<(), EnqueueOutcome> {
+    Self::handoff_actor_publication(
+      actor,
+      state,
+      supplied_run,
+      resources,
+      now,
+      ServiceCutoff::Snapshotted,
+    )
   }
 
   #[cfg(test)]

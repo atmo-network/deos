@@ -1300,6 +1300,96 @@ fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomical
 }
 
 #[test]
+fn legacy_handoff_atomically_rehomes_zero_step_service_authority() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    let state = Actors::active_actor_state(actor_id).expect("latched zero-Step Actor");
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("exact legacy primary");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+
+    Actors::test_handoff_actor_publication(actor, &state, None, cell.resources, 1)
+      .expect("legacy authority hands off atomically");
+
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert_eq!(
+      crate::ServiceNodes::<Test>::get(actor_id).map(|node| node.generation),
+      Some(actor.generation),
+    );
+    assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 0);
+  });
+}
+
+#[test]
+fn legacy_handoff_rehomes_process_and_temporal_deadlines_and_rolls_back_failure() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_suspended_system_retry(1);
+    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let (location, mut cell) = Actors::actor_control_cell(actor_id).expect("exact waiting primary");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
+    state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
+      anchor_tick: Some(0),
+    };
+    state.hot.trigger_wakeup_pointer = None;
+    cell.hot.trigger_runtime_state = state.hot.trigger_runtime_state.clone();
+    cell.hot.trigger_wakeup_pointer = state.hot.trigger_wakeup_pointer;
+    cell.admission =
+      Actors::build_admission_certificate(&state.contract).expect("temporal Contract is admitted");
+    cell.pipeline_service_identity =
+      crate::pipeline_service_identity(cell.admission.admission_identity);
+    Actors::store_primary_control_cell(location, cell.clone())
+      .expect("legacy and semantic authority remain exact");
+    let (_, _, _, _, trigger_deadline) = Actors::test_plan_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      0,
+    )
+    .expect("complete handoff plan");
+    let trigger_key = trigger_deadline.expect("temporal deadline").key;
+    crate::DeadlineIndexPositions::<Test>::insert(trigger_key, 0);
+    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+
+    assert_eq!(
+      Actors::test_handoff_actor_publication(
+        actor,
+        &state,
+        state.run_state.as_ref(),
+        cell.resources,
+        0,
+      ),
+      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
+    );
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      before,
+      "post-removal Trigger insertion failure restores the exact legacy root",
+    );
+
+    crate::DeadlineIndexPositions::<Test>::remove(trigger_key);
+    Actors::test_handoff_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      0,
+    )
+    .expect("process and Trigger deadlines hand off together");
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
+  });
+}
+
+#[test]
 fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures() {
   let corrupted = crate::scheduler::EnqueueOutcome::CorruptedTopology;
 
