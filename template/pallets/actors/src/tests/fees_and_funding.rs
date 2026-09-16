@@ -829,6 +829,108 @@ fn manual_trigger_collection_failure_rolls_back_readiness_and_fee_movement() {
   });
 }
 
+#[test]
+fn canonical_fee_bearing_activation_is_atomic_with_publication() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    let mut state = Actors::active_actor_state(actor_id).expect("unlatched active Actor");
+    let (_, cell) = Actors::actor_control_cell(actor_id).expect("legacy resource authority");
+    let actor = Actors::load_actor_ref(actor_id).expect("generation-bound Actor reference");
+    let sovereign = sovereign_account(actor_id);
+    clear_fee_collections();
+    let breakdown = crate::TriggerFeeBreakdown {
+      trigger_family: TriggerFamily::Manual,
+      trigger_fee: manual_trigger_fee(),
+    };
+
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    crate::ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    Actors::test_publish_actor_publication(
+      actor,
+      &state,
+      state.run_state.as_ref(),
+      cell.resources,
+      1,
+    )
+    .expect("unlatched canonical publication commits as Disabled");
+    state.hot = match crate::ActorSemanticStates::<Test>::get(actor_id) {
+      Some(crate::ActorSemanticState::Active(record)) => record.hot,
+      _ => panic!("canonical semantic source remains active"),
+    };
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(1).expect("empty canonical round opens");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+    let sovereign_before = native_balance(&sovereign);
+    let sink_before = native_balance(&TestFeeSink::get());
+    let root_before =
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+    set_fail_fee_sink_transfer(true);
+    assert_noop!(
+      Actors::commit_canonical_trigger_occurrence_with_authority(
+        actor,
+        ActorType::User,
+        &sovereign,
+        breakdown,
+        state.clone(),
+        cell.resources,
+        1,
+      ),
+      Error::<Test>::InsufficientFee
+    );
+    set_fail_fee_sink_transfer(false);
+    assert_eq!(
+      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+      root_before,
+      "late fee refusal restores semantic, process, and Disabled residence",
+    );
+    assert_eq!(native_balance(&sovereign), sovereign_before);
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+    clear_fee_collections();
+
+    assert_eq!(
+      Actors::commit_canonical_trigger_occurrence_with_authority(
+        actor,
+        ActorType::User,
+        &sovereign,
+        breakdown,
+        state,
+        cell.resources,
+        1,
+      ),
+      Ok(crate::scheduler::ActivationOutcome::Latched)
+    );
+    assert_eq!(fee_collections(), vec![manual_trigger_fee()]);
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(_)),
+        ..
+      })
+    ));
+    assert!(matches!(
+      crate::ActorSemanticStates::<Test>::get(actor_id),
+      Some(crate::ActorSemanticState::Active(record)) if record.hot.pending_signal
+    ));
+    assert!(has_actor_event(|event| matches!(
+      event,
+      Event::TriggerOccurrenceProcessed {
+        actor_id: id,
+        trigger_family: TriggerFamily::Manual,
+        fee,
+      } if *id == actor_id && *fee == manual_trigger_fee()
+    )));
+  });
+}
+
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
 fn address_event_uses_canonical_pending_authority() {

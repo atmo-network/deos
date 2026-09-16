@@ -10691,6 +10691,63 @@ pub mod pallet {
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 
+    /// Atomically charges one useful Trigger occurrence and replaces an exact canonical
+    /// publication with its latched successor. This remains inert until the carrier cutover;
+    /// payment or publication refusal restores the complete storage root.
+    #[allow(
+      dead_code,
+      reason = "canonical fee-bearing activation remains inert until all production paths cut over"
+    )]
+    pub(crate) fn commit_canonical_trigger_occurrence_with_authority(
+      actor: ActorRef,
+      actor_type: ActorType,
+      sovereign_account: &T::AccountId,
+      breakdown: TriggerFeeBreakdown<T::Balance>,
+      state: ActiveActorStateOf<T>,
+      resources: ActorStepResourceEnvelope,
+      now: BlockNumberFor<T>,
+    ) -> Result<crate::scheduler::ActivationOutcome, DispatchError> {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        let result = (|| {
+          ensure!(!state.hot.pending_signal, Error::<T>::ActorInvariant);
+          Self::ensure_trigger_occurrence_capacity(actor_type, sovereign_account, breakdown)?;
+          ensure!(
+            state.identity.actor_class.actor_type() == actor_type
+              && state.identity.sovereign_account == *sovereign_account,
+            Error::<T>::ActorInvariant
+          );
+
+          let mut successor = state.clone();
+          successor.hot.pending_signal = true;
+          Self::transition_actor_publication_to_successor(
+            actor,
+            &state,
+            &successor,
+            state.run_state.as_ref(),
+            resources,
+            now,
+            crate::scheduler::ServiceCutoff::Open,
+          )
+          .map_err(Self::placement_error)?;
+          Self::charge_trigger_occurrence(actor_type, sovereign_account, breakdown)?;
+          Self::deposit_event(Event::TriggerOccurrenceProcessed {
+            actor_id: actor.actor_id,
+            trigger_family: breakdown.trigger_family,
+            fee: breakdown.trigger_fee,
+          });
+          Ok(crate::scheduler::ActivationOutcome::Latched)
+        })();
+        match result {
+          Ok(outcome) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
+          }
+          Err(error) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+          }
+        }
+      })
+    }
+
     fn commit_trigger_occurrence_with_authority(
       actor_id: ActorId,
       actor_type: ActorType,

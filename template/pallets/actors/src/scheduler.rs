@@ -172,7 +172,7 @@ impl TerminalCleanupReservation {
 }
 
 #[derive(Clone, Copy)]
-enum ServiceCutoff {
+pub(crate) enum ServiceCutoff {
   Open,
   Snapshotted,
 }
@@ -8907,7 +8907,7 @@ impl<T: Config> Pallet<T> {
     dead_code,
     reason = "canonical lifecycle transition remains inert until all production paths cut over"
   )]
-  fn transition_actor_publication_to_successor(
+  pub(crate) fn transition_actor_publication_to_successor(
     actor: ActorRef,
     source: &ActiveActorStateOf<T>,
     successor: &ActiveActorStateOf<T>,
