@@ -1,5 +1,4 @@
 use super::*;
-use crate::scheduler::ActivationOutcome;
 use crate::weights::WeightInfo as _;
 
 #[test]
@@ -432,7 +431,7 @@ fn repeated_latched_crossing_fires_charge_only_the_useful_transition() {
 }
 
 #[test]
-fn busy_crossing_fire_rearms_without_fee_or_future_pipeline() {
+fn busy_crossing_fire_and_rearm_preserve_canonical_residence_without_future_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_observation(
@@ -442,47 +441,75 @@ fn busy_crossing_fire_rearms_without_fee_or_future_pipeline() {
         observed_at: 1,
       },
     );
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
-    let actor_id = create_user_with(
+    let mut step = make_step(Task::Transfer {
+      to: BOB,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(2_000_000),
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 3 };
+    let steps = BoundedVec::try_from(vec![step]).expect("single retry Step fits");
+    let actor_id = create_system_with(
       ALICE,
-      Mutability::Mutable,
       Schedule {
         trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
+        cooldown_blocks: 2,
       },
       None,
       steps,
     );
     fund_native(actor_id, 1_000_000);
-    assert_eq!(
-      Actors::request_activation(actor_id),
-      Ok(ActivationOutcome::Latched)
-    );
-    Actors::on_idle(1, Weight::MAX);
-    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
-    assert_eq!(
-      Actors::actor_hot(actor_id).map(|hot| hot.cycle_state),
-      Some(CycleState::Running)
-    );
-    clear_fee_collections();
-
     assert_ok!(Actors::note_observation_transition(
       7,
       crate::ObservationTransition {
         revision: 2,
         previous: Some(50),
+        current: 150,
+      },
+    ));
+    drain_crossing_work();
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::on_idle(2, Weight::MAX);
+    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Suspended");
+    let process_before =
+      crate::ActorProcesses::<Test>::get(actor_id).expect("canonical process remains resident");
+    assert!(matches!(
+      process_before.residence,
+      Some(crate::ProcessResidence::Deadline { .. })
+    ));
+    assert!(matches!(
+      crate::ActorSemanticStates::<Test>::get(actor_id),
+      Some(crate::ActorSemanticState::Active(crate::ActorSemanticRecord {
+        hot: crate::ActorHotState {
+          cycle_state: CycleState::Suspended,
+          ..
+        },
+        ..
+      }))
+    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    clear_fee_collections();
+    frame_system::Pallet::<Test>::reset_events();
+
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 3,
+        previous: Some(150),
+        current: 70,
+      },
+    ));
+    drain_crossing_work();
+    assert_eq!(crossing_phase(actor_id), CrossingPhase::Armed);
+    assert_eq!(crate::ActorProcesses::<Test>::get(actor_id), Some(process_before));
+
+    assert_ok!(Actors::note_observation_transition(
+      7,
+      crate::ObservationTransition {
+        revision: 4,
+        previous: Some(70),
         current: 150,
       },
     ));
@@ -497,13 +524,23 @@ fn busy_crossing_fire_rearms_without_fee_or_future_pipeline() {
         ..
       } if *id == actor_id
     )));
-    let hot = Actors::actor_hot(actor_id).expect("busy Actor remains active");
-    assert_eq!(hot.cycle_state, CycleState::Running);
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("busy Actor remains active");
+    assert_eq!(hot.cycle_state, CycleState::Suspended);
     assert!(!hot.pending_signal);
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
-    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
+    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Suspended");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
+    assert_eq!(crate::ActorProcesses::<Test>::get(actor_id), Some(process_before));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
   });
 }
 
