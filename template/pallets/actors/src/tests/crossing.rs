@@ -323,9 +323,29 @@ fn observation_crossing_fire_charges_before_readiness() {
     assert_eq!(fee_collections(), vec![fee]);
     assert_eq!(native_balance(&sovereign), sovereign_before - fee);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before + fee);
-    let hot = Actors::actor_hot(actor_id).expect("Crossing Actor remains active");
+    let hot = crate::ActorSemanticStates::<Test>::get(actor_id)
+      .and_then(|semantic| match semantic {
+        crate::ActorSemanticState::Active(record) => Some(record.hot),
+        crate::ActorSemanticState::Dormant(_) => None,
+      })
+      .expect("Crossing semantic state survives");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    assert!(hot.queue_ticket.is_none());
+    assert!(hot.wakeup_pointer.is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Serving,
+        residence: Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending
+        )),
+        ..
+      })
+    ));
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     {
       let rearmed = CrossingMemberships::<Test>::get(actor_id).expect("rearm membership");

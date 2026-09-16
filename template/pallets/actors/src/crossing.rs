@@ -1493,28 +1493,12 @@ impl<T: Config> Pallet<T> {
     if !fire_classification.resolves_fire() {
       return Ok(Some((CrossingWorkPlan::FireCohortPending, false, None)));
     }
-    let classification = Self::classify_observation_activation_compact(&state)
-      .map_err(|_| Error::<T>::ActorInvariant)?;
-    if classification.terminal_reason.is_some() || ActorReadyTail::<T>::get() == u64::MAX {
-      return Ok(Some((CrossingWorkPlan::FireCohortClosed, false, None)));
-    }
-    if state.hot.pending_signal {
-      return Ok(Some((CrossingWorkPlan::FireCohortCoalesced, false, None)));
-    }
-    if classification.execution_phase != crate::ActorExecutionPhase::Ready {
-      return Ok(None);
-    }
-    let mut queue_hot = state.hot;
-    queue_hot.pending_signal = true;
-    queue_hot.trigger_runtime_state = TriggerRuntimeState::ObservationCrossing {
-      phase: CrossingPhase::WaitingForRearm,
-      installed_at_revision,
+    let LoadedActorStateOf::Active(loaded) = Self::load_actor_state(member.actor_id) else {
+      return Err(Error::<T>::ActorInvariant.into());
     };
-    Ok(Some((
-      CrossingWorkPlan::FireCohortPlaced,
-      true,
-      Some(queue_hot),
-    )))
+    ensure!(loaded.hot == state.hot, Error::<T>::ActorInvariant);
+    Self::classify_fire_activation(member.actor_id, state.hot, loaded.contract, transition)
+      .map(Some)
   }
 
   pub(crate) fn preflight_crossing_cohort(
