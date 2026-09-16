@@ -157,7 +157,7 @@ fn observation_crossing_semantics_are_exact_and_hysteretic() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn crossing_idle_loader_uses_primary_pending_authority() {
+fn crossing_idle_loader_uses_canonical_disabled_publication() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_observation(
@@ -177,7 +177,7 @@ fn crossing_idle_loader_uses_primary_pending_authority() {
       inert_contract_steps(),
     );
     let loaded = Actors::load_crossing_idle_activation_state(actor_id, 7)
-      .expect("frame-owned Crossing state loads");
+      .expect("canonical Crossing state loads");
     assert!(!loaded.hot.pending_signal);
     assert!(matches!(
       loaded.hot.trigger_runtime_state,
@@ -186,13 +186,18 @@ fn crossing_idle_loader_uses_primary_pending_authority() {
         installed_at_revision: 1,
       }
     ));
-    assert!(enqueue_latched_actor(actor_id));
-    assert!(
-      Actors::load_crossing_idle_activation_state(actor_id, 7)
-        .expect("primary latch remains readable")
-        .hot
-        .pending_signal
-    );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        status: crate::ProcessStatus::Disabled(_),
+        residence: None,
+        ..
+      })
+    ));
   });
 }
 
@@ -218,48 +223,10 @@ fn crossing_activation_requires_its_certified_threshold_selector() {
       None,
       inert_contract_steps(),
     );
-    let differently_selected = system_active_contract(
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(feed, CrossingDirection::Rising, 101, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    )
-    .expect("differently selected Contract is valid");
     let sovereign = sovereign_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let sink_before = native_balance(&TestFeeSink::get());
-    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
-      let cell = stored.as_mut().expect("Unsignaled authority exists");
-      let old = &cell.admission;
-      let replacement = crate::ActorAdmissionCertificate::new(
-        old.semantic_contract_id,
-        old.body_commitment,
-        differently_selected
-          .trigger
-          .wake_qualification(&differently_selected.window),
-        old.runtime_actor_semantics_version,
-        old.production_weight_identity,
-        old.body_geometry_version,
-        old.configured_bounds_commitment,
-        old.maximum_lifecycle_weight,
-      );
-      cell.pipeline_service_identity =
-        crate::pipeline_service_identity(replacement.admission_identity);
-      cell.admission = replacement;
-    });
-    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
-      .expect("mutated authority exists")
-      .admission
-      .admission_identity;
-    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
-      stored
-        .as_mut()
-        .expect("Contract head exists")
-        .header
-        .admission_identity = replacement_identity;
-    });
+    let replacement_identity = [7; 32];
     crate::ActorActivationAuthorities::<Test>::mutate(actor_id, |stored| {
       stored
         .as_mut()
@@ -290,9 +257,8 @@ fn crossing_activation_requires_its_certified_threshold_selector() {
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
     assert_eq!(System::events(), events_before);
     assert!(
-      !crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
-        .expect("authority remains fail-closed")
-        .hot
+      !Actors::active_actor_view(actor_id)
+        .expect("canonical authority remains fail-closed")
         .pending_signal
     );
   });

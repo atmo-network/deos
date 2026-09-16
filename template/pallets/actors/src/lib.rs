@@ -7058,45 +7058,47 @@ pub mod pallet {
       feed: T::ObservationFeedId,
     ) -> Option<ObservationActivationState<T>> {
       let authority = ActorActivationAuthorities::<T>::get(actor_id)?;
-      let (identity, hot, certificate) = Self::load_control_authority_with_authority(actor_id)?;
-      if hot.cycle_state != CycleState::Idle
+      let LoadedActorStateOf::Active(state) = Self::load_actor_state(actor_id) else {
+        return None;
+      };
+      if state.hot.cycle_state != CycleState::Idle
         || !matches!(
-          hot.trigger_runtime_state,
+          state.hot.trigger_runtime_state,
           TriggerRuntimeState::ObservationCrossing { .. }
         )
-        || ActorRunHeads::<T>::contains_key(actor_id)
+        || state.run_state.is_some()
       {
         return None;
       }
+      let certificate = Self::build_admission_certificate(&state.contract)?;
       if authority.feed != feed
         || authority.semantic_contract_id != certificate.semantic_contract_id
         || authority.body_commitment != certificate.body_commitment
         || authority.admission_identity != certificate.admission_identity
-      {
-        return None;
-      }
-      let head = ActorContractHeads::<T>::get(actor_id)?;
-      if !certificate.authorizes_wake(head.header.trigger.wake_qualification(&head.header.window))
+        || !certificate.authorizes_wake(
+          state
+            .contract
+            .trigger
+            .wake_qualification(&state.contract.window),
+        )
         || !matches!(
-          &head.header.trigger,
+          &state.contract.trigger,
           Trigger::ObservationCrossing { feed: contract_feed, .. } if *contract_feed == feed
         )
-        || authority.cooldown_blocks != head.header.cooldown_blocks
-        || authority.window != head.header.window
-        || authority.auto_close_at_cycle_nonce != head.header.auto_close_at_cycle_nonce
-        || authority.semantic_contract_id != head.header.semantic_contract_id
-        || authority.body_commitment != head.header.body_commitment
-        || authority.admission_identity != head.header.admission_identity
-        || !hot
+        || authority.cooldown_blocks != state.contract.cooldown_blocks
+        || authority.window != state.contract.window
+        || authority.auto_close_at_cycle_nonce != state.contract.auto_close_at_cycle_nonce
+        || !state
+          .hot
           .trigger_runtime_state
-          .is_compatible_with(&head.header.trigger)
+          .is_compatible_with(&state.contract.trigger)
       {
         return None;
       }
       Some(ObservationActivationState {
         actor_id,
-        identity,
-        hot,
+        identity: state.identity,
+        hot: state.hot,
         authority,
         admission: Some(certificate),
         run_head: None,
