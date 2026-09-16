@@ -1054,10 +1054,6 @@ impl<T: Config> Pallet<T> {
 
   /// Executes and commits one generation-bound zero-Step Service attempt without restoring legacy
   /// FIFO authority. Refusal rolls back semantic, lifecycle, process, and ring mutations together.
-  #[allow(
-    dead_code,
-    reason = "canonical Service execution remains staged behind the atomic publication cutover"
-  )]
   pub(crate) fn execute_zero_step_on_service(
     actor: ActorRef,
     kind: ServiceResidenceKind,
@@ -8739,10 +8735,6 @@ impl<T: Config> Pallet<T> {
   /// Atomically replaces one canonical publication with a validated lifecycle successor. The
   /// source semantic record and process residence remain authoritative until their exact carrier
   /// members have been removed; any refusal restores the complete canonical root.
-  #[allow(
-    dead_code,
-    reason = "canonical lifecycle transition remains inert until all production paths cut over"
-  )]
   pub(crate) fn transition_actor_publication_to_successor(
     actor: ActorRef,
     source: &ActiveActorStateOf<T>,
@@ -8914,12 +8906,7 @@ impl<T: Config> Pallet<T> {
   }
 
   /// Atomically publishes semantic Hot state, one exclusive process residence and an optional
-  /// independent temporal Trigger deadline. Production callers remain on the legacy carrier until
-  /// the complete create/resume and mandatory-service cutover can enter this boundary together.
-  #[allow(
-    dead_code,
-    reason = "composite publication remains inert until the atomic carrier cutover"
-  )]
+  /// independent temporal Trigger deadline for initial activation and lifecycle republishing.
   pub(crate) fn publish_actor_publication(
     actor: ActorRef,
     state: &ActiveActorStateOf<T>,

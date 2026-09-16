@@ -5346,10 +5346,6 @@ pub mod pallet {
 
     /// Atomically commits one retained canonical Service attempt before advancing its ring head.
     /// Any semantic or frontier refusal rolls back both owners and leaves the member retryable.
-    #[allow(
-      dead_code,
-      reason = "canonical service consumer remains staged behind the atomic publication cutover"
-    )]
     pub(crate) fn commit_retained_service_attempt(
       actor: ActorRef,
       kind: ServiceResidenceKind,
@@ -6446,10 +6442,6 @@ pub mod pallet {
 
     /// Atomically wakes one exact generation/plan-bound Park resident into canonical Service.
     /// Stale authority and occupied Pending work refuse without consuming the retained plan.
-    #[allow(
-      dead_code,
-      reason = "canonical Park wake remains staged behind the atomic publication cutover"
-    )]
     pub(crate) fn wake_parked_member_to_service(
       actor: ActorRef,
       kind: ServiceResidenceKind,
@@ -6573,10 +6565,6 @@ pub mod pallet {
 
     /// Atomically transfers one exact canonical Service member into a preselected deadline slot.
     /// The caller must commit semantic retry state first in the same outer transaction.
-    #[allow(
-      dead_code,
-      reason = "canonical deadline transfer remains staged behind the atomic publication cutover"
-    )]
     pub(crate) fn transfer_service_member_to_deadline(
       actor: ActorRef,
       destination: DeadlineHandleOf<T>,
