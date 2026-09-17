@@ -905,10 +905,22 @@ fn run_idle(weight: Weight) {
   let max_blocks =
     <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get().saturating_mul(2u32);
   for _ in 1..max_blocks {
-    if !ActorControlLocators::<Test>::iter_keys()
+    let legacy_running = ActorControlLocators::<Test>::iter_keys()
       .filter_map(Actors::actor_hot)
-      .any(|hot| hot.cycle_state == CycleState::Running)
-    {
+      .any(|hot| hot.cycle_state == CycleState::Running);
+    // Canonical production authority keeps hot state in the semantic record rather than in a legacy
+    // control locator. A fresh occurrence publishes one Pending Service at B+1, so the helper must
+    // advance one block to reach it; a Running continuation keeps its one-round-per-call contract
+    // and is advanced explicitly by the caller, mirroring the legacy predicate.
+    let canonical_pending = crate::ActorSemanticStates::<Test>::iter().any(|(actor_id, state)| {
+      matches!(
+        state,
+        crate::ActorSemanticState::Active(record)
+          if record.hot.pending_signal && record.hot.cycle_state == CycleState::Idle
+      ) && (crate::ActorProcesses::<Test>::contains_key(actor_id)
+        || crate::ServiceNodes::<Test>::contains_key(actor_id))
+    });
+    if !legacy_running && !canonical_pending {
       break;
     }
     let Some(next) = now.checked_add(1) else {

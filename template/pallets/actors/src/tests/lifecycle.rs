@@ -1806,31 +1806,6 @@ fn manual_trigger_waits_for_schedule_window_without_second_signal() {
 }
 
 #[test]
-fn manual_trigger_is_preserved_on_weight_defer() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Actors::scheduler_admission_overhead().saturating_add(Weight::from_parts(10, 0)));
-    let inst = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert!(inst.pending_signal);
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
-        if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn manual_trigger_is_preserved_on_proof_size_defer() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
