@@ -1897,7 +1897,7 @@ impl<T: Config> Pallet<T> {
       }
     }
     polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err(|| {
-      let result = Self::simulate_actor_service(actor_id, budget);
+      let result = Self::simulate_actor_service(actor_id, budget, classification.terminal_reason);
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(result)
     })
     .map_err(|()| SimulationError::TransactionDepthExceeded)?

@@ -2837,6 +2837,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn simulate_actor_service(
     actor_id: ActorId,
     budget: SimulationBudget,
+    terminal_reason: Option<CloseReason>,
   ) -> Result<SimulationResult, SimulationError> {
     let limits = budget
       .checked_limits()
@@ -2884,7 +2885,40 @@ impl<T: Config> Pallet<T> {
         }
         Some(ProcessResidence::Deadline { .. }) => return Err(SimulationError::NotReady),
         Some(ProcessResidence::Service(_)) => {}
-        _ => return Err(SimulationError::NotReady),
+        _ => {
+          // An Idle Actor with no Service/Deadline residence is only reachable by the canonical
+          // Service round after a trigger occurrence publishes membership. The projection must
+          // still surface a terminal classification (for example an exhausted cycle nonce), which
+          // production applies through the same atomic close owner once the Actor is serviced.
+          // Charge the identical selector plus close envelope so an insufficient control budget
+          // defers instead of silently projecting a close.
+          let Some(reason) = terminal_reason else {
+            return Err(SimulationError::NotReady);
+          };
+          let selector_envelope = T::WeightInfo::service_round_begin_populated()
+            .saturating_add(T::WeightInfo::service_round_probe_eligible());
+          let close_envelope =
+            selector_envelope.saturating_add(Self::close_dispatch_weight_upper());
+          let total = selector_envelope.saturating_add(close_envelope);
+          let mut reservation = resources
+            .reserve(limits, BlockResourceDomain::ActorControl, close_envelope)
+            .map_err(|_| SimulationError::ResourceDeferred)?;
+          if !cycle_meter.can_consume(total) {
+            return Err(SimulationError::ResourceDeferred);
+          }
+          cycle_meter.consume(total);
+          resources
+            .settle(&mut reservation, close_envelope)
+            .map_err(|_| SimulationError::ResourceDeferred)?;
+          return Ok(Self::simulation_attempt_result(Self::step_simulation_evidence(
+            semantic.identity.cycle_nonce,
+            0,
+            AttemptDisposition::Closed(reason),
+            OutcomeTotals::default(),
+            None,
+            None,
+          )));
+        }
       }
       Self::begin_service_round(now)
         .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;

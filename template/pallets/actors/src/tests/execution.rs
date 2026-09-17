@@ -1625,7 +1625,7 @@ fn execute_cycle_respects_max_executions_per_block() {
     }
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started_block_2 = frame_system::Pallet::<Test>::events()
       .iter()
       .filter(|record| {
@@ -1638,7 +1638,7 @@ fn execute_cycle_respects_max_executions_per_block() {
     assert_eq!(started_block_2, max_exec);
     frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started_block_3 = frame_system::Pallet::<Test>::events()
       .iter()
       .filter(|record| {
