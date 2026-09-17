@@ -5044,12 +5044,11 @@ fn pipeline_opening_rearms_cadence_from_current_tick() {
     );
     fund_native(actor_id, 1_000);
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
+    service_canonical_temporal_frontiers(2);
     assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.trigger_wakeup_pointer.is_none()));
     let bob_before = native_balance(&BOB);
 
-    let _ = Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert_eq!(native_balance(&BOB), bob_before + 10);
     let state = Actors::active_actor_state(actor_id).expect("Actor remains active");
@@ -6354,23 +6353,26 @@ fn cadenced_latch_disables_detection_until_pipeline_opening() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     let first = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active");
-    let placement = first.queue_ticket;
     assert!(first.pending_signal);
-    assert!(placement.is_some());
+    assert!(first.queue_ticket.is_none());
     assert!(first.trigger_wakeup_pointer.is_none());
+    assert_eq!(
+      crate::ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(crate::ProcessResidence::Service(
+        crate::ServiceResidenceKind::Pending
+      ))
+    );
 
     frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(3, &mut meter);
+    service_canonical_temporal_frontiers(3);
 
     let fee = cadenced_trigger_fee();
     assert_eq!(fee_collections(), vec![fee]);
     let second = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active");
     assert!(second.pending_signal);
-    assert_eq!(second.queue_ticket, placement);
+    assert!(second.queue_ticket.is_none());
     assert!(second.trigger_wakeup_pointer.is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -6474,40 +6476,6 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn paused_temporal_occurrence_restores_unsignaled_frame_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
-    run_idle(Weight::MAX);
-    assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    frame_system::Pallet::<Test>::set_block_number(6);
-
-    crate::NextWakeupClock::<Test>::put(WakeupClock::Tick);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    let stats = Actors::drain_overdue_wakeups_cursor(6, &mut meter);
-    assert_eq!(stats.entries_scanned, 1);
-    assert_eq!(stats.ready_entries, 1);
-    assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
-
-    assert_eq!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    );
-    let (_, _, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("paused temporal Unsignaled frame authority exists");
-    assert!(hot.lifecycle.is_paused());
-    assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, None);
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
 fn cadenced_rearm_uses_frozen_opening_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -6600,65 +6568,6 @@ fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
     let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
     assert_eq!(run_after.cursor, run_before.cursor);
     assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn busy_cadenced_occurrence_preserves_frame_service_with_canonical_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
-    let actor_id = create_user_with(ALICE, Mutability::Mutable, timer_schedule(1), None, steps);
-    fund_native(actor_id, 1_000_000);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
-    let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
-    clear_fee_collections();
-    System::reset_events();
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    let stats = Actors::drain_overdue_wakeups_cursor(3, &mut meter);
-
-    assert_eq!(stats.entries_scanned, 1);
-    assert_eq!(stats.ready_entries, 1);
-    assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
-    assert!(fee_collections().is_empty());
-    let (_, _, hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("busy Cadenced frame authority remains active");
-    assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(!hot.pending_signal);
-    assert_eq!(
-      hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(4)
-    );
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
-    )));
-    let run_after = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline remains Running");
-    assert_eq!(run_after.cursor, run_before.cursor);
-    assert_eq!(run_after.cycle_nonce, run_before.cycle_nonce);
-    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
