@@ -2858,7 +2858,7 @@ fn frame_only_manual_zero_step_uses_only_canonical_control() {
     // locator or scalar hot cell survives the completed zero-Step cycle.
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_hot(actor_id).is_some());
     assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(crate::ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
@@ -2916,7 +2916,7 @@ fn frame_only_opening_stop_cycle_uses_only_canonical_control() {
     )));
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_hot(actor_id).is_some());
     assert!(Actors::actor_control_cell(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -3633,7 +3633,7 @@ fn frame_only_paused_ready_pop_uses_only_canonical_control() {
     );
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_hot(actor_id).is_some());
     assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -7255,5 +7255,36 @@ fn eligibility_projection_reports_exact_cadence_gate_without_actor_phase() {
       Err(SimulationError::NotReady),
       "simulation must not synthesize readiness before scheduler materialization"
     );
+  });
+}
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+#[test]
+fn canonical_in_place_hot_mutation_requires_no_legacy_primary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_contract_steps(),
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+    let before = Actors::actor_hot(actor_id).expect("canonical semantic Hot owner");
+    Actors::try_mutate_control_hot_with_authority(
+      actor_id,
+      Error::<Test>::ActorNotFound,
+      |hot| {
+        hot.pending_signal = !before.pending_signal;
+        Ok(())
+      },
+    )
+    .expect("canonical in-place Hot mutation commits through the semantic owner");
+    let after = Actors::actor_hot(actor_id).expect("canonical semantic Hot owner");
+    assert_eq!(after.pending_signal, !before.pending_signal);
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }

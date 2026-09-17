@@ -6789,13 +6789,33 @@ pub mod pallet {
       Self::try_store_service_control_state(actor, kind, identity, hot)
     }
 
-    /// In-place legacy mutation requires a live primary; moving transitions publish a supplied successor.
+    /// In-place Hot mutation resolves against whichever authority owns the active record: a live
+    /// legacy primary keeps its physical mirror, while a canonically published Actor mutates only
+    /// the semantic owner and fails closed on any leftover unsignaled cell. Moving transitions
+    /// publish a supplied successor instead of using this in-place seam.
     pub(crate) fn try_store_control_hot_with_authority(
       actor_id: ActorId,
       hot: ActorHotStateOf<T>,
     ) -> Result<(), crate::scheduler::EnqueueOutcome> {
       if !ActorControlLocators::<T>::contains_key(actor_id) {
-        return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+        if ActorUnsignaledControlCells::<T>::contains_key(actor_id) {
+          return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+        }
+        let current = ActorSemanticStates::<T>::get(actor_id)
+          .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+        let ActorSemanticState::Active(mut record) = current.clone() else {
+          return Err(crate::scheduler::EnqueueOutcome::CorruptedTopology);
+        };
+        record.hot = hot;
+        return Self::mutate_actor_semantic_state(
+          actor_id,
+          ActorSemanticMutation::Replace {
+            expected: current,
+            replacement: ActorSemanticState::Active(record),
+          },
+        )
+        .map(|_| ())
+        .map_err(|_| crate::scheduler::EnqueueOutcome::CorruptedTopology);
       }
       let current = ActorSemanticStates::<T>::get(actor_id)
         .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
@@ -7599,8 +7619,15 @@ pub mod pallet {
       Self::load_primary_control_cell(actor_id).ok()
     }
 
+    /// Reads the active Hot state from its canonical semantic owner, falling back to the legacy
+    /// primary only when no semantic record exists. Canonically published Actors keep Hot state in
+    /// `ActorSemanticStates`; legacy Actors mirror it there while a primary remains.
     pub fn actor_hot(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
-      Self::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+      match ActorSemanticStates::<T>::get(actor_id) {
+        Some(ActorSemanticState::Active(record)) => Some(record.hot),
+        Some(ActorSemanticState::Dormant(_)) => None,
+        None => Self::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot),
+      }
     }
 
     pub fn pending_signal(actor_id: ActorId) -> bool {
