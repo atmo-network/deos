@@ -4702,10 +4702,24 @@ impl<T: Config> Pallet<T> {
     actor_id: ActorId,
     state: ActiveActorStateOf<T>,
   ) -> Result<ActivationPlan<T>, ActivationFailure> {
-    let frame_admission = {
+    let frame_admission = if ActorControlLocators::<T>::contains_key(actor_id) {
       let (_, identity, _, admission) = Self::load_frame_control_authority(actor_id).ok_or(
         ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()),
       )?;
+      if identity != state.identity {
+        return Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ));
+      }
+      admission
+    } else {
+      // Canonically published Actor: the generation-bound semantic owner is the sole authority,
+      // so the preflight derives its frame admission from canonical state instead of a legacy
+      // primary control cell that canonical publication never creates.
+      let (identity, _, admission) =
+        Self::load_control_authority_with_authority(actor_id).ok_or(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ))?;
       if identity != state.identity {
         return Err(ActivationFailure::Permanent(
           Error::<T>::ActorInvariant.into(),

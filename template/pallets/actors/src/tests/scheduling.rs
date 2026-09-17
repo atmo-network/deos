@@ -2464,6 +2464,37 @@ fn ready_activation_plan_commits_its_frozen_destination_from_canonical_authority
 }
 
 #[test]
+fn canonical_activation_preflight_derives_admission_without_a_legacy_primary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      contract_steps_with_step(make_step(Task::StopCycle)),
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+
+    let state = Actors::active_actor_state(actor_id).expect("canonical activation source");
+    let plan = Actors::preflight_activation_loaded(actor_id, state)
+      .expect("canonical activation preflight derives admission from semantic authority");
+    assert!(matches!(
+      &plan.action,
+      crate::scheduler::ActivationAction::EnqueueReady(Ok(_))
+    ));
+
+    assert_eq!(
+      Actors::commit_activation_plan(plan),
+      Ok(crate::scheduler::ActivationOutcome::Latched)
+    );
+    let hot = Actors::actor_hot(actor_id).expect("committed hot authority");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some());
+  });
+}
+
+#[test]
 fn deferred_activation_preserves_source_on_failure_and_publishes_exact_waiting() {
   for saturated in [false, true] {
     for empty in [false, true] {
