@@ -10011,11 +10011,13 @@ mod benches {
       );
       assert!(IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id));
     }
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id)
-      .expect("published observation creates Ready primary");
-    assert!(cell.hot.pending_signal);
+    // A canonical observation publishes one Pending Service member at B+1, so the fixture
+    // advances to that canonical eligibility instead of reading a retired legacy primary cell.
+    let eligible_from = ServiceNodes::<T>::get(actor_id)
+      .expect("published observation creates a canonical Pending Service member")
+      .eligible_from;
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Ready eligibility exists"),
+      frame_system::Pallet::<T>::block_number().max(eligible_from),
     );
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("published observation readiness is coherent");
