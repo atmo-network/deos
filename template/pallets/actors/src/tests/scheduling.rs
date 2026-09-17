@@ -489,7 +489,9 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
             assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
             run_idle(Weight::MAX);
             let run = Actors::actor_run_state(actor_id).expect("ordinary retry");
-            assert_eq!(run.eligible_at, 2);
+            // The occurrence published at block 1 is served at B+1, so a cooldown of one block
+            // makes the retry eligible at block 3.
+            assert_eq!(run.eligible_at, 3);
             System::set_block_number(2);
             if paused { assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id)); }
             if breaker { assert_ok!(Actors::set_global_circuit_breaker(RuntimeOrigin::root(), true)); }
@@ -498,11 +500,15 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
               let excess = native_balance(&sovereign).checked_sub(TestMinUserBalance::get()).expect("funded fee floor");
               deplete_user_sovereign(actor_id, excess);
             }
-            assert_eq!(Actors::paged_head_entry().map(|(_, entry)| entry.actor_id), Some(actor_id));
+            assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+            assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
             let custody = native_balance(&sovereign);
             clear_fee_collections();
             System::reset_events();
             System::set_block_number(102);
+            // Window expiry for a paused Actor is owned by the canonical temporal deadline carrier,
+            // so the drain pass only sees it after the housekeeping frontier returns it to Service.
+            service_canonical_temporal_frontiers(102);
             let limits = crate::SimulationBudget {
               actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
               shared_economic: effect_capacity,
@@ -4226,7 +4232,9 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
+    // The occurrence published at block 1 is served at B+1, so a two-block cooldown makes the
+    // retry eligible at block 4.
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(4));
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("suspended")
@@ -4244,7 +4252,9 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     );
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    Actors::on_initialize(4);
+    run_prepass();
     run_idle(Weight::MAX);
     let completed = Actors::active_actor_view(actor_id).expect("actor completes");
     assert_eq!(completed.cycle_nonce, 1);
@@ -4464,7 +4474,12 @@ fn run_retry_preserves_independent_external_timer_cadence() {
       hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
       Some(cadence_due + 100)
     );
-    assert!(hot.queue_ticket.is_some());
+    // The suspended retry keeps its structural residence in the canonical process/Service carrier
+    // while the external cadence keeps its own Trigger deadline, so no legacy queue ticket exists.
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(crate::TriggerDeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(hot.queue_ticket.is_none());
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("suspended")
