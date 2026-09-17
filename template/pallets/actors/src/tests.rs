@@ -178,20 +178,6 @@ fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
   }
 }
 
-fn restore_structural_queue_tombstone(actor_id: ActorId) {
-  assert_eq!(
-    ActorControlLocators::<Test>::get(actor_id),
-    Some(crate::ActorControlLocation::Unsignaled)
-  );
-  mutate_primary_control_cell(actor_id, |cell| cell.hot.pending_signal = false);
-  assert!(
-    Actors::actor_hot(actor_id)
-      .expect("invalidated Actor exists")
-      .queue_ticket
-      .is_none()
-  );
-}
-
 fn schedule_latched_service_wakeup(actor_id: ActorId, wakeup_block: MockBlockNumber) -> bool {
   try_schedule_latched_service_wakeup(actor_id, wakeup_block).is_ok()
 }
@@ -1062,83 +1048,6 @@ fn actor_event_count(predicate: impl Fn(&Event<Test>) -> bool) -> usize {
 
 fn has_actor_event(predicate: impl Fn(&Event<Test>) -> bool) -> bool {
   actor_event_count(predicate) > 0
-}
-
-fn mixed_materialization_ticket_trace() -> Vec<u64> {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let steps = contract_steps_with_step(make_step(Task::StopCycle));
-    let cadence_actor = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::cadenced(1),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps.clone(),
-    );
-    let crossing_actor = create_system_with(
-      BOB,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps.clone(),
-    );
-    let change_actor = create_system_with(
-      CHARLIE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_change(8),
-        cooldown_blocks: 0,
-      },
-      None,
-      steps,
-    );
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    assert_ok!(Actors::note_observation_transition(
-      7,
-      crate::ObservationTransition {
-        revision: 2,
-        previous: Some(50),
-        current: 150,
-      },
-    ));
-    assert_ok!(Actors::note_observation_changed(8, 1));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-
-    let mut trace = crate::ActorReadyFrameChunks::<Test>::iter()
-      .flat_map(|(page_id, page)| {
-        page
-          .into_iter()
-          .enumerate()
-          .filter_map(move |(slot, cell)| {
-            cell.map(|cell| (page_id * 32 + slot as u64, cell.actor_id))
-          })
-      })
-      .collect::<Vec<_>>();
-    trace.sort_unstable_by_key(|(ticket, _)| *ticket);
-    let actor_trace = trace
-      .into_iter()
-      .map(|(_, actor_id)| actor_id)
-      .collect::<Vec<_>>();
-    assert_eq!(
-      actor_trace,
-      vec![cadence_actor, crossing_actor, change_actor]
-    );
-    actor_trace
-  })
 }
 
 // --- Error Coverage Tests ---

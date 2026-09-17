@@ -1,5 +1,8 @@
 use super::*;
-use crate::{FundingProvenance, TriggerCauseProvenance};
+use crate::{
+  ActorProcesses, FundingProvenance, ProcessResidence, ServiceNodes, ServiceResidenceKind,
+  TriggerCauseProvenance,
+};
 
 #[test]
 fn cancelled_run_returns_idle_without_a_deferred_manual_cycle() {
@@ -4145,34 +4148,6 @@ fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_
 }
 
 #[test]
-fn queue_ticket_exhaustion_closes_through_the_unified_sink() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    fund_native(actor_id, 1_000);
-    let sovereign = sovereign_account(actor_id);
-    // Monotonic ticket namespace at the ceiling closes through the single
-    // scheduler-exhaustion terminal owner.
-    crate::ActorReadyHead::<Test>::put(u64::MAX);
-    crate::ActorReadyTail::<Test>::put(u64::MAX);
-    let actor_before = native_balance(&sovereign);
-    assert_ok!(Actors::notify_address_event(
-      actor_id,
-      TestAsset::Native,
-      100,
-      &ALICE
-    ));
-    assert_eq!(native_balance(&sovereign), actor_before);
-    assert!(Actors::active_actor_view(actor_id).is_none());
-  });
-}
-
-#[test]
 fn queue_cohort_preflight_ticket_exhaustion_is_read_only() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -4201,74 +4176,6 @@ fn queue_cohort_preflight_ticket_exhaustion_is_read_only() {
       root_before
     );
     assert_eq!(native_balance(&sovereign_account(actor_id)), actor_before);
-  });
-}
-
-#[test]
-fn stale_close_entry_drains_as_tombstone_before_recreated_slot_runs() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // Create a User actor at slot 3, trigger it into the FIFO, then close it while queued.
-    let first = create_user_with_slot(
-      ALICE,
-      3,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(first, 1_000_000_000_000_000);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), first));
-    assert!(
-      Actors::actor_hot(first)
-        .expect("queued actor")
-        .queue_ticket
-        .is_some(),
-      "closed actor is physically queued"
-    );
-    assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), first));
-    assert!(Actors::actor_hot(first).is_none(), "actor is closed");
-
-    // Recreate at the same slot; the stale queue entry must not signal the fresh identity.
-    let second = create_user_with_slot(
-      ALICE,
-      3,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    fund_native(second, 1_000_000_000_000_000);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), second));
-    let second_ticket = Actors::actor_hot(second)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("recreated actor has its own ticket");
-    assert_ne!(
-      second_ticket, 0,
-      "fresh ticket must differ from the stale one"
-    );
-
-    // The stale head is a tombstone (actor closed, ticket cleared) and drains in physical order.
-    let cutoff = Actors::next_queue_ticket();
-    let drained = Actors::paged_drain_tombstones(cutoff, 10).expect("valid stale drain");
-    assert_eq!(drained.tombstones_skipped, 1, "stale entry is a tombstone");
-    assert_eq!(Actors::queue_head(), 1);
-
-    // No CycleStarted for the recreated actor from the stale entry; the live head is the fresh
-    // actor only after the fresh trigger.
-    assert!(Actors::actor_hot(second).is_some_and(|hot| hot.pending_signal));
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    let started: Vec<_> = frame_system::Pallet::<Test>::events()
-      .into_iter()
-      .filter_map(|record| match record.event {
-        RuntimeEvent::Actors(Event::CycleStarted { actor_id, .. }) => Some(actor_id),
-        _ => None,
-      })
-      .collect();
-    assert_eq!(started, vec![second], "only the recreated actor executes");
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -4579,6 +4486,7 @@ fn canonical_fifo_uses_one_physical_ticket_sequence() {
       inert_contract_steps(),
     );
 
+    let triggered = [system_a, user_a, system_b, user_b];
     for (owner, actor_id) in [
       (ALICE, system_a),
       (ALICE, user_a),
@@ -4591,58 +4499,35 @@ fn canonical_fifo_uses_one_physical_ticket_sequence() {
       ));
     }
 
-    assert_eq!(Actors::next_queue_ticket(), 4);
-    let tickets: Vec<_> = crate::ActorReadyFrameChunks::<Test>::get(0)
-      .expect("canonical queue page")
-      .into_iter()
-      .enumerate()
-      .filter_map(|(slot, cell)| cell.map(|_| slot as u64))
-      .collect();
-    assert_eq!(tickets, vec![0, 1, 2, 3]);
-    assert_eq!(Actors::queue_occupancy(), 4);
-  });
-}
-
-#[test]
-fn canonical_tombstones_cannot_bypass_the_oldest_live_head() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    let old_user = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      old_user
-    ));
-    for _ in 0..3 {
-      let tombstone = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        tombstone
-      ));
-      assert!(Actors::paged_invalidate(tombstone).is_some());
-      restore_structural_queue_tombstone(tombstone);
+    // Canonical publication gives every latched Actor exactly one generation-bound
+    // `Service(Pending)` membership in the single persistent service ring; no legacy ready-frame
+    // ticket or scalar allocator is mirrored.
+    let header = Actors::service_header();
+    assert_eq!(header.count, 4);
+    for actor_id in triggered {
+      let hot = Actors::actor_hot(actor_id).expect("latched Actor");
+      assert!(hot.pending_signal);
+      assert!(hot.queue_ticket.is_none());
+      assert!(ServiceNodes::<Test>::contains_key(actor_id));
+      assert_eq!(
+        ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+        Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+      );
     }
-    let later_system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      later_system
-    ));
-    let cutoff = Actors::next_queue_ticket();
-    let (state, entry, _) = Actors::test_head_discovery(cutoff, 1, 0, scan);
-    assert_eq!(state, 1);
-    assert_eq!(entry.map(|entry| entry.actor_id), Some(old_user));
 
-    assert_eq!(Actors::paged_invalidate(old_user), Some(0));
-    restore_structural_queue_tombstone(old_user);
-    let (state, entry, scanned) = Actors::test_head_discovery(cutoff, 5, 0, scan.saturating_mul(5));
-    assert_eq!((state, scanned), (1, 5));
-    assert_eq!(entry.map(|entry| entry.actor_id), Some(later_system));
+    // The ring is one circular physical sequence in publication order.
+    let first = header.cursor.expect("non-empty ring cursor");
+    let mut order = vec![first.actor_id];
+    let mut current = ServiceNodes::<Test>::get(first.actor_id)
+      .expect("cursor member")
+      .next;
+    while current != first {
+      order.push(current.actor_id);
+      current = ServiceNodes::<Test>::get(current.actor_id)
+        .expect("ring member")
+        .next;
+    }
+    assert_eq!(order, triggered);
   });
 }
 
@@ -5023,14 +4908,6 @@ fn empty_materialization_families_charge_only_their_measured_probes_and_yield() 
     assert_eq!(Actors::crossing_pending_feed_list().count, 0);
     assert_eq!(Actors::dirty_observation_list().count, 0);
   });
-}
-
-#[test]
-fn mixed_materialization_ticket_order_is_reproducible_from_cursor_and_block_state() {
-  assert_eq!(
-    mixed_materialization_ticket_trace(),
-    mixed_materialization_ticket_trace()
-  );
 }
 
 #[test]
