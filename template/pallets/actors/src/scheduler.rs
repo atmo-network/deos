@@ -595,6 +595,7 @@ impl<T: Config> Pallet<T> {
               continue;
             }
             Ok(ServiceRoundEncounter::Empty | ServiceRoundEncounter::Closed) => break,
+            Ok(ServiceRoundEncounter::TerminallyClosed(_)) => break,
             Ok(ServiceRoundEncounter::AlreadyAttempted(_)) => break,
             Ok(ServiceRoundEncounter::BreakerRefused(_)) => break,
             Err(_) => {
@@ -712,6 +713,7 @@ impl<T: Config> Pallet<T> {
         ServiceHeadDiscovery::Closed
       }
       Ok(ServiceRoundEncounter::Closed) => ServiceHeadDiscovery::Closed,
+      Ok(ServiceRoundEncounter::TerminallyClosed(_)) => ServiceHeadDiscovery::Closed,
       Ok(ServiceRoundEncounter::NoWork(_)) => ServiceHeadDiscovery::InvariantStall,
       _ => ServiceHeadDiscovery::InvariantStall,
     }
@@ -2898,12 +2900,22 @@ impl<T: Config> Pallet<T> {
         }
         _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
       })?;
-      if encounter != ServiceRoundEncounter::Eligible(actor) {
-        return Err(SimulationError::NotReady);
-      }
-      return attempt
-        .map(Self::simulation_attempt_result)
-        .ok_or(SimulationError::NotReady);
+      return match encounter {
+        ServiceRoundEncounter::Eligible(_) => attempt
+          .map(Self::simulation_attempt_result)
+          .ok_or(SimulationError::NotReady),
+        ServiceRoundEncounter::TerminallyClosed(reason) => {
+          Ok(Self::simulation_attempt_result(Self::step_simulation_evidence(
+            semantic.identity.cycle_nonce,
+            0,
+            AttemptDisposition::Closed(reason),
+            OutcomeTotals::default(),
+            None,
+            None,
+          )))
+        }
+        _ => Err(SimulationError::NotReady),
+      };
     }
     let (location, cell) = Self::load_primary_control_cell(actor_id)
       .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;

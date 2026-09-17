@@ -6555,7 +6555,7 @@ pub mod pallet {
                   .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
               execution_weight = close_envelope;
-              encounter = ServiceRoundEncounter::Closed;
+              encounter = ServiceRoundEncounter::TerminallyClosed(reason);
             } else if idle_no_work {
               // A completed or aborted member is retained in the ring as an Idle resident. A later
               // round revisits it with no admitted work; it must advance the bounded cursor without

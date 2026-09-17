@@ -4186,6 +4186,12 @@ fn simulation_and_scheduler_reject_the_same_protected_fee_floor_boundary() {
     let actor_before = Actors::active_actor_view(actor_id).expect("actor before simulation");
     let events_before = System::events();
 
+    // The canonical occurrence is eligible at B+1, so the viability projection must be taken at
+    // that eligible block rather than in the publication block.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let hot = Actors::actor_hot(actor_id).expect("pending canonical head");
+    assert!(hot.pending_signal);
+    assert_eq!(hot.cycle_state, CycleState::Idle);
     let result = Actors::simulate_current_contract(
       actor_id,
       ActorType::User,
@@ -4525,7 +4531,11 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
       RuntimeOrigin::root(),
       true
     ));
-    run_idle(Weight::MAX);
+    // Drive exactly one block: the canonical breaker refusal retains placement without the
+    // helper's multi-block continuation loop advancing into future rounds.
+    Actors::on_initialize(3);
+    run_prepass();
+    Actors::on_idle(3, Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("breaker gated")
@@ -4539,7 +4549,9 @@ fn pause_and_breaker_gate_scheduler_owned_retry() {
     ));
     set_temporary_dex_failure(false);
     frame_system::Pallet::<Test>::set_block_number(4);
-    run_idle(Weight::MAX);
+    Actors::on_initialize(4);
+    run_prepass();
+    Actors::on_idle(4, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -6072,10 +6084,11 @@ fn scheduler_ignores_sparse_id_gaps() {
     assert_eq!(Actors::next_actor_id(), 2001);
     assert!(Actors::active_actor_view(0).is_some());
     assert!(Actors::active_actor_view(2000).is_some());
-    // Run one block: both actors must execute despite 2000-wide ID gap
-    System::set_block_number(2);
+    // Run one canonical service block: both actors must execute despite 2000-wide ID gap.
+    // Canonical publication serves the occurrence at B+1 through the mandatory prepass and
+    // Drain phase, so the block boundary and hooks must be driven canonically.
     System::reset_events();
-    Actors::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));
+    run_next_idle(Weight::from_parts(u64::MAX, u64::MAX));
     let executed: alloc::vec::Vec<_> = System::events()
       .iter()
       .filter_map(|r| {

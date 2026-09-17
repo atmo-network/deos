@@ -1,6 +1,6 @@
 use super::{
   contract::ActorContractCommitment,
-  lifecycle::{ActorId, ActorRef, ProcessPublicationError, ServiceResidenceKind},
+  lifecycle::{ActorId, ActorRef, CloseReason, ProcessPublicationError, ServiceResidenceKind},
 };
 use frame::prelude::*;
 
@@ -82,6 +82,9 @@ pub enum ServiceRetirementError {
 pub enum ServiceRoundEncounter {
   Empty,
   Closed,
+  /// The round finalized an eligible head through the atomic terminal close owner; carries the
+  /// applied close reason so a rolling-back viability simulation can project the same disposition.
+  TerminallyClosed(CloseReason),
   AlreadyAttempted(ActorRef),
   Eligible(ActorRef),
   /// The eligible head holds no admitted work this round; its Idle residence was retained and the
