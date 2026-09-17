@@ -644,16 +644,6 @@ impl<T: Config> Pallet<T> {
     });
   }
 
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn execute_zero_step_from_consumed_fixture(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-    now: BlockNumberFor<T>,
-  ) -> Result<(), AttemptTransactionError> {
-    Self::execute_zero_step_from_consumed_frame(actor_id, state, admission, now, None).map(|_| ())
-  }
-
   fn prepare_cadenced_rearm_hot(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,

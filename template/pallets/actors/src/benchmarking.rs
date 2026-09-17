@@ -483,7 +483,20 @@ mod benches {
   }
 
   fn benchmark_fixture_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, _, hot, _)| hot)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, _, hot, _)| hot)
+      .or_else(|| benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.hot))
+  }
+
+  /// Canonically published Actors own identity/hot/admission in the semantic record and no legacy
+  /// control cell, so the fixture accessors read that owner when no pre-cutover primary exists.
+  fn benchmark_fixture_semantic_record<T: Config>(
+    actor_id: ActorId,
+  ) -> Option<crate::ActorSemanticRecordOf<T>> {
+    match ActorSemanticStates::<T>::get(actor_id) {
+      Some(ActorSemanticState::Active(record)) => Some(record),
+      _ => None,
+    }
   }
 
   fn benchmark_fixture_semantic_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
@@ -586,7 +599,11 @@ mod benches {
   }
 
   fn benchmark_fixture_identity<T: Config>(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, identity, _, _)| identity)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, identity, _, _)| identity)
+      .or_else(|| {
+        benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.identity)
+      })
   }
 
   fn benchmark_fixture_scalar_identity<T: Config>(actor_id: ActorId) -> Option<ActorIdentityOf<T>> {
@@ -615,7 +632,11 @@ mod benches {
   fn benchmark_fixture_admission<T: Config>(
     actor_id: ActorId,
   ) -> Option<ActorAdmissionCertificateOf<T>> {
-    Pallet::<T>::load_frame_control_authority(actor_id).map(|(_, _, _, admission)| admission)
+    Pallet::<T>::load_frame_control_authority(actor_id)
+      .map(|(_, _, _, admission)| admission)
+      .or_else(|| {
+        benchmark_fixture_semantic_record::<T>(actor_id).map(|record| record.admission)
+      })
   }
 
   fn benchmark_fixture_scalar_admission<T: Config>(
@@ -8931,10 +8952,13 @@ mod benches {
     }
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real Manual occurrence publishes zero-Step readiness");
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("zero-Step Ready cell exists");
-    assert!(cell.hot.pending_signal);
+    // A fresh occurrence publishes one Pending Service member for the following block, so the
+    // fixture advances to that eligible block instead of reading a retired legacy primary cell.
+    let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("zero-Step canonical publication is coherent");
+    assert!(step.is_none() && state.hot.pending_signal);
     frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("zero-Step eligibility exists"),
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
     );
     actor_id
   }
@@ -8945,8 +8969,11 @@ mod benches {
     let (state, admission, step) =
       Pallet::<T>::load_frame_actor_service_state(actor_id).expect("zero-Step frame is coherent");
     assert!(step.is_none() && state.contract.steps.is_empty());
-    Pallet::<T>::remove_primary_control_cell_inner(actor_id)
-      .expect("zero-Step primary is consumed outside the inner measurement");
+    let now = frame_system::Pallet::<T>::block_number();
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Pallet::<T>::begin_service_round(now).expect("zero-Step canonical round begins");
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
     (state, admission)
   }
 
@@ -8956,8 +8983,13 @@ mod benches {
     admission: &ActorAdmissionCertificateOf<T>,
     now: BlockNumberFor<T>,
   ) {
+    let actor = Pallet::<T>::load_actor_ref(actor_id).expect("zero-Step Actor reference exists");
+    let (_, kind) = Pallet::<T>::load_service_actor_semantic_state_with_kind(actor)
+      .expect("zero-Step canonical Service residence exists");
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      match Pallet::<T>::execute_zero_step_from_consumed_fixture(actor_id, state, admission, now) {
+      match Pallet::<T>::execute_zero_step_on_service(actor, kind, state, admission, now, None)
+        .map(|_| ())
+      {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
           (),
           AttemptTransactionError,
@@ -9552,18 +9584,26 @@ mod benches {
     let tick = benchmark_fixture_hot::<T>(actor_id)
       .unwrap()
       .trigger_wakeup_pointer
-      .expect("creation installed a temporal primary")
+      .expect("creation installed a canonical temporal deadline")
       .tick;
     T::BenchmarkHelper::advance_to_scheduler_tick(tick).expect("host clock reaches the due tick");
     assert!(Pallet::<T>::current_scheduler_tick().unwrap() >= tick);
     let now = frame_system::Pallet::<T>::block_number();
+    let now_tick = Pallet::<T>::current_scheduler_tick().expect("scheduler clock is available");
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(now, &mut meter);
-    let (_, cell) = Pallet::<T>::actor_control_cell(actor_id).expect("due Actor is Ready");
-    assert!(cell.hot.pending_signal && cell.hot.trigger_wakeup_pointer.is_none());
-    frame_system::Pallet::<T>::set_block_number(
-      cell.eligible_at.expect("Ready eligibility exists"),
-    );
+    Pallet::<T>::service_due_deadline_frontiers(
+      &mut meter,
+      ServiceResidenceKind::Live,
+      now,
+      now_tick,
+      Some(WakeupKey::Block(now.saturating_add(1u32.into()))),
+      Some(WakeupKey::Tick(now_tick.saturating_add(1))),
+    )
+    .expect("canonical temporal frontier publishes due readiness");
+    let (state, _, step) = Pallet::<T>::load_frame_actor_service_state(actor_id)
+      .expect("temporal canonical publication is coherent");
+    assert!(step.is_none() && state.hot.pending_signal);
+    frame_system::Pallet::<T>::set_block_number(now.saturating_add(1u32.into()));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("ordinary temporal readiness and holds are coherent");
     actor_id
@@ -9685,14 +9725,12 @@ mod benches {
         .trigger_wakeup_pointer
         .expect("Cadenced successor has a temporal pointer");
       assert!(pointer.tick > Pallet::<T>::current_scheduler_tick().unwrap());
-      assert!(Pallet::<T>::wakeup_page_entry_matches(
-        WakeupPointer {
-          block: WakeupKey::Tick(pointer.tick),
-          page_id: pointer.page_id,
-          slot: pointer.slot,
-        },
-        actor_id
-      ));
+      let handle = TriggerDeadlineHandles::<T>::get(actor_id)
+        .expect("Cadenced successor owns a canonical deadline member");
+      assert_eq!(handle.actor.actor_id, actor_id);
+      assert_eq!(handle.key, WakeupKey::Tick(pointer.tick));
+      assert_eq!(handle.page, pointer.page_id);
+      assert_eq!(handle.slot, pointer.slot as u8);
     }
     let receipt: <T as frame_system::Config>::RuntimeEvent =
       Event::<T>::PipelineFeeCharged { actor_id, fee }.into();
