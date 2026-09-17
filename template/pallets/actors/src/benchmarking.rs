@@ -4397,6 +4397,25 @@ mod benches {
     )
   }
 
+  /// Returns one canonically suspended retry to its `Pending` Service residence at `due`. The
+  /// production block deadline frontier performs exactly this branch through the shared deadline
+  /// owner; the retired legacy waiting cursor never observes the canonical `DeadlineHandles`
+  /// member a canonically published retry registers.
+  fn service_canonical_suspended_retry<T: Config>(actor_id: ActorId, due: BlockNumberFor<T>) {
+    assert!(
+      DeadlineHandles::<T>::contains_key(actor_id),
+      "a canonically suspended retry owns one DeadlineHandles member"
+    );
+    let actor =
+      Pallet::<T>::load_actor_ref(actor_id).expect("suspended retry has a live reference");
+    Pallet::<T>::return_due_deadline_member_to_service(actor, ServiceResidenceKind::Live, due)
+      .expect("canonical due retry returns to Service residence");
+    assert!(
+      ServiceNodes::<T>::contains_key(actor_id),
+      "the returned retry owns one Service ring member"
+    );
+  }
+
   fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
     let page_size = T::WakeupPageSize::get();
     let page_start = u32::try_from(page_id)
@@ -7205,7 +7224,6 @@ mod benches {
   struct ReachableSuspendedSkip<T: Config> {
     actor_id: ActorId,
     cursor: u32,
-    ready_others: u32,
     owner: T::AccountId,
     frozen_asset: T::AssetId,
     balances: [(T::AssetId, T::Balance); 2],
@@ -7345,7 +7363,7 @@ mod benches {
       T::AssetOps::balance(&actor, *asset)
         < <T::Balance as polkadot_sdk::sp_runtime::traits::Bounded>::max_value()
     }));
-    let mut skip = if let Some((asset_a, asset_b, amount_a, amount_b)) = liquidity {
+    let skip = if let Some((asset_a, asset_b, amount_a, amount_b)) = liquidity {
       let frozen_asset = [asset_a, asset_b]
         .into_iter()
         .find(|asset| *asset != T::FeeNativeAssetId::get())
@@ -7362,7 +7380,6 @@ mod benches {
       Some(ReachableSuspendedSkip {
         actor_id,
         cursor: 0,
-        ready_others: 0,
         owner: owner.clone(),
         frozen_asset,
         balances: [
@@ -7376,6 +7393,11 @@ mod benches {
     };
     Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), actor_id)
       .expect("real head occurrence admits Opening");
+    // Canonical publication serves the Manual latch one block later; the Opening attempt there
+    // fails and suspends into a canonical deadline residence.
+    frame_system::Pallet::<T>::set_block_number(
+      frame_system::Pallet::<T>::block_number().saturating_add(1u32.into()),
+    );
     Pallet::<T>::execute_cycle(Weight::MAX);
     let state = Pallet::<T>::active_actor_state(actor_id).expect("Opening retains Actor");
     let run = state.run_state.expect("real failure retains Run");
@@ -7403,18 +7425,7 @@ mod benches {
       assert_eq!(run.last_step_outcome, Some(StepOutcome::FundingUnavailable));
     }
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
-    if let Some(fixture) = &mut skip {
-      // Host asset bootstrap may create other due Actors. Preserve their real topology.
-      fixture.ready_others = benchmark_fixture_ready_occupancy::<T>()
-        .checked_sub(1)
-        .expect("target owns one live Ready slot");
-    }
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due Run persists")
@@ -7440,9 +7451,10 @@ mod benches {
       Some(StepOutcome::FundingUnavailable)
     );
     assert_eq!(after.opening_snapshot, before.opening_snapshot);
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == after.eligible_at)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("head retry suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(after.eligible_at));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("head retry successor passes full audit");
   }
@@ -7617,29 +7629,18 @@ mod benches {
     )?;
     assert!(T::AssetOps::balance(&sovereign, frozen_asset).is_zero());
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    assert_eq!(
-      Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter).ready_entries,
-      1
-    );
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due Run retained")
         .encode(),
       retained
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("real frozen due source passes full audit");
     Ok(ReachableSuspendedSkip {
       actor_id,
       cursor,
-      ready_others: benchmark_fixture_ready_occupancy::<T>()
-        .checked_sub(1)
-        .expect("target owns one live Ready slot"),
       owner,
       frozen_asset,
       balances,
@@ -7650,7 +7651,6 @@ mod benches {
   struct ReachableSuspendedSuccess<T: Config> {
     actor_id: ActorId,
     cursor: u32,
-    ready_others: u32,
     asset: T::AssetId,
     amount: T::Balance,
     recipient: T::AccountId,
@@ -7749,10 +7749,7 @@ mod benches {
     assert_reachable_suspended_tail_retry_state::<T>(actor_id, cursor, 1);
     let run = ActorRunStateStore::<T>::get(actor_id).expect("suspension persists");
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    assert!(
-      Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter).ready_entries >= 1
-    );
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     let sovereign = Pallet::<T>::actor_identity(actor_id)
       .expect("Suspended identity exists")
       .sovereign_account;
@@ -7762,7 +7759,6 @@ mod benches {
     Ok(ReachableSuspendedSuccess {
       actor_id,
       cursor,
-      ready_others: benchmark_fixture_ready_occupancy::<T>().saturating_sub(1),
       asset,
       amount,
       recipient,
@@ -7785,10 +7781,8 @@ mod benches {
         assert!(state.run_state.is_none());
         assert_eq!(state.identity.cycle_nonce, 1);
         assert_eq!(state.hot.cycle_state, CycleState::Idle);
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
       RunningInnerBranch::Progress => {
         let run = state
@@ -7799,14 +7793,27 @@ mod benches {
         assert_eq!(run.cursor, fixture.cursor + 1);
         assert_eq!(run.last_committed_step_block, Some(now));
         assert_eq!(run.last_step_outcome, Some(StepOutcome::Executed));
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others + 1
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
     }
     #[cfg(feature = "try-runtime")]
     Pallet::<T>::do_try_state().expect("successful Suspended tail preserves full state audit");
+    // Explicit fixture teardown after the measured-transition assertions: the harness restarts each
+    // parameter sample from its captured state, so this setup must return the minted retry funding
+    // and the transferred value to a custody-neutral balance.
+    T::AssetOps::burn(
+      &fixture.recipient,
+      fixture.asset,
+      T::AssetOps::balance(&fixture.recipient, fixture.asset),
+    )
+    .expect("fixture-only recipient teardown succeeds");
+    T::AssetOps::burn(
+      &state.identity.sovereign_account,
+      fixture.asset,
+      T::AssetOps::balance(&state.identity.sovereign_account, fixture.asset),
+    )
+    .expect("fixture-only sovereign teardown succeeds");
   }
 
   fn assert_reachable_suspended_tail_skip<T: Config>(
@@ -7832,14 +7839,8 @@ mod benches {
         assert!(state.run_state.is_none());
         assert_eq!(state.identity.cycle_nonce, 1);
         assert_eq!(state.hot.cycle_state, CycleState::Idle);
-        assert_eq!(
-          ActorControlLocators::<T>::get(fixture.actor_id),
-          Some(ActorControlLocation::Unsignaled)
-        );
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others
-        );
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
       RunningInnerBranch::Progress => {
         let run = state.run_state.as_ref().expect("progress retains real Run");
@@ -7853,14 +7854,8 @@ mod benches {
         );
         assert_eq!(run.unsuccessful_attempts_at_cursor, 0);
         assert!(run.suspension.is_none());
-        assert_eq!(
-          benchmark_fixture_ready_occupancy::<T>(),
-          fixture.ready_others + 1
-        );
-        assert!(matches!(
-          ActorControlLocators::<T>::get(fixture.actor_id),
-          Some(ActorControlLocation::Ready { .. })
-        ));
+        assert!(ServiceNodes::<T>::contains_key(fixture.actor_id));
+        assert!(!ActorControlLocators::<T>::contains_key(fixture.actor_id));
       }
     }
     #[cfg(feature = "try-runtime")]
@@ -7988,25 +7983,15 @@ mod benches {
     let run = ActorRunStateStore::<T>::get(actor_id).expect("first real retry persists");
     let retained = run.encode();
     frame_system::Pallet::<T>::set_block_number(run.eligible_at);
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
-    let drained = Pallet::<T>::drain_overdue_wakeups_cursor(run.eligible_at, &mut meter);
-    assert!(drained.ready_entries >= 1);
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
+    service_canonical_suspended_retry::<T>(actor_id, run.eligible_at);
     assert_eq!(
       ActorRunStateStore::<T>::get(actor_id)
         .expect("due retry Run persists")
         .encode(),
       retained
     );
-    assert!(matches!(
-      ActorControlLocators::<T>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real due retry Ready source passes full audit");
+    Pallet::<T>::do_try_state().expect("real due retry source passes full audit");
     Ok((actor_id, cursor))
   }
 
@@ -8030,9 +8015,10 @@ mod benches {
     let due =
       Pallet::<T>::suspension_eligible_at(2, None, now, attempts).expect("retry due boundary fits");
     assert_eq!(run.eligible_at, due);
-    assert!(
-      matches!(ActorControlLocators::<T>::get(actor_id), Some(ActorControlLocation::Waiting { key: WakeupKey::Block(at), .. }) if at == due)
-    );
+    assert!(!ServiceNodes::<T>::contains_key(actor_id));
+    let handle = DeadlineHandles::<T>::get(actor_id)
+      .expect("retry suspends into a canonical deadline residence");
+    assert_eq!(handle.key, WakeupKey::Block(due));
     assert_eq!(
       run.opening_snapshot.len(),
       Pallet::<T>::opening_surfaces(&state.contract.steps, 0).len()
@@ -8041,11 +8027,12 @@ mod benches {
     else {
       unreachable!()
     };
-    assert!(T::AssetOps::balance(&state.identity.sovereign_account, asset).is_zero());
+    // The authored Transfer has not moved value: the retry step failed for funding, so the
+    // recipient retains zero. The sovereign may legitimately hold a minimum balance when the
+    // chosen asset doubles as an authored liquidity leg, so only the recipient is pinned here.
     assert!(T::AssetOps::balance(to, asset).is_zero());
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 0);
     #[cfg(feature = "try-runtime")]
-    Pallet::<T>::do_try_state().expect("real Suspended Waiting retry passes full audit");
+    Pallet::<T>::do_try_state().expect("real Suspended retry passes full audit");
   }
 
   fn prepare_reachable_running_with_step<T: Config>(
