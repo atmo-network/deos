@@ -268,7 +268,6 @@ pub enum CrossingWorkPlan {
   FireCohortCoalescedPair,
   FireCohortCoalesced,
   FireCohortPlaced,
-  FireCohortClosed,
   StructuralFault,
 }
 

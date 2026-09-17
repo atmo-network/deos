@@ -13741,9 +13741,7 @@ mod benches {
     {
       assert!(matches!(
         Pallet::<T>::classify_crossing_work(),
-        CrossingWorkPlan::FireCohortPlaced
-          | CrossingWorkPlan::FireCohortCoalesced
-          | CrossingWorkPlan::FireCohortClosed
+        CrossingWorkPlan::FireCohortPlaced | CrossingWorkPlan::FireCohortCoalesced
       ));
     }
   }
@@ -13944,49 +13942,6 @@ mod benches {
       )
       .expect("homogeneous coalesced preflight");
       assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortCoalesced);
-      assert_eq!(preflight.admitted_candidates, c);
-    }
-  }
-
-  #[benchmark]
-  fn crossing_terminal_cohort_preflight(c: Linear<1, { CROSSING_COHORT_BENCHMARK_MAX }>) {
-    let (feed, first) = prepare_crossing_work::<T>(2);
-    for index in 1..c {
-      let owner: T::AccountId = account("crossing-terminal-cohort", index, 0);
-      let _ = bench_create_user_with_trigger::<T>(
-        owner,
-        Trigger::observation_crossing(feed, CrossingDirection::Rising, 2, 0),
-      );
-    }
-    benchmark_fixture_set_next_ready_ticket::<T>(u64::MAX);
-    let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
-    let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
-      .expect("Crossing cohort source page");
-    let transition = CrossingTransitionObligation {
-      revision: 2,
-      previous: 0,
-      current: 2,
-      cause_provenance: TriggerCauseProvenance::Deferred,
-      cause_block: 0,
-    };
-    #[block]
-    {
-      let snapshot = Pallet::<T>::snapshot_crossing_source_prefix(
-        locator.key,
-        locator.page,
-        &page,
-        locator.offset,
-        c,
-      )
-      .expect("bounded cohort snapshot");
-      let preflight = Pallet::<T>::preflight_crossing_cohort(
-        &snapshot,
-        transition,
-        crate::crossing::CrossingFireClassification::Resolve,
-        Some(CrossingWorkPlan::FireCohortClosed),
-      )
-      .expect("homogeneous terminal preflight");
-      assert_eq!(preflight.plan, CrossingWorkPlan::FireCohortClosed);
       assert_eq!(preflight.admitted_candidates, c);
     }
   }

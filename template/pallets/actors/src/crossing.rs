@@ -2827,10 +2827,7 @@ impl<T: Config> Pallet<T> {
     )?;
     let mut activation = None;
     if let Some(fire_plan) = fire_plan {
-      if fire_plan == CrossingWorkPlan::FireCohortClosed {
-        activation =
-          Some(Self::request_activation(member.actor_id).map_err(Self::activation_failure_error)?);
-      } else if fire_plan != CrossingWorkPlan::FireCohortCoalesced {
+      if fire_plan != CrossingWorkPlan::FireCohortCoalesced {
         use crate::weights::WeightInfo as _;
 
         let actor_type = loaded.identity.actor_class.actor_type();
@@ -2866,19 +2863,14 @@ impl<T: Config> Pallet<T> {
           }
         }
       }
-      if activation == Some(ActivationOutcome::Closed)
-        && CrossingFeedMembershipCount::<T>::get(feed) == 0
-      {
-        // Closing the final member clears this feed's queue, cursor, and pending
-        // link. Report possible outer work conservatively; the next bounded
-        // unit observes the canonical pending-list state without recreating it.
-        return Ok(CrossingWorkOutcome::new(true, 1, 1, 1, 1).with_activation(true));
-      }
     }
     Self::persist_crossing_cursor_after_movement(feed, &transition, cursor, key, threshold)?;
     let outcome = CrossingWorkOutcome::new(true, 1, 1, 1, 1);
     Ok(match activation {
-      Some(activated) => outcome.with_activation(activated == ActivationOutcome::Closed),
+      // A canonical fire publishes exactly one latched occurrence through the canonical Trigger
+      // owner; the retired terminal-cohort close branch and its separate final-member membership
+      // cleanup were unreachable legacy producer paths that fresh-genesis publication never built.
+      Some(_) => outcome.with_activation(false),
       None if transition_kind == CrossingTransition::Fire => outcome.with_canonical_probe(),
       None => outcome,
     })
@@ -2937,8 +2929,7 @@ impl<T: Config> Pallet<T> {
       | CrossingWorkPlan::RearmCohort
       | CrossingWorkPlan::FireCohortPending
       | CrossingWorkPlan::FireCohortCoalesced
-      | CrossingWorkPlan::FireCohortPlaced
-      | CrossingWorkPlan::FireCohortClosed => (1, 1, 1, 1),
+      | CrossingWorkPlan::FireCohortPlaced => (1, 1, 1, 1),
     }
   }
 
@@ -2993,7 +2984,7 @@ impl<T: Config> Pallet<T> {
       CrossingWorkPlan::FireCohortPlacedBatch => placed_pair,
       CrossingWorkPlan::FireCohortCoalescedPair => coalesced_pair,
       CrossingWorkPlan::FireCohortCoalesced => coalesced,
-      CrossingWorkPlan::FireCohortClosed | CrossingWorkPlan::StructuralFault => terminal,
+      CrossingWorkPlan::StructuralFault => terminal,
     }
   }
 

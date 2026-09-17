@@ -1762,7 +1762,6 @@ fn crossing_plan_components_are_exhaustive_and_branch_exact() {
     FireCohortPending,
     FireCohortCoalesced,
     FireCohortPlaced,
-    FireCohortClosed,
   ] {
     assert_eq!(Actors::crossing_plan_components(plan), (1, 1, 1, 1));
   }
@@ -1774,10 +1773,6 @@ fn crossing_plan_components_are_exhaustive_and_branch_exact() {
   ] {
     assert_eq!(Actors::crossing_single_candidate_plan(pair), Some(single));
   }
-  assert_eq!(
-    Actors::crossing_single_candidate_plan(FireCohortClosed),
-    None
-  );
 }
 
 #[test]
@@ -4009,7 +4004,7 @@ fn crossing_terminal_weight_is_separate_from_ordinary_placement() {
       ordinary
     );
     assert_eq!(
-      Actors::crossing_plan_weight(crate::CrossingWorkPlan::FireCohortClosed),
+      Actors::crossing_plan_weight(crate::CrossingWorkPlan::StructuralFault),
       terminal
     );
     assert_ne!(ordinary, terminal);
