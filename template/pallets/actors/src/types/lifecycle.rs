@@ -223,9 +223,9 @@ pub enum CanonicalOccurrenceError {
 
 /// Plans the common occurrence transition without reading or writing storage. Duplicate latched
 /// occurrences are rejected by the caller before matching/charging and therefore return no plan.
-/// Idle readiness from a carrier-free Disabled process or a Deadline/Park residence always enters
-/// Pending at B+1; Running/Suspended work preserves its exact current Service or Deadline residence
-/// and changes only the deferred semantic latch.
+/// Idle readiness from a carrier-free Disabled process, a retained Idle Service resident, or a
+/// Deadline/Park residence always enters Pending at B+1; Running/Suspended work preserves its exact
+/// current Service or Deadline residence and changes only the deferred semantic latch.
 pub fn plan_canonical_occurrence<BlockNumber>(
   cycle_state: CycleState,
   pending_signal: bool,
@@ -249,7 +249,11 @@ where
         (ProcessStatus::Disabled(_), None)
           | (
             ProcessStatus::Serving,
-            Some(ProcessResidence::Deadline { .. } | ProcessResidence::Parked(_)),
+            Some(
+              ProcessResidence::Deadline { .. }
+                | ProcessResidence::Parked(_)
+                | ProcessResidence::Service(_)
+            ),
           )
       ) {
         return Err(CanonicalOccurrenceError::InvalidResidence);

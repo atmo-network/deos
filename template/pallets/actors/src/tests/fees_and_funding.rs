@@ -703,6 +703,61 @@ fn repeated_pending_manual_occurrence_is_latched_without_trigger_fee() {
 }
 
 #[test]
+fn completed_idle_service_resident_relatches_at_the_next_block() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    fund_native(actor_id, 1_000_000_000);
+    clear_fee_collections();
+
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("persistent Actor remains")
+        .cycle_nonce,
+      1
+    );
+
+    // A completed Cycle leaves an Idle resident in canonical Service with its latch consumed.
+    assert!(ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!Actors::actor_hot(actor_id).expect("hot state").pending_signal);
+
+    // A fresh Manual occurrence re-latches the retained resident at B+1, and a duplicate in the
+    // same block coalesces without a second charge or a second occurrence event.
+    let current = frame_system::Pallet::<Test>::block_number();
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert!(Actors::actor_hot(actor_id).expect("hot state").pending_signal);
+    let node = ServiceNodes::<Test>::get(actor_id).expect("retained member");
+    assert_eq!(node.kind, ServiceResidenceKind::Pending);
+    assert_eq!(node.eligible_from, current + 1);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      Actors::active_actor_view(actor_id)
+        .expect("persistent Actor remains")
+        .cycle_nonce,
+      2
+    );
+  });
+}
+
+#[test]
 fn busy_manual_occurrence_creates_no_future_cycle_latch_or_trigger_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

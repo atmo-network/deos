@@ -10133,7 +10133,10 @@ pub mod pallet {
       );
       // A Manual occurrence while the current Cycle is open is intentionally ignored before
       // Trigger-fee admission: current-state service owns no deferred future-Cycle latch.
-      if snapshot.cycle_state != CycleState::Idle {
+      // A duplicate occurrence that is already latched but not yet serviced is likewise a
+      // coalescing no-op rather than an invariant failure: one useful false->true transition owns
+      // the charged readiness and later occurrences neither re-charge nor create a second cycle.
+      if snapshot.cycle_state != CycleState::Idle || snapshot.pending_signal {
         return Ok(().into());
       }
       let actor_type = snapshot.actor_class.actor_type();
@@ -11324,6 +11327,15 @@ pub mod pallet {
                   );
                 }
                 None if matches!(process.status, ProcessStatus::Disabled(_)) => {
+                  ActorProcesses::<T>::insert(actor.actor_id, plan.process);
+                  Self::insert_service_member(actor, ServiceResidenceKind::Pending, now)
+                    .map_err(|_| Error::<T>::ActorInvariant)?;
+                }
+                // A completed Cycle leaves an Idle Service resident in the ring. Re-latching it
+                // is a new B+1 occurrence: refresh the semantic latch, relabel the residence to
+                // Pending and re-admit it at the next block rather than rejecting the transition.
+                Some(ProcessResidence::Service(_)) => {
+                  Self::remove_service_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
                   ActorProcesses::<T>::insert(actor.actor_id, plan.process);
                   Self::insert_service_member(actor, ServiceResidenceKind::Pending, now)
                     .map_err(|_| Error::<T>::ActorInvariant)?;
