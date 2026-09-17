@@ -1029,6 +1029,22 @@ fn run_idle_until_cycle_nonce(actor_id: u64, target_cycle_nonce: u64) {
   panic!("cycle nonce did not reach target");
 }
 
+/// Advances canonical per-round Service until the Actor opens no further Run and owns no pending
+/// occurrence. Canonical execution commits at most one Step per block, so a multi-Step witness must
+/// advance one explicit round per Step instead of relying on a single same-block `run_idle` pass,
+/// which stops as soon as the committed prefix leaves the Actor `Running`.
+fn run_next_idle_to_completion(actor_id: u64) {
+  let rounds =
+    <<Test as crate::Config>::MaxContractSteps as Get<u32>>::get() as usize + 1;
+  for _ in 0..rounds {
+    if Actors::actor_run_state(actor_id).is_none() && !Actors::pending_signal(actor_id) {
+      return;
+    }
+    run_next_idle(Weight::MAX);
+  }
+  panic!("canonical cycle did not complete within the bounded contract step budget");
+}
+
 fn actor_event_count(predicate: impl Fn(&Event<Test>) -> bool) -> usize {
   frame_system::Pallet::<Test>::events()
     .into_iter()

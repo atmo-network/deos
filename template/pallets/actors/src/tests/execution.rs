@@ -1177,7 +1177,7 @@ fn authored_abort_preserves_earlier_provisional_task_commit() {
       actor_id
     ));
 
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(
@@ -2301,7 +2301,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     let actor = Actors::active_actor_view(actor_id).expect("actor remains active");
     assert_eq!(actor.cycle_state, CycleState::Idle);
@@ -2358,7 +2358,7 @@ fn skipped_stop_cycle_advances_to_the_suffix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     assert_eq!(native_balance(&BOB), bob_before + 5);
     assert!(!has_actor_event(|event| matches!(
@@ -2869,7 +2869,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
 
     let completed = Actors::active_actor_view(actor_id).expect("actor remains");
     assert_eq!(completed.cycle_state, CycleState::Idle);
@@ -4379,7 +4379,7 @@ fn cycle_summary_tracks_step_outcomes() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -4610,7 +4610,7 @@ fn percentage_of_current_uses_each_steps_available_balance() {
     let actor = sovereign_account(actor_id);
     let actor_before = native_balance(&actor);
     signal_percentage_trigger(actor_id, TestAsset::Native);
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
     assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(25));
     assert_eq!(native_balance(&actor), actor_before.saturating_sub(75));
@@ -4911,7 +4911,7 @@ fn predicates_observe_current_step_state() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert!(has_actor_event(|event| matches!(
       event,
@@ -5161,7 +5161,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert!(
       has_actor_event(|e| matches!(
         e,
@@ -5205,7 +5205,7 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&actor), 110);
     assert_eq!(staked_balance(actor, asset), 0);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 10);
