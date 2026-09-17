@@ -2768,39 +2768,6 @@ pub mod pallet {
       ))
     }
 
-    /// Compiles one coherent legacy control owner without publishing a second storage authority.
-    /// Ready Idle work is Pending; already-open or terminal work remains Live. Unsignaled requires
-    /// separately supplied Park or lifecycle-disablement evidence and is never guessed from absence.
-    #[allow(
-      dead_code,
-      reason = "storage-free cutover adapter remains candidate-only until every placement owner moves atomically"
-    )]
-    pub(crate) fn compile_legacy_control_process(
-      generation: ActorGeneration,
-      last_attempted: Option<BlockNumberFor<T>>,
-      location: ActorControlLocation<BlockNumberFor<T>>,
-      cell: &ActorControlCellOf<T>,
-      unsignaled_evidence: Option<UnsignaledProcessEvidence<BlockNumberFor<T>>>,
-    ) -> Result<ActorProcess<BlockNumberFor<T>>, ProcessCompileError> {
-      Self::project_control_cell(cell, location)
-        .ok_or(ProcessCompileError::MalformedControlCell)?;
-      let placement = match location {
-        ActorControlLocation::Ready { .. } => {
-          let kind = if cell.hot.cycle_state == CycleState::Idle && cell.hot.pending_signal {
-            ServiceResidenceKind::Pending
-          } else {
-            ServiceResidenceKind::Live
-          };
-          LegacyProcessPlacement::Ready(kind)
-        }
-        ActorControlLocation::Waiting { key, page, slot } => {
-          LegacyProcessPlacement::Waiting { key, page, slot }
-        }
-        ActorControlLocation::Unsignaled => LegacyProcessPlacement::Unsignaled(unsignaled_evidence),
-      };
-      compile_legacy_process(generation, last_attempted, placement)
-    }
-
     /// Publishes one already-inventoried legacy transition only inside its caller's transaction.
     /// The legacy locator must have been removed first, so failure rolls the whole authority move
     /// back rather than creating dual process residence.
@@ -7994,10 +7961,6 @@ pub mod pallet {
       }
     }
 
-    pub fn wakeup_pages(key: (BlockNumberFor<T>, WakeupPageId)) -> Option<ActorWaitingPageOf<T>> {
-      ActorWaitingFrameChunks::<T>::get((WakeupKey::Block(key.0), key.1))
-    }
-
     pub fn wakeup_buckets(block: BlockNumberFor<T>) -> Option<WakeupBucketState> {
       Self::wakeup_bucket_state(WakeupKey::Block(block))
     }
@@ -8017,10 +7980,6 @@ pub mod pallet {
         live_entries,
         cursor_index: ActorWaitingCursorIndices::<T>::get(key),
       })
-    }
-
-    pub fn wakeup_cursor_pages(page_id: WakeupPageId) -> Option<WakeupCursorPageOf<T>> {
-      WakeupCursorPages::<T>::get((WakeupClock::Block, page_id))
     }
 
     pub fn wakeup_cursor_len() -> WakeupCursorIndex {
