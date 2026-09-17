@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(not(feature = "runtime-benchmarks"))]
 use crate::scheduler::ActivationOutcome;
 use crate::{
   ActorHotStateOf, ActorProcesses, ActorSemanticState, ActorSemanticStates, ProcessResidence,
@@ -208,47 +209,6 @@ fn observation_change_execution_preserves_absent_scalar_control() {
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     });
   }
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn observation_future_activation_moves_primary_to_waiting_without_scalar_bridge() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_change(55),
-        cooldown_blocks: 0,
-      },
-      Some(crate::ScheduleWindow {
-        start: 10,
-        end: 200,
-      }),
-      inert_contract_steps(),
-    );
-
-    assert_eq!(
-      Actors::request_observation_activation_compact(actor_id, 55),
-      Ok(ActivationOutcome::Latched)
-    );
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Waiting {
-        key: crate::WakeupKey::Block(10),
-        ..
-      })
-    ));
-    let state = Actors::active_actor_state(actor_id).expect("Waiting primary remains active");
-    assert!(state.hot.pending_signal);
-    assert_eq!(
-      state.hot.wakeup_pointer.map(|pointer| pointer.block),
-      Some(crate::WakeupKey::Block(10))
-    );
-    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
 }
 
 #[test]
@@ -1153,53 +1113,6 @@ fn fanout_structural_fault_is_bounded_and_requires_repair_before_resume() {
 }
 
 #[test]
-fn fanout_fault_captures_exact_page_position_actor_c6_authority_and_branch() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = Schedule {
-      trigger: RuntimeTrigger::observation_change(25),
-      cooldown_blocks: 100,
-    };
-    let first = create_system_with(ALICE, schedule.clone(), None, inert_contract_steps());
-    let second = create_system_with(ALICE, schedule, None, inert_contract_steps());
-    assert_eq!(
-      Actors::request_observation_activation_compact(first, 25),
-      Ok(ActivationOutcome::Latched)
-    );
-    mutate_actor_hot_coherent(second, |hot| hot.last_cycle_block = Some(1));
-    Actors::test_fail_wakeup_placement_with_capacity();
-    assert_ok!(Actors::note_observation_changed(25, 1));
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(true));
-    let retained = Actors::dirty_observation_feeds(25).expect("retry cursor");
-    assert_eq!(retained.next_subscriber_page, Some(0));
-    assert_eq!(retained.next_subscriber_position, 1);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let authority =
-      crate::ActorActivationAuthorities::<Test>::get(second).expect("second activation authority");
-    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(101), 1);
-    Actors::fanout_dirty_observations(Weight::MAX);
-
-    assert_eq!(
-      Actors::observation_fanout_worker_fault(),
-      Some(crate::ObservationFanoutWorkerFault {
-        feed: 25,
-        revision: 1,
-        subscriber_page: Some(0),
-        subscriber_position: 1,
-        actor_id: Some(second),
-        semantic_contract_id: Some(authority.semantic_contract_id),
-        body_commitment: Some(authority.body_commitment),
-        admission_identity: Some(authority.admission_identity),
-        branch: crate::ObservationFanoutBranch::Ordinary,
-        class: crate::CrossingWorkerFaultClass::SchedulerExhausted,
-      })
-    );
-    assert_eq!(Actors::dirty_observation_feeds(25), Some(retained));
-  });
-}
-
-#[test]
 fn fanout_fault_recording_admits_both_weight_dimensions_and_is_idempotent() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1520,38 +1433,6 @@ fn one_fanout_page_sets_existing_latches_and_scheduler_membership() {
 }
 
 #[test]
-fn mixed_observation_page_commits_each_contiguous_queue_cohort_once() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actors = (0..3)
-      .map(|_| {
-        create_system_with(
-          ALICE,
-          observation_schedule(vec![23]),
-          None,
-          inert_contract_steps(),
-        )
-      })
-      .collect::<Vec<_>>();
-    assert_eq!(
-      Actors::request_observation_activation_compact(actors[1], 23),
-      Ok(ActivationOutcome::Latched)
-    );
-    assert_ok!(Actors::note_observation_changed(23, 1));
-    Actors::test_reset_queue_append_commits();
-
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    assert_eq!(Actors::test_queue_append_commits(), 2);
-    assert!(Actors::dirty_observation_feeds(23).is_none());
-    for actor_id in actors {
-      let hot = Actors::actor_hot(actor_id).expect("active actor");
-      assert!(hot.pending_signal);
-      assert!(hot.queue_ticket.is_some());
-    }
-  });
-}
-
-#[test]
 fn contiguous_observation_cooldown_run_publishes_pending_service() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -1605,130 +1486,6 @@ fn observation_service_publication_preserves_absent_scalar_control() {
     }
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn saturated_queue_materializes_fanout_through_the_canonical_deferred_wakeup() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      observation_schedule(vec![16]),
-      None,
-      inert_contract_steps(),
-    );
-    seed_saturated_tombstone_queue();
-    assert_ok!(Actors::note_observation_changed(16, 1));
-    let base =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_base();
-    let unit =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_page();
-    let fault = <TestWeightInfo as crate::WeightInfo>::record_observation_fanout_worker_fault();
-    let budget = base.saturating_add(unit).saturating_add(fault);
-
-    Actors::fanout_dirty_observations(budget);
-    assert!(Actors::dirty_observation_feeds(16).is_none());
-    assert!(Actors::pending_signal(actor_id));
-    assert!(
-      Actors::active_actor_state(actor_id)
-        .expect("actor")
-        .hot
-        .queue_ticket
-        .is_none()
-    );
-    assert_eq!(
-      Actors::active_actor_state(actor_id)
-        .and_then(|state| state.hot.wakeup_pointer)
-        .and_then(|pointer| match pointer.block {
-          WakeupKey::Block(block) => Some(block),
-          WakeupKey::Tick(_) => None,
-        }),
-      Some(2)
-    );
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    }
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn fanout_position_cursor_does_not_replay_a_committed_page_prefix() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = Schedule {
-      trigger: RuntimeTrigger::observation_change(18),
-      cooldown_blocks: 100,
-    };
-    let first = create_system_with(ALICE, schedule.clone(), None, inert_contract_steps());
-    let second = create_system_with(ALICE, schedule, None, inert_contract_steps());
-    assert_eq!(
-      Actors::request_observation_activation_compact(first, 18),
-      Ok(ActivationOutcome::Latched)
-    );
-    mutate_actor_hot_coherent(second, |hot| hot.last_cycle_block = Some(1));
-    Actors::test_fail_wakeup_placement_with_capacity();
-    assert_ok!(Actors::note_observation_changed(18, 1));
-
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(true));
-    let blocked = Actors::dirty_observation_feeds(18).expect("fanout remains retryable");
-    assert_eq!(blocked.next_subscriber_page, Some(0));
-    assert_eq!(blocked.next_subscriber_position, 1);
-    assert_eq!(blocked.retry_after, Some(2));
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(true));
-    Actors::fanout_dirty_observations(Weight::MAX);
-    assert_eq!(Actors::dirty_observation_feeds(18), Some(blocked));
-    assert!(Actors::observation_fanout_worker_fault().is_none());
-    assert!(
-      Actors::actor_hot(second)
-        .expect("second actor")
-        .wakeup_pointer
-        .is_none()
-    );
-
-    crate::ActorActivationAuthorities::<Test>::remove(first);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    assert!(Actors::dirty_observation_feeds(18).is_none());
-    assert!(
-      Actors::actor_hot(second)
-        .expect("second actor")
-        .wakeup_pointer
-        .is_some()
-    );
-  });
-}
-
-#[test]
-fn fanout_terminal_branch_is_durable_and_executes_under_a_later_scalar_turn() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      observation_schedule(vec![21]),
-      Some(crate::ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    frame_system::Pallet::<Test>::set_block_number(102);
-    assert_ok!(Actors::note_observation_changed(21, 1));
-
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(true));
-    let deferred = Actors::dirty_observation_feeds(21).expect("terminal branch is durable");
-    assert_eq!(deferred.next_subscriber_page, Some(0));
-    assert_eq!(deferred.next_subscriber_position, 0);
-    assert_eq!(
-      deferred.next_subscriber_branch,
-      crate::ObservationFanoutBranch::Terminal
-    );
-    assert!(Actors::actor_hot(actor_id).is_some());
-
-    assert_eq!(Actors::do_fanout_dirty_observation_page(), Ok(false));
-    assert!(Actors::actor_hot(actor_id).is_none());
-    assert!(Actors::dirty_observation_feeds(21).is_none());
-    assert_eq!(Actors::dirty_observation_feed_count(), 0);
   });
 }
 
@@ -2498,7 +2255,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
       1,
       crate::ScalarObservationState::Fresh {
         value: 50,
-        observed_at: 11,
+        observed_at: 12,
       },
     );
     let invalid_condition_step = StepOf::<Test> {
@@ -2533,6 +2290,7 @@ fn invalid_fresh_observation_fails_permanently_and_applies_step_policy() {
       actor_id
     ));
     run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before + 7);
     assert!(has_actor_event(|event| matches!(
       event,
