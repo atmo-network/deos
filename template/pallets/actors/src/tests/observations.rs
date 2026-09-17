@@ -14,6 +14,19 @@ fn observation_semantic_hot(actor_id: ActorId) -> ActorHotStateOf<Test> {
     .expect("ObservationChange semantic Hot state")
 }
 
+/// Canonical ObservationChange fanout publishes one `Service(Pending)` ring member per subscriber
+/// at B+1 with no legacy ready-frame ticket, so membership assertions read the canonical owner.
+fn assert_canonical_pending_member(actor_id: ActorId) {
+  let hot = Actors::actor_hot(actor_id).expect("active actor");
+  assert!(hot.pending_signal);
+  assert!(hot.queue_ticket.is_none());
+  assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+  assert_eq!(
+    ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+    Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+  );
+}
+
 fn observation_activation_placement_snapshot(
   compact: bool,
   window: Option<crate::ScheduleWindow<u64>>,
@@ -1117,16 +1130,13 @@ fn multiple_dense_dirty_feeds_receive_round_robin_service() {
     }
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
     assert_eq!(Actors::dirty_observation_list(), Default::default());
-    let tickets = actors
-      .iter()
-      .flatten()
-      .map(|actor_id| {
-        let hot = Actors::actor_hot(*actor_id).expect("dense-feed actor");
-        assert!(hot.pending_signal);
-        hot.queue_ticket.expect("dense-feed actor queued")
-      })
-      .collect::<alloc::collections::BTreeSet<_>>();
-    assert_eq!(tickets.len(), feeds.len() * (page_size as usize + 1));
+    for actor_id in actors.iter().flatten() {
+      assert_canonical_pending_member(*actor_id);
+    }
+    assert_eq!(
+      ServiceHeader::<Test>::get().count,
+      (feeds.len() * (page_size as usize + 1)) as u32
+    );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1611,16 +1621,13 @@ fn one_fanout_page_sets_existing_latches_and_scheduler_membership() {
     let unit =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_page();
     let fault = <TestWeightInfo as crate::WeightInfo>::record_observation_fanout_worker_fault();
-    Actors::test_reset_queue_append_commits();
     assert_eq!(
       Actors::fanout_dirty_observations(base.saturating_add(unit).saturating_add(fault)),
       base.saturating_add(unit)
     );
-    assert_eq!(Actors::test_queue_append_commits(), 1);
+    assert_eq!(ServiceHeader::<Test>::get().count, 3);
     for actor_id in actors {
-      let hot = Actors::actor_hot(actor_id).expect("active actor");
-      assert!(hot.pending_signal);
-      assert!(hot.queue_ticket.is_some());
+      assert_canonical_pending_member(actor_id);
     }
     assert!(Actors::dirty_observation_feeds(11).is_none());
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
@@ -1995,11 +2002,10 @@ fn latest_revision_fanout_model_converges_across_seeded_races() {
         .iter()
         .all(|revision| *revision == latest_revision)
     );
-    let tickets = actors
-      .iter()
-      .filter_map(|actor_id| Actors::actor_hot(*actor_id).and_then(|hot| hot.queue_ticket))
-      .collect::<alloc::collections::BTreeSet<_>>();
-    assert_eq!(tickets.len(), actors.len());
+    assert_eq!(ServiceHeader::<Test>::get().count, actors.len() as u32);
+    for actor_id in &actors {
+      assert_canonical_pending_member(*actor_id);
+    }
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -2158,13 +2164,10 @@ fn maximum_density_fanout_converges_without_duplicate_queue_membership() {
     assert_ne!(consumed, Weight::zero());
     assert!(Actors::dirty_observation_feeds(13).is_none());
     assert_eq!(Actors::dirty_observation_feed_count(), 0);
-    let mut tickets = alloc::collections::BTreeSet::new();
+    assert_eq!(ServiceHeader::<Test>::get().count, actor_count);
     for actor_id in actors {
-      let hot = Actors::actor_hot(actor_id).expect("active actor");
-      assert!(hot.pending_signal);
-      assert!(tickets.insert(hot.queue_ticket.expect("one queue ticket")));
+      assert_canonical_pending_member(actor_id);
     }
-    assert_eq!(tickets.len() as u32, actor_count);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
