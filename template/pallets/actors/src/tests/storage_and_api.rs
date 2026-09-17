@@ -568,11 +568,13 @@ fn process_publication_is_transaction_local_single_authority_and_rollback_safe()
         ),
       )
     });
+    // A canonically created Actor already owns one process carrier. The legacy transition writer
+    // must refuse to overwrite that single authority instead of publishing a second carrier.
     assert_eq!(
       dual_authority,
-      Err(ProcessPublicationError::LegacyAuthorityPresent)
+      Err(ProcessPublicationError::ProcessAlreadyExists)
     );
-    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
 
     let rejected = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
@@ -2489,66 +2491,6 @@ fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process()
 }
 
 #[test]
-fn legacy_control_adapter_derives_ready_kind_and_rejects_malformed_or_ambiguous_cells() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let (unsignaled_location, unsignaled_cell) =
-      Actors::actor_control_cell(actor_id).expect("Manual Actor starts Unsignaled");
-    assert_eq!(
-      Actors::compile_legacy_control_process(
-        7,
-        Some(5),
-        unsignaled_location,
-        &unsignaled_cell,
-        None,
-      ),
-      Err(ProcessCompileError::AmbiguousUnsignaled)
-    );
-    let park = ParkEvidence {
-      plan_identity: [4; 32],
-      reason: ParkNegativeReason::SourceUnavailable,
-      review_at: Some(9),
-    };
-    assert_eq!(
-      Actors::compile_legacy_control_process(
-        7,
-        Some(5),
-        unsignaled_location,
-        &unsignaled_cell,
-        Some(UnsignaledProcessEvidence::Parked(park)),
-      ),
-      Ok(ActorProcess {
-        generation: 7,
-        last_attempted: Some(5),
-        status: ProcessStatus::Serving,
-        residence: Some(ProcessResidence::Parked(park)),
-      })
-    );
-
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
-    let (ready_location, ready_cell) =
-      Actors::actor_control_cell(actor_id).expect("latched Manual Actor is Ready");
-    assert_eq!(
-      Actors::compile_legacy_control_process(7, Some(5), ready_location, &ready_cell, None),
-      Ok(ActorProcess {
-        generation: 7,
-        last_attempted: Some(5),
-        status: ProcessStatus::Serving,
-        residence: Some(ProcessResidence::Service(ServiceResidenceKind::Pending)),
-      })
-    );
-
-    let mut malformed = ready_cell;
-    malformed.eligible_at = None;
-    assert_eq!(
-      Actors::compile_legacy_control_process(7, Some(5), ready_location, &malformed, None),
-      Err(ProcessCompileError::MalformedControlCell)
-    );
-  });
-}
-
-#[test]
 fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
   #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
   enum TransactionBoundary {
@@ -2596,15 +2538,6 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
       RequiredProcessTransition::PublishTypedResidence,
       PlannerIntent::Publish,
       AtomicPublicationSite::MutationOwner,
-      AtomicOutcome::SuccessorOrRollback,
-    ),
-    (
-      "lib.rs",
-      "insert_unsignaled_control_authority",
-      TransactionBoundary::CallerTransactional,
-      RequiredProcessTransition::PublishTypedResidence,
-      PlannerIntent::Publish,
-      AtomicPublicationSite::EveryDirectCaller,
       AtomicOutcome::SuccessorOrRollback,
     ),
     (
@@ -2677,15 +2610,6 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
       RequiredProcessTransition::AtomicSuccessorOrRemoval,
       PlannerIntent::Replace,
       AtomicPublicationSite::MutationOwner,
-      AtomicOutcome::SuccessorOrRollback,
-    ),
-    (
-      "scheduler.rs",
-      "demote_ready_frame_to_unsignaled",
-      TransactionBoundary::CallerTransactional,
-      RequiredProcessTransition::PublishTypedResidence,
-      PlannerIntent::Publish,
-      AtomicPublicationSite::EveryDirectCaller,
       AtomicOutcome::SuccessorOrRollback,
     ),
     (
@@ -2909,333 +2833,23 @@ fn legacy_control_mutation_inventory_covers_every_raw_storage_owner() {
 }
 
 #[test]
-fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner() {
+fn canonical_semantic_publication_is_the_sole_actor_authority() {
   let lib = include_str!("../lib.rs");
   let scheduler = include_str!("../scheduler.rs");
-  let execution = include_str!("../execution.rs");
-  let benchmarks = include_str!("../benchmarking.rs");
   let pallet_weights = include_str!("../weights.rs");
   let runtime_weights = include_str!("../../../../runtime/src/weights/pallet_deos_actors.rs");
 
-  assert!(lib.contains("Self::insert_unsignaled_control_authority(actor_id, identity, hot"));
-  assert!(lib.contains("ActorIdentities::<T>::remove(actor_id);"));
-  assert!(lib.contains("Self::prime_initial_actor_schedule(actor_id)"));
+  // The post-cutover creation/activation owner publishes exactly one semantic record and one
+  // process/residence carrier instead of mirroring per-field state into a legacy primary cell.
+  assert!(lib.contains("fn insert_active_actor("));
+  assert!(lib.contains("Self::mutate_actor_semantic_state("));
+  assert!(lib.contains("Self::publish_actor_publication("));
+  assert!(lib.contains("Self::store_actor_contract(actor_id, contract.clone())?"));
+  assert!(lib.contains("fn load_actor_semantic_state("));
   assert!(lib.contains("ActorSemanticStates::<T>::get(actor_id)"));
 
-  // Lifecycle, service, observation and execution callers now enter through one storage-neutral
-  // semantic loader. Only that loader compiles the placement-backed owner; production semantic
-  // storage remains absent until the writer and Weight cutover can land atomically.
-  for owner in [
-    "load_actor_state_with_admission",
-    "load_control_authority_with_authority",
-    "load_actor_service_state_with_authority",
-  ] {
-    let marker = format!("    pub(crate) fn {owner}(");
-    let start = lib
-      .find(&marker)
-      .unwrap_or_else(|| panic!("semantic loader caller disappeared: {owner}"));
-    let body = &lib[start..];
-    let end = body[marker.len()..]
-      .find("\n    pub(crate) fn ")
-      .map_or(body.len(), |offset| marker.len() + offset);
-    assert!(
-      body[..end].contains("Self::load_actor_semantic_state(actor_id)"),
-      "semantic loader caller bypassed the storage-neutral boundary: {owner}"
-    );
-  }
-  assert!(lib.contains("fn load_actor_semantic_state("));
-  assert!(lib.contains("Self::load_frame_control_authority(actor_id)"));
-  assert!(!scheduler.contains("Self::load_frame_actor_state(actor_id)"));
-  assert!(execution.contains("Self::load_actor_state_for_frame_control(actor_id)"));
-
-  // Initial semantic publication has one shared owner. Create and activate supply scalar identity,
-  // freshly initialized hot state, and complete contract geometry to insert_active_actor; that
-  // owner derives admission and the zero-Step/Step-0 resource envelope before publishing the
-  // Unsignaled cell. The future cutover therefore needs no caller-specific record constructor.
-  for dependency in [
-    "Self::build_admission_certificate(&contract)",
-    "Self::derive_step_resource_envelopes(&contract)",
-    "T::WeightInfo::scheduler_inner_zero_step_complete()",
-    "Self::insert_unsignaled_control_authority(actor_id, identity, hot, admission, resources,)",
-    "Self::store_actor_contract(actor_id, contract)",
-  ] {
-    assert!(
-      lib.contains("fn insert_active_actor(") && lib.contains(dependency),
-      "initial semantic construction input drift: {dependency}"
-    );
-  }
-  for caller in ["do_create_actor", "do_activate_actor"] {
-    let marker = format!("    fn {caller}(");
-    let start = lib
-      .find(&marker)
-      .unwrap_or_else(|| panic!("initial publication caller disappeared: {caller}"));
-    let body = &lib[start..];
-    let end = body[marker.len()..]
-      .find("\n    fn ")
-      .map_or(body.len(), |offset| marker.len() + offset);
-    assert!(
-      body[..end].contains("Self::insert_active_actor("),
-      "supported initial publication must retain the shared constructor: {caller}"
-    );
-  }
-
-  // Every projected field has one post-cutover source: semantic record for identity/hot/admission,
-  // run state for cursor/eligibility, and contract geometry for current-Step resources. Placement
-  // may retain only residence and reverse-handle evidence after this complete loader conversion.
-  for dependency in [
-    "ActorRunStateStore::<T>::get(actor_id)",
-    "Self::load_current_step_from_geometry(",
-    "ActorContractHeads::<T>::get(actor_id)?",
-  ] {
-    assert!(
-      lib.contains("fn load_actor_service_state_with_head(") && lib.contains(dependency),
-      "semantic execution projection input drift: {dependency}"
-    );
-  }
-
-  // The complete post-cutover operation map is deliberately smaller than the caller set: shared
-  // construction publishes one record; every semantic writer performs whole-record Replace;
-  // deactivate/finalize remove the exact record; and residence-only movement performs no semantic
-  // mutation. Production storage remains blocked until all mapped callers and composed weights
-  // convert together.
-  let semantic_operation_map = [
-    ("insert_active_actor", "Publish"),
-    ("store_frame_control_authority", "Replace"),
-    ("replace_control_admission_for_transition", "Replace"),
-    ("prepare_observation_ready_cell", "Replace"),
-    ("update_existing_frame_control_identity", "Replace"),
-    ("update_existing_frame_control_hot", "Replace"),
-    ("consume_waiting_from_supplied_authority", "Replace"),
-    ("write_run_state", "Replace"),
-    ("do_deactivate_actor", "Replace"),
-    ("finalize_actor_loaded_inner", "Remove"),
-  ];
-  assert_eq!(
-    semantic_operation_map
-      .iter()
-      .filter(|(_, operation)| *operation == "Publish")
-      .count(),
-    1
-  );
-  assert_eq!(
-    semantic_operation_map
-      .iter()
-      .filter(|(_, operation)| *operation == "Remove")
-      .count(),
-    1
-  );
-  for (owner, _) in semantic_operation_map {
-    assert!(
-      lib.contains(&format!("fn {owner}("))
-        || scheduler.contains(&format!("fn {owner}("))
-        || execution.contains(&format!("fn {owner}(")),
-      "semantic operation owner disappeared: {owner}"
-    );
-  }
-  for placement_only_owner in [
-    "append_waiting_entry",
-    "control_normalize_ready_head",
-    "control_remove_ready_primary",
-    "remove_waiting_entry",
-  ] {
-    assert!(
-      scheduler.contains(&format!("fn {placement_only_owner}(")),
-      "placement-only semantic no-op owner disappeared: {placement_only_owner}"
-    );
-    assert!(
-      !semantic_operation_map
-        .iter()
-        .any(|(owner, _)| *owner == placement_only_owner),
-      "placement-only owner must not acquire semantic write authority: {placement_only_owner}"
-    );
-  }
-
-  // These production owners still rewrite semantic fields inside the legacy placement cell after
-  // publication. Cutover must convert this complete writer closure atomically or it creates dual
-  // semantic truth.
-  for (source, owner, mutation) in [
-    (
-      lib,
-      "store_frame_control_authority",
-      "cell.identity = control_identity;",
-    ),
-    (
-      lib,
-      "store_frame_control_authority",
-      "cell.hot = Self::control_hot_from_scalar(hot.clone());",
-    ),
-    (
-      lib,
-      "replace_control_admission_for_transition",
-      "cell.admission = certificate.clone();",
-    ),
-    (
-      lib,
-      "replace_control_admission_for_transition",
-      "cell.resources = resources;",
-    ),
-    (
-      scheduler,
-      "prepare_observation_ready_cell",
-      "cell.cursor = state.run_head.as_ref().map_or(0, |run| run.cursor);",
-    ),
-    (
-      scheduler,
-      "update_existing_frame_control_identity",
-      "cell.identity = Self::control_identity_from_scalar(identity.clone())",
-    ),
-    (
-      scheduler,
-      "update_existing_frame_control_hot",
-      "cell.hot = Self::control_hot_from_scalar(hot.clone());",
-    ),
-    (
-      scheduler,
-      "consume_waiting_from_supplied_authority",
-      "cell.cursor = 0;",
-    ),
-    (
-      execution,
-      "write_run_state",
-      "cell.cursor = state.as_ref().map_or(0, |run| run.cursor);",
-    ),
-    (
-      execution,
-      "write_run_state",
-      "cell.resources = step.resources;",
-    ),
-  ] {
-    assert!(
-      source.contains(&format!("fn {owner}(")) && source.contains(mutation),
-      "semantic-owner cutover inventory drift for {owner}: {mutation}"
-    );
-  }
-  // Both supported initial publication callers already provide the required outer rollback
-  // boundary. The blocker is therefore the complete loader/writer conversion and composed weight,
-  // not a missing transaction around create or activate.
-  for (owner, transaction) in [
-    (
-      "do_create_actor",
-      "polkadot_sdk::frame_support::storage::with_transaction(||",
-    ),
-    (
-      "do_activate_actor",
-      "polkadot_sdk::frame_support::storage::with_transaction(||",
-    ),
-  ] {
-    let marker = format!("    fn {owner}(");
-    let start = lib
-      .find(&marker)
-      .unwrap_or_else(|| panic!("initial publication owner disappeared: {owner}"));
-    let body = &lib[start..];
-    let end = body[marker.len()..]
-      .find("\n    fn ")
-      .map_or(body.len(), |offset| marker.len() + offset);
-    assert!(
-      body[..end].contains(transaction),
-      "initial canonical publication needs an outer rollback boundary in {owner}"
-    );
-  }
-
-  // Exact incremental storage composition at the cutover boundary. Publish, Replace and Remove
-  // each require one semantic-record read plus one write. Initial Live publication must additionally
-  // compose the generated populated-ring owner, whose benchmark already covers process publication,
-  // legacy-absence checks, ring/header reads and process/node/header writes (10 reads, 6 writes).
-  // The worst supported create/activate path therefore gains 11 reads and 7 writes before any
-  // measured execution/proof contribution from the semantic record itself.
-  let semantic_mutation_io = [("Publish", 1u64, 1u64), ("Replace", 1, 1), ("Remove", 1, 1)];
-  assert_eq!(
-    semantic_mutation_io
-      .iter()
-      .find(|(operation, _, _)| *operation == "Publish")
-      .map(|(_, reads, writes)| (*reads + 10, *writes + 6)),
-    Some((11, 7))
-  );
-  assert!(benchmarks.contains("fn service_member_publish_populated()"));
-  assert!(pallet_weights.contains(
-    "fn service_member_publish_populated() -> Weight {\n    Weight::from_parts(200_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(10, 6))"
-  ));
-
-  // Existing create/activate/deactivate benchmarks and generated runtime bindings cannot account
-  // for that composition: no production semantic map exists, those lifecycle benchmarks do not
-  // execute service publication, and generated storage evidence cannot name the semantic owner.
-  // Production publication is blocked until the lifecycle benchmarks exercise the composed path
-  // and regenerate both pallet/runtime Weight bindings in the same atomic authority cutover.
-  assert!(!lib.contains("pub type ActorSemanticRecords<T:"));
-  let lifecycle_branch_matrix = [
-    (
-      "create_user_actor",
-      "active creation with populated Contract geometry and an initially\n  // non-Live current-state detector residence",
-      "must Publish semantic state",
-    ),
-    (
-      "create_system_actor",
-      "System active creation shares the populated, initially non-Live",
-      "Publish active\n  // semantic state; no service publication",
-    ),
-    (
-      "create_dormant_system_actor",
-      "dormant creation uses Publish identity-only semantic state and no",
-      "Publish identity-only semantic state",
-    ),
-    (
-      "activate_actor",
-      "activation must Replace dormant with active semantic state",
-      "Replace dormant with active semantic state",
-    ),
-    (
-      "deactivate_actor",
-      "deactivation must Replace active with identity-only dormant semantic",
-      "Replace active with identity-only dormant semantic",
-    ),
-  ];
-  for (benchmark, branch_marker, cutover_operation) in lifecycle_branch_matrix {
-    assert!(benchmarks.contains(&format!("fn {benchmark}()")));
-    assert!(benchmarks.contains(branch_marker));
-    assert!(benchmarks.contains(cutover_operation));
-  }
-  assert!(benchmarks.contains("terminal finalization instead removes the record"));
-  assert!(benchmarks.contains("fn service_member_publish_populated()"));
-  assert!(benchmarks.contains("fn scheduler_inner_zero_step_complete()"));
-
-  // Dispatch Weight ownership follows the semantic branch rather than the public-call aliases.
-  // User at-slot and System sovereign-id creation already have distinct generated owners; active
-  // versus dormant System creation selects its owner from the optional Contract. Every path that
-  // may terminally finalize composes the shared close upper bound, including scheduler-side close.
-  for binding in [
-    "T::WeightInfo::create_user_actor().max(T::WeightInfo::create_user_actor_crossing_new_page())",
-    "T::WeightInfo::create_user_actor_at_slot().max(T::WeightInfo::create_user_actor_crossing_new_page())",
-    "T::WeightInfo::create_system_actor()\n        .max(T::WeightInfo::create_user_actor_crossing_new_page())",
-    "T::WeightInfo::create_dormant_system_actor()",
-    "T::WeightInfo::create_system_actor_at_sovereign_id().max(T::WeightInfo::create_user_actor_crossing_new_page())",
-    "T::WeightInfo::activate_actor()",
-    "T::WeightInfo::deactivate_actor()",
-    "Pallet::<T>::close_dispatch_weight_upper()",
-  ] {
-    assert!(
-      lib.contains(binding),
-      "lifecycle Weight owner drift: {binding}"
-    );
-  }
-  for generated_owner in [
-    "create_user_actor",
-    "create_user_actor_at_slot",
-    "create_system_actor",
-    "create_system_actor_at_sovereign_id",
-    "create_dormant_system_actor",
-    "activate_actor",
-    "deactivate_actor",
-    "close_actor",
-  ] {
-    assert!(
-      pallet_weights.contains(&format!("fn {generated_owner}() -> Weight")),
-      "pallet Weight binding disappeared: {generated_owner}"
-    );
-    assert!(
-      runtime_weights.contains(&format!("fn {generated_owner}() -> Weight")),
-      "runtime Weight binding disappeared: {generated_owner}"
-    );
-  }
+  // Every dispatch that may terminally finalize prices the shared close upper bound so a canonical
+  // close can never underprice its bounded cleanup.
   for terminal_dispatch_owner in [
     "pause_actor",
     "resume_actor",
@@ -3259,34 +2873,23 @@ fn canonical_service_cutover_waits_for_a_nonplacement_semantic_authority_owner()
   assert!(scheduler.contains("pub fn close_cleanup_weight_upper() -> Weight"));
   assert!(scheduler.contains("T::WeightInfo::close_actor()"));
 
-  // A zero-Step active Contract still publishes complete active semantic state, but has no current
-  // Step resource load. Initial Live publication, when selected by the new residence policy, must
-  // compose the populated service owner; initially Sleeping/Parked/Unsignaled branches must not.
-  // The existing zero-Step scheduler benchmark is executable evidence for the no-Step branch, while
-  // the lifecycle comments above are an explicit guard against collapsing Dormant into zero-Step.
-  assert!(benchmarks.contains("fn scheduler_inner_zero_step_complete()"));
-  assert!(benchmarks.contains("This remains distinct from an active zero-Step Contract"));
-  for generated in [pallet_weights, runtime_weights] {
-    assert!(!generated.contains("Actors::ActorSemanticRecords"));
-  }
-
-  for source in [lib, scheduler, execution] {
-    assert_eq!(
-      source.matches("Self::publish_service_member(").count(),
-      0,
-      "production must not publish canonical service authority while the legacy control cell is the sole identity/hot/admission owner"
+  for generated_owner in [
+    "create_user_actor",
+    "create_user_actor_at_slot",
+    "create_system_actor",
+    "create_system_actor_at_sovereign_id",
+    "create_dormant_system_actor",
+    "activate_actor",
+    "deactivate_actor",
+    "close_actor",
+  ] {
+    assert!(
+      pallet_weights.contains(&format!("fn {generated_owner}() -> Weight")),
+      "pallet Weight binding disappeared: {generated_owner}"
     );
-  }
-  assert_eq!(
-    scheduler.matches("Self::retire_service_member(").count(),
-    2,
-    "only staged canonical zero-Step and effectful completion transactions may retire their consumed Service carriers"
-  );
-  for source in [lib, execution] {
-    assert_eq!(
-      source.matches("Self::retire_service_member(").count(),
-      0,
-      "other production paths must not retire canonical Service authority before publication cuts over"
+    assert!(
+      runtime_weights.contains(&format!("fn {generated_owner}() -> Weight")),
+      "runtime Weight binding disappeared: {generated_owner}"
     );
   }
 }
@@ -3490,15 +3093,22 @@ fn canonical_service_ring_is_transactional_generation_bound_and_structurally_com
       Err(ServiceRingMutationError::TransactionRequired)
     );
 
-    let legacy_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let legacy_rejected = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
-      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
-        Actors::insert_service_member(actor_ref(legacy_id, 1), ServiceResidenceKind::Live, 1),
-      )
-    });
+    // A canonically published Actor carries its own Service residence. Inserting a different
+    // residence kind for the same generation must fail closed before the ring is touched.
+    let mismatched = actor_ref(104, 9);
+    ActorProcesses::<Test>::insert(
+      mismatched.actor_id,
+      serving_process(mismatched, ServiceResidenceKind::Pending),
+    );
+    let residence_rejected =
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(
+          Actors::insert_service_member(mismatched, ServiceResidenceKind::Live, 1),
+        )
+      });
     assert_eq!(
-      legacy_rejected,
-      Err(ServiceRingMutationError::LegacyAuthorityPresent)
+      residence_rejected,
+      Err(ServiceRingMutationError::ProcessResidenceMismatch)
     );
 
     let members = [
@@ -7562,10 +7172,10 @@ fn actor_identity_resolves_lifecycle_owner_and_fails_closed_on_missing_primary()
       transfer_contract_steps(BOB, 2),
     );
     let identity = Actors::actor_identity(actor_id).expect("active identity exists");
-    let primary = crate::ActorUnsignaledControlCells::<Test>::take(actor_id)
-      .expect("Manual Actor starts unsignaled");
+    let semantic = crate::ActorSemanticStates::<Test>::take(actor_id)
+      .expect("Manual Actor starts with one semantic authority");
     assert!(Actors::actor_identity(actor_id).is_none());
-    crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, primary);
+    crate::ActorSemanticStates::<Test>::insert(actor_id, semantic);
     assert_eq!(Actors::actor_identity(actor_id), Some(identity.clone()));
     assert_ok!(Actors::deactivate_actor(
       RuntimeOrigin::signed(ALICE),
@@ -7844,17 +7454,14 @@ fn current_step_service_state_does_not_load_unreached_tail_chunks() {
       crate::LoadedActorStateOf::Corrupt
     ));
     System::reset_events();
-    Actors::on_idle(1, Weight::MAX);
-    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| !hot.pending_signal));
+    // The canonical service round owns the complete Contract geometry, so an incomplete tail must
+    // fail closed: the latched occurrence is retained without opening a cycle or mutating state.
+    run_canonical_round_at(2, Weight::MAX);
+    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
+    assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } if *id == actor_id
-    )));
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::CycleSummary { actor_id: id, result: CycleResult::Completed, outcomes, .. }
-        if *id == actor_id && outcomes.executed_steps == 1 && outcomes.committed_effectful_tasks == 0
     )));
     assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 0));
     assert!(matches!(
@@ -7876,27 +7483,23 @@ fn run_head_and_immutable_payload_remain_coherent_across_progress() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
-    let first_head = crate::ActorRunHeads::<Test>::get(actor_id).expect("run head exists");
-    let first_payload = crate::ActorRunPayloads::<Test>::get(actor_id).expect("run payload exists");
+    run_next_idle(Weight::MAX);
+    let first = ActorRunStateStore::<Test>::get(actor_id).expect("canonical run state exists");
+    assert_eq!(first.cursor, 1);
+    let authority = first.contract_authority;
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    Actors::execute_cycle(Weight::MAX);
-    let second_head = crate::ActorRunHeads::<Test>::get(actor_id).expect("run head persists");
-    let second_payload =
-      crate::ActorRunPayloads::<Test>::get(actor_id).expect("run payload persists");
-    assert_eq!(second_head.cursor, 2);
-    assert_eq!(
-      second_head.payload_commitment,
-      first_head.payload_commitment
-    );
-    assert_eq!(second_payload.encode(), first_payload.encode());
+    run_next_idle(Weight::MAX);
+    let second = ActorRunStateStore::<Test>::get(actor_id).expect("canonical run state persists");
+    assert_eq!(second.cursor, 2);
+    assert_eq!(second.contract_authority, authority);
 
-    crate::ActorRunHeads::<Test>::mutate(actor_id, |maybe| {
-      maybe.as_mut().expect("run head exists").payload_commitment[0] ^= 1;
+    ActorRunStateStore::<Test>::mutate(actor_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("canonical run state exists")
+        .contract_authority
+        .body_commitment[0] ^= 1;
     });
-    assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       crate::LoadedActorStateOf::Corrupt
@@ -7945,7 +7548,7 @@ fn running_execution_and_post_placement_ignore_unreached_tail_chunks() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id).map(|run| run.cursor),
       Some(1)
@@ -7956,233 +7559,19 @@ fn running_execution_and_post_placement_ignore_unreached_tail_chunks() {
       Actors::load_actor_state(actor_id),
       crate::LoadedActorStateOf::Corrupt
     ));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
-    let (_, queued) = Actors::paged_head_entry().expect("successor is queued");
-    assert_eq!(queued.actor_id, actor_id);
-    assert_eq!(queued.eligible_at, 2);
+    // The running suffix is republished as a canonical Pending Service for the following block;
+    // its current Step lives in tail chunk 0, so the unreached tail chunk 1 is never loaded.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
     assert!(Actors::load_current_step_service_state(actor_id).is_some());
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::StepSkipped { actor_id: id, step_index: 1, .. } if *id == actor_id
     )));
-    let run = Actors::actor_run_state(actor_id).expect("Running suffix remains live");
+    let run = ActorRunStateStore::<Test>::get(actor_id).expect("Running suffix remains live");
     assert_eq!(run.cursor, 2);
-    assert_eq!(run.last_committed_step_block, Some(2));
-    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| {
-      hot.cycle_state == CycleState::Running
-        && (hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some())
-    }));
-  });
-}
-
-#[test]
-fn current_step_plan_builds_only_from_coherent_opening_authority() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    crate::ActorReadyHead::<Test>::put(9);
-    crate::ActorReadyTail::<Test>::put(9);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let identity = Actors::actor_identity(actor_id).expect("identity exists");
-    let hot = Actors::actor_hot(actor_id).expect("hot state exists");
-    assert_eq!(hot.queue_ticket, Some(9));
-    let admission = Actors::actor_control_cell(actor_id)
-      .map(|(_, cell)| cell.admission)
-      .expect("canonical admission certificate exists");
-    let head = ActorContractHeads::<Test>::get(actor_id).expect("canonical head exists");
-    let loaded_step = Actors::load_current_step_from_geometry(actor_id, &head, &admission, 0, None)
-      .expect("Step 0 loads");
-    let ticket = crate::ActorStepTicket {
-      actor_id,
-      cycle_nonce: identity.cycle_nonce + 1,
-      cursor: 0,
-      ticket: 9,
-      eligible_at: 1,
-      contract_commitment: crate::ActorContractCommitment {
-        semantic_contract_id: admission.semantic_contract_id,
-        body_commitment: admission.body_commitment,
-      },
-    };
-    assert_eq!(
-      Actors::build_actor_step_ticket(actor_id, 9, 1, &identity, &hot, None, &admission,),
-      Some(ticket)
-    );
-    let mut stale_hot = hot.clone();
-    stale_hot.queue_ticket = Some(10);
-    assert!(
-      Actors::build_actor_step_ticket(actor_id, 9, 1, &identity, &stale_hot, None, &admission,)
-        .is_none()
-    );
-    let user_fee = Actors::maximum_current_step_fee(ActorType::User, loaded_step.resources)
-      .expect("User current-Step fee is representable");
-    assert_eq!(
-      user_fee.total_fee,
-      user_fee.control_fee + user_fee.effect_fee
-    );
-    let maximum_fee = Actors::maximum_current_step_fee(ActorType::System, loaded_step.resources)
-      .expect("System current-Step fee is representable");
-    assert_eq!(maximum_fee.total_fee, 0);
-    let storage_plan = Actors::load_current_step_plan_from_storage(ticket)
-      .expect("storage-backed Opening plan builds");
-    assert_eq!(storage_plan.ticket.actor_id, ticket.actor_id);
-    assert_eq!(storage_plan.ticket.cycle_nonce, ticket.cycle_nonce);
-    assert_eq!(storage_plan.ticket.cursor, ticket.cursor);
-    assert_eq!(storage_plan.ticket.eligible_at, ticket.eligible_at);
-    assert_eq!(
-      storage_plan.ticket.contract_commitment,
-      ticket.contract_commitment
-    );
-    assert_eq!(storage_plan.loaded_step, loaded_step);
-    assert_eq!(storage_plan.maximum_fee, maximum_fee);
-    let mut future_ticket = ticket;
-    future_ticket.eligible_at = 2;
-    assert!(Actors::load_current_step_plan_from_storage(future_ticket).is_none());
-    let plan = Actors::build_current_step_plan(
-      actor_id,
-      identity.clone(),
-      hot.clone(),
-      None,
-      admission.clone(),
-      ticket,
-      loaded_step.clone(),
-      maximum_fee.clone(),
-    )
-    .expect("coherent Opening plan builds");
-    assert_eq!(plan.loaded_step, loaded_step);
-    assert_eq!(plan.maximum_fee, maximum_fee);
-
-    let mut running_hot = plan.hot.clone();
-    running_hot.cycle_state = CycleState::Running;
-    let running = RuntimeActorRunState {
-      contract_authority: run_contract_authority(actor_id),
-      cycle_nonce: plan.ticket.cycle_nonce,
-      cursor: plan.ticket.cursor,
-      unsuccessful_attempts_at_cursor: 0,
-      last_attempt_block: 0,
-      last_committed_step_block: Some(0),
-      eligible_at: plan.ticket.eligible_at,
-      opening_snapshot: Default::default(),
-      cumulative_outcomes: Default::default(),
-      last_step_outcome: None,
-      suspension: None,
-    };
-    let running_ticket = Actors::build_actor_step_ticket(
-      actor_id,
-      9,
-      running.eligible_at,
-      &plan.identity,
-      &running_hot,
-      Some(&running),
-      &plan.admission,
-    )
-    .expect("coherent legacy Running ticket builds");
-    assert!(
-      Actors::build_actor_step_ticket(
-        actor_id,
-        9,
-        running.eligible_at + 1,
-        &plan.identity,
-        &running_hot,
-        Some(&running),
-        &plan.admission,
-      )
-      .is_none()
-    );
-    assert!(
-      Actors::build_current_step_plan(
-        actor_id,
-        plan.identity.clone(),
-        running_hot.clone(),
-        Some(running.clone()),
-        plan.admission.clone(),
-        running_ticket,
-        plan.loaded_step.clone(),
-        plan.maximum_fee.clone(),
-      )
-      .is_some()
-    );
-    let mut stale_run = running.clone();
-    stale_run.contract_authority.body_commitment[0] ^= 1;
-    assert!(
-      Actors::build_actor_step_ticket(
-        actor_id,
-        9,
-        stale_run.eligible_at,
-        &plan.identity,
-        &running_hot,
-        Some(&stale_run),
-        &plan.admission,
-      )
-      .is_none()
-    );
-    assert!(
-      Actors::build_current_step_plan(
-        actor_id,
-        plan.identity.clone(),
-        running_hot.clone(),
-        Some(stale_run),
-        plan.admission.clone(),
-        running_ticket,
-        plan.loaded_step.clone(),
-        plan.maximum_fee.clone(),
-      )
-      .is_none()
-    );
-    let mut suspended_hot = running_hot.clone();
-    suspended_hot.cycle_state = CycleState::Suspended;
-    let mut suspended = running.clone();
-    suspended.last_step_outcome = Some(StepOutcome::FundingUnavailable);
-    suspended.suspension = Some(SuspensionReason::FundingUnavailable);
-    assert!(
-      Actors::build_current_step_plan(
-        actor_id,
-        plan.identity.clone(),
-        suspended_hot,
-        Some(suspended),
-        plan.admission.clone(),
-        running_ticket,
-        plan.loaded_step.clone(),
-        plan.maximum_fee.clone(),
-      )
-      .is_some()
-    );
-    let mut incoherent_suspension = running;
-    incoherent_suspension.suspension = Some(SuspensionReason::Temporary);
-    assert!(
-      Actors::build_current_step_plan(
-        actor_id,
-        plan.identity.clone(),
-        running_hot,
-        Some(incoherent_suspension),
-        plan.admission.clone(),
-        running_ticket,
-        plan.loaded_step.clone(),
-        plan.maximum_fee.clone(),
-      )
-      .is_none()
-    );
-
-    let mut stale_ticket = ticket;
-    stale_ticket.cycle_nonce += 1;
-    assert!(
-      Actors::build_current_step_plan(
-        actor_id,
-        identity,
-        hot,
-        None,
-        admission,
-        stale_ticket,
-        plan.loaded_step,
-        plan.maximum_fee,
-      )
-      .is_none()
-    );
+    assert_eq!(run.last_committed_step_block, Some(3));
+    assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.cycle_state == CycleState::Running));
   });
 }
 
@@ -8365,10 +7754,15 @@ fn production_contract_load_requires_its_certified_wake_qualification() {
     );
 
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
-      let cell = stored.as_mut().expect("Unsignaled authority exists");
-      let old = &cell.admission;
-      let replacement = crate::ActorAdmissionCertificate::new(
+    crate::ActorSemanticStates::<Test>::mutate(actor_id, |stored| {
+      let crate::ActorSemanticState::Active(record) = stored
+        .as_mut()
+        .expect("canonical semantic authority exists")
+      else {
+        panic!("created Actor is active");
+      };
+      let old = record.admission.clone();
+      record.admission = crate::ActorAdmissionCertificate::new(
         old.semantic_contract_id,
         old.body_commitment,
         temporal_contract
@@ -8380,14 +7774,13 @@ fn production_contract_load_requires_its_certified_wake_qualification() {
         old.configured_bounds_commitment,
         old.maximum_lifecycle_weight,
       );
-      cell.pipeline_service_identity =
-        crate::pipeline_service_identity(replacement.admission_identity);
-      cell.admission = replacement;
     });
-    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
-      .expect("mutated authority exists")
-      .admission
-      .admission_identity;
+    let crate::ActorSemanticState::Active(record) =
+      crate::ActorSemanticStates::<Test>::get(actor_id).expect("mutated authority exists")
+    else {
+      panic!("mutated Actor is active");
+    };
+    let replacement_identity = record.admission.admission_identity;
     crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
       stored
         .as_mut()
@@ -8929,26 +8322,40 @@ fn contract_replacement_updates_frame_admission_and_current_step_resources_in_pl
       None,
       contract_steps_with_step(make_step(Task::StopCycle)),
     );
-    let (_, before) = Actors::load_primary_control_cell(actor_id).expect("initial primary exists");
+    let crate::ActorSemanticState::Active(before_record) =
+      crate::ActorSemanticStates::<Test>::get(actor_id).expect("initial semantic authority exists")
+    else {
+      panic!("created Actor is active");
+    };
     let replacement =
       system_active_contract(manual_schedule(), None, transfer_contract_steps(BOB, 7))
         .expect("replacement Contract");
 
     assert_ok!(Actors::store_actor_contract(actor_id, replacement));
 
-    let (_, after) =
-      Actors::load_primary_control_cell(actor_id).expect("replacement primary exists");
-    let projected_admission = Actors::actor_control_cell(actor_id)
-      .map(|(_, cell)| cell.admission)
-      .expect("canonical admission projection exists");
-    let loaded_step = Actors::load_current_step_from_storage(actor_id, after.cursor)
-      .expect("replacement current Step loads");
+    let crate::ActorSemanticState::Active(after_record) =
+      crate::ActorSemanticStates::<Test>::get(actor_id).expect("replacement semantic authority")
+    else {
+      panic!("replaced Actor is active");
+    };
+    let head =
+      ActorContractHeads::<Test>::get(actor_id).expect("replacement canonical head exists");
+    let loaded_step =
+      Actors::load_current_step_from_storage(actor_id, 0).expect("replacement current Step loads");
     assert_ne!(
-      after.admission.admission_identity,
-      before.admission.admission_identity
+      after_record.admission.admission_identity,
+      before_record.admission.admission_identity
     );
-    assert_eq!(after.admission, projected_admission);
-    assert_eq!(after.resources, loaded_step.resources);
+    assert_eq!(
+      after_record.admission.admission_identity,
+      head.header.admission_identity
+    );
+    assert_eq!(
+      head
+        .first_step_resources
+        .expect("replacement Step resources"),
+      loaded_step.resources
+    );
   });
 }
 
@@ -9030,10 +8437,12 @@ fn admitted_contract_storage_loads_one_current_fragment_and_replaces_exact_tail(
     )
     .expect("active Contract");
     let actor_id = create_system_with(ALICE, manual_schedule(), None, contract.steps.clone());
-    let certificate = Actors::actor_control_cell(actor_id)
-      .expect("live primary owns admission")
-      .1
-      .admission;
+    let crate::ActorSemanticState::Active(record) =
+      crate::ActorSemanticStates::<Test>::get(actor_id).expect("live semantic authority exists")
+    else {
+      panic!("created Actor is active");
+    };
+    let certificate = record.admission;
     assert_eq!(
       Actors::remove_admitted_contract_geometry(actor_id),
       Some(contract.clone())
@@ -9073,23 +8482,20 @@ fn admitted_contract_storage_loads_one_current_fragment_and_replaces_exact_tail(
       BoundedVec::try_from(vec![make_step(Task::StopCycle)]).expect("one Step fits"),
     )
     .expect("replacement Contract");
-    let replacement_certificate =
-      Actors::build_admission_certificate(&replacement).expect("replacement host admission");
-    assert!(Actors::replace_admitted_contract_geometry(
-      actor_id,
-      &replacement,
-      &replacement_certificate,
-    ));
+    // The canonical storage owner rotates geometry, admission and the generation-bound carrier
+    // together instead of mirroring a legacy primary cell.
+    assert_ok!(Actors::store_actor_contract(actor_id, replacement.clone()));
     assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 0));
     assert!(!ActorContractTailChunks::<Test>::contains_key(actor_id, 1));
     assert!(Actors::load_current_step_from_storage(actor_id, 1).is_none());
-    let primary_before = Actors::actor_control_cell(actor_id).expect("replacement primary");
+    let process_before = ActorProcesses::<Test>::get(actor_id);
     assert_eq!(
       Actors::remove_admitted_contract_geometry(actor_id),
       Some(replacement)
     );
     assert!(!ActorContractHeads::<Test>::contains_key(actor_id));
-    assert_eq!(Actors::actor_control_cell(actor_id), Some(primary_before));
+    // Removing the geometry leaves the canonical process/residence carrier untouched.
+    assert_eq!(ActorProcesses::<Test>::get(actor_id), process_before);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       LoadedActorStateOf::Corrupt
@@ -9960,48 +9366,6 @@ fn temporal_membership_try_state_rejects_terminal_at_drift() {
   });
 }
 
-#[test]
-fn temporal_membership_try_state_rejects_unconsumed_at_time_without_pointer() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, at_time_schedule(10), None, inert_contract_steps());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-    Actors::trigger_wakeup_substrate_invalidate_inner(actor_id)
-      .expect("AtTime pointer is coherent")
-      .expect("AtTime pointer exists");
-    #[cfg(feature = "try-runtime")]
-    assert!(crate::Pallet::<Test>::do_try_state().is_err());
-  });
-}
-
-#[test]
-fn temporal_membership_try_state_rejects_page_slot_pointing_at_different_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let other = create_system_with(BOB, manual_schedule(), None, inert_contract_steps());
-    assert!(schedule_latched_service_wakeup(actor_id, 10));
-    assert!(schedule_latched_service_wakeup(other, 10));
-    // A physical slot whose entry addresses an actor that owns a different pointer in the
-    // same clock domain is corruption.
-    crate::ActorWaitingFrameChunks::<Test>::mutate((WakeupKey::Block(10), 0), |maybe| {
-      let page = maybe.as_mut().expect("wakeup page");
-      let crate::ActorWaitingEntry::Primary(cell) =
-        page.entries[0].as_mut().expect("occupied temporal slot")
-      else {
-        panic!("service wakeup owns the primary");
-      };
-      cell.actor_id = other;
-    });
-    #[cfg(feature = "try-runtime")]
-    assert_eq!(
-      crate::Pallet::<Test>::do_try_state().map_err(|error| format!("{error:?}")),
-      Err("Other(\"ActorControl frame topology is corrupt\")".into())
-    );
-  });
-}
-
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
 fn canonical_loader_rejects_contract_admission_disagreement() {
@@ -10116,35 +9480,33 @@ fn canonical_loader_distinguishes_absence_dormancy_active_and_corruption() {
 
 #[test]
 fn canonical_loader_classifies_every_primary_partition_presence_mask() {
-  for mask in 0u8..16 {
+  for mask in 0u8..8 {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
+      // The canonical partition presence domain is the semantic owner, the Contract geometry and
+      // the generation-bound process/residence carrier; a fresh genesis never publishes a legacy
+      // primary cell or locator.
       let semantic =
         crate::ActorSemanticStates::<Test>::take(actor_id).expect("semantic authority fixture");
-      let cell =
-        crate::ActorUnsignaledControlCells::<Test>::take(actor_id).expect("primary fixture");
-      let locator = crate::ActorControlLocators::<Test>::take(actor_id).expect("locator fixture");
       let head = ActorContractHeads::<Test>::take(actor_id).expect("Contract head fixture");
-      if mask & 0b0001 != 0 {
+      let process = ActorProcesses::<Test>::take(actor_id).expect("process residence fixture");
+      if mask & 0b001 != 0 {
         crate::ActorSemanticStates::<Test>::insert(actor_id, semantic);
       }
-      if mask & 0b0010 != 0 {
-        crate::ActorUnsignaledControlCells::<Test>::insert(actor_id, cell);
-      }
-      if mask & 0b0100 != 0 {
-        crate::ActorControlLocators::<Test>::insert(actor_id, locator);
-      }
-      if mask & 0b1000 != 0 {
+      if mask & 0b010 != 0 {
         ActorContractHeads::<Test>::insert(actor_id, head);
+      }
+      if mask & 0b100 != 0 {
+        ActorProcesses::<Test>::insert(actor_id, process);
       }
       let loaded = Actors::load_actor_state(actor_id);
       match mask {
         0 => assert!(matches!(loaded, LoadedActorStateOf::NotRegistered)),
-        15 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
+        7 => assert!(matches!(loaded, LoadedActorStateOf::Active(_))),
         _ => assert!(
           matches!(loaded, LoadedActorStateOf::Corrupt),
-          "mask {mask:04b}"
+          "mask {mask:03b}"
         ),
       }
     });

@@ -2370,6 +2370,10 @@ pub mod pallet {
     }
 
     #[cfg(any(test, feature = "runtime-benchmarks"))]
+    #[allow(
+      dead_code,
+      reason = "legacy paged-FIFO Opening planner is reachable only from runtime-benchmark fixtures after the canonical Service cutover"
+    )]
     pub(crate) fn load_current_step_plan_from_storage(
       ticket: ActorStepTicketOf<T>,
     ) -> Option<CurrentStepPlanOf<T>> {

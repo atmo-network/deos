@@ -6620,6 +6620,10 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(any(test, feature = "runtime-benchmarks"))]
+  #[allow(
+    dead_code,
+    reason = "legacy waiting-substrate invalidation is reachable only from runtime-benchmark fixtures after the canonical deadline carrier cutover"
+  )]
   pub(crate) fn trigger_wakeup_substrate_invalidate_inner(
     actor_id: ActorId,
   ) -> Result<Option<WakeupPointer<BlockNumberFor<T>>>, EnqueueOutcome> {
