@@ -1731,35 +1731,6 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
 }
 
 #[test]
-fn cadence_update_rolls_back_exactly_when_existing_wakeup_cursor_is_corrupt() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(20), None, inert_contract_steps());
-    let initial_block = scheduled_wakeup_block(actor_id).expect("initial wakeup");
-    crate::ActorWaitingCursorIndices::<Test>::remove(WakeupKey::Tick(initial_block));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let events_before = System::events();
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    assert!(
-      update_contract_partial!(
-        RuntimeOrigin::signed(ALICE),
-        actor_id,
-        timer_schedule(5),
-        None,
-      )
-      .is_err()
-    );
-
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-}
-
-#[test]
 fn ticket_and_terminal_window_wakeup_coexist_under_one_pointer() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

@@ -38,6 +38,9 @@ fn cancelled_run_returns_idle_without_a_deferred_manual_cycle() {
     assert_eq!(cancelled.cycle_state, CycleState::Idle);
     assert!(!cancelled.pending_signal);
     assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::ActorClosed { actor_id: id, .. } if *id == actor_id

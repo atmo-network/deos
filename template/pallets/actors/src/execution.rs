@@ -257,13 +257,21 @@ impl<T: Config> Pallet<T> {
         && (!consumed || !ActorControlLocators::<T>::contains_key(actor_id)),
       Error::<T>::ActorRunInvariant
     );
-    if state.hot.wakeup_pointer.is_some() {
-      Self::wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission)
-        .map_err(|_| Error::<T>::ActorRunInvariant)?;
-    }
-    if ActorControlLocators::<T>::contains_key(actor_id) {
-      Self::remove_primary_control_cell_inner(actor_id)
-        .map_err(|_| Error::<T>::ActorRunInvariant)?;
+    // A canonically published Actor owns no legacy primary or unsignaled cell. Its cancellation
+    // releases the generation-bound process residence and republishes one Idle successor through
+    // the canonical carrier instead of mirroring a physical control cell.
+    let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+      && !ActorUnsignaledControlCells::<T>::contains_key(actor_id);
+    let source = state.clone();
+    if !canonical {
+      if state.hot.wakeup_pointer.is_some() {
+        Self::wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission)
+          .map_err(|_| Error::<T>::ActorRunInvariant)?;
+      }
+      if ActorControlLocators::<T>::contains_key(actor_id) {
+        Self::remove_primary_control_cell_inner(actor_id)
+          .map_err(|_| Error::<T>::ActorRunInvariant)?;
+      }
     }
     state.hot.cycle_state = CycleState::Idle;
     state.hot.queue_ticket = None;
@@ -281,7 +289,26 @@ impl<T: Config> Pallet<T> {
           .map(|loaded| loaded.resources)
           .ok_or(Error::<T>::ActorRunInvariant)?
       };
-      if state.hot.pending_signal && !state.hot.lifecycle.is_paused() {
+      if canonical {
+        let generation = match ActorSemanticStates::<T>::get(actor_id) {
+          Some(ActorSemanticState::Active(record)) => record.generation,
+          _ => return Err(Error::<T>::ActorRunInvariant.into()),
+        };
+        let mut successor = state.clone();
+        successor.run_state = None;
+        Self::cancel_actor_publication(
+          ActorRef {
+            actor_id,
+            generation,
+          },
+          &source,
+          &successor,
+          resources,
+          frame_system::Pallet::<T>::block_number(),
+          crate::scheduler::ServiceCutoff::Open,
+        )
+        .map_err(Self::placement_error)?;
+      } else if state.hot.pending_signal && !state.hot.lifecycle.is_paused() {
         let plan = Self::preflight_paged_enqueue_authority(
           actor_id,
           state.hot,

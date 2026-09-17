@@ -10165,7 +10165,9 @@ pub mod pallet {
         } else {
           None
         };
-        if schedule_changed {
+        let legacy_authority = ActorControlLocators::<T>::contains_key(actor_id)
+          || ActorUnsignaledControlCells::<T>::contains_key(actor_id);
+        if schedule_changed && legacy_authority {
           let (state, admission, _) =
             Self::load_frame_actor_service_state(actor_id).ok_or(Error::<T>::ActorInvariant)?;
           if state.hot.trigger_wakeup_pointer.is_some() {
