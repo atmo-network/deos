@@ -7586,11 +7586,6 @@ impl<T: Config> Pallet<T> {
   }
 
   #[cfg(test)]
-  pub(crate) fn test_fail_wakeup_placement_with_capacity() {
-    FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.set(true));
-  }
-
-  #[cfg(test)]
   fn defer_retained_wakeup(
     actor_id: ActorId,
     wakeup_block: BlockNumberFor<T>,
@@ -7802,13 +7797,6 @@ impl<T: Config> Pallet<T> {
 
   pub fn wakeup_cursor_drain_unit_weight_upper(bucket: WakeupBucketDisposition) -> Weight {
     Self::wakeup_cursor_drain_unit_weight_for(bucket, WakeupClock::Tick)
-  }
-
-  #[cfg(test)]
-  pub(crate) fn block_wakeup_cursor_drain_unit_weight_upper(
-    bucket: WakeupBucketDisposition,
-  ) -> Weight {
-    Self::wakeup_cursor_drain_unit_weight_for(bucket, WakeupClock::Block)
   }
 
   pub(crate) fn process_due_temporal_occurrence_loaded(

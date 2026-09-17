@@ -1,8 +1,8 @@
 use crate::{
   ActiveLifecycle, ActorActivationPlacement, ActorClass, ActorClassification,
   ActorClassificationError, ActorContract, ActorControlLocators, ActorEligibility,
-  ActorExecutionPhase, ActorId, ActorIdentities, ActorReadyHead, ActorReadyOccupancy,
-  ActorReadyTail, ActorRunAuthority, ActorRunStateStore, ActorTriggerActivation, ActorType,
+  ActorExecutionPhase, ActorId, ActorIdentities, ActorRunAuthority, ActorRunStateStore,
+  ActorTriggerActivation, ActorType,
   AmountResolution, AssetFilter, AssetFilterOf, AttemptDisposition, CancellationReason,
   CloseReason, CrossingDirection, CrossingMemberPages, CrossingMemberships, CrossingPhase,
   CrossingTransition, CycleResult, CycleState, Error, Event, FeeChargeKind, FeeEnvelopeError,
@@ -181,17 +181,12 @@ fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
 }
 
 fn schedule_latched_service_wakeup(actor_id: ActorId, wakeup_block: MockBlockNumber) -> bool {
-  try_schedule_latched_service_wakeup(actor_id, wakeup_block).is_ok()
-}
-
-fn try_schedule_latched_service_wakeup(
-  actor_id: ActorId,
-  wakeup_block: MockBlockNumber,
-) -> Result<(), crate::scheduler::EnqueueOutcome> {
-  let (location, cell) = Actors::actor_control_cell(actor_id)
-    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
-  let (identity, mut hot, admission) = Actors::project_control_cell(&cell, location)
-    .ok_or(crate::scheduler::EnqueueOutcome::CorruptedTopology)?;
+  let Some((location, cell)) = Actors::actor_control_cell(actor_id) else {
+    return false;
+  };
+  let Some((identity, mut hot, admission)) = Actors::project_control_cell(&cell, location) else {
+    return false;
+  };
   hot.pending_signal = true;
   Actors::try_wakeup_substrate_schedule_transition_with_authority(
     actor_id,
@@ -202,6 +197,7 @@ fn try_schedule_latched_service_wakeup(
     &admission,
     cell.resources,
   )
+  .is_ok()
 }
 
 fn enqueue_latched_actor(actor_id: ActorId) -> bool {
@@ -423,41 +419,6 @@ fn drain_crossing_work_with_limit(limit: u32) -> u32 {
     }
   }
   panic!("Crossing work did not converge within the bounded fixture");
-}
-
-fn assert_on_idle_wakeup_insufficiency_preserves_state(wakeup_budget: Weight) {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(10);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_contract_steps(BOB, 1),
-    );
-    assert!(schedule_latched_service_wakeup(actor_id, 10));
-    GlobalCircuitBreaker::<Test>::put(true);
-    let hot_before = Actors::actor_hot(actor_id).expect("actor before bounded wakeup pass");
-    let bucket_before = Actors::wakeup_buckets(10).expect("due wakeup bucket");
-    let page_before = Actors::wakeup_pages((10, 0)).expect("due wakeup page");
-    let cursor_before = Actors::wakeup_cursor_peek();
-    let events_before = System::events();
-    let remaining =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-        .saturating_add(wakeup_budget);
-
-    let used = Actors::on_idle(10, remaining);
-
-    assert!(
-      used.all_lte(remaining),
-      "on_idle must not exceed its caller budget"
-    );
-    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(Actors::wakeup_buckets(10), Some(bucket_before));
-    assert_eq!(Actors::wakeup_pages((10, 0)), Some(page_before));
-    assert_eq!(Actors::wakeup_cursor_peek(), cursor_before);
-    assert!(Actors::wakeup_worker_fault().is_none());
-    assert_eq!(System::events(), events_before);
-  });
 }
 
 fn ordinary_transfer_to_actor(
