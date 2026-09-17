@@ -202,7 +202,7 @@ fn crossing_idle_loader_uses_canonical_disabled_publication() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn crossing_activation_requires_its_certified_threshold_selector() {
+fn crossing_activation_falls_back_to_authoritative_admission_on_stale_compact_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let feed = 7;
@@ -222,9 +222,6 @@ fn crossing_activation_requires_its_certified_threshold_selector() {
       None,
       inert_contract_steps(),
     );
-    let sovereign = sovereign_account(actor_id);
-    let sovereign_before = native_balance(&sovereign);
-    let sink_before = native_balance(&TestFeeSink::get());
     let replacement_identity = [7; 32];
     crate::ActorActivationAuthorities::<Test>::mutate(actor_id, |stored| {
       stored
@@ -250,16 +247,13 @@ fn crossing_activation_requires_its_certified_threshold_selector() {
         current: 150,
       },
     ));
-    let events_before = System::events();
-    assert_noop!(Actors::crossing_work_unit(), Error::<Test>::ActorInvariant);
-    assert_eq!(native_balance(&sovereign), sovereign_before);
-    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
-    assert_eq!(System::events(), events_before);
-    assert!(
-      !Actors::active_actor_view(actor_id)
-        .expect("canonical authority remains fail-closed")
-        .pending_signal
-    );
+    // A stale compact authority mirror disables only the read-only fast path; the canonical
+    // occurrence commit re-derives the admission certificate from the authoritative semantic
+    // record, so the certified threshold selector still fires and the membership moves to
+    // `WaitingForRearm` without a structural fault.
+    assert_ok!(Actors::crossing_work_unit());
+    assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
+    assert!(!crate::CrossingWorkerFaultState::<Test>::exists());
   });
 }
 
@@ -1256,7 +1250,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       Actors::test_atomic_placed_pair_commit_prototype(actors[0], actors[3], locator),
       Ok(true)
     );
-    assert_eq!(Actors::test_queue_append_commits(), 1);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       movement_root,
@@ -1338,19 +1331,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     );
     assert_eq!(placed_homogeneous.admitted_candidates, 2);
     assert_eq!(placed_homogeneous.placed_immediate_fifo, Some(true));
-    assert_eq!(placed_homogeneous.queue_candidates.len(), 2);
-    assert!(
-      placed_homogeneous
-        .queue_candidates
-        .iter(/* deos-bypass: bounded-iter */)
-        .all(|(_, hot)| matches!(
-          hot.trigger_runtime_state,
-          TriggerRuntimeState::ObservationCrossing {
-            phase: CrossingPhase::WaitingForRearm,
-            ..
-          }
-        ))
-    );
     let maximum_prefix =
       Actors::snapshot_crossing_source_prefix(locator.key, locator.page, &page, 0, 4)
         .expect("maximum production prefix");
@@ -1363,7 +1343,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
     .expect("maximum placed preflight");
     assert_eq!(maximum_preflight.admitted_candidates, 4);
     assert_eq!(maximum_preflight.placed_immediate_fifo, Some(true));
-    assert_eq!(maximum_preflight.queue_candidates.len(), 4);
     let maximum_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert_eq!(
       Actors::test_placed_cohort_authority_count(
@@ -1373,7 +1352,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       ),
       Ok(4)
     );
-    assert_eq!(Actors::test_queue_append_commits(), 1);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       maximum_root,
@@ -1391,15 +1369,6 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       maximum_root,
       "malformed later locator must roll back every cohort surface"
-    );
-    assert!(
-      Actors::preflight_paged_enqueue_cohort_with_authority(maximum_preflight.queue_candidates)
-        .is_ok()
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      maximum_root,
-      "maximum placed prefix and aggregate FIFO authority must remain read-only"
     );
 
     let original_contract = Actors::load_actor_contract(actors[2]).expect("second prefix contract");
@@ -1421,30 +1390,17 @@ fn crossing_source_prefix_snapshot_grants_only_contiguous_validated_authority() 
       placement_split.plan,
       crate::CrossingWorkPlan::FireCohortPlaced
     );
+    // A candidate still inside its cooldown publishes no canonical occurrence, so its plan is
+    // the coalesced `PreserveResidence` branch rather than a placed fire: the homogeneous placed
+    // prefix truncates before it. Canonical placement no longer distinguishes immediate FIFO from
+    // a block wakeup, so the split is `FireCohortPlaced` versus `FireCohortCoalesced`.
     assert_eq!(placement_split.admitted_candidates, 2);
     assert_eq!(placement_split.placed_immediate_fifo, Some(true));
-    assert_eq!(placement_split.queue_candidates.len(), 2);
-    assert!(matches!(
-      placement_split.queue_candidates[0].1.trigger_runtime_state,
-      TriggerRuntimeState::ObservationCrossing {
-        phase: CrossingPhase::WaitingForRearm,
-        ..
-      }
-    ));
-    let wakeup_only =
-      Actors::snapshot_crossing_source_prefix(locator.key, locator.page, &page, 2, 1)
-        .expect("wakeup-only prefix");
-    let wakeup_preflight = Actors::preflight_crossing_cohort(
-      &wakeup_only,
-      transition,
-      crate::crossing::CrossingFireClassification::Resolve,
-      None,
-    )
-    .expect("wakeup-only preflight");
-    assert_eq!(wakeup_preflight.admitted_candidates, 1);
-    assert_eq!(wakeup_preflight.placed_immediate_fifo, Some(false));
     assert_ok!(Actors::store_actor_contract(actors[2], original_contract));
     mutate_actor_hot_coherent(actors[2], |hot| *hot = original_wakeup_hot);
+    // Every canonical Contract replacement rotates the generation-bound process identity and the
+    // compiled Crossing membership follows it, so the cached source page must be refreshed.
+    let page = CrossingMemberPages::<Test>::get(locator.key, locator.page).expect("refreshed page");
     let read_only_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
     let mut heterogeneous_hot = Actors::actor_hot(actors[2]).expect("second prefix actor");
@@ -1537,9 +1493,9 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
         None,
         contract_steps_with_step(make_step(Task::StopCycle)),
       );
-      assert!(enqueue_latched_actor(actor_id));
+      assert!(latch_canonical_occurrence(actor_id, TriggerFamily::Manual));
     }
-    assert_eq!(Actors::queue_occupancy(), 31);
+    assert_eq!(canonical_service_occupancy(), 31);
     let crossing_page_size =
       <<Test as crate::Config>::CrossingPageSize as Get<u32>>::get() as usize;
     let actors = (0..crossing_page_size as u64 + 4)
@@ -1706,7 +1662,7 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
       Some(non_tail_weight),
       "production must consume the admitted specialized non-tail branch owner"
     );
-    assert!(Actors::test_queue_append_commits() >= 1);
+    assert_eq!(canonical_service_occupancy(), 35);
     assert!(Actors::test_crossing_cursor_commits() >= 1);
     assert!(
       actors[..4].iter().all(|actor_id| {
@@ -1718,14 +1674,13 @@ fn crossing_tail_suffix_snapshot_grants_exact_generation_checked_refill_authorit
         .map(|actor_id| Actors::crossing_membership(*actor_id))
         .collect::<Vec<_>>()
     );
-    assert_eq!(
-      actors[..4]
-        .iter()
-        .map(|actor_id| Actors::actor_hot(*actor_id).and_then(|hot| hot.queue_ticket))
-        .collect::<Vec<_>>(),
-      vec![Some(31), Some(32), Some(33), Some(34)],
-      "non-tail aggregate queue authority must cross the queue-page boundary"
-    );
+    for actor_id in &actors[..4] {
+      let hot = Actors::actor_hot(*actor_id).expect("non-tail cohort actor remains active");
+      assert!(hot.pending_signal);
+      let node = crate::ServiceNodes::<Test>::get(*actor_id)
+        .expect("non-tail aggregate authority publishes one canonical Service member");
+      assert_eq!(node.kind, crate::ServiceResidenceKind::Pending);
+    }
     assert_ne!(
       Actors::crossing_membership(actors[0]).map(|locator| locator.key),
       Actors::crossing_membership(actors[2]).map(|locator| locator.key),
@@ -1915,7 +1870,7 @@ fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
   // Aggregate band: the full classified batch fits its generated maximum owner.
   new_test_ext().execute_with(|| {
     prepare_batch();
-    let occupancy = Actors::queue_occupancy();
+    let occupancy = canonical_service_occupancy();
     Actors::test_reset_first_crossing_branch_weight();
     let maximum = <Test as crate::Config>::WeightInfo::crossing_placed_maximum_unit();
     let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
@@ -1928,13 +1883,13 @@ fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
     assert_eq!(counters.faults, 0);
     assert_eq!(Actors::test_first_crossing_branch_weight(), Some(maximum));
     assert_eq!(consumed, classification.saturating_add(maximum));
-    assert_eq!(Actors::queue_occupancy(), occupancy + 4);
+    assert_eq!(canonical_service_occupancy(), occupancy + 4);
   });
 
   // Pair band: the aggregate owner misses and the generated pair owner fits.
   new_test_ext().execute_with(|| {
     prepare_batch();
-    let occupancy = Actors::queue_occupancy();
+    let occupancy = canonical_service_occupancy();
     Actors::test_reset_first_crossing_branch_weight();
     let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
       classification.saturating_add(pair).saturating_add(fault),
@@ -1947,13 +1902,13 @@ fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
       "the ladder must settle the generated pair owner before the scalar single"
     );
     assert_eq!(consumed, classification.saturating_add(pair));
-    assert_eq!(Actors::queue_occupancy(), occupancy + 2);
+    assert_eq!(canonical_service_occupancy(), occupancy + 2);
   });
 
   // Single band: the pair owner misses and the scalar single fits.
   new_test_ext().execute_with(|| {
     prepare_batch();
-    let occupancy = Actors::queue_occupancy();
+    let occupancy = canonical_service_occupancy();
     Actors::test_reset_first_crossing_branch_weight();
     let (consumed, counters) = Actors::service_crossing_transitions_with_counters(single_check);
     assert_eq!(counters.candidates, 1);
@@ -1964,14 +1919,14 @@ fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
       "below the pair reservation the ladder must fall through to the scalar single"
     );
     assert_eq!(consumed, classification.saturating_add(placed));
-    assert_eq!(Actors::queue_occupancy(), occupancy + 1);
+    assert_eq!(canonical_service_occupancy(), occupancy + 1);
   });
 
   // Refusal band: below the scalar single check the frontier stays unmoved.
   new_test_ext().execute_with(|| {
     prepare_batch();
     let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let occupancy = Actors::queue_occupancy();
+    let occupancy = canonical_service_occupancy();
     Actors::test_reset_first_crossing_branch_weight();
     let (consumed, counters) = Actors::service_crossing_transitions_with_counters(
       single_check.saturating_sub(Weight::from_parts(1, 0)),
@@ -1979,7 +1934,7 @@ fn crossing_placed_pair_fallback_ladder_admits_under_regressed_grants() {
     assert_eq!(counters.candidates, 0);
     assert_eq!(consumed, classification);
     assert_eq!(Actors::test_first_crossing_branch_weight(), None);
-    assert_eq!(Actors::queue_occupancy(), occupancy);
+    assert_eq!(canonical_service_occupancy(), occupancy);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       root,
@@ -2133,7 +2088,7 @@ fn crossing_non_tail_limited_grant_preserves_scalar_progress_without_fault() {
     assert_eq!(counters.activations, 1);
     assert_eq!(Actors::test_first_crossing_branch_weight(), Some(placed));
     assert!(consumed.all_lte(budget));
-    assert_eq!(Actors::queue_occupancy(), 1);
+    assert_eq!(canonical_service_occupancy(), 1);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(StateVersion::V1),
       scalar_root,
@@ -2147,7 +2102,7 @@ fn crossing_non_tail_limited_grant_preserves_scalar_progress_without_fault() {
     );
     assert_eq!(resumed.faults, 0);
     assert!(!crate::CrossingWorkerFaultState::<Test>::exists());
-    assert!(Actors::queue_occupancy() > 1);
+    assert!(canonical_service_occupancy() > 1);
   });
 }
 
@@ -2180,7 +2135,7 @@ fn crossing_pair_downgrades_to_one_at_each_resumed_component_boundary() {
       assert_eq!(observed, maximums[component]);
       assert_eq!(resumed.candidates, counters.candidates.saturating_add(1));
       assert_eq!(resumed.faults, 0);
-      assert_eq!(Actors::queue_occupancy(), 2);
+      assert_eq!(canonical_service_occupancy(), 2);
     });
   }
 }
@@ -2203,12 +2158,12 @@ fn crossing_pair_downgrades_to_one_at_probe_weight_boundary() {
     );
     assert_eq!(counters.candidates, 1);
     assert_eq!(counters.faults, 0);
-    assert_eq!(Actors::queue_occupancy(), 2);
+    assert_eq!(canonical_service_occupancy(), 2);
 
     let (_, resumed) = Actors::service_crossing_transitions_resuming(Weight::MAX, counters);
     assert_eq!(resumed.candidates, 2);
     assert_eq!(resumed.faults, 0);
-    assert_eq!(Actors::queue_occupancy(), 3);
+    assert_eq!(canonical_service_occupancy(), 3);
   });
 }
 
@@ -2230,12 +2185,12 @@ fn crossing_pair_downgrades_to_one_at_branch_weight_boundary() {
     );
     assert_eq!(counters.candidates, 1);
     assert_eq!(counters.faults, 0);
-    assert_eq!(Actors::queue_occupancy(), 2);
+    assert_eq!(canonical_service_occupancy(), 2);
 
     let (_, resumed) = Actors::service_crossing_transitions_resuming(Weight::MAX, counters);
     assert_eq!(resumed.candidates, 2);
     assert_eq!(resumed.faults, 0);
-    assert_eq!(Actors::queue_occupancy(), 3);
+    assert_eq!(canonical_service_occupancy(), 3);
   });
 }
 
@@ -2268,7 +2223,7 @@ fn crossing_pair_admits_at_exact_remaining_component_capacity() {
       assert_eq!(observed, maximums[component]);
       assert_eq!(resumed.candidates, counters.candidates.saturating_add(2));
       assert_eq!(resumed.faults, 0);
-      assert_eq!(Actors::queue_occupancy(), 3);
+      assert_eq!(canonical_service_occupancy(), 3);
     });
   }
 }
@@ -2593,14 +2548,15 @@ fn same_threshold_crossing_herd_spans_pages_without_loss_or_duplicate_ticket() {
       },
     ));
     drain_crossing_work();
-    let mut tickets = BTreeSet::new();
     for actor_id in actors {
       let hot = Actors::actor_hot(actor_id).expect("hot state");
       assert!(hot.pending_signal);
-      assert!(tickets.insert(hot.queue_ticket.expect("one live ticket")));
+      let node = crate::ServiceNodes::<Test>::get(actor_id)
+        .expect("one canonical Service member per latched crossing");
+      assert_eq!(node.kind, crate::ServiceResidenceKind::Pending);
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     }
-    assert_eq!(tickets.len() as u32, count);
+    assert_eq!(canonical_service_occupancy(), count);
   });
 }
 
@@ -2704,17 +2660,15 @@ fn large_crossing_jump_visits_each_distinct_occupied_threshold_once() {
       },
     ));
     drain_crossing_work();
-    let tickets = actors
-      .iter()
-      .map(|actor_id| {
-        assert_eq!(crossing_phase(*actor_id), CrossingPhase::WaitingForRearm);
-        Actors::actor_hot(*actor_id)
-          .expect("hot state")
-          .queue_ticket
-          .expect("one live ticket")
-      })
-      .collect::<BTreeSet<_>>();
-    assert_eq!(tickets.len(), actors.len());
+    for actor_id in &actors {
+      assert_eq!(crossing_phase(*actor_id), CrossingPhase::WaitingForRearm);
+      let hot = Actors::actor_hot(*actor_id).expect("hot state");
+      assert!(hot.pending_signal);
+      let node = crate::ServiceNodes::<Test>::get(*actor_id)
+        .expect("one canonical Service member per latched crossing");
+      assert_eq!(node.kind, crate::ServiceResidenceKind::Pending);
+    }
+    assert_eq!(canonical_service_occupancy(), actors.len() as u32);
     assert!(Actors::crossing_transition_queue(7).is_none());
   });
 }
@@ -2788,21 +2742,15 @@ fn sparse_crossing_range_preserves_bounded_leaf_suffix_across_service_passes() {
       passes = passes.saturating_add(1);
     }
     assert_eq!(passes, 5);
-    let tickets = actors
-      .iter()
-      .map(|actor_id| {
-        Actors::actor_hot(*actor_id)
-          .expect("actor remains active")
-          .queue_ticket
-          .expect("one live ticket")
-      })
-      .collect::<BTreeSet<_>>();
-    assert_eq!(tickets.len(), actors.len());
-    assert!(
-      actors
-        .iter()
-        .all(|actor_id| crossing_phase(*actor_id) == CrossingPhase::WaitingForRearm)
-    );
+    for actor_id in &actors {
+      let hot = Actors::actor_hot(*actor_id).expect("actor remains active");
+      assert!(hot.pending_signal);
+      let node = crate::ServiceNodes::<Test>::get(*actor_id)
+        .expect("one canonical Service member per latched crossing");
+      assert_eq!(node.kind, crate::ServiceResidenceKind::Pending);
+      assert_eq!(crossing_phase(*actor_id), CrossingPhase::WaitingForRearm);
+    }
+    assert_eq!(canonical_service_occupancy(), actors.len() as u32);
   });
 }
 
@@ -3356,14 +3304,16 @@ fn semantic_crossing_replacement_reinitializes_from_current_observation() {
     assert_eq!(crossing_phase(actor_id), CrossingPhase::Armed);
     let hot = Actors::actor_hot(actor_id).expect("active Crossing actor");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
+    let node = crate::ServiceNodes::<Test>::get(actor_id)
+      .expect("replacement republishes one canonical Service member");
+    assert_eq!(node.kind, crate::ServiceResidenceKind::Pending);
     let locator = Actors::crossing_membership(actor_id).expect("replacement membership");
     assert_eq!(locator.key.threshold, 200);
   });
 }
 
 #[test]
-fn ready_crossing_replacement_rebinds_ticket_to_current_membership_and_contract() {
+fn ready_crossing_replacement_retains_pending_service_for_replacement_contract() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     set_observation(
@@ -3391,9 +3341,9 @@ fn ready_crossing_replacement_rebinds_ticket_to_current_membership_and_contract(
       },
     ));
     drain_crossing_work();
-    let ticket_before = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("Crossing occurrence publishes Ready authority");
+    let node_before = crate::ServiceNodes::<Test>::get(actor_id)
+      .expect("Crossing occurrence publishes pending Service authority");
+    assert_eq!(node_before.kind, crate::ServiceResidenceKind::Pending);
 
     let mut replacement = Actors::actor_contract(actor_id).expect("current Contract");
     replacement.trigger = Trigger::manual();
@@ -3405,28 +3355,21 @@ fn ready_crossing_replacement_rebinds_ticket_to_current_membership_and_contract(
     ));
 
     assert!(Actors::crossing_membership(actor_id).is_none());
-    let (_, _, hot, admission) =
-      Actors::load_frame_control_authority(actor_id).expect("replacement frame authority");
+    let (_, hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("replacement canonical authority");
     assert!(hot.pending_signal);
-    assert_eq!(hot.queue_ticket, Some(ticket_before));
-    let (_, ready) = Actors::paged_head_entry().expect("replacement retains Ready entry");
-    assert_eq!(ready.ticket, ticket_before);
-    assert_eq!(
-      ready.contract_commitment.semantic_contract_id,
-      admission.semantic_contract_id
-    );
-    assert_eq!(
-      ready.contract_commitment.body_commitment,
-      admission.body_commitment
-    );
+    let retained = crate::ServiceNodes::<Test>::get(actor_id)
+      .expect("replacement retains one pending Service member");
+    assert_eq!(retained.kind, crate::ServiceResidenceKind::Pending);
+    assert!(retained.generation >= node_before.generation);
 
     let recipient_before = MockAssetOps::balance(&BOB, TestAsset::Native);
     fund_native(actor_id, 1_000);
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       MockAssetOps::balance(&BOB, TestAsset::Native),
       recipient_before + 7,
-      "retained ticket executes only the replacement Contract"
+      "retained occurrence executes only the replacement Contract"
     );
     assert!(!Actors::pending_signal(actor_id));
     assert!(Actors::crossing_membership(actor_id).is_none());
@@ -3641,52 +3584,22 @@ fn crossing_same_tail_page_places_two_candidates_in_one_admitted_cohort() {
         exhausted: false,
       },
     );
-    let queue_capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
-    crate::ActorReadyTail::<Test>::put(u64::from(queue_capacity - 1));
-    assert_eq!(
-      Actors::classify_crossing_work(),
-      crate::CrossingWorkPlan::FireCohortPlaced,
-      "a pair must downgrade before mutation when only one FIFO position remains"
-    );
-    crate::ActorReadyTail::<Test>::put(0);
-    crate::ActorReadyTail::<Test>::put(u64::MAX - 1);
-    assert_eq!(
-      Actors::classify_crossing_work(),
-      crate::CrossingWorkPlan::FireCohortPlaced,
-      "a pair must downgrade before its second ticket would exhaust the allocator"
-    );
-    crate::ActorReadyTail::<Test>::put(0);
-    crate::ActorReadyHead::<Test>::put(1);
-    let corrupt_root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    assert_eq!(
-      Actors::classify_crossing_work(),
-      crate::CrossingWorkPlan::FireCohortPlaced,
-      "corrupt aggregate FIFO authority must not admit a pair"
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      corrupt_root,
-      "pair classification must retain no partial queue authority"
-    );
-    crate::ActorReadyHead::<Test>::put(0);
     assert_eq!(
       Actors::classify_crossing_work(),
       crate::CrossingWorkPlan::FireCohortPlacedBatch
     );
-    Actors::test_reset_queue_append_commits();
     Actors::test_reset_crossing_cursor_commits();
     let (_, counters) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
     assert_eq!(counters.candidates, 2);
     assert_eq!(counters.canonical_probes, 2);
     assert_eq!(counters.activations, 2);
-    assert_eq!(Actors::test_queue_append_commits(), 1);
     assert_eq!(Actors::test_crossing_cursor_commits(), 1);
     assert_eq!(counters.closes, 0);
     assert_eq!(counters.faults, 0);
     for actor_id in [first, second] {
       let hot = Actors::actor_hot(actor_id).expect("cohort actor remains active");
       assert!(hot.pending_signal);
-      assert!(hot.queue_ticket.is_some());
+      assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
       assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     }
 
@@ -3765,19 +3678,13 @@ fn crossing_placed_cohort_commits_from_frame_authority_without_scalar_control() 
         exhausted: false,
       },
     );
-    Actors::test_reset_queue_append_commits();
     let (_, counters) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
     assert_eq!(counters.candidates, 2);
     assert_eq!(counters.activations, 2);
     assert_eq!(counters.faults, 0);
-    assert_eq!(Actors::test_queue_append_commits(), 1);
     for actor_id in [first, second] {
-      let (location, _, hot, _) =
-        Actors::load_frame_control_authority(actor_id).expect("cohort frame authority survives");
-      assert!(matches!(
-        location,
-        crate::ActorControlLocation::Ready { .. }
-      ));
+      let (_, hot, _) = Actors::load_control_authority_with_authority(actor_id)
+        .expect("cohort canonical authority survives");
       assert!(hot.pending_signal);
       assert!(matches!(
         hot.trigger_runtime_state,
@@ -3786,8 +3693,9 @@ fn crossing_placed_cohort_commits_from_frame_authority_without_scalar_control() 
           ..
         }
       ));
+      assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+      assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_control_cell(actor_id).is_some());
     }
     run_idle(Weight::MAX);
     for actor_id in [first, second] {
@@ -3795,8 +3703,9 @@ fn crossing_placed_cohort_commits_from_frame_authority_without_scalar_control() 
         event,
         Event::CycleSummary { actor_id: id, .. } if *id == actor_id
       )));
+      assert!(Actors::active_actor_view(actor_id).is_some());
+      assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_control_cell(actor_id).is_some());
     }
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -3854,7 +3763,6 @@ fn crossing_maximum_partial_page_batch_preserves_remainder_and_next_feed() {
       crate::CrossingWorkPlan::FireCohortPlacedBatch
     );
     let cap: u32 = <Test as crate::Config>::MaxCrossingActorsPerBlock::get();
-    Actors::test_reset_queue_append_commits();
     Actors::test_reset_crossing_cursor_commits();
     let (_, counters) = Actors::service_crossing_transitions_resuming(
       Weight::MAX,
@@ -3864,7 +3772,6 @@ fn crossing_maximum_partial_page_batch_preserves_remainder_and_next_feed() {
       },
     );
     assert_eq!(counters.candidates, cap);
-    assert_eq!(Actors::test_queue_append_commits(), 1);
     assert_eq!(Actors::test_crossing_cursor_commits(), 1);
     for actor_id in [first, second, third, fourth] {
       assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.pending_signal));
@@ -4142,10 +4049,11 @@ fn frame_only_zero_step_crossing_never_materializes_scalar_hot() {
     assert_eq!(counters.activations, 1);
     assert!(crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
 
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(!crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
     assert!(crate::CrossingMemberships::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     let state = Actors::active_actor_state(actor_id).expect("Crossing successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
     assert!(matches!(
@@ -4155,10 +4063,7 @@ fn frame_only_zero_step_crossing_never_materializes_scalar_hot() {
         ..
       }
     ));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -4483,108 +4388,6 @@ fn crossing_generation_exhaustion_rejects_replacement_before_mutation() {
 }
 
 #[test]
-fn crossing_activation_under_saturated_fifo_latches_and_defers_exactly_once() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    seed_saturated_tombstone_queue();
-    assert_ok!(Actors::note_observation_transition(
-      7,
-      crate::ObservationTransition {
-        revision: 2,
-        previous: Some(50),
-        current: 150,
-      },
-    ));
-    drain_crossing_work();
-    let hot = Actors::actor_hot(actor_id).expect("hot state");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
-    assert_eq!(
-      hot.wakeup_pointer.map(|pointer| pointer.block),
-      Some(WakeupKey::Block(2))
-    );
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    let recovered = Actors::actor_hot(actor_id).expect("actor survives StopCycle");
-    assert!(!recovered.pending_signal);
-    assert!(recovered.queue_ticket.is_none());
-    assert!(recovered.wakeup_pointer.is_none());
-    assert_eq!(
-      Actors::actor_identity(actor_id)
-        .expect("actor identity")
-        .cycle_nonce,
-      1
-    );
-  });
-}
-
-#[test]
-fn crossing_ticket_exhaustion_closes_and_cleans_detection_membership() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      contract_steps_with_step(make_step(Task::StopCycle)),
-    );
-    crate::ActorReadyHead::<Test>::put(u64::MAX);
-    crate::ActorReadyTail::<Test>::put(u64::MAX);
-    assert_ok!(Actors::note_observation_transition(
-      7,
-      crate::ObservationTransition {
-        revision: 2,
-        previous: Some(50),
-        current: 150,
-      },
-    ));
-    let (_, counters) = Actors::service_crossing_transitions_with_counters(Weight::MAX);
-    assert_eq!(counters.candidates, 1);
-    assert_eq!(counters.canonical_probes, 1);
-    assert_eq!(counters.activations, 1);
-    assert_eq!(counters.closes, 1);
-    assert_eq!(counters.faults, 0);
-    assert!(Actors::active_actor_state(actor_id).is_none());
-    assert!(Actors::crossing_membership(actor_id).is_none());
-    assert_eq!(Actors::crossing_feed_membership_count(7), 0);
-    assert_eq!(Actors::combined_queue_occupancy(), 0);
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed {
-        actor_id: id,
-        reason: CloseReason::SchedulerIndexExhausted,
-      } if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn crossing_opening_rearm_uses_frozen_class_admission_and_frame_hot_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -4622,7 +4425,7 @@ fn crossing_opening_rearm_uses_frozen_class_admission_and_frame_hot_authority() 
         observed_at: 3,
       },
     );
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let crate::LoadedActorStateOf::Active(state) =
       Actors::load_actor_state_for_frame_control(actor_id)
@@ -4647,7 +4450,8 @@ fn crossing_opening_rearm_uses_frozen_class_admission_and_frame_hot_authority() 
       100
     );
     assert!(!crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::active_actor_view(actor_id).is_some());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -4981,3 +4785,4 @@ fn eligibility_projection_explains_crossing_phase_work_and_topology_failure() {
     );
   });
 }
+

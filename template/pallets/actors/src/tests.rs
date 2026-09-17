@@ -408,6 +408,12 @@ fn crossing_phase(actor_id: ActorId) -> CrossingPhase {
   }
 }
 
+/// Canonical observable of latched crossings: the number of `Service(Pending)` ring members a
+/// Crossing cohort publishes, which replaces the legacy paged `ActorReadyOccupancy` observable.
+fn canonical_service_occupancy() -> u32 {
+  crate::ServiceHeader::<Test>::get().count
+}
+
 fn drain_crossing_work() -> u32 {
   drain_crossing_work_with_limit(512)
 }

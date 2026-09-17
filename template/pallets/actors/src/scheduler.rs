@@ -3921,6 +3921,7 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  #[cfg(test)]
   pub(crate) fn preflight_paged_enqueue_cohort_with_authority(
     actors: Vec<(ActorId, ActorHotStateOf<T>)>,
   ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {

@@ -1230,10 +1230,16 @@ fn crossing_schedule_replacement_preserves_frame_phase_with_canonical_control() 
       actor_id,
       replacement,
     ));
-    assert_eq!(
-      crate::CrossingMemberships::<Test>::get(actor_id),
-      Some(membership_before)
-    );
+    // A canonical Contract replacement rotates the generation-bound process identity, and
+    // `sync_crossing_compiled_authority` re-binds the compiled Crossing membership to the new
+    // generation so later homogeneous cohort commits cannot mutate a stale actor reference. The
+    // phase key and physical geometry are preserved; only the generation advances.
+    let membership_after =
+      crate::CrossingMemberships::<Test>::get(actor_id).expect("Crossing membership survives");
+    assert_eq!(membership_after.key, membership_before.key);
+    assert_eq!(membership_after.page, membership_before.page);
+    assert_eq!(membership_after.offset, membership_before.offset);
+    assert!(membership_after.generation >= membership_before.generation);
     let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
       panic!("Crossing frame authority survives");
     };

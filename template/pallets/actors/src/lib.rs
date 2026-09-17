@@ -10154,7 +10154,7 @@ pub mod pallet {
           actor_id,
           generation: record.generation,
         };
-        let (_, process) = Self::load_canonical_actor_semantic_state(actor)
+        Self::load_canonical_actor_semantic_state(actor)
           .map_err(|_| Error::<T>::ActorInvariant)?;
         let resources = if state.contract.steps.is_empty() {
           ActorStepResourceEnvelope {
@@ -10181,10 +10181,19 @@ pub mod pallet {
           ServiceCutoff::Open,
         )
         .map_err(Self::placement_error)?;
+        // The successor publication must leave the canonical process for this generation in
+        // place and must have cleared the paused lifecycle. A latched occurrence can leave the
+        // process shape (`status`/`residence`) unchanged across resume, so the applied semantic
+        // lifecycle -- not process inequality -- is the authoritative evidence that resume ran.
         ensure!(
-          ActorProcesses::<T>::get(actor_id).is_some_and(|successor| {
-            successor.generation == actor.generation && successor != process
-          }),
+          ActorProcesses::<T>::get(actor_id)
+            .is_some_and(|successor| successor.generation == actor.generation)
+            && ActorSemanticStates::<T>::get(actor_id).is_some_and(|state| {
+              matches!(
+                state,
+                ActorSemanticState::Active(record) if !record.hot.lifecycle.is_paused()
+              )
+            }),
           Error::<T>::ActorInvariant
         );
         Self::deposit_event(Event::ActorResumed { actor_id });
