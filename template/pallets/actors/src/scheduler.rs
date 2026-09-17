@@ -4263,20 +4263,6 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  pub(crate) fn request_activation(
-    actor_id: ActorId,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    let activate = || Self::request_activation_inner(actor_id);
-    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
-      return activate();
-    }
-    polkadot_sdk::frame_support::storage::with_transaction(|| match activate() {
-      Ok(outcome) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome)),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
-    })
-  }
-
   fn preflight_activation_enqueue(
     actor_id: ActorId,
     state: &ActiveActorStateOf<T>,
@@ -4292,39 +4278,6 @@ impl<T: Config> Pallet<T> {
       )
     };
     Self::preflight_paged_enqueue_actor_state(actor_id, state, admission, loaded_step.as_ref())
-  }
-
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  pub(crate) fn preflight_activation_loaded(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-  ) -> Result<ActivationPlan<T>, ActivationFailure> {
-    let frame_admission = if ActorControlLocators::<T>::contains_key(actor_id) {
-      let (_, identity, _, admission) = Self::load_frame_control_authority(actor_id).ok_or(
-        ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()),
-      )?;
-      if identity != state.identity {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-      admission
-    } else {
-      // Canonically published Actor: the generation-bound semantic owner is the sole authority,
-      // so the preflight derives its frame admission from canonical state instead of a legacy
-      // primary control cell that canonical publication never creates.
-      let (identity, _, admission) =
-        Self::load_control_authority_with_authority(actor_id).ok_or(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ))?;
-      if identity != state.identity {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-      admission
-    };
-    Self::preflight_activation_from_authority(actor_id, state, frame_admission)
   }
 
   fn preflight_activation_from_authority(
@@ -4390,27 +4343,6 @@ impl<T: Config> Pallet<T> {
       instance,
       terminal_reason: classification.terminal_reason,
       action,
-    })
-  }
-
-  #[cfg(test)]
-  pub(crate) fn test_activation_plan_kind(actor_id: ActorId) -> Result<u8, ActivationFailure> {
-    let loaded = Self::load_actor_state(actor_id);
-    let LoadedActorStateOf::Active(state) = loaded else {
-      return Err(ActivationFailure::Permanent(
-        Error::<T>::ActorInvariant.into(),
-      ));
-    };
-    let plan = Self::preflight_activation_loaded(actor_id, state)?;
-    Ok(match plan.action {
-      ActivationAction::Close(_) => 0,
-      ActivationAction::CoalesceLive => 1,
-      ActivationAction::EnqueueTemporal(_) => 2,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => 3,
-      ActivationAction::EnqueueReady(_) => 4,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => 4,
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(_))) => 5,
-      ActivationAction::PrimeSchedule(Err(_)) => 6,
     })
   }
 
@@ -4560,24 +4492,6 @@ impl<T: Config> Pallet<T> {
         Error::<T>::SchedulerIndexExhausted.into(),
       )),
     }
-  }
-
-  #[cfg(any(test, feature = "runtime-benchmarks"))]
-  fn request_activation_inner(actor_id: ActorId) -> Result<ActivationOutcome, ActivationFailure> {
-    let loaded = Self::load_actor_state_with_authority(actor_id);
-    let state = match loaded {
-      LoadedActorStateOf::NotRegistered | LoadedActorStateOf::Dormant(_) => {
-        return Ok(ActivationOutcome::IgnoredStale);
-      }
-      LoadedActorStateOf::Active(state) => state,
-      LoadedActorStateOf::Corrupt => {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-    };
-    let plan = Self::preflight_activation_loaded(actor_id, state)?;
-    Self::commit_activation_plan(plan)
   }
 
   pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {

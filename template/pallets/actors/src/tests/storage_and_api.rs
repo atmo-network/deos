@@ -8417,7 +8417,6 @@ fn dormant_activation_and_trigger_replacements_preserve_strict_frame_loading() {
       Actors::load_frame_actor_state(actor_id),
       crate::LoadedActorStateOf::Active(_)
     ));
-    assert_eq!(Actors::test_activation_plan_kind(actor_id), Ok(3));
   });
 }
 

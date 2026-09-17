@@ -3136,7 +3136,10 @@ fn crossing_mixed_dense_sparse_directional_lifecycle_profile() {
       RuntimeOrigin::signed(400_000),
       rising[0]
     ));
-    Actors::request_activation(dense[0]).expect("fixture latch placement succeeds");
+    assert!(latch_canonical_occurrence(
+      dense[0],
+      TriggerFamily::ObservationCrossing
+    ));
 
     let user_steps = transfer_contract_steps(BOB, 1);
     let insolvent = create_user_with(

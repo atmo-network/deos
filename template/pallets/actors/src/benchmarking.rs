@@ -493,23 +493,29 @@ mod benches {
     })
   }
 
-  fn benchmark_latch_canonical_crossing<T: Config>(actor_id: ActorId) {
+  /// Latches one canonical `false -> true` occurrence for the Actor's declared Trigger family
+  /// through the production Trigger owner, recording that family and charging the generic
+  /// trigger probe fee so every benchmark fixture stays affordable.
+  fn benchmark_latch_canonical_occurrence<T: Config>(actor_id: ActorId) {
     use crate::weights::WeightInfo as _;
 
     let ActorSemanticState::Active(record) = ActorSemanticStates::<T>::get(actor_id)
-      .expect("benchmark Crossing Actor owns semantic state")
+      .expect("benchmark occurrence Actor owns semantic state")
     else {
-      panic!("benchmark Crossing Actor is active")
+      panic!("benchmark occurrence Actor is active")
     };
     let LoadedActorStateOf::Active(state) = Pallet::<T>::load_actor_state(actor_id) else {
-      panic!("benchmark Crossing Actor loads from canonical authority")
+      panic!("benchmark occurrence Actor loads from canonical authority")
     };
     let actor_type = state.identity.actor_class.actor_type();
     let sovereign_account = state.identity.sovereign_account.clone();
+    let trigger_family = state.contract.trigger.family();
+    // The generic trigger probe keeps the fixture affordable for every family, matching the
+    // canonical latch used by the pallet witnesses; the recorded family stays trigger-accurate.
     let breakdown = Pallet::<T>::trigger_fee_for_weight(
       actor_type,
-      TriggerFamily::ObservationCrossing,
-      T::WeightInfo::observation_crossing_trigger_occurrence(),
+      trigger_family,
+      T::WeightInfo::manual_trigger(),
     );
     assert_eq!(
       Pallet::<T>::commit_canonical_trigger_occurrence_with_authority(
@@ -523,9 +529,13 @@ mod benches {
         state,
         frame_system::Pallet::<T>::block_number(),
       )
-      .expect("benchmark Crossing occurrence latches canonically"),
+      .expect("benchmark occurrence latches canonically"),
       crate::scheduler::ActivationOutcome::Latched
     );
+  }
+
+  fn benchmark_latch_canonical_crossing<T: Config>(actor_id: ActorId) {
+    benchmark_latch_canonical_occurrence::<T>(actor_id);
   }
 
   fn benchmark_fixture_scalar_hot<T: Config>(actor_id: ActorId) -> Option<ActorHotStateOf<T>> {
@@ -1372,7 +1382,7 @@ mod benches {
     )
     .expect("apoptosis benchmark Actor exists");
     let actor_id = NextActorId::<T>::get().saturating_sub(1);
-    Pallet::<T>::request_activation(actor_id).expect("apoptosis readiness must latch");
+    benchmark_latch_canonical_occurrence::<T>(actor_id);
     let instance = Pallet::<T>::active_actor_view(actor_id).expect("active Actor view exists");
     assert_eq!(instance.cycle_state, CycleState::Idle);
     assert!(instance.pending_signal);
@@ -12492,9 +12502,9 @@ mod benches {
   /// Measures actual scheduler admission and complete execution for up to 1,000
   /// minimal one-step System actors. `Weight::MAX` exposes the full production-Wasm
   /// cost curve; separate guaranteed-budget stress evidence determines how many
-  /// executions the reference block budget actually admits. Setup writes the split actor stores and canonical paged FIFO outside
-  /// the measured block so the result isolates queue scanning, admission,
-  /// execution, and consumption rather than actor creation.
+  /// executions the reference block budget actually admits. Setup latches one canonical B+1
+  /// Service occurrence per actor outside the measured block so the result isolates queue
+  /// scanning, admission, execution, and consumption rather than actor creation.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_execute_cheap(n: Linear<1, 1_000>) {
     benchmark_fixture_reset_ready_queue::<T>();
@@ -12507,7 +12517,7 @@ mod benches {
     let mut actors = alloc::vec::Vec::with_capacity(bounded as usize);
     for offset in 0..bounded {
       let actor_id = bench_create_system_manual::<T>(41_000_000u32.saturating_add(offset));
-      Pallet::<T>::request_activation(actor_id).expect("cheap benchmark readiness must latch");
+      benchmark_latch_canonical_occurrence::<T>(actor_id);
       actors.push(actor_id);
     }
     let now: BlockNumberFor<T> = 1u32.into();
@@ -12533,8 +12543,8 @@ mod benches {
     );
   }
 
-  /// Measures canonical FIFO execution over alternating System/User actors.
-  /// Setup materializes one ticket-ordered queue outside the measured block.
+  /// Measures canonical Service-ring execution over alternating System/User actors.
+  /// Setup latches one canonical B+1 Service occurrence per actor outside the measured block.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_execute_cheap_mixed(n: Linear<2, 1_000>) {
     benchmark_fixture_reset_ready_queue::<T>();
@@ -12556,7 +12566,7 @@ mod benches {
         let owner: T::AccountId = account("mixed_user_owner", offset, 0);
         bench_create_user::<T>(owner)
       };
-      Pallet::<T>::request_activation(actor_id).expect("mixed benchmark readiness must latch");
+      benchmark_latch_canonical_occurrence::<T>(actor_id);
       actors.push(actor_id);
     }
     let now: BlockNumberFor<T> = 1u32.into();
@@ -13749,12 +13759,6 @@ mod benches {
   #[benchmark]
   fn crossing_fire_pair_probe() {
     let (feed, _) = prepare_crossing_work::<T>(2);
-    for index in 0..31 {
-      let owner: T::AccountId = account("crossing-pair-queue-boundary", index, 0);
-      let actor_id = bench_create_user_with_trigger::<T>(owner, Trigger::manual());
-      Pallet::<T>::request_activation(actor_id).expect("queue-boundary actor activation");
-    }
-    assert_eq!(benchmark_fixture_ready_occupancy::<T>(), 31);
     let second_owner: T::AccountId = account("crossing-pair-probe", 0, 0);
     let _ = bench_create_user_with_trigger::<T>(
       second_owner,
@@ -13912,7 +13916,7 @@ mod benches {
       ));
     }
     for actor_id in actors {
-      Pallet::<T>::request_activation(actor_id).expect("coalesced cohort activation");
+      benchmark_latch_canonical_crossing::<T>(actor_id);
     }
     let locator = CrossingMemberships::<T>::get(first).expect("first Crossing locator");
     let page = CrossingMemberPages::<T>::get(locator.key, locator.page)
