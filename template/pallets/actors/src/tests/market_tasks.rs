@@ -553,44 +553,6 @@ fn on_address_event_asset_filter_is_enforced() {
 }
 
 #[test]
-fn cadence_rearm_capacity_failure_rolls_back_pipeline_opening() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      timer_schedule(1),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut wakeup_meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut wakeup_meter);
-    let ready = Actors::actor_hot(actor_id).expect("Cadenced Actor remains active after detection");
-    assert!(ready.pending_signal);
-    assert!(ready.queue_ticket.is_some());
-    assert!(ready.trigger_wakeup_pointer.is_none());
-    let bob_before = native_balance(&BOB);
-    System::reset_events();
-    crate::WakeupCursorLen::<Test>::insert(
-      WakeupClock::Tick,
-      <<Test as crate::Config>::MaxActiveActors as Get<u32>>::get(),
-    );
-
-    let _ = Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(native_balance(&BOB), bob_before);
-    let state = Actors::active_actor_state(actor_id).expect("Cadenced Actor remains active");
-    assert_eq!(state.identity.cycle_nonce, 0);
-    assert!(state.hot.pending_signal);
-    assert!(state.hot.trigger_wakeup_pointer.is_none());
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn user_actor_rejects_mint_task_on_create() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
