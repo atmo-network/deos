@@ -1115,8 +1115,7 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = crate::ActorRef {
       actor_id,
       generation: crate::ActorSemanticStates::<Test>::get(actor_id)
@@ -1126,18 +1125,22 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
         })
         .expect("active generation"),
     };
+    // Canonical creation publishes the Actor immediately, so the pre-publication preflight is
+    // reached by detaching that exact publication back to its semantic-only source.
+    let state = Actors::detach_actor_publication(actor, state.clone(), state.run_state.as_ref())
+      .expect("canonical publication detaches to its pre-publication source");
 
     assert_eq!(
       Actors::test_preflight_actor_publication(
         actor,
         &state,
         state.run_state.as_ref(),
-        cell.resources,
+        resources,
         0,
       ),
       Ok(())
     );
-    let mut stale_resources = cell.resources;
+    let mut stale_resources = resources;
     stale_resources.effect = stale_resources
       .effect
       .saturating_add(Weight::from_parts(1, 0));
@@ -1170,7 +1173,7 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
         actor,
         &state,
         state.run_state.as_ref(),
-        cell.resources,
+        resources,
         0,
       ),
       Err(crate::scheduler::EnqueueOutcome::CorruptedTopology),
@@ -1183,10 +1186,13 @@ fn composite_publication_preflight_rejects_stale_resources_and_partial_canonical
 fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
-    let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    // Detach the canonical publication so the rehomed Trigger pointer is the only stale carrier.
+    let run_state = state.run_state.clone();
+    let mut state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     state.hot.trigger_wakeup_pointer = Some(crate::TriggerWakeupPointer {
       tick: 9,
       page_id: 77,
@@ -1198,13 +1204,12 @@ fn composite_publication_rehomes_an_existing_temporal_trigger_pointer() {
       };
       record.hot = state.hot.clone();
     });
-    crate::ActorControlLocators::<Test>::remove(actor_id);
 
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       0,
     )
     .expect("existing temporal authority is rehomed");
@@ -1295,8 +1300,7 @@ fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomical
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = crate::ActorRef {
       actor_id,
       generation: crate::ActorSemanticStates::<Test>::get(actor_id)
@@ -1327,13 +1331,16 @@ fn composite_publication_commits_process_and_temporal_trigger_deadlines_atomical
       actor_id,
       crate::ActorSemanticState::Active(semantic),
     );
-    crate::ActorControlLocators::<Test>::remove(actor_id);
+    // Re-derive the pre-publication source so the Cadenced successor owns both deadlines.
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
 
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       0,
     )
     .expect("complete canonical publication commits");
@@ -1370,8 +1377,7 @@ fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
     state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
@@ -1387,12 +1393,14 @@ fn temporal_trigger_deadline_removal_is_independent_and_transactional() {
       record.hot = state.hot.clone();
       record.admission = admission;
     });
-    crate::ActorControlLocators::<Test>::remove(actor_id);
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       0,
     )
     .expect("complete canonical publication commits");
@@ -1489,8 +1497,7 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
     state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
@@ -1506,12 +1513,14 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
       record.hot = state.hot.clone();
       record.admission = admission;
     });
-    crate::ActorControlLocators::<Test>::remove(actor_id);
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       0,
     )
     .expect("complete canonical publication commits");
@@ -1552,7 +1561,7 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
       &source,
       &successor,
       source.run_state.as_ref(),
-      cell.resources,
+      resources,
       1,
     )
     .expect("canonical pause transition commits");
@@ -1579,7 +1588,7 @@ fn canonical_lifecycle_transition_atomically_pauses_and_resumes_service_authorit
       &paused,
       &resumed,
       resumed.run_state.as_ref(),
-      cell.resources,
+      resources,
       2,
     )
     .expect("canonical resume and latched occurrence publish one Service residence");
@@ -1613,16 +1622,17 @@ fn canonical_terminal_removal_closes_service_authority_transactionally() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let mut state = Actors::active_actor_state(actor_id).expect("real latched Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let state = Actors::active_actor_state(actor_id).expect("real latched Actor");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
-    crate::ActorControlLocators::<Test>::remove(actor_id);
+    let run_state = state.run_state.clone();
+    let mut state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       1,
     )
     .expect("complete canonical publication commits");
@@ -1830,25 +1840,30 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     state.hot.lifecycle = crate::ActiveLifecycle::Active;
     state.hot.cycle_state = crate::CycleState::Idle;
     state.hot.pending_signal = true;
     state.run_state = None;
+    crate::ActorRunStateStore::<Test>::remove(actor_id);
     crate::ActorSemanticStates::<Test>::mutate(actor_id, |semantic| {
       let Some(crate::ActorSemanticState::Active(record)) = semantic else {
         panic!("active semantic record");
       };
       record.hot = state.hot.clone();
     });
-    crate::ActorControlLocators::<Test>::remove(actor_id);
-    crate::ServiceHeader::<Test>::mutate(|header| header.cursor = Some(actor));
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
+    crate::ServiceHeader::<Test>::mutate(|header| {
+      header.count = 0;
+      header.cursor = Some(actor);
+    });
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
     assert_eq!(
-      Actors::test_publish_actor_publication(actor, &state, None, cell.resources, 0),
+      Actors::test_publish_actor_publication(actor, &state, None, resources, 2),
       Err(corrupted),
       "malformed Service topology fails after semantic and process publication"
     );
@@ -1862,14 +1877,15 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     let (_, _, process_deadline) =
       Actors::test_plan_process_destination(actor, &state, state.run_state.as_ref(), 0)
         .expect("suspended process destination");
     let process_key = process_deadline.expect("process deadline handle").key;
-    crate::ActorControlLocators::<Test>::remove(actor_id);
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     crate::DeadlineIndexPositions::<Test>::insert(process_key, 0);
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
@@ -1878,7 +1894,7 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
         actor,
         &state,
         state.run_state.as_ref(),
-        cell.resources,
+        resources,
         0,
       ),
       Err(corrupted),
@@ -1894,8 +1910,7 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let mut state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     state.contract.trigger = Trigger::Cadenced { every_ticks: 5 };
     state.hot.trigger_runtime_state = TriggerRuntimeState::Cadenced {
@@ -1911,18 +1926,20 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
       record.hot = state.hot.clone();
       record.admission = admission;
     });
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("canonical publication detaches");
     let (_, _, _, _, trigger_deadline) = Actors::test_plan_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       0,
     )
     .expect("composite temporal destination");
     let trigger_key = trigger_deadline
       .expect("temporal Trigger deadline handle")
       .key;
-    crate::ActorControlLocators::<Test>::remove(actor_id);
     crate::DeadlineIndexPositions::<Test>::insert(trigger_key, 0);
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
@@ -1931,7 +1948,7 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
         actor,
         &state,
         state.run_state.as_ref(),
-        cell.resources,
+        resources,
         0,
       ),
       Err(corrupted),

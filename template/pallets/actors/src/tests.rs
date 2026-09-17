@@ -988,6 +988,24 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
 }
 
+/// Canonical equivalent of the retired legacy control-cell resource envelope. A canonically
+/// published Actor stores its current-Step envelope in the semantic/service owner, so the
+/// pre-cutover fixtures that used `actor_control_cell(...).resources` read it from there instead.
+fn fixture_step_resource_envelope(
+  actor_id: crate::ActorId,
+) -> crate::ActorStepResourceEnvelope {
+  if let Some((_, cell)) = Actors::actor_control_cell(actor_id) {
+    return cell.resources;
+  }
+  Actors::load_frame_actor_service_state(actor_id)
+    .and_then(|(_, _, loaded_step)| loaded_step)
+    .map(|loaded| loaded.resources)
+    .unwrap_or(crate::ActorStepResourceEnvelope {
+      control: <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete(),
+      effect: Weight::zero(),
+    })
+}
+
 /// Test fixture: clears the canonical carrier published by creation and then publishes one inert
 /// Service member, so ring tests can construct membership without the creation-time Disabled
 /// process tripping the single-authority publication guard.
