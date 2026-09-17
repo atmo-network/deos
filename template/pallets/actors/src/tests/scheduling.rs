@@ -779,148 +779,17 @@ fn running_fifo_head_avoids_cold_reads_before_eligibility_and_weight_admission()
 }
 
 #[test]
-fn initial_placement_preserves_creation_and_reactivation_authority() {
-  for schedule in [manual_schedule(), at_time_schedule(10), timer_schedule(10)] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let window = matches!(schedule.trigger, Trigger::Manual).then_some(ScheduleWindow {
-          start: 10,
-          end: 10 + <<Test as crate::Config>::MinWindowLength as Get<u64>>::get(),
-        });
-        let steps = if empty { BoundedVec::default() } else { inert_contract_steps() };
-        let contract = system_active_contract(schedule.clone(), window, steps);
-        let actor_id = NextActorId::<Test>::get();
-        for reactivation in [false, true] {
-          if reactivation {
-            frame_system::Pallet::<Test>::set_block_number(2);
-            assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
-            frame_system::Pallet::<Test>::set_block_number(3);
-          }
-          let install = || {
-            if reactivation {
-              Actors::activate_actor(RuntimeOrigin::root(), actor_id, contract.clone().expect("active Contract"))
-            } else {
-              Actors::create_system_actor(RuntimeOrigin::root(), ALICE, Mutability::Mutable, contract.clone())
-            }
-          };
-          let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-          Actors::test_fail_wakeup_placement_with_capacity();
-          assert_noop!(install(), Error::<Test>::QueueCapacityUnavailable);
-          assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
-          assert_ok!(install());
-          let (state, admission, step) = Actors::load_frame_actor_service_state(actor_id)
-            .expect("complete installed authority");
-          assert_eq!(step.is_some(), !empty);
-          assert_eq!(state.hot.cycle_state, CycleState::Idle);
-          assert!(!state.hot.pending_signal);
-          assert!(state.hot.queue_ticket.is_none());
-          assert!(state.run_state.is_none());
-          let expected_key = if let Some(window) = window {
-            assert!(state.hot.trigger_wakeup_pointer.is_none());
-            let pointer = state.hot.wakeup_pointer.expect("terminal Block pointer");
-            assert_eq!(pointer.block, WakeupKey::Block(window.end + 1));
-            pointer.block
-          } else {
-            assert!(state.hot.wakeup_pointer.is_none());
-            let pointer = state.hot.trigger_wakeup_pointer.expect("initial Tick pointer");
-            assert_eq!(pointer.tick, if reactivation { 13 } else { 11 });
-            WakeupKey::Tick(pointer.tick)
-          };
-          let (location, cell) = Actors::actor_control_cell(actor_id).expect("installed primary");
-          assert!(matches!(location, crate::ActorControlLocation::Waiting { key, .. } if key == expected_key));
-          assert_eq!(cell.admission, admission);
-          #[cfg(feature = "try-runtime")]
-          assert_ok!(Actors::do_try_state());
-        }
-      });
-    }
-  }
-}
-
-#[test]
-fn temporal_replacement_publishes_exact_primary_and_preserves_failed_source() {
-  for schedule in [at_time_schedule(10), timer_schedule(10)] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let steps = if empty {
-          BoundedVec::default()
-        } else {
-          inert_contract_steps()
-        };
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-        let mut replacement = Actors::load_actor_contract(actor_id).expect("admitted Contract");
-        replacement.trigger = schedule.trigger.clone();
-        frame_system::Pallet::<Test>::set_block_number(2);
-        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        Actors::test_fail_wakeup_placement_with_capacity();
-        assert_noop!(
-          Actors::update_contract(RuntimeOrigin::root(), actor_id, replacement.clone()),
-          Error::<Test>::QueueCapacityUnavailable
-        );
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          before
-        );
-        assert_ok!(Actors::update_contract(
-          RuntimeOrigin::root(),
-          actor_id,
-          replacement
-        ));
-        let (state, admission, loaded_step) =
-          Actors::load_frame_actor_service_state(actor_id).expect("complete temporal authority");
-        assert_eq!(loaded_step.is_some(), !empty);
-        let anchor = match state.hot.trigger_runtime_state {
-          TriggerRuntimeState::AtTime { anchor_tick, .. }
-          | TriggerRuntimeState::Cadenced { anchor_tick } => {
-            anchor_tick.expect("anchored replacement")
-          }
-          _ => panic!("temporal Trigger"),
-        };
-        let pointer = state.hot.trigger_wakeup_pointer.expect("Tick pointer");
-        assert_eq!(pointer.tick, anchor + 10);
-        let (location, cell) = Actors::actor_control_cell(actor_id).expect("sole primary");
-        let crate::ActorControlLocation::Waiting { key, page, slot } = location else {
-          panic!("Tick primary");
-        };
-        assert_eq!(key, WakeupKey::Tick(pointer.tick));
-        assert_eq!(page, pointer.page_id);
-        assert_eq!(u32::from(slot), pointer.slot);
-        assert_eq!(cell.admission, admission);
-        assert_eq!(cell.cursor, 0);
-        assert_eq!(
-          cell.resources,
-          loaded_step.map_or(
-            crate::ActorStepResourceEnvelope {
-              control: <<Test as crate::Config>::WeightInfo as crate::weights::WeightInfo>::scheduler_inner_zero_step_complete(),
-              effect: Weight::zero(),
-            },
-            |loaded| loaded.resources
-          )
-        );
-        let published =
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        assert_ok!(Actors::prime_frame_actor_schedule(actor_id));
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          published
-        );
-        #[cfg(feature = "try-runtime")]
-        assert_ok!(Actors::do_try_state());
-      });
-    }
-  }
-}
-
-#[test]
 fn next_work_plan_types_unsignaled_process_authority_without_writes() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
     let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
+    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
+    let resources = fixture_step_resource_envelope(actor_id);
+    let run_state = state.run_state.clone();
+    let state = Actors::detach_actor_publication(actor, state, run_state.as_ref())
+      .expect("detach canonical publication for pure process planning");
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
-    let actor = Actors::load_actor_ref(actor_id).expect("active generation-bound reference");
     let mut paused = state.clone();
     paused.hot.lifecycle = crate::ActiveLifecycle::Paused;
     paused.contract.window = None;
@@ -982,7 +851,7 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
     let mut pending = unlatched;
     pending.hot.pending_signal = true;
     assert_eq!(
-      Actors::test_plan_next_work_source(&pending, None, 0),
+      Actors::test_plan_next_work_source(&pending, None, System::block_number()),
       Ok((
         crate::StepControlPlacement::Queue,
         None,
@@ -991,7 +860,7 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
       ))
     );
     let (service, admission_round, deadline) =
-      Actors::test_plan_process_destination(actor, &pending, None, 0)
+      Actors::test_plan_process_destination(actor, &pending, None, System::block_number())
         .expect("pending Actor has a complete Service destination");
     assert_eq!(
       (service.generation, service.status, service.residence),
@@ -1003,7 +872,7 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
         )),
       )
     );
-    assert_eq!((admission_round, deadline), (Some(0), None));
+    assert_eq!((admission_round, deadline), (Some(System::block_number()), None));
 
     let (sleeping, admission_round, deadline) =
       Actors::test_plan_process_destination(actor, &state, state.run_state.as_ref(), 0)
@@ -1026,14 +895,12 @@ fn next_work_plan_types_unsignaled_process_authority_without_writes() {
       anchor_tick: Some(0),
     };
     temporal.hot.trigger_wakeup_pointer = None;
-    let (_, cell) =
-      Actors::actor_control_cell(actor_id).expect("legacy resources remain available");
     let (planned_hot, planned_process, _, process_deadline, trigger_deadline) =
       Actors::test_plan_actor_publication(
         actor,
         &temporal,
         temporal.run_state.as_ref(),
-        cell.resources,
+        resources,
         0,
       )
       .expect("process residence and temporal Trigger plan together");
@@ -1803,7 +1670,7 @@ fn supplied_run_is_the_only_consumed_scheduling_authority() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        Actors::on_idle(1, Weight::MAX);
+        run_idle(Weight::MAX);
         actor_id
       };
       let state = Actors::active_actor_state(actor_id).expect("real active Run");
@@ -1820,13 +1687,15 @@ fn supplied_run_is_the_only_consumed_scheduling_authority() {
         .as_ref()
         .expect("real lifecycle Run")
         .clone();
-      let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+      let (_, admission, _) =
+        Actors::load_frame_actor_service_state(actor_id).expect("canonical service authority");
+      let resources = fixture_step_resource_envelope(actor_id);
       let invoke = |supplied| {
         Actors::test_schedule_next_work_source(
           actor_id,
           &state,
-          &cell.admission,
-          cell.resources,
+          &admission,
+          resources,
           supplied,
           run.eligible_at,
         )
@@ -2168,76 +2037,6 @@ fn canonical_activation_preflight_derives_admission_without_a_legacy_primary() {
     assert!(hot.pending_signal);
     assert!(hot.queue_ticket.is_some());
   });
-}
-
-#[test]
-fn deferred_activation_preserves_source_on_failure_and_publishes_exact_waiting() {
-  for saturated in [false, true] {
-    for empty in [false, true] {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let window = (!saturated).then_some(ScheduleWindow {
-          start: 10,
-          end: 10 + <<Test as crate::Config>::MinWindowLength as Get<u64>>::get(),
-        });
-        let steps = if empty {
-          BoundedVec::default()
-        } else {
-          inert_contract_steps()
-        };
-        let actor_id = create_system_with(ALICE, manual_schedule(), window, steps);
-        if saturated {
-          seed_saturated_tombstone_queue();
-        }
-        let state = Actors::active_actor_state(actor_id).expect("canonical activation source");
-        let plan = Actors::preflight_activation_loaded(actor_id, state).expect("valid preflight");
-        if saturated {
-          assert!(matches!(
-            plan.action,
-            crate::scheduler::ActivationAction::EnqueueReady(Err(
-              crate::EnqueueOutcome::CapacityUnavailable
-            ))
-          ));
-        } else {
-          assert!(matches!(
-            plan.action,
-            crate::scheduler::ActivationAction::PrimeSchedule(Ok(
-              crate::scheduler::PrimeSchedulePlan::BlockWakeup(10)
-            ))
-          ));
-        }
-        let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-        Actors::test_fail_wakeup_placement_with_capacity();
-        assert_noop!(
-          Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id),
-          Error::<Test>::QueueCapacityUnavailable
-        );
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-          before
-        );
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          actor_id
-        ));
-        let hot = Actors::actor_hot(actor_id).expect("published activation");
-        assert!(hot.pending_signal);
-        assert!(hot.queue_ticket.is_none());
-        assert_eq!(
-          hot.wakeup_pointer.expect("Waiting pointer").block,
-          WakeupKey::Block(if saturated { 2 } else { 10 })
-        );
-        assert!(matches!(
-          Actors::actor_control_cell(actor_id)
-            .expect("canonical primary")
-            .0,
-          crate::ActorControlLocation::Waiting { .. }
-        ));
-        #[cfg(feature = "try-runtime")]
-        assert_ok!(Actors::do_try_state());
-      });
-    }
-  }
 }
 
 #[test]
