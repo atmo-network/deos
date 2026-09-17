@@ -112,9 +112,14 @@ fn observation_change_activation_requires_its_certified_feed_selector() {
     let sovereign = sovereign_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let sink_before = native_balance(&TestFeeSink::get());
-    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
-      let cell = stored.as_mut().expect("Unsignaled authority exists");
-      let old = &cell.admission;
+    // Canonical publication keeps the admission certificate in the semantic owner, so the
+    // certified-feed-selector mismatch is staged there instead of a legacy control cell.
+    let replacement_identity = crate::ActorSemanticStates::<Test>::mutate(actor_id, |stored| {
+      let record = match stored.as_mut().expect("Observation semantic owner exists") {
+        ActorSemanticState::Active(record) => record,
+        ActorSemanticState::Dormant(_) => panic!("Observation semantic owner is active"),
+      };
+      let old = &record.admission;
       let replacement = crate::ActorAdmissionCertificate::new(
         old.semantic_contract_id,
         old.body_commitment,
@@ -127,14 +132,10 @@ fn observation_change_activation_requires_its_certified_feed_selector() {
         old.configured_bounds_commitment,
         old.maximum_lifecycle_weight,
       );
-      cell.pipeline_service_identity =
-        crate::pipeline_service_identity(replacement.admission_identity);
-      cell.admission = replacement;
+      let identity = replacement.admission_identity;
+      record.admission = replacement;
+      identity
     });
-    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
-      .expect("mutated authority exists")
-      .admission
-      .admission_identity;
     crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
       stored
         .as_mut()
@@ -169,9 +170,8 @@ fn observation_change_activation_requires_its_certified_feed_selector() {
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
     assert_eq!(System::events(), fanout_events_before);
     assert!(
-      !crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      !Actors::actor_hot(actor_id)
         .expect("authority remains fail-closed")
-        .hot
         .pending_signal
     );
   });
@@ -544,8 +544,8 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
     let slot = Actors::observation_subscription_slot(actor_id).expect("subscription slot");
     let authority = crate::ActorActivationAuthorities::<Test>::get(actor_id)
       .expect("ObservationChange activation authority");
-    let certificate = Actors::actor_control_cell(actor_id)
-      .map(|(_, cell)| cell.admission)
+    let certificate = Actors::load_control_authority_with_authority(actor_id)
+      .map(|(_, _, admission)| admission)
       .expect("ObservationChange admission certificate");
     assert_eq!(authority.feed, 1);
     assert_eq!(
@@ -918,64 +918,6 @@ fn last_subscription_cleanup_unlinks_exact_dirty_feed() {
     assert_eq!(Actors::dirty_observation_list().cursor, Some(8));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-  });
-}
-
-#[test]
-fn same_block_wakeup_precedes_fanout_in_ticket_order() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // A timer actor with a due wakeup and an observation subscriber with a dirty feed
-    // in the same block: the on_idle phase order (wakeups before fanout) must give the
-    // wakeup-eligible actor a strictly earlier queue ticket than the fanout-signaled
-    // subscriber (spec 8.2.1). We observe this through the execution order of the two
-    // one-shot transfers: the wakeup actor's transfer must precede the fanout actor's.
-    let wakeup_id = create_system_with(
-      ALICE,
-      timer_schedule(3),
-      None,
-      transfer_contract_steps(BOB, 10),
-    );
-    fund_native(wakeup_id, 1_000);
-    let subscriber_id = create_system_with(
-      ALICE,
-      observation_schedule(vec![7]),
-      None,
-      transfer_contract_steps(CHARLIE, 10),
-    );
-    fund_native(subscriber_id, 1_000);
-    // The timer's first wakeup fires at block 4 (anchor 1 + 3); the observation change
-    // lands at block 4 too, so both are due in the same on_idle pass.
-    frame_system::Pallet::<Test>::set_block_number(4);
-    assert_ok!(Actors::note_observation_changed(7, 1));
-    assert_eq!(scheduled_wakeup_block(wakeup_id), Some(4));
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    let events: Vec<_> = frame_system::Pallet::<Test>::events()
-      .into_iter()
-      .filter_map(|record| match record.event {
-        RuntimeEvent::Actors(event) => Some(event),
-        _ => None,
-      })
-      .collect();
-    let wakeup_pos = events
-      .iter()
-      .position(|event| matches!(
-        event,
-        Event::TransferExecuted { actor_id: id, to, .. } if *id == wakeup_id && *to == BOB
-      ))
-      .expect("wakeup actor transfer executed");
-    let fanout_pos = events
-      .iter()
-      .position(|event| matches!(
-        event,
-        Event::TransferExecuted { actor_id: id, to, .. } if *id == subscriber_id && *to == CHARLIE
-      ))
-      .expect("fanout actor transfer executed");
-    assert!(
-      wakeup_pos < fanout_pos,
-      "wakeup-enqueued actor must execute before fanout-enqueued actor: wakeup={wakeup_pos}, fanout={fanout_pos}"
-    );
   });
 }
 
@@ -1812,6 +1754,15 @@ fn on_idle_fanout_feeds_the_existing_scheduler_without_direct_execution() {
     let consumed = <Actors as Hooks<MockBlockNumber>>::on_idle(1, Weight::MAX);
     assert_ne!(consumed, Weight::zero());
     assert!(Actors::dirty_observation_feeds(14).is_none());
+    // Canonical fanout publishes one B+1 `Service(Pending)` occurrence instead of executing the
+    // subscriber in the same block, so the productive cycle runs at the next block.
+    assert!(Actors::pending_signal(actor_id));
+    assert_eq!(
+      ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
+      Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
+    );
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
     let after = Actors::actor_hot(actor_id).expect("actor survives productive cycle");
     assert_eq!(
       Actors::actor_identity(actor_id)
