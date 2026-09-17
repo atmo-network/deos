@@ -3529,27 +3529,23 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(102));
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-      let locator = crate::ActorControlLocators::<Test>::get(actor_id);
-      assert!(
-        matches!(
-          locator,
-          Some(crate::ActorControlLocation::Waiting {
-            key: WakeupKey::Block(102),
-            ..
-          })
-        ),
-        "window-expiry locator: {locator:?}; hot={:?}",
-        Actors::actor_hot(actor_id)
-      );
-      assert!(Actors::load_frame_control_authority(actor_id).is_some());
-    }
+    // A retry suspension inside an active window must wake for the window terminal before its
+    // cooldown, so the canonical deadline and the persisted Run eligibility both clamp to 102.
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
+    assert_eq!(
+      Actors::actor_run_state(actor_id).map(|run| run.eligible_at),
+      Some(102)
+    );
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(102))
+    );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     let ticket_frontier_before_expiry = crate::ActorReadyTail::<Test>::get();
     frame_system::Pallet::<Test>::set_block_number(102);
+    run_prepass();
     run_idle(Weight::MAX);
     assert_eq!(
       crate::ActorReadyTail::<Test>::get(),

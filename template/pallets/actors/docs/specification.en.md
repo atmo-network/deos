@@ -960,8 +960,12 @@ A terminal Failed Attempt increments the global unsuccessful streak once. A `Con
 Retry eligibility is:
 
 ```text
-retry_eligible_at = last_attempt_block + max(cooldown_blocks, backoff(next_local - 1))
+retry_eligible_at =
+  last_attempt_block + max(cooldown_blocks, backoff(next_local - 1))
+  bounded by [window.start, terminal_at] when a ScheduleWindow is present
 ```
+
+A retry suspension inside an active window therefore wakes at the window terminal (`end + 1`) rather than sleeping through its own cooldown. Because the persisted Run `eligible_at` uses this same owner, it agrees with the exact deadline destination and the suspension transition can commit.
 
 ### 6.6 Task semantics
 

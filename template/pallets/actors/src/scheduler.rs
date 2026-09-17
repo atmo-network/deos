@@ -8387,7 +8387,9 @@ impl<T: Config> Pallet<T> {
       .checked_add(&retry_delay)
       .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
     if let Some(window) = window {
-      eligible_at = eligible_at.max(window.start);
+      eligible_at = eligible_at
+        .max(window.start)
+        .min(Self::window_terminal_at(&window));
     }
     Ok(eligible_at)
   }
