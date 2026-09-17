@@ -1929,12 +1929,15 @@ impl<T: Config> Pallet<T> {
           _ => None,
         };
         let later_retry_destination = match (disposition, eligible_at, deadline) {
+          // A successful attempt always retains canonical Service residence. The destination
+          // precomputed for a possible retry failure is irrelevant on success and must not
+          // prevent the commit; the member simply advances within the ring.
+          (
+            AttemptDisposition::Completed | AttemptDisposition::Continued,
+            Some(eligible_at),
+            _,
+          ) if now.checked_add(&One::one()) == Some(eligible_at) => None,
           (AttemptDisposition::Completed, None, _) => None,
-          (AttemptDisposition::Continued, Some(eligible_at), None)
-            if now.checked_add(&One::one()) == Some(eligible_at) =>
-          {
-            None
-          }
           (AttemptDisposition::Failed, None, _)
             if matches!(step.on_error, StepErrorPolicy::RetryLater { .. })
               && exhaustion_reason.is_some() =>

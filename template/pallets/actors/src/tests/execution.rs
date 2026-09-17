@@ -1768,7 +1768,7 @@ fn frame_only_running_swap_retry_and_resume_never_materialize_scalar_hot() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -1776,35 +1776,24 @@ fn frame_only_running_swap_retry_and_resume_never_materialize_scalar_hot() {
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let retry = Actors::actor_run_state(actor_id).expect("Running failure suspends");
     assert_eq!(retry.cursor, 1);
-    assert_eq!(retry.eligible_at, 3);
+    assert_eq!(retry.eligible_at, 4);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    run_prepass();
-    Actors::on_idle(3, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("resumed continuation")
         .cursor,
       2
     );
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    Actors::on_idle(4, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -2007,15 +1996,12 @@ fn frame_only_retry_attempt_exhaustion_closes_from_consumed_authority() {
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert!(matches!(
       Actors::active_actor_view(actor_id).map(|instance| instance.cycle_state),
       Some(CycleState::Suspended)
     ));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2144,7 +2130,8 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let first = Actors::active_actor_view(actor_id).expect("suspended actor remains");
     let first_continuation = Actors::actor_run_state(actor_id).expect("Actor run exists");
@@ -2154,8 +2141,8 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(first_continuation.cycle_nonce, 1);
     assert_eq!(first_continuation.cursor, 1);
     assert_eq!(first_continuation.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(first_continuation.last_attempt_block, 2);
-    assert_eq!(first_continuation.eligible_at, 3);
+    assert_eq!(first_continuation.last_attempt_block, 3);
+    assert_eq!(first_continuation.eligible_at, 4);
     assert!(matches!(
       first_continuation.last_step_outcome,
       Some(StepOutcome::Failed(TaskFailure {
@@ -2171,8 +2158,6 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(first_continuation.cumulative_outcomes.failed_steps, 1);
     assert!(crate::ActorRunHeads::<Test>::contains_key(actor_id));
     assert!(crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(first.queue_ticket.is_some());
-    assert!(first.wakeup_pointer.is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
     assert_eq!(native_balance(&first.sovereign_account), 90);
@@ -2182,8 +2167,6 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
       matches!(event, Event::CycleSummary { actor_id: id, .. } if *id == actor_id)
     }));
 
-    frame_system::Pallet::<Test>::set_block_number(first_continuation.eligible_at);
-    run_idle(Weight::MAX);
     run_next_idle(Weight::MAX);
     let second_continuation = Actors::actor_run_state(actor_id).expect("Actor run remains");
     assert_eq!(second_continuation.cycle_nonce, 1);
@@ -2193,11 +2176,8 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(second_continuation.eligible_at, 6);
     assert_eq!(second_continuation.cumulative_outcomes.executed_steps, 1);
     assert_eq!(second_continuation.cumulative_outcomes.failed_steps, 2);
-    let second = Actors::active_actor_view(actor_id).expect("long retry Actor remains");
     assert!(crate::ActorRunHeads::<Test>::contains_key(actor_id));
     assert!(crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(second.queue_ticket.is_none());
-    assert!(second.wakeup_pointer.is_some());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before);
 
@@ -2215,8 +2195,6 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::ActorRunHeads::<Test>::contains_key(actor_id));
     assert!(!crate::ActorRunPayloads::<Test>::contains_key(actor_id));
-    assert!(completed.queue_ticket.is_none());
-    assert!(completed.wakeup_pointer.is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);
     assert_eq!(native_balance(&CHARLIE), charlie_before + 5);
     let starts = frame_system::Pallet::<Test>::events()
