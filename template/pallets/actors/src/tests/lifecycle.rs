@@ -326,13 +326,9 @@ fn deactivation_removes_active_epoch_and_all_contract_fragments_without_orphans(
 
     for actor_id in [user_id, system_id] {
       assert!(Actors::actor_hot(actor_id).is_some());
-      assert_eq!(
-        ActorControlLocators::<Test>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
-      );
-      assert!(ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+      assert!(ActorProcesses::<Test>::contains_key(actor_id));
+      assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
       assert!(ActorContractHeads::<Test>::contains_key(actor_id));
-      assert!(Actors::actor_control_cell(actor_id).is_some());
       assert!(ActorContractTailChunks::<Test>::contains_key(actor_id, 0));
       assert!(ActorContractTailChunks::<Test>::contains_key(actor_id, 1));
     }
@@ -1109,8 +1105,8 @@ fn stable_hot_mutation_and_store_seams_update_primary_and_fail_closed_on_topolog
       }),
       7
     );
-    let (_, _, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame authority exists");
+    let (_, frame_hot, _) =
+      Actors::load_control_authority_with_authority(actor_id).expect("frame authority exists");
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical projection exists");
     assert_eq!(frame_hot, projected_hot);
     assert_eq!(frame_hot.unsuccessful_attempt_streak, 7);
@@ -1121,12 +1117,12 @@ fn stable_hot_mutation_and_store_seams_update_primary_and_fail_closed_on_topolog
       Actors::try_store_control_hot_with_authority(actor_id, replacement.clone(),),
       Ok(())
     );
-    let (_, _, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("stored frame authority exists");
+    let (_, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("stored frame authority exists");
     assert_eq!(frame_hot, replacement);
     assert_eq!(Actors::actor_hot(actor_id), Some(replacement.clone()));
 
-    ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    crate::ActorSemanticStates::<Test>::remove(actor_id);
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     assert!(Actors::actor_hot(actor_id).is_none());
     assert_eq!(
@@ -1158,8 +1154,8 @@ fn lifecycle_mutations_keep_frame_identity_and_hot_authority_in_lockstep() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    let (_, frame_identity, frame_hot, frame_admission) =
-      Actors::load_frame_control_authority(actor_id).expect("paused frame authority exists");
+    let (frame_identity, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("paused frame authority exists");
     assert_eq!(
       frame_identity,
       Actors::actor_identity(actor_id).expect("canonical identity")
@@ -1168,18 +1164,12 @@ fn lifecycle_mutations_keep_frame_identity_and_hot_authority_in_lockstep() {
       frame_hot,
       Actors::actor_hot(actor_id).expect("canonical hot state")
     );
-    assert_eq!(
-      frame_admission,
-      Actors::actor_control_cell(actor_id)
-        .map(|(_, cell)| cell.admission)
-        .expect("canonical admission")
-    );
     assert!(frame_hot.lifecycle.is_paused());
 
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    let (_, frame_identity, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("resumed frame authority exists");
+    let (frame_identity, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("resumed frame authority exists");
     assert_eq!(
       frame_identity,
       Actors::actor_identity(actor_id).expect("canonical identity")
@@ -1208,18 +1198,19 @@ fn policy_only_contract_replacement_uses_frame_authority_with_canonical_control(
       actor_id,
       replacement.clone(),
     ));
-    let (_, _, hot, admission) =
-      Actors::load_frame_control_authority(actor_id).expect("updated frame authority exists");
-    assert_eq!(hot.lifecycle, ActiveLifecycle::Active);
     let crate::LoadedActorStateOf::Active(updated) = Actors::load_frame_actor_state(actor_id)
     else {
       panic!("updated frame state");
     };
+    let (_, _, admission) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("updated frame admission exists");
+    assert_eq!(updated.hot.lifecycle, ActiveLifecycle::Active);
     assert_eq!(updated.contract, replacement);
     assert!(admission.has_valid_identity());
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }
 
@@ -1253,7 +1244,8 @@ fn user_contract_replacement_reconciles_state_hold_from_frame_authority() {
     assert_eq!(hold_after.breakdown, hold_before.breakdown);
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1294,18 +1286,24 @@ fn user_crossing_install_uses_frozen_class_with_canonical_control() {
     let locator =
       crate::CrossingMemberships::<Test>::get(actor_id).expect("User membership exists");
     assert_eq!(crate::CrossingUserFeedMembershipCount::<Test>::get(7), 1);
-    let (_, _, hot, admission) =
-      Actors::load_frame_control_authority(actor_id).expect("User Crossing frame authority exists");
+    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
+      panic!("User Crossing frame authority exists");
+    };
+    let (_, _, crossing_admission) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("User Crossing admission exists");
     let page = crate::CrossingMemberPages::<Test>::get(locator.key, locator.page)
       .expect("User Crossing member page exists");
     let member = page
       .entries
       .get(locator.offset as usize)
       .expect("User Crossing member exists");
-    assert_eq!(member.admission_identity, admission.admission_identity);
+    assert_eq!(
+      member.admission_identity,
+      crossing_admission.admission_identity
+    );
     assert_ne!(member.admission_identity, [0; 32]);
     assert!(matches!(
-      hot.trigger_runtime_state,
+      state.hot.trigger_runtime_state,
       TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::Armed,
         ..
@@ -1313,7 +1311,8 @@ fn user_crossing_install_uses_frozen_class_with_canonical_control() {
     ));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1358,10 +1357,11 @@ fn crossing_schedule_replacement_preserves_frame_phase_with_canonical_control() 
       crate::CrossingMemberships::<Test>::get(actor_id),
       Some(membership_before)
     );
-    let (_, _, hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("Crossing frame authority survives");
+    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
+      panic!("Crossing frame authority survives");
+    };
     assert!(matches!(
-      hot.trigger_runtime_state,
+      state.hot.trigger_runtime_state,
       TriggerRuntimeState::ObservationCrossing {
         phase: CrossingPhase::Armed,
         ..
@@ -1369,7 +1369,8 @@ fn crossing_schedule_replacement_preserves_frame_phase_with_canonical_control() 
     ));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1394,13 +1395,17 @@ fn temporal_schedule_replacement_invalidates_loaded_frame_reference_with_canonic
       actor_id,
       replacement,
     ));
-    let (location, _, hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("updated frame authority exists");
-    assert_eq!(location, crate::ActorControlLocation::Unsignaled);
-    assert!(hot.trigger_wakeup_pointer.is_none());
+    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
+      panic!("updated frame authority exists");
+    };
+    assert!(state.hot.trigger_wakeup_pointer.is_none());
+    assert!(!crate::TriggerDeadlineHandles::<Test>::contains_key(
+      actor_id
+    ));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }
 
@@ -1412,31 +1417,36 @@ fn pause_and_resume_use_frame_authority_with_canonical_control() {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
 
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    let (_, _, paused_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("paused frame authority exists");
-    assert!(paused_hot.lifecycle.is_paused());
+    let crate::LoadedActorStateOf::Active(paused) = Actors::load_frame_actor_state(actor_id) else {
+      panic!("paused frame authority exists");
+    };
+    assert!(paused.hot.lifecycle.is_paused());
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::signed(ALICE), actor_id));
-    let (_, _, resumed_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("resumed frame authority exists");
-    assert_eq!(resumed_hot.lifecycle, ActiveLifecycle::Active);
+    let crate::LoadedActorStateOf::Active(resumed) = Actors::load_frame_actor_state(actor_id)
+    else {
+      panic!("resumed frame authority exists");
+    };
+    assert_eq!(resumed.hot.lifecycle, ActiveLifecycle::Active);
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn pause_and_resume_fail_closed_without_primary_authority() {
+fn pause_and_resume_fail_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
     assert_noop!(
@@ -1452,7 +1462,7 @@ fn pause_and_resume_fail_closed_without_primary_authority() {
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::remove_primary_control_cell_inner(actor_id).expect("paused primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
     assert_noop!(
@@ -1466,11 +1476,11 @@ fn pause_and_resume_fail_closed_without_primary_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn permissionless_sweep_fails_closed_without_primary_authority() {
+fn permissionless_sweep_fails_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let identity_before = Actors::actor_identity(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
@@ -1492,14 +1502,15 @@ fn permissionless_sweep_fails_closed_without_primary_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_primary() {
+fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let terminal = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     set_actor_cycle_nonce_coherent(terminal, u64::MAX);
     let corrupt = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    Actors::remove_primary_control_cell_inner(corrupt).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(corrupt);
     let corrupt_contract_before = ActorContractHeads::<Test>::get(corrupt);
+    let corrupt_hot_before = Actors::actor_hot(corrupt);
     let events_before = System::events();
     let sweep_ids: BoundedVec<u64, <Test as crate::Config>::MaxSweepBatch> =
       BoundedVec::try_from(vec![terminal, corrupt]).expect("batch fits");
@@ -1516,7 +1527,7 @@ fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_primary() {
       u64::MAX
     );
     assert!(Actors::actor_identity(corrupt).is_none());
-    assert!(Actors::actor_hot(corrupt).is_none());
+    assert_eq!(Actors::actor_hot(corrupt), corrupt_hot_before);
     assert!(!ActorControlLocators::<Test>::contains_key(corrupt));
     assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
       corrupt
@@ -1531,11 +1542,11 @@ fn permissionless_sweep_many_rolls_back_an_earlier_close_on_missing_primary() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn close_and_deactivate_fail_closed_without_primary_authority() {
+fn close_and_deactivate_fail_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let identity_before = Actors::actor_identity(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
@@ -1551,7 +1562,7 @@ fn close_and_deactivate_fail_closed_without_primary_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let identity_before = Actors::actor_identity(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
@@ -1567,12 +1578,12 @@ fn close_and_deactivate_fail_closed_without_primary_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn active_reactivation_fails_closed_without_primary_authority() {
+fn active_reactivation_fails_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let contract = Actors::load_actor_contract(actor_id).expect("active Contract exists");
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let identity_before = Actors::actor_identity(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
@@ -1589,16 +1600,17 @@ fn active_reactivation_fails_closed_without_primary_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn contract_update_fails_closed_without_primary_authority() {
+fn contract_update_fails_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     let mut replacement = Actors::load_actor_contract(actor_id).expect("active Contract exists");
     replacement.steps = transfer_contract_steps(BOB, 1);
     replacement.completion = crate::CompletionPolicy::Persistent;
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    ActorContractHeads::<Test>::remove(actor_id);
     let contract_before = Actors::load_actor_contract(actor_id);
-    let admission_before = Actors::actor_control_cell(actor_id).map(|(_, cell)| cell.admission);
+    let admission_before =
+      Actors::load_control_authority_with_authority(actor_id).map(|(_, _, cell)| cell);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
 
@@ -1608,7 +1620,7 @@ fn contract_update_fails_closed_without_primary_authority() {
     );
     assert_eq!(Actors::load_actor_contract(actor_id), contract_before);
     assert_eq!(
-      Actors::actor_control_cell(actor_id).map(|(_, cell)| cell.admission),
+      Actors::load_control_authority_with_authority(actor_id).map(|(_, _, cell)| cell),
       admission_before
     );
     assert_eq!(Actors::actor_hot(actor_id), hot_before);
@@ -1741,20 +1753,24 @@ fn manual_trigger_waits_through_cooldown_without_second_signal() {
         .cycle_nonce,
       1
     );
-    frame_system::Pallet::<Test>::set_block_number(2);
+    // The canonical first occurrence commits at the B+1 block, so the next-cycle cooldown is
+    // anchored at block 2 and the second signal waits until block 7.
+    assert_eq!(frame_system::Pallet::<Test>::block_number(), 2);
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingBlock(7)
+    );
+    assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors exists")
-        .pending_signal
+        .cycle_nonce,
+      1
     );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(6));
-    frame_system::Pallet::<Test>::set_block_number(6);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(7, Weight::MAX);
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(instance.cycle_nonce, 2);
     assert!(!instance.pending_signal);
@@ -1780,23 +1796,17 @@ fn manual_trigger_waits_for_schedule_window_without_second_signal() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(
+    assert_eq!(
+      active_eligibility(actor_id).execution_phase,
+      ActorExecutionPhase::WaitingBlock(10)
+    );
+    assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors exists")
-        .pending_signal
+        .cycle_nonce,
+      0
     );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(10));
-    frame_system::Pallet::<Test>::set_block_number(10);
-    run_idle(Weight::MAX);
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      let locator = crate::ActorControlLocators::<Test>::get(actor_id);
-      assert!(
-        matches!(locator, Some(crate::ActorControlLocation::Waiting { .. })),
-        "post-cycle locator: {locator:?}"
-      );
-    }
+    run_canonical_round_at(10, Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors exists")
@@ -2025,25 +2035,22 @@ fn authored_cancellation_restores_frame_authority_with_canonical_control() {
     let actor_id = create_suspended_system_retry(9);
     frame_system::Pallet::<Test>::set_block_number(10);
     run_idle(Weight::MAX);
-    assert!(matches!(
-      ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Waiting { .. })
-    ));
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(ActorRunStateStore::<Test>::get(actor_id).is_some());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
 
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id,));
     assert!(ActorRunStateStore::<Test>::get(actor_id).is_none());
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert_eq!(
-      ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    );
-    let (_, _, hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame authority is restored");
-    assert_eq!(hot.cycle_state, CycleState::Idle);
-    assert!(hot.wakeup_pointer.is_none());
-    assert!(hot.queue_ticket.is_none());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    let crate::LoadedActorStateOf::Active(state) = Actors::load_frame_actor_state(actor_id) else {
+      panic!("frame authority is restored");
+    };
+    assert_eq!(state.hot.cycle_state, CycleState::Idle);
+    assert!(state.hot.wakeup_pointer.is_none());
+    assert!(state.hot.queue_ticket.is_none());
   });
 }
 
@@ -2086,22 +2093,16 @@ fn authored_ready_close_removes_frame_authority_with_canonical_control() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(matches!(
-      ActorControlLocators::<Test>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     frame_system::Pallet::<Test>::set_block_number(2);
 
     assert_ok!(Actors::close_actor(RuntimeOrigin::signed(ALICE), actor_id));
 
-    assert!(ActorControlLocators::<Test>::get(actor_id).is_none());
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_none());
-    assert!(
-      Actors::actor_control_cell(actor_id)
-        .map(|(_, cell)| cell.admission)
-        .is_none()
-    );
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       crate::LoadedActorStateOf::NotRegistered
@@ -2118,15 +2119,13 @@ fn cadenced_waiting_deactivation_invalidates_frame_wakeup_with_canonical_control
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    assert!(matches!(
-      ActorControlLocators::<Test>::get(actor_id),
-      Some(ActorControlLocation::Waiting { .. })
-    ));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     frame_system::Pallet::<Test>::set_block_number(2);
 
     assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
 
-    assert!(ActorControlLocators::<Test>::get(actor_id).is_none());
+    assert!(ActorProcesses::<Test>::get(actor_id).is_none());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(scheduled_wakeup_block(actor_id), None);
     assert!(matches!(
       Actors::load_actor_state(actor_id),
@@ -2152,21 +2151,15 @@ fn ready_deactivation_consumes_frame_ticket_with_canonical_control() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert!(matches!(
-      ActorControlLocators::<Test>::get(actor_id),
-      Some(ActorControlLocation::Ready { .. })
-    ));
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     frame_system::Pallet::<Test>::set_block_number(2);
 
     assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
 
-    assert!(ActorControlLocators::<Test>::get(actor_id).is_none());
+    assert!(!ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_none());
-    assert!(
-      Actors::actor_control_cell(actor_id)
-        .map(|(_, cell)| cell.admission)
-        .is_none()
-    );
     assert!(matches!(
       Actors::load_actor_state(actor_id),
       crate::LoadedActorStateOf::Dormant(_)
@@ -2661,11 +2654,10 @@ fn actor_id_collision_rejects_each_orphan_canonical_partition_without_writes() {
         let source = create_suspended_system_retry(1);
         let target = NextActorId::<Test>::get();
         match partition {
-          0 => {
-            let (_, mut cell) = Actors::actor_control_cell(source).expect("source primary");
-            cell.actor_id = target;
-            ActorUnsignaledControlCells::<Test>::insert(target, cell);
-          }
+          0 => ActorRunStateStore::<Test>::insert(
+            target,
+            ActorRunStateStore::<Test>::get(source).expect("source Run state"),
+          ),
           1 => ActorContractHeads::<Test>::insert(
             target,
             ActorContractHeads::<Test>::get(source).expect("source Contract head"),
@@ -3735,14 +3727,14 @@ fn active_actors_set_maintains_integrity() {
         system_active_contract(schedule.clone(), None, inert_plan.clone()),
       ));
     }
-    assert_eq!(ActorControlLocators::<Test>::iter_keys().count(), 3);
+    assert_eq!(ActorProcesses::<Test>::iter_keys().count(), 3);
     assert!(Actors::active_actor_view(0).is_some());
     assert!(Actors::active_actor_view(1).is_some());
     assert!(Actors::active_actor_view(2).is_some());
     let inst = Actors::active_actor_view(1).unwrap();
     let _ = Balances::deposit_creating(&inst.sovereign_account, 1_000_000);
     assert_ok!(Actors::close_actor(RuntimeOrigin::root(), 1));
-    assert_eq!(ActorControlLocators::<Test>::iter_keys().count(), 2);
+    assert_eq!(ActorProcesses::<Test>::iter_keys().count(), 2);
     assert!(Actors::active_actor_view(0).is_some());
     assert!(Actors::active_actor_view(2).is_some());
     assert!(Actors::active_actor_view(1).is_none());
@@ -3847,7 +3839,8 @@ fn system_immutable_creation_rejects_manual_but_allows_internal_window_close() {
       Error::<Test>::ImmutableActor
     );
     assert!(Actors::active_actor_view(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(ActorProcesses::<Test>::contains_key(actor_id));
     frame_system::Pallet::<Test>::set_block_number(102);
     run_idle(Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -4046,7 +4039,7 @@ fn eligibility_projection_waits_for_cooldown_and_reports_next_block() {
     ));
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
-      ActorExecutionPhase::WaitingBlock(6)
+      ActorExecutionPhase::WaitingBlock(7)
     );
   });
 }
