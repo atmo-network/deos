@@ -4452,24 +4452,16 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       RuntimeOrigin::signed(ALICE),
       continue_id
     ));
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(continue_id);
     let after_first = Actors::active_actor_view(continue_id).expect("successful actor remains active");
     assert_eq!(after_first.cycle_nonce, 1);
     assert_eq!(after_first.unsuccessful_attempt_streak, 0);
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
-    run_prepass();
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       continue_id
     ));
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(continue_id);
     assert!(Actors::active_actor_view(continue_id).is_none());
     let continue_events: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -5393,7 +5385,10 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(starvation_blocked_budget(actor_id));
+    // The occurrence published at block 1 is served at B+1. A weight-blocked Drain pass must not
+    // open or complete a cycle, so a deferred cycle never consumes the auto-close nonce target.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_drain_only(starvation_blocked_budget(actor_id));
     let inst = Actors::active_actor_view(actor_id).expect("Actors must exist");
     assert_eq!(inst.cycle_nonce, 0);
     assert!(!has_actor_event(|event| matches!(
@@ -5401,7 +5396,8 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
       Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
         if *id == actor_id
     )));
-    run_idle(Weight::MAX);
+    // A full canonical round completes the successful cycle and reaches the auto-close target.
+    run_next_idle(Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
   });
 }
