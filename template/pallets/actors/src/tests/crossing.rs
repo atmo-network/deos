@@ -404,7 +404,9 @@ fn repeated_latched_crossing_fires_charge_only_the_useful_transition() {
     assert_eq!(fee_collections(), vec![fee]);
     let hot = Actors::actor_hot(actor_id).expect("Crossing Actor remains active");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some());
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       frame_system::Pallet::<Test>::events()
         .iter()
@@ -643,7 +645,9 @@ fn crossing_batch_falls_back_to_scalar_progress_for_an_underfunded_member() {
     assert_eq!(crossing_phase(underfunded), CrossingPhase::WaitingForRearm);
     let funded_hot = Actors::actor_hot(funded).expect("funded process remains");
     assert!(funded_hot.pending_signal);
-    assert!(funded_hot.queue_ticket.is_some() || funded_hot.wakeup_pointer.is_some());
+    assert!(crate::ActorProcesses::<Test>::contains_key(funded));
+    assert!(crate::ServiceNodes::<Test>::contains_key(funded));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(funded));
     assert_eq!(fee_collections(), vec![observation_crossing_trigger_fee()]);
   });
 }
@@ -671,6 +675,7 @@ fn crossing_fire_collection_failure_advances_without_readiness() {
     );
     let sovereign = sovereign_account(actor_id);
     let before = native_balance(&sovereign);
+    let service_before = crate::ServiceNodes::<Test>::contains_key(actor_id);
     set_fail_fee_sink_transfer(true);
 
     assert_ok!(Actors::note_observation_transition(
@@ -691,67 +696,21 @@ fn crossing_fire_collection_failure_advances_without_readiness() {
     assert!(hot.wakeup_pointer.is_none());
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     assert!(Actors::crossing_transition_queue(7).is_none());
+    // The atomic occurrence commit restored the pre-activation root: the refused fee transfer
+    // leaves no canonical Pending Service residence, no legacy control authority and no
+    // detection-disable latch behind the advanced traversal phase.
+    assert_eq!(crate::ServiceNodes::<Test>::contains_key(actor_id), service_before);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorUnsignaledControlCells::<Test>::contains_key(
+      actor_id
+    ));
+    assert!(!crate::IndexedTriggerDetectionDisabled::<Test>::contains_key(
+      actor_id
+    ));
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::TriggerOccurrenceProcessed { actor_id: id, .. } if *id == actor_id
     )));
-  });
-}
-
-#[cfg(not(feature = "runtime-benchmarks"))]
-#[test]
-fn crossing_fire_collection_failure_uses_frame_authority_without_scalar_control() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_observation(
-      7,
-      crate::ScalarObservationState::Fresh {
-        value: 50,
-        observed_at: 1,
-      },
-    );
-    let actor_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      Schedule {
-        trigger: RuntimeTrigger::observation_crossing(7, CrossingDirection::Rising, 100, 80),
-        cooldown_blocks: 0,
-      },
-      None,
-      inert_contract_steps(),
-    );
-    let sovereign = sovereign_account(actor_id);
-    let before = native_balance(&sovereign);
-    set_fail_fee_sink_transfer(true);
-
-    assert_ok!(Actors::note_observation_transition(
-      7,
-      crate::ObservationTransition {
-        revision: 2,
-        previous: Some(50),
-        current: 150,
-      },
-    ));
-    drain_crossing_work();
-    set_fail_fee_sink_transfer(false);
-
-    assert_eq!(native_balance(&sovereign), before);
-    let (_, _, hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame process remains live");
-    assert!(!hot.pending_signal);
-    assert!(hot.queue_ticket.is_none());
-    assert!(hot.wakeup_pointer.is_none());
-    assert!(matches!(
-      hot.trigger_runtime_state,
-      TriggerRuntimeState::ObservationCrossing {
-        phase: CrossingPhase::WaitingForRearm,
-        ..
-      }
-    ));
-    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_control_cell(actor_id).is_some());
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
@@ -2365,13 +2324,13 @@ fn crossing_opening_executes_effectful_step_and_rearms_detector() {
         .expect("latched Actor exists")
         .pending_signal
     );
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let hot = Actors::actor_hot(actor_id).expect("opened Actor remains active");
     assert_eq!(hot.cycle_state, CycleState::Running);
     assert!(!hot.pending_signal);
     let run = ActorRunStateStore::<Test>::get(actor_id).expect("Opening publishes a Run");
     assert_eq!(run.cursor, 1);
-    assert_eq!(run.last_committed_step_block, Some(1));
+    assert_eq!(run.last_committed_step_block, Some(2));
     assert_eq!(
       MockAssetOps::balance(&BOB, TestAsset::Native),
       recipient_before + 7
@@ -2472,8 +2431,8 @@ fn falling_crossing_fires_and_rearms_without_duplicate_activation() {
     let fired = Actors::crossing_membership(actor_id).expect("membership remains");
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     assert_eq!(fired.key.traversal, crate::CrossingTraversal::Upward);
-    let ticket = Actors::actor_hot(actor_id).expect("hot state").queue_ticket;
-    assert!(ticket.is_some());
+    let process = crate::ActorProcesses::<Test>::get(actor_id).expect("canonical process");
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
 
     assert_ok!(Actors::note_observation_transition(
       7,
@@ -2488,8 +2447,8 @@ fn falling_crossing_fires_and_rearms_without_duplicate_activation() {
     assert_eq!(crossing_phase(actor_id), CrossingPhase::WaitingForRearm);
     assert_eq!(rearmed.key.traversal, crate::CrossingTraversal::Upward);
     assert_eq!(
-      Actors::actor_hot(actor_id).expect("hot state").queue_ticket,
-      ticket,
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(process),
       "rearm changes detection state only and cannot duplicate activation"
     );
   });

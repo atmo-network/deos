@@ -2842,20 +2842,28 @@ impl<T: Config> Pallet<T> {
         );
         if Self::trigger_occurrence_capacity_sufficient(actor_type, &sovereign_account, breakdown)?
         {
-          let activated = Self::commit_canonical_trigger_occurrence_with_authority(
+          match Self::commit_canonical_trigger_occurrence_with_authority(
             actor,
             actor_type,
             &sovereign_account,
             breakdown,
             loaded,
             polkadot_sdk::frame_system::Pallet::<T>::block_number(),
-          )?;
-          ensure!(
-            activated == ActivationOutcome::Latched,
-            Error::<T>::CrossingIndexInvariant
-          );
-          IndexedTriggerDetectionDisabled::<T>::insert(member.actor_id, ());
-          activation = Some(activated);
+          ) {
+            Ok(activated) => {
+              ensure!(
+                activated == ActivationOutcome::Latched,
+                Error::<T>::CrossingIndexInvariant
+              );
+              IndexedTriggerDetectionDisabled::<T>::insert(member.actor_id, ());
+              activation = Some(activated);
+            }
+            // A detected occurrence whose fee transfer cannot complete advances the certified
+            // traversal without readiness, matching the automatic-trigger contract: the atomic
+            // commit restored the pre-activation root, so the phase move simply persists.
+            Err(error) if error == Error::<T>::InsufficientFee.into() => {}
+            Err(error) => return Err(error),
+          }
         }
       }
       if activation == Some(ActivationOutcome::Closed)
