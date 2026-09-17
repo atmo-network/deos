@@ -644,7 +644,7 @@ fn process_publication_is_transaction_local_single_authority_and_rollback_safe()
 fn service_publication_atomically_owns_process_and_ring_insertion() {
   new_test_ext().execute_with(|| {
     let first = actor_ref(910, 4);
-    Actors::publish_service_member(first, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(first, ServiceResidenceKind::Live, 1)
       .expect("empty publication succeeds");
     assert_eq!(ServiceHeader::<Test>::get().count, 1);
     assert_eq!(
@@ -654,7 +654,7 @@ fn service_publication_atomically_owns_process_and_ring_insertion() {
     assert!(ServiceNodes::<Test>::contains_key(first.actor_id));
 
     let second = actor_ref(911, 2);
-    Actors::publish_service_member(second, ServiceResidenceKind::Pending, 1)
+    publish_test_service_member(second, ServiceResidenceKind::Pending, 1)
       .expect("populated publication succeeds");
     assert_eq!(ServiceHeader::<Test>::get().count, 2);
     assert!(ActorProcesses::<Test>::contains_key(second.actor_id));
@@ -663,7 +663,7 @@ fn service_publication_atomically_owns_process_and_ring_insertion() {
     ServiceHeader::<Test>::mutate(|header| header.cursor = None);
     let rejected = actor_ref(912, 1);
     assert_eq!(
-      Actors::publish_service_member(rejected, ServiceResidenceKind::Live, 1),
+      publish_test_service_member(rejected, ServiceResidenceKind::Live, 1),
       Err(ServicePublicationError::Ring(
         ServiceRingMutationError::CorruptRing
       ))
@@ -687,7 +687,7 @@ fn canonical_service_semantics_load_and_mutate_without_legacy_authority() {
 
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
     assert_eq!(
       Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live),
@@ -737,7 +737,7 @@ fn canonical_service_parking_installs_destination_before_releasing_membership() 
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
     let source = 19;
     let desired = [DependencyPlanSource {
@@ -1122,7 +1122,7 @@ fn positive_due_review_wakes_only_the_exact_current_park_episode() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let source = 23;
     let observed = [DependencyPlanSource {
       source,
@@ -1267,7 +1267,7 @@ fn bounded_due_review_worker_admits_one_atomic_oracle_attempt() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let source = 30;
     let feed = 8;
     ObservationDependencySources::<Test>::insert(feed, source);
@@ -1439,7 +1439,7 @@ fn due_review_deadline_traversal_is_weight_gated_and_atomic() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let source = 31;
     let feed = 9;
     ObservationDependencySources::<Test>::insert(feed, source);
@@ -1583,7 +1583,7 @@ fn due_tick_review_uses_its_own_frontier_and_preserves_refused_work() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let source = 32;
     let feed = 10;
     ObservationDependencySources::<Test>::insert(feed, source);
@@ -1673,7 +1673,7 @@ fn mandatory_deadline_service_reserves_both_independent_frontiers() {
       let actor = actor_ref(actor_id, record.generation);
       ActorControlLocators::<Test>::remove(actor_id);
       ActorUnsignaledControlCells::<Test>::remove(actor_id);
-      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+      publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
       ObservationDependencySources::<Test>::insert(feed, source);
       DependencySourceObservations::<Test>::insert(source, feed);
       set_observation(feed, ScalarObservationState::Unavailable);
@@ -1763,7 +1763,7 @@ fn on_idle_services_due_block_and_tick_frontiers_with_current_clocks() {
       let actor = actor_ref(actor_id, record.generation);
       ActorControlLocators::<Test>::remove(actor_id);
       ActorUnsignaledControlCells::<Test>::remove(actor_id);
-      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 6).unwrap();
+      publish_test_service_member(actor, ServiceResidenceKind::Live, 6).unwrap();
       ObservationDependencySources::<Test>::insert(feed, source);
       DependencySourceObservations::<Test>::insert(source, feed);
       set_observation(feed, ScalarObservationState::Unavailable);
@@ -1826,7 +1826,7 @@ fn due_review_interpreter_routes_one_snapshot_without_consuming_refusals() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let source = 29;
     let feed = 7;
     ObservationDependencySources::<Test>::insert(feed, source);
@@ -2036,7 +2036,7 @@ fn canonical_service_semantics_reject_stale_generation_and_residence_without_mut
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
 
     let mut rejected = record.hot.clone();
@@ -2072,7 +2072,7 @@ fn retained_service_attempt_commits_semantics_before_advance_and_preserves_refus
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       Actors::begin_service_round(2).expect("round begins");
@@ -2145,7 +2145,7 @@ fn canonical_zero_step_service_attempt_commits_semantics_before_ring_advance() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
     polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
       Actors::begin_service_round(2).expect("round begins");
@@ -2454,7 +2454,7 @@ fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process()
       actor_ref(923, 1),
     ];
     for actor in members {
-      Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1)
+      publish_test_service_member(actor, ServiceResidenceKind::Live, 1)
         .expect("service publication succeeds");
     }
 
@@ -2471,7 +2471,7 @@ fn service_retirement_atomically_unlinks_each_topology_and_retires_the_process()
     assert_eq!(ServiceHeader::<Test>::get(), ServiceHeaderRecord::default());
 
     let corrupt = actor_ref(924, 1);
-    Actors::publish_service_member(corrupt, ServiceResidenceKind::Live, 2)
+    publish_test_service_member(corrupt, ServiceResidenceKind::Live, 2)
       .expect("service publication succeeds");
     ServiceHeader::<Test>::mutate(|header| header.cursor = None);
     assert_eq!(
@@ -5967,7 +5967,7 @@ fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Pending, 4).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Pending, 4).unwrap();
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
@@ -6040,7 +6040,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     let recipient_before = asset_balance(&BOB, TestAsset::Local(1));
@@ -6153,7 +6153,7 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
@@ -6238,7 +6238,7 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
@@ -6684,7 +6684,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
@@ -6797,7 +6797,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
@@ -6907,7 +6907,7 @@ fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
     let legacy_ticket = Actors::actor_hot(actor_id).unwrap().queue_ticket.unwrap();
     assert_ok!(Actors::paged_consume_head_at(legacy_ticket));
     ActorControlLocators::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
 
     let open_resource_block = |now| {
       let mut state = crate::BlockResourceState::new(now);

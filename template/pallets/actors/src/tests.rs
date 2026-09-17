@@ -691,7 +691,21 @@ fn mutate_actor_hot_coherent(
   actor_id: ActorId,
   mutate: impl FnOnce(&mut crate::ActorHotStateOf<Test>),
 ) {
-  assert_ok!(Actors::try_mutate_control_hot(
+  // Public creation publishes canonical semantic/process authority and no legacy control cell, so
+  // route through the semantic owner when the actor has crossed over and keep the legacy physical
+  // primary for fixtures that still publish it directly.
+  if ActorControlLocators::<Test>::contains_key(actor_id) {
+    assert_ok!(Actors::try_mutate_control_hot(
+      actor_id,
+      Error::<Test>::ActorNotFound,
+      |hot| {
+        mutate(hot);
+        Ok(())
+      }
+    ));
+    return;
+  }
+  assert_ok!(Actors::try_mutate_actor_hot_semantic(
     actor_id,
     Error::<Test>::ActorNotFound,
     |hot| {
@@ -948,8 +962,14 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
   let state_probe = Actors::scheduler_actor_state_probe_weight_upper();
   let consume = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
     .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
-  let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
-  let step = cell.resources.control.saturating_add(cell.resources.effect);
+  // Canonically published Actors keep their current-Step envelope in the semantic/service owner
+  // rather than a legacy control cell, so fall back to that authority when no primary exists.
+  let step = match Actors::actor_control_cell(actor_id) {
+    Some((_, cell)) => cell.resources.control.saturating_add(cell.resources.effect),
+    None => Actors::load_current_step_service_state(actor_id)
+      .map(|(_, _, loaded)| loaded.resources.control.saturating_add(loaded.resources.effect))
+      .expect("current control owner exists"),
+  };
   let full = base
     .saturating_add(cursor)
     .saturating_add(scan)
@@ -957,6 +977,21 @@ fn starvation_blocked_budget(actor_id: u64) -> Weight {
     .saturating_add(consume)
     .saturating_add(step);
   Weight::from_parts(u64::MAX, full.proof_size().saturating_sub(1))
+}
+
+/// Test fixture: clears the canonical carrier published by creation and then publishes one inert
+/// Service member, so ring tests can construct membership without the creation-time Disabled
+/// process tripping the single-authority publication guard.
+fn publish_test_service_member(
+  actor: crate::ActorRef,
+  kind: crate::ServiceResidenceKind,
+  now: MockBlockNumber,
+) -> Result<(), crate::ServicePublicationError> {
+  crate::ActorProcesses::<Test>::remove(actor.actor_id);
+  crate::ServiceNodes::<Test>::remove(actor.actor_id);
+  crate::DeadlineHandles::<Test>::remove(actor.actor_id);
+  crate::TriggerDeadlineHandles::<Test>::remove(actor.actor_id);
+  Actors::publish_service_member(actor, kind, now)
 }
 
 fn run_idle_until_cycle_nonce(actor_id: u64, target_cycle_nonce: u64) {

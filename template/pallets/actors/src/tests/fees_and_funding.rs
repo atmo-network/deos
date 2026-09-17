@@ -948,7 +948,7 @@ fn canonical_park_occurrence_rollback_restores_dependency_authority() {
     let sovereign = sovereign_account(actor_id);
     crate::ActorControlLocators::<Test>::remove(actor_id);
     crate::ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    Actors::publish_service_member(actor, crate::ServiceResidenceKind::Live, 1)
+    publish_test_service_member(actor, crate::ServiceResidenceKind::Live, 1)
       .expect("canonical Service carrier publishes");
     let source = 29;
     let desired = [crate::DependencyPlanSource {
