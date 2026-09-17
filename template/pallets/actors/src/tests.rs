@@ -914,6 +914,21 @@ fn run_next_idle(weight: Weight) {
   run_idle(weight);
 }
 
+/// Drives one canonical temporal deadline frontier at `now`, mirroring the production `on_idle`
+/// housekeeping call. Canonically published Actors register temporal triggers in the `Deadline*`
+/// carrier, which the legacy `drain_overdue_wakeups_cursor` waiting substrate never observes.
+fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
+  let mut meter = WeightMeter::with_limit(Weight::MAX);
+  let _ = Actors::service_due_deadline_frontiers(
+    &mut meter,
+    crate::ServiceResidenceKind::Live,
+    now,
+    now,
+    Some(WakeupKey::Block(now.saturating_add(1))),
+    Some(WakeupKey::Tick(now.saturating_add(1))),
+  );
+}
+
 fn run_prepass() {
   let now = frame_system::Pallet::<Test>::block_number();
   if Actors::block_resource_state().is_some_and(|state| state.ensure_block(now).is_err()) {

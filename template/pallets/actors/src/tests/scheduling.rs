@@ -5881,13 +5881,12 @@ fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert_eq!(fee_collections(), vec![at_time_trigger_fee()]);
     let hot = Actors::actor_hot(actor_id).expect("AtTime Actor remains active");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
+    assert!(hot.queue_ticket.is_none());
     assert!(hot.trigger_wakeup_pointer.is_none());
     assert!(matches!(
       hot.trigger_runtime_state,
@@ -5903,8 +5902,7 @@ fn at_time_occurrence_charges_once_consumes_deadline_and_latches_readiness() {
     )));
 
     frame_system::Pallet::<Test>::set_block_number(20);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(20, &mut meter);
+    service_canonical_temporal_frontiers(20);
     assert_eq!(fee_collections(), vec![at_time_trigger_fee()]);
   });
 }
@@ -6093,8 +6091,7 @@ fn underfunded_at_time_occurrence_selects_prepaid_custody_neutral_apoptosis() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     assert!(!Actors::active_actor_exists(actor_id));
@@ -6128,8 +6125,7 @@ fn frame_only_underfunded_at_time_closes_from_consumed_wakeup_authority() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     assert!(!Actors::active_actor_exists(actor_id));
@@ -6158,10 +6154,11 @@ fn frame_only_zero_step_at_time_uses_only_canonical_control() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, at_time_schedule(1), None, BoundedVec::default());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
+    // B+1 canonical temporal service: block 2 processes the due AtTime deadline and publishes the
+    // Pending Service member; block 3 executes the zero-Step cycle. Canonical publication leaves no
+    // legacy control locator or scalar hot cell behind.
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("AtTime successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -6169,13 +6166,10 @@ fn frame_only_zero_step_at_time_uses_only_canonical_control() {
       state.hot.trigger_runtime_state,
       TriggerRuntimeState::AtTime { consumed: true, .. }
     ));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -6197,8 +6191,7 @@ fn at_time_collection_failure_rolls_back_consumption_and_retains_wakeup() {
     set_fail_fee_sink_transfer(true);
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
@@ -6256,8 +6249,8 @@ fn immutable_zero_step_at_time_closes_at_authored_cycle_nonce() {
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     Actors::execute_cycle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -6399,15 +6392,10 @@ fn at_time_occurrence_uses_primary_pending_authority() {
     assert!(!Actors::pending_signal(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
-    let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("AtTime occurrence retains canonical primary");
-    assert!(matches!(
-      location,
-      crate::ActorControlLocation::Ready { .. }
-    ));
+    let state = Actors::active_actor_state(actor_id).expect("AtTime pending authority exists");
+    let frame_hot = state.hot;
     assert!(frame_hot.pending_signal);
     assert!(
       matches!(
@@ -6417,6 +6405,8 @@ fn at_time_occurrence_uses_primary_pending_authority() {
       "{:?}",
       frame_hot.trigger_runtime_state
     );
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert!(projected_hot.pending_signal);
     assert_eq!(
@@ -6445,15 +6435,10 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
     assert!(!Actors::pending_signal(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
-    let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-      .expect("Cadenced occurrence retains canonical primary");
-    assert!(matches!(
-      location,
-      crate::ActorControlLocation::Ready { .. }
-    ));
+    let state = Actors::active_actor_state(actor_id).expect("Cadenced pending authority exists");
+    let frame_hot = state.hot;
     assert!(frame_hot.pending_signal);
     assert!(matches!(
       frame_hot.trigger_runtime_state,
@@ -6462,6 +6447,8 @@ fn cadenced_occurrence_uses_primary_pending_authority() {
       }
     ));
     assert!(frame_hot.trigger_wakeup_pointer.is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert_eq!(projected_hot.pending_signal, frame_hot.pending_signal);
     assert_eq!(
@@ -6692,8 +6679,7 @@ fn underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis()
     clear_fee_collections();
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
 
     assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("underfunded process remains active");
@@ -6724,8 +6710,7 @@ fn cadenced_collection_failure_advances_deadline_without_readiness() {
     set_fail_fee_sink_transfer(true);
 
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     set_fail_fee_sink_transfer(false);
 
     assert_eq!(native_balance(&sovereign), before);
