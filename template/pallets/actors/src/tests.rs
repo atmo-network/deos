@@ -247,18 +247,6 @@ fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
   })
 }
 
-fn canonical_scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::active_actor_view(actor_id).and_then(|actor| {
-    actor
-      .wakeup_pointer
-      .map(|pointer| match pointer.block {
-        WakeupKey::Block(block) => block,
-        WakeupKey::Tick(tick) => tick,
-      })
-      .or_else(|| actor.trigger_wakeup_pointer.map(|pointer| pointer.tick))
-  })
-}
-
 fn seed_saturated_tombstone_queue() {
   let capacity: u32 = <Test as crate::Config>::MaxQueueLength::get();
   for page_id in 0..capacity.div_ceil(32) {

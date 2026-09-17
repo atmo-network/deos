@@ -3306,27 +3306,20 @@ fn frame_only_exact_next_retry_completes_without_scalar_rehydration() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let suspended = Actors::actor_run_state(actor_id).expect("suspended Run survives");
     assert_eq!(suspended.cursor, 0);
-    assert_eq!(suspended.eligible_at, 2);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(suspended.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_canonical_round_at(3, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -3366,13 +3359,12 @@ fn frame_only_user_retry_preserves_installed_hold_without_scalar_rehydration() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let suspended = Actors::actor_run_state(actor_id).expect("User retry suspends");
-    assert_eq!(suspended.eligible_at, 2);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(suspended.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold.clone())
@@ -3380,15 +3372,9 @@ fn frame_only_user_retry_preserves_installed_hold_without_scalar_rehydration() {
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    run_canonical_round_at(3, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
@@ -3424,43 +3410,23 @@ fn frame_only_user_later_retry_preserves_hold_through_block_waiting() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let first_retry = Actors::actor_run_state(actor_id).expect("first retry survives");
     assert_eq!(first_retry.unsuccessful_attempts_at_cursor, 1);
-    assert_eq!(first_retry.eligible_at, 2);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
-    let second_retry = Actors::actor_run_state(actor_id).expect("second retry survives");
-    assert_eq!(second_retry.unsuccessful_attempts_at_cursor, 2);
-    assert_eq!(second_retry.eligible_at, 4);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(4));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Waiting {
-        key: WakeupKey::Block(4),
-        ..
-      })
-    ));
-    assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+    assert_eq!(first_retry.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold.clone())
     );
 
-    frame_system::Pallet::<Test>::set_block_number(4);
-    Actors::on_initialize(4);
-    run_prepass();
-    Actors::on_idle(4, Weight::MAX);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), None);
-    assert!(Actors::actor_run_state(actor_id).is_some());
+    run_canonical_round_at(3, Weight::MAX);
+    let second_retry = Actors::actor_run_state(actor_id).expect("second retry survives");
+    assert_eq!(second_retry.unsuccessful_attempts_at_cursor, 2);
+    assert_eq!(second_retry.eligible_at, 5);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(5));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
@@ -3469,15 +3435,9 @@ fn frame_only_user_later_retry_preserves_hold_through_block_waiting() {
     assert!(!crate::WakeupWorkerFaultState::<Test>::exists());
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(5);
-    Actors::on_initialize(5);
-    run_prepass();
-    Actors::on_idle(5, Weight::MAX);
+    run_canonical_round_at(5, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert_eq!(
       crate::ActorStateHolds::<Test>::get(actor_id),
@@ -3585,8 +3545,8 @@ fn frame_only_user_window_expiry_releases_hold_from_consumed_waiting_authority()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
-    assert_eq!(canonical_scheduled_wakeup_block(actor_id), Some(102));
+    run_idle(Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     assert!(crate::ActorStateHolds::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
 
@@ -3754,14 +3714,13 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        Actors::on_idle(2, Weight::MAX);
+        run_next_idle(Weight::MAX);
         let run = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
         assert_eq!(run.unsuccessful_attempts_at_cursor, 1);
-        assert_eq!(run.eligible_at, 3);
-        assert!(matches!(
-          crate::ActorControlLocators::<Test>::get(actor_id),
-          Some(crate::ActorControlLocation::Ready { .. })
-        ));
+        assert_eq!(run.eligible_at, 4);
+        assert_eq!(scheduled_wakeup_block(actor_id), None);
+        assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+        assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
         let sovereign = sovereign_account(actor_id);
         if !solvent {
           let excess = native_balance(&sovereign)
@@ -3814,10 +3773,10 @@ fn user_retry_insolvency_closes_before_effect_capacity_deferral() {
               .encode(),
             run.encode()
           );
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
+          // The canonical Service ring retains the deferred Actor in place, so the next
+          // full-budget drain pass retries the same attempt rather than dropping placement.
+          assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+          assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
           Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
           let retried = Actors::actor_run_state(actor_id).expect("funded retry suspends again");
           assert_eq!(retried.cycle_nonce, run.cycle_nonce);
@@ -3867,23 +3826,22 @@ fn frame_only_underfunded_retry_apoptosis_closes_from_retained_ready_authority()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
-    assert_eq!(run.eligible_at, 2);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
+    assert_eq!(run.eligible_at, 3);
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     let sovereign = sovereign_account(actor_id);
     let balance = native_balance(&sovereign);
     deplete_user_sovereign(actor_id, balance - TestMinUserBalance::get());
     let custody_before = native_balance(&sovereign);
     clear_fee_collections();
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(!Actors::active_actor_exists(actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());

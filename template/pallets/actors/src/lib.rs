@@ -6508,9 +6508,37 @@ pub mod pallet {
             } else {
               false
             };
-            let close_reason = terminal_reason.or_else(|| {
-              admission_insufficient.then_some(CloseReason::CycleAdmissionInsufficient)
-            });
+            // A User retry continuation that can no longer cover its current Action's maximum fee
+            // plus the protected ledger floor must terminate through the same custody-neutral
+            // `CycleAdmissionInsufficient` close the legacy admission decision applies, instead of
+            // re-suspending or re-attempting forever behind the floor. System Actors and non-
+            // Suspended states retain their unbounded admission.
+            let retry_action_insufficient = if terminal_reason.is_none()
+              && state.identity.actor_class.actor_type() == ActorType::User
+              && state.hot.cycle_state == CycleState::Suspended
+            {
+              match loaded_step.as_ref() {
+                Some(loaded_step) => match Self::action_capacity_sufficient(
+                  ActorType::User,
+                  &instance.sovereign_account,
+                  &loaded_step.step,
+                  loaded_step.resources,
+                ) {
+                  Ok(sufficient) => !sufficient,
+                  Err(_) => return Err(ServiceRoundError::ProcessResidenceMismatch),
+                },
+                None => false,
+              }
+            } else {
+              false
+            };
+            let close_reason = terminal_reason
+              .or_else(|| {
+                admission_insufficient.then_some(CloseReason::CycleAdmissionInsufficient)
+              })
+              .or_else(|| {
+                retry_action_insufficient.then_some(CloseReason::CycleAdmissionInsufficient)
+              });
             let idle_no_work = state.hot.cycle_state == CycleState::Idle
               && !state.hot.pending_signal
               && state.run_state.is_none();
