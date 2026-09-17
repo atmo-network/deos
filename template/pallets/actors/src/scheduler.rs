@@ -873,6 +873,44 @@ impl<T: Config> Pallet<T> {
     let anchor_tick = instance
       .temporal_anchor_tick
       .ok_or(AttemptTransactionError::Invariant)?;
+    let now_tick =
+      Self::current_scheduler_tick().map_err(|_| AttemptTransactionError::Invariant)?;
+    let due_tick = next_cadence_due_tick(anchor_tick, *every_ticks, now_tick)
+      .ok_or(AttemptTransactionError::Invariant)?;
+    let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+      && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      && ActorProcesses::<T>::contains_key(actor_id);
+    if canonical {
+      // Opening follows a consumed occurrence commit, so no temporal Trigger member or pointer may
+      // remain. Re-register the next cadence deadline in the canonical `TriggerDeadlineHandles`
+      // carrier so the shared `service_due_deadline_frontiers` frontier observes it; the legacy
+      // `ActorWaitingEntry` reference substrate is never read by canonical production `on_idle`.
+      if hot.trigger_wakeup_pointer.is_some() {
+        return Err(AttemptTransactionError::Invariant);
+      }
+      let actor = Self::load_actor_ref(actor_id).ok_or(AttemptTransactionError::Invariant)?;
+      let handle = Self::plan_deadline_destination(actor, WakeupKey::Tick(due_tick))
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+      let pointer = TriggerWakeupPointer {
+        tick: due_tick,
+        page_id: handle.page,
+        slot: u32::from(handle.slot),
+      };
+      let Some(ActorSemanticState::Active(current)) = ActorSemanticStates::<T>::get(actor_id)
+      else {
+        return Err(AttemptTransactionError::Invariant);
+      };
+      if current.generation != actor.generation || current.admission != *admission {
+        return Err(AttemptTransactionError::Invariant);
+      }
+      let mut replacement = current;
+      replacement.hot.trigger_wakeup_pointer = Some(pointer);
+      ActorSemanticStates::<T>::insert(actor_id, ActorSemanticState::Active(replacement));
+      Self::insert_trigger_deadline_member(handle)
+        .map_err(|_| AttemptTransactionError::Invariant)?;
+      hot.trigger_wakeup_pointer = Some(pointer);
+      return Ok(hot);
+    }
     if let Some(pointer) = hot.trigger_wakeup_pointer {
       Self::invalidate_wakeup_reference(
         actor_id,
@@ -886,10 +924,6 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| AttemptTransactionError::Invariant)?;
       hot.trigger_wakeup_pointer = None;
     }
-    let now_tick =
-      Self::current_scheduler_tick().map_err(|_| AttemptTransactionError::Invariant)?;
-    let due_tick = next_cadence_due_tick(anchor_tick, *every_ticks, now_tick)
-      .ok_or(AttemptTransactionError::Invariant)?;
     let (page_id, slot) = Self::schedule_fresh_wakeup_reference(
       actor_id,
       WakeupKey::Tick(due_tick),

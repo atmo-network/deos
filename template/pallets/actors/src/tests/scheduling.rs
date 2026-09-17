@@ -6481,16 +6481,12 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
+    service_canonical_temporal_frontiers(2);
     assert!(Actors::pending_signal(actor_id));
-    Actors::execute_cycle(Weight::MAX);
+    // Opening happens at B+1, so the next cadence frontier starts strictly after that tick.
+    run_next_idle(Weight::MAX);
 
-    let crate::LoadedActorStateOf::Active(state) =
-      Actors::load_actor_state_for_frame_control(actor_id)
-    else {
-      panic!("rearmed Cadenced frame state is active");
-    };
+    let state = Actors::active_actor_state(actor_id).expect("rearmed Cadenced state is active");
     assert_eq!(state.identity.cycle_nonce, 1);
     assert!(!state.hot.pending_signal);
     assert!(state.hot.queue_ticket.is_none());
@@ -6502,7 +6498,7 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
     ));
     assert_eq!(
       state.hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(3)
+      Some(4)
     );
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical hot projection exists");
     assert_eq!(
@@ -6513,10 +6509,20 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
       projected_hot.trigger_wakeup_pointer,
       state.hot.trigger_wakeup_pointer
     );
+    // The rearm is owned by the canonical Trigger deadline carrier, not the legacy waiting
+    // reference substrate that production `on_idle` no longer drains for temporal triggers.
+    let handle = Actors::trigger_deadline_handles(actor_id)
+      .expect("canonical Trigger deadline member is registered");
+    assert_eq!(handle.key, WakeupKey::Tick(4));
     assert_eq!(
-      crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Tick(3)),
-      1
+      u32::from(handle.slot),
+      projected_hot
+        .trigger_wakeup_pointer
+        .expect("projected pointer exists")
+        .slot
     );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert_eq!(crate::ActorWaitingOccupancies::<Test>::get(WakeupKey::Tick(4)), 0);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
