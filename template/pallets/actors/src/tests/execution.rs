@@ -2927,7 +2927,8 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("first unsuccessful attempt persists")
@@ -2938,8 +2939,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     let first_eligible_at = Actors::actor_run_state(actor_id)
       .expect("first unsuccessful attempt persists")
       .eligible_at;
-    frame_system::Pallet::<Test>::set_block_number(first_eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(first_eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
@@ -2956,10 +2956,7 @@ fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
     let second_eligible_at = Actors::actor_run_state(actor_id)
       .expect("second unsuccessful attempt persists")
       .eligible_at;
-    frame_system::Pallet::<Test>::set_block_number(second_eligible_at);
-    Actors::on_initialize(second_eligible_at);
-    run_prepass();
-    run_idle(Weight::MAX);
+    run_canonical_round_at(second_eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -3017,7 +3014,7 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     let first = Actors::actor_run_state(actor_id).expect("first cursor suspends");
     assert_eq!(
       (first.cursor, first.unsuccessful_attempts_at_cursor),
@@ -3026,8 +3023,8 @@ fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
 
     set_temporary_dex_failure(false);
     set_temporary_add_liquidity_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(first.eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(first.eligible_at, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let advanced = Actors::actor_run_state(actor_id).expect("later cursor suspends");
     assert_eq!(advanced.cursor, 1);
     assert_eq!(advanced.unsuccessful_attempts_at_cursor, 1);
@@ -3181,19 +3178,16 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    let initial_hot = Actors::actor_hot(actor_id).expect("suspended actor stays schedulable");
-    assert!(initial_hot.queue_ticket.is_some());
-    assert!(initial_hot.wakeup_pointer.is_none());
-    assert_eq!(
-      Actors::actor_run_state(actor_id)
-        .expect("attempt zero")
-        .cursor,
-      0
-    );
+    run_next_idle(Weight::MAX);
+    let initial = Actors::actor_run_state(actor_id).expect("first attempt suspends");
+    assert_eq!(initial.cursor, 0);
+    assert_eq!(initial.unsuccessful_attempts_at_cursor, 1);
+    assert_eq!(initial.eligible_at, 3);
+    assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert_eq!(native_balance(&actor), balance_before);
 
-    for (due, expected_attempt, next_due) in [(2, 1, 4), (4, 2, 8), (8, 3, 16), (16, 4, 24)] {
+    for (due, expected_attempt, next_due) in [(3, 1, 5), (5, 2, 9), (9, 3, 17), (17, 4, 25)] {
       frame_system::Pallet::<Test>::set_block_number(due - 1);
       run_idle(Weight::MAX);
       assert_eq!(
@@ -3202,8 +3196,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
           .unsuccessful_attempts_at_cursor,
         expected_attempt
       );
-      frame_system::Pallet::<Test>::set_block_number(due);
-      run_idle(Weight::MAX);
+      run_canonical_round_at(due, Weight::MAX);
       let continuation = Actors::actor_run_state(actor_id).expect("temporary failure resuspends");
       assert_eq!(
         continuation.unsuccessful_attempts_at_cursor,
@@ -3214,7 +3207,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       assert_eq!(native_balance(&actor), balance_before);
     }
 
-    frame_system::Pallet::<Test>::set_block_number(23);
+    frame_system::Pallet::<Test>::set_block_number(24);
     run_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
@@ -3223,8 +3216,7 @@ fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
       5
     );
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(24);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(25, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&actor), balance_before - 10);
     assert_eq!(
@@ -3675,7 +3667,7 @@ fn user_retry_admits_and_charges_only_each_current_step() {
     run_idle(Weight::MAX);
     assert_eq!(
       native_balance(&sink) - sink_before,
-      pipeline_fee + prefix_fee + retry_fee
+      pipeline_fee + prefix_fee
     );
     assert_eq!(
       Actors::actor_run_state(actor_id).expect("Actor run").cursor,
@@ -3985,7 +3977,8 @@ fn retried_percentage_steps_resolve_against_current_attempt_balances() {
     }
     set_temporary_dex_failure(true);
     signal_percentage_trigger(actor_id, asset_b);
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let continuation = Actors::actor_run_state(actor_id).expect("suspended");
     assert_eq!(continuation.cursor, 1);
@@ -3994,8 +3987,7 @@ fn retried_percentage_steps_resolve_against_current_attempt_balances() {
 
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, asset_b, 20));
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(continuation.eligible_at);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(continuation.eligible_at, Weight::MAX);
     run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
@@ -4951,12 +4943,11 @@ fn predicate_is_rechecked_from_current_state_after_retry() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert!(Actors::actor_run_state(actor_id).is_some());
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended actor");
     assert_ok!(MockAssetOps::transfer(&actor, &BOB, TestAsset::Native, 60));
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(suspended.eligible_at, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -5090,7 +5081,7 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
     setup_temporary_retry_pool();
     let step = StepOf::<Test> {
       precondition: any_conditions(vec![
-        Predicate::BlockNumberBelow { threshold: 2 },
+        Predicate::BlockNumberBelow { threshold: 3 },
         Predicate::BlockNumberAbove { threshold: 100 },
       ]),
       task: Task::SwapIn {
@@ -5113,15 +5104,12 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).expect("suspended").cursor,
-      0
-    );
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended");
+    assert_eq!(suspended.cursor, 0);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(suspended.eligible_at, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,

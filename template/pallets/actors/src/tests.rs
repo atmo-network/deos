@@ -900,6 +900,17 @@ fn service_canonical_temporal_frontiers(now: MockBlockNumber) {
   );
 }
 
+/// Advances to the absolute `block` and drives exactly one canonical Service round there:
+/// `on_initialize`, the mandatory prepass, then `on_idle`. Canonical retries and future
+/// occurrences are deadline-gated at an absolute eligible block, so a witness that knows the
+/// persisted `eligible_at` must advance to it instead of assuming same-block execution.
+fn run_canonical_round_at(block: MockBlockNumber, weight: Weight) {
+  frame_system::Pallet::<Test>::set_block_number(block);
+  Actors::on_initialize(block);
+  run_prepass();
+  run_idle(weight);
+}
+
 fn run_prepass() {
   let now = frame_system::Pallet::<Test>::block_number();
   if Actors::block_resource_state().is_some_and(|state| state.ensure_block(now).is_err()) {
