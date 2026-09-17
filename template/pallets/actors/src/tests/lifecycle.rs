@@ -433,11 +433,12 @@ fn deactivate_activate_preserves_nonce_but_resets_active_epoch_state_for_both_cl
       assert_eq!(active.cycle_nonce, 1);
       assert_eq!(Actors::load_actor_ref(actor_id).unwrap().generation, 2);
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
+      assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+      assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
       assert_eq!(
-        ActorControlLocators::<Test>::get(actor_id),
-        Some(ActorControlLocation::Unsignaled)
+        Actors::actor_processes(actor_id).map(|process| process.generation),
+        Some(2)
       );
-      assert!(ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
       assert_eq!(active.unsuccessful_attempt_streak, 0);
       assert!(!active.pending_signal);
     }
@@ -4204,6 +4205,34 @@ fn canonical_owner_close_releases_process_and_deadline_residence() {
     assert!(
       !DeadlineHandles::<Test>::contains_key(actor_id),
       "a closed canonical Actor must release its deadline residence"
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
+  });
+}
+
+#[test]
+fn canonical_owner_deactivation_releases_process_and_deadline_residence() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_canonical_suspended_system_retry(9);
+    assert!(ActorProcesses::<Test>::get(actor_id).is_some());
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+
+    assert_ok!(Actors::deactivate_actor(RuntimeOrigin::root(), actor_id));
+
+    assert!(matches!(
+      ActorSemanticStates::<Test>::get(actor_id),
+      Some(ActorSemanticState::Dormant(_))
+    ));
+    assert!(ActorIdentities::<Test>::get(actor_id).is_some());
+    assert!(
+      ActorProcesses::<Test>::get(actor_id).is_none(),
+      "a dormant canonical Actor must not retain its process publication"
+    );
+    assert!(
+      !DeadlineHandles::<Test>::contains_key(actor_id),
+      "a dormant canonical Actor must release its deadline residence"
     );
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));

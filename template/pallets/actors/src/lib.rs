@@ -12132,26 +12132,52 @@ pub mod pallet {
             Error::<T>::ActorInvariant.into(),
           ));
         };
-        if let Err(error) = Self::remove_actor_from_queues_with_authority(actor_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        if state.hot.wakeup_pointer.is_some() {
-          let invalidated =
-            Self::wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission).is_ok();
-          if !invalidated {
+        // A canonically published Actor owns its scheduler residence in the generation-bound
+        // process carrier, not in a legacy primary/FIFO cell. Detach that publication atomically
+        // so the dormant identity retains no scheduler work; the legacy retained-frame path keeps
+        // its queue/wakeup cleanup for pre-cutover Actors.
+        let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id);
+        if canonical {
+          let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+          else {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              Error::<T>::ActorNotFound.into(),
+              Error::<T>::ActorInvariant.into(),
             ));
+          };
+          let supplied_run = state.run_state.clone();
+          if let Err(error) = Self::detach_actor_publication(
+            ActorRef {
+              actor_id,
+              generation: record.generation,
+            },
+            state.clone(),
+            supplied_run.as_ref(),
+          ) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
-        }
-        if state.hot.trigger_wakeup_pointer.is_some() {
-          let invalidated =
-            Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission)
-              .is_ok();
-          if !invalidated {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              Error::<T>::ActorNotFound.into(),
-            ));
+        } else {
+          if let Err(error) = Self::remove_actor_from_queues_with_authority(actor_id) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+          if state.hot.wakeup_pointer.is_some() {
+            let invalidated =
+              Self::wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission).is_ok();
+            if !invalidated {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                Error::<T>::ActorNotFound.into(),
+              ));
+            }
+          }
+          if state.hot.trigger_wakeup_pointer.is_some() {
+            let invalidated =
+              Self::trigger_wakeup_substrate_invalidate_loaded(actor_id, state.clone(), &admission)
+                .is_ok();
+            if !invalidated {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                Error::<T>::ActorNotFound.into(),
+              ));
+            }
           }
         }
         if let Err(error) = Self::remove_active_actor_with_admission(

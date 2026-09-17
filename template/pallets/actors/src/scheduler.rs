@@ -8815,6 +8815,96 @@ impl<T: Config> Pallet<T> {
   /// Atomically removes one exact canonical active publication and converges on the existing
   /// custody-neutral terminal finalizer. Trigger and process residence are independent; a refusal
   /// after either removal restores the complete storage root.
+  /// Releases one canonical generation-bound process publication and its exact residence without
+  /// finalizing the durable identity. On success the semantic Active record owns the released Hot
+  /// state, `ActorProcesses` and its Service/Deadline/Trigger residence are gone, and no legacy
+  /// authority was created. The caller owns the enclosing storage transaction.
+  fn detach_actor_publication_inner(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+  ) -> Result<(ActiveActorStateOf<T>, ActorAdmissionCertificateOf<T>), DispatchError> {
+    ensure!(
+      !ActorControlLocators::<T>::contains_key(actor.actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
+      Error::<T>::ActorInvariant
+    );
+    let admission =
+      Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
+    let Some(ActorSemanticState::Active(semantic)) = ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    ensure!(
+      actor.generation != 0
+        && semantic.generation == actor.generation
+        && semantic.identity == state.identity
+        && semantic.hot == state.hot
+        && semantic.admission == admission
+        && state.run_state.as_ref().map(|run| run.encode())
+          == supplied_run.map(|run| run.encode())
+        && ActorRunStateStore::<T>::get(actor.actor_id)
+          .as_ref()
+          .map(|run| run.encode())
+          == supplied_run.map(|run| run.encode()),
+      Error::<T>::ActorInvariant
+    );
+    let process = ActorProcesses::<T>::get(actor.actor_id)
+      .filter(|process| process.generation == actor.generation)
+      .ok_or(Error::<T>::ActorInvariant)?;
+
+    let mut terminal_state = state;
+    if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
+      Self::remove_trigger_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+      terminal_state.hot.trigger_wakeup_pointer = None;
+    } else {
+      ensure!(
+        terminal_state.hot.trigger_wakeup_pointer.is_none(),
+        Error::<T>::ActorInvariant
+      );
+    }
+    match process.residence {
+      Some(ProcessResidence::Service(_)) => {
+        Self::remove_service_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+      }
+      Some(ProcessResidence::Deadline { .. }) => {
+        Self::remove_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
+        terminal_state.hot.wakeup_pointer = None;
+      }
+      None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
+      _ => return Err(Error::<T>::ActorInvariant.into()),
+    }
+    ActorProcesses::<T>::remove(actor.actor_id);
+    let Some(ActorSemanticState::Active(mut terminal_semantic)) =
+      ActorSemanticStates::<T>::get(actor.actor_id)
+    else {
+      return Err(Error::<T>::ActorInvariant.into());
+    };
+    terminal_semantic.hot = terminal_state.hot.clone();
+    ActorSemanticStates::<T>::insert(actor.actor_id, ActorSemanticState::Active(terminal_semantic));
+    Ok((terminal_state, admission))
+  }
+
+  /// Atomically releases one canonical process publication and residence while preserving the
+  /// durable identity, used by owner-initiated deactivation. Refusal restores the complete
+  /// canonical root and never creates legacy control authority.
+  pub(crate) fn detach_actor_publication(
+    actor: ActorRef,
+    state: ActiveActorStateOf<T>,
+    supplied_run: Option<&ActorRunStateOf<T>>,
+  ) -> Result<ActiveActorStateOf<T>, DispatchError> {
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      match Self::detach_actor_publication_inner(actor, state, supplied_run) {
+        Ok((terminal_state, _admission)) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(terminal_state))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+  }
+
   pub(crate) fn remove_actor_publication_and_finalize(
     actor: ActorRef,
     state: ActiveActorStateOf<T>,
@@ -8823,69 +8913,14 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let result = (|| -> DispatchResult {
-        ensure!(
-          !ActorControlLocators::<T>::contains_key(actor.actor_id)
-            && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
-          Error::<T>::ActorInvariant
-        );
-        let admission =
-          Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
-        let Some(ActorSemanticState::Active(semantic)) =
-          ActorSemanticStates::<T>::get(actor.actor_id)
-        else {
-          return Err(Error::<T>::ActorInvariant.into());
-        };
-        ensure!(
-          actor.generation != 0
-            && semantic.generation == actor.generation
-            && semantic.identity == state.identity
-            && semantic.hot == state.hot
-            && semantic.admission == admission
-            && state.run_state.as_ref().map(|run| run.encode())
-              == supplied_run.map(|run| run.encode())
-            && ActorRunStateStore::<T>::get(actor.actor_id)
-              .as_ref()
-              .map(|run| run.encode())
-              == supplied_run.map(|run| run.encode()),
-          Error::<T>::ActorInvariant
-        );
-        let process = ActorProcesses::<T>::get(actor.actor_id)
-          .filter(|process| process.generation == actor.generation)
-          .ok_or(Error::<T>::ActorInvariant)?;
-
-        let mut terminal_state = state;
-        if TriggerDeadlineHandles::<T>::contains_key(actor.actor_id) {
-          Self::remove_trigger_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
-          terminal_state.hot.trigger_wakeup_pointer = None;
-        } else {
-          ensure!(
-            terminal_state.hot.trigger_wakeup_pointer.is_none(),
-            Error::<T>::ActorInvariant
-          );
-        }
-        match process.residence {
-          Some(ProcessResidence::Service(_)) => {
-            Self::remove_service_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
-          }
-          Some(ProcessResidence::Deadline { .. }) => {
-            Self::remove_deadline_member(actor).map_err(|_| Error::<T>::ActorInvariant)?;
-            terminal_state.hot.wakeup_pointer = None;
-          }
-          None if matches!(process.status, ProcessStatus::Disabled(_)) => {}
-          _ => return Err(Error::<T>::ActorInvariant.into()),
-        }
-        ActorProcesses::<T>::remove(actor.actor_id);
-        let Some(ActorSemanticState::Active(mut terminal_semantic)) =
-          ActorSemanticStates::<T>::get(actor.actor_id)
-        else {
-          return Err(Error::<T>::ActorInvariant.into());
-        };
-        terminal_semantic.hot = terminal_state.hot.clone();
-        ActorSemanticStates::<T>::insert(
+        let (terminal_state, admission) =
+          Self::detach_actor_publication_inner(actor, state, supplied_run)?;
+        Self::finalize_actor_from_consumed_state(
           actor.actor_id,
-          ActorSemanticState::Active(terminal_semantic),
-        );
-        Self::finalize_actor_from_consumed_state(actor.actor_id, terminal_state, &admission, reason)
+          terminal_state,
+          &admission,
+          reason,
+        )
       })();
       match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
