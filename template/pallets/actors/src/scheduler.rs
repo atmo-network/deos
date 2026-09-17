@@ -954,6 +954,21 @@ impl<T: Config> Pallet<T> {
         };
         // Replacement may preserve a paid latch from a different Trigger family.
         *consumed = true;
+        // A canonical replacement that armed the AtTime deadline while a different-family latch was
+        // pending leaves that one-shot Trigger member behind. This Opening consumes the occurrence,
+        // so the deadline must be released here; otherwise the shared deadline frontier observes a
+        // consumed occurrence and its member can never be serviced. The ordinary AtTime path already
+        // removed its member before the occurrence commit reached this point.
+        let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
+          && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+          && ActorProcesses::<T>::contains_key(actor_id);
+        if canonical && hot.trigger_wakeup_pointer.is_some() {
+          let actor =
+            Self::load_actor_ref(actor_id).ok_or(AttemptTransactionError::Invariant)?;
+          Self::remove_trigger_deadline_member(actor)
+            .map_err(|_| AttemptTransactionError::Invariant)?;
+          hot.trigger_wakeup_pointer = None;
+        }
         Ok(hot)
       }
       Trigger::Cadenced { .. } => {

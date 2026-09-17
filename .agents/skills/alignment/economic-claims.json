@@ -139,17 +139,18 @@
     {
       "id": "actors-queue-dedup",
       "doc": "template/pallets/actors/docs/architecture.en.md",
-      "claim": "ActorHot.queue_ticket prevents duplicate live queue entries across repeated enqueue attempts.",
+      "claim": "A canonical Actor receives exactly one live Service-ring membership; a duplicate occurrence coalesces before fee admission and never publishes a second runnable member.",
       "status": "shipped invariant",
       "proof_kind": "invariant",
       "tautology_risk": "low",
-      "falsification_note": "Removing same-epoch queue dedup causes repeated enqueue attempts for one actor to produce more than one runnable queue entry.",
+      "falsification_note": "Removing same-round membership dedup causes repeated occurrence attempts for one actor to produce more than one runnable Service member.",
       "code_anchors": [
         "template/pallets/actors/src/types/lifecycle.rs::ActorHotState",
-        "template/pallets/actors/src/scheduler.rs::paged_enqueue"
+        "template/pallets/actors/src/lib.rs::insert_service_member"
       ],
       "falsification_tests": [
-        "template/pallets/actors/src/tests/scheduling.rs::paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation"
+        "template/pallets/actors/src/tests/scheduling.rs::repeated_trigger_same_block_yields_one_ticket_and_one_execution",
+        "template/pallets/actors/src/tests/scheduling.rs::canonical_fifo_uses_one_physical_ticket_sequence"
       ]
     },
     {

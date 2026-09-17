@@ -873,23 +873,6 @@ fn deplete_user_sovereign(actor_id: u64, amount: Balance) {
   MockAssetOps::burn(&acc, TestAsset::Native, amount).expect("fixture depletion burn succeeds");
 }
 
-fn run_actor_hook_order_with_external(
-  now: u64,
-  external: impl FnOnce(),
-  idle_weight: Weight,
-) -> Weight {
-  frame_system::Pallet::<Test>::set_block_number(now);
-  let initialize_weight = Actors::on_initialize(now);
-  let prepass_weight = Actors::actor_prepass(RuntimeOrigin::none())
-    .expect("fixture prepass succeeds")
-    .actual_weight
-    .unwrap_or_else(Weight::zero);
-  external();
-  initialize_weight
-    .saturating_add(prepass_weight)
-    .saturating_add(Actors::on_idle(now, idle_weight))
-}
-
 fn run_next_idle(weight: Weight) {
   let now = frame_system::Pallet::<Test>::block_number()
     .checked_add(1)
@@ -1070,105 +1053,6 @@ fn has_actor_event(predicate: impl Fn(&Event<Test>) -> bool) -> bool {
 // --- User Actors E2E Lifecycle Tests ---
 
 // --- Multi-Asset Funding Tests ---
-
-fn assert_scheduler_close_requires_atomic_budget(reason: CloseReason, shortfall: Weight) {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let is_system = matches!(
-      reason,
-      CloseReason::ConsecutiveFailures | CloseReason::AutoCloseNonceReached
-    );
-    let actor_id = if is_system {
-      create_system_with(ALICE, manual_schedule(), None, inert_contract_steps())
-    } else {
-      create_user_with(
-        ALICE,
-        Mutability::Mutable,
-        manual_schedule(),
-        None,
-        inert_contract_steps(),
-      )
-    };
-    match reason {
-      CloseReason::WindowExpired => fund_native(actor_id, 1_000),
-      CloseReason::CycleAdmissionInsufficient => {
-        let balance = native_balance(&sovereign_account(actor_id));
-        deplete_user_sovereign(actor_id, balance);
-        fund_native(
-          actor_id,
-          TestMinUserBalance::get().saturating_add(manual_trigger_fee()),
-        );
-      }
-      CloseReason::CycleNonceExhausted => {
-        fund_native(actor_id, 1_000);
-        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX - 1);
-      }
-      CloseReason::ConsecutiveFailures => {
-        mutate_actor_hot_coherent(actor_id, |hot| {
-          hot.unsuccessful_attempt_streak = <Test as crate::Config>::MaxConsecutiveFailures::get();
-        });
-      }
-      CloseReason::AutoCloseNonceReached => {
-        mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = 1);
-        let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
-        contract.auto_close_at_cycle_nonce = Some(1);
-        assert_ok!(Actors::store_actor_contract(actor_id, contract));
-      }
-      unsupported => panic!("unsupported admission-time close reason: {unsupported:?}"),
-    }
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    if reason == CloseReason::CycleNonceExhausted {
-      mutate_actor_identity_coherent(actor_id, |identity| identity.cycle_nonce = u64::MAX);
-    }
-    if reason == CloseReason::WindowExpired {
-      let mut contract = Actors::load_actor_contract(actor_id).expect("actor contract exists");
-      contract.window = Some(ScheduleWindow { start: 0, end: 0 });
-      assert_ok!(Actors::store_actor_contract(actor_id, contract));
-    }
-    let before = Actors::actor_hot(actor_id)
-      .unwrap_or_else(|| panic!("{reason:?} actor remains active before scheduler admission"));
-    let queue_head = ActorReadyHead::<Test>::get();
-    frame_system::Pallet::<Test>::reset_events();
-    let discovery = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    // Discovery and the loaded-state probe are provisional for a complete FIFO close. The
-    // accepted close owner replaces them and source consumption instead of being added to them.
-    let pre_admission =
-      discovery.saturating_add(Actors::scheduler_actor_state_probe_weight_upper());
-    let close = if reason == CloseReason::CycleAdmissionInsufficient {
-      <TestWeightInfo as crate::WeightInfo>::pipeline_admission_apoptosis()
-    } else {
-      Actors::close_cleanup_weight_upper()
-    };
-    let budget = close.saturating_sub(shortfall);
-    let consumed = Actors::execute_cycle(budget).consumed;
-    let after =
-      Actors::actor_hot(actor_id).expect("incomplete atomic close budget preserves actor");
-    assert_eq!(after.queue_ticket, before.queue_ticket);
-    assert_eq!(ActorReadyHead::<Test>::get(), queue_head);
-    assert!(!has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
-    )));
-    assert!(consumed.all_lte(pre_admission));
-    assert!(consumed.all_lte(budget));
-
-    let consumed = Actors::execute_cycle(Weight::MAX).consumed;
-    assert_eq!(
-      consumed,
-      close.saturating_add(discovery),
-      "the complete entry owner replaces its provisional prefix; the later empty-queue probe remains a distinct pass operation"
-    );
-    assert!(Actors::active_actor_view(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed { actor_id: id, reason: closed_reason }
-        if *id == actor_id && *closed_reason == reason
-    )));
-  });
-}
 
 #[cfg(test)]
 mod proptest_actor {

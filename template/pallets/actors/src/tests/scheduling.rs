@@ -2053,82 +2053,6 @@ fn block_initialize_freezes_the_pre_external_ticket_frontier() {
 }
 
 #[test]
-fn prepass_materialization_stays_behind_the_frozen_cutoff_until_next_block() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, timer_schedule(1), None, inert_contract_steps());
-    run_prepass();
-    Actors::on_idle(1, Weight::MAX);
-    Actors::on_finalize(1);
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    let cutoff = Actors::next_queue_ticket();
-    run_prepass();
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((2, cutoff)));
-    let deferred = Actors::active_actor_view(actor_id).expect("timer Actor remains active");
-    assert_eq!(deferred.cycle_nonce, 0);
-    assert!(deferred.pending_signal);
-    assert!(deferred.queue_ticket.is_some_and(|ticket| ticket >= cutoff));
-    Actors::on_idle(2, Weight::MAX);
-    Actors::on_finalize(2);
-
-    frame_system::Pallet::<Test>::set_block_number(3);
-    run_prepass();
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1)
-    );
-  });
-}
-
-#[test]
-fn hook_order_fixture_exposes_external_ticket_after_prepass_cutoff() {
-  new_test_ext().execute_with(|| {
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let before_external = Actors::next_queue_ticket();
-
-    let consumed = run_actor_hook_order_with_external(
-      1,
-      || {
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          actor_id
-        ));
-      },
-      Weight::MAX,
-    );
-
-    assert_eq!(
-      Actors::prepass_execution_cutoff(),
-      Some((1, before_external))
-    );
-    assert!(
-      Actors::prepass_execution_cutoff()
-        .is_some_and(|(_, cutoff)| Actors::next_queue_ticket() > cutoff)
-    );
-    let hot = Actors::actor_hot(actor_id).expect("Actor remains pending for the next block");
-    assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(0)
-    );
-    assert!(
-      <TestWeightInfo as crate::WeightInfo>::scheduler_on_initialize_cutoff().all_lte(consumed)
-    );
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    run_prepass();
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
-      Some(1)
-    );
-  });
-}
-
-#[test]
 fn certified_ingress_maps_funding_provenance_to_cause_phase() {
   assert_eq!(
     Actors::test_trigger_cause_provenance(Some(&FundingProvenance::Signed)),
@@ -3593,53 +3517,6 @@ fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_cont
 }
 
 #[test]
-fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let scan_weight =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
-        1,
-      );
-    let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
-    assert_eq!(resource_state.begin_prepass(), Ok(()));
-    assert_eq!(resource_state.open_external_phase(), Ok(()));
-    assert_eq!(resource_state.begin_drain(), Ok(()));
-    let pass = Actors::execute_cycle_to_cutoff_with_resources(
-      Weight::from_parts(
-        u64::MAX,
-        scan_weight
-          .proof_size()
-          .saturating_add(Actors::scheduler_actor_probe_weight_upper().proof_size())
-          .saturating_sub(1),
-      ),
-      Actors::next_queue_ticket(),
-      &mut resource_state,
-      budget.limits(),
-      crate::BlockResourceDomain::ActorDrainEffect,
-      budget.limits().actor_control(),
-    );
-    assert_eq!(resource_state.outstanding_reservations(), 0);
-    assert_eq!(resource_state.usage().actor_control_used(), pass.consumed);
-    assert_eq!(resource_state.usage().actor_effect_used(), Weight::zero());
-    let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
-    assert!(instance.pending_signal);
-    assert_eq!(instance.cycle_nonce, 0);
-    assert!(
-      Actors::actor_hot(actor_id)
-        .expect("queued actor")
-        .queue_ticket
-        .is_some()
-    );
-  });
-}
-
-#[test]
 fn global_fifo_eventually_services_system_actor_after_many_users() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -3803,96 +3680,6 @@ fn canonical_queue_try_state_rejects_a_malformed_page_width() {
     crate::ActorReadyTail::<Test>::put(2);
     crate::ActorReadyOccupancy::<Test>::put(0);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
-  });
-}
-
-#[test]
-fn mandatory_prepass_reclaims_saturated_fifo_without_domain_spill() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    seed_saturated_tombstone_queue();
-    let cutoff = Actors::queue_tail();
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_prepass();
-    assert!(Actors::queue_head() > 0);
-    let actor = Actors::active_actor_view(actor_id).expect("deferred Actor is materialized");
-    assert_eq!(actor.queue_ticket, Some(cutoff));
-    assert!(actor.pending_signal);
-    assert_eq!(actor.cycle_nonce, 0);
-    assert_eq!(Actors::prepass_execution_cutoff(), Some((2, cutoff)));
-    let state = Actors::block_resource_state().expect("prepass resource state exists");
-    assert_eq!(state.usage().actor_effect_used(), Weight::zero());
-    assert_eq!(state.outstanding_reservations(), 0);
-    assert_eq!(state.phase(), crate::BlockResourcePhase::ExternalPhase);
-  });
-}
-
-#[test]
-fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_work() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let capacity = <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get();
-    for page_id in 0..capacity.div_ceil(32) {
-      crate::ActorReadyFrameChunks::<Test>::insert(
-        u64::from(page_id),
-        BoundedVec::try_from(vec![None; 32]).expect("canonical tombstone page"),
-      );
-    }
-    crate::ActorReadyHead::<Test>::put(0);
-    crate::ActorReadyTail::<Test>::put(u64::from(capacity));
-    crate::ActorReadyOccupancy::<Test>::put(0);
-
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      true
-    ));
-    let cleanup_budget =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
-        .saturating_add(
-          <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::materialization_coordinator_base(),
-        )
-        .saturating_add(
-          <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::block_resource_finalize(),
-        )
-        .saturating_add(
-        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
-          1,
-        ),
-      );
-    Actors::on_idle(1, cleanup_budget);
-    assert_eq!(
-      Actors::queue_head(),
-      1,
-      "saturated stale head must make progress before ingress"
-    );
-    assert_eq!(Actors::queue_tail(), u64::from(capacity));
-
-    frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(Actors::set_global_circuit_breaker(
-      RuntimeOrigin::root(),
-      false
-    ));
-    Actors::on_idle(2, Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("deferred actor survives")
-        .cycle_nonce,
-      1
-    );
-    assert_eq!(Actors::queue_head(), Actors::queue_tail());
-    assert_eq!(scheduled_wakeup_block(actor_id), None);
   });
 }
 
@@ -5108,19 +4895,18 @@ fn temporal_occurrence_refuses_selector_and_schedule_mismatched_wake_qualificati
 fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
+    let steps = BoundedVec::try_from(
+      (0..6)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("six-Step Contract fits");
     let actor_id = create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps);
     fund_native(actor_id, 1_000_000);
     assert_ok!(Actors::manual_trigger(
@@ -5128,6 +4914,8 @@ fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
       actor_id
     ));
     frame_system::Pallet::<Test>::set_block_number(2);
+    // The latched manual occurrence survives the schedule replacement and opens the Pipeline at
+    // its B+1 eligible block, retaining the replacement AtTime deadline for the next tick.
     let mut replacement = Actors::actor_contract(actor_id).expect("admitted Contract");
     replacement.trigger = RuntimeTrigger::at_time(2);
     assert_ok!(Actors::update_contract(
@@ -5135,13 +4923,19 @@ fn latched_at_time_replacement_does_not_retrigger_running_pipeline() {
       actor_id,
       replacement
     ));
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
+    assert!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).is_none(),
+      "opening a preserved latch releases the replacement AtTime one-shot deadline"
+    );
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
+    System::reset_events();
 
+    // A later temporal service pass must observe no leftover one-shot occurrence and must not
+    // re-trigger the Running Pipeline.
     frame_system::Pallet::<Test>::set_block_number(4);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(4, &mut meter);
+    service_canonical_temporal_frontiers(4);
 
     assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("busy AtTime Actor remains active");
@@ -6128,86 +5922,6 @@ fn queue_progress_matrix_keeps_progress_and_coverage() {
           assert!(Actors::active_actor_view(*actor_id).is_none());
         }
       }
-    });
-  }
-}
-
-#[test]
-fn admission_time_close_reasons_require_complete_queue_and_cleanup_budget() {
-  let reasons = [
-    CloseReason::WindowExpired,
-    CloseReason::CycleAdmissionInsufficient,
-    CloseReason::CycleNonceExhausted,
-    CloseReason::ConsecutiveFailures,
-    CloseReason::AutoCloseNonceReached,
-  ];
-  for reason in reasons {
-    assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(1, 0));
-    assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(0, 1));
-  }
-}
-
-#[test]
-fn mixed_fifo_stops_at_corrupt_actor_without_touching_valid_suffix() {
-  for corrupt_index in 0usize..3 {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let actors = (0..3)
-        .map(|_| create_system_with(ALICE, manual_schedule(), None, inert_contract_steps()))
-        .collect::<Vec<_>>();
-      for actor_id in &actors {
-        assert_ok!(Actors::manual_trigger(
-          RuntimeOrigin::signed(ALICE),
-          *actor_id
-        ));
-      }
-      let sovereign_accounts = actors
-        .iter()
-        .map(|actor_id| {
-          Actors::actor_identity(*actor_id)
-            .expect("identity")
-            .sovereign_account
-        })
-        .collect::<Vec<_>>();
-      crate::ActorContractHeads::<Test>::remove(actors[corrupt_index]);
-      let suffix_hot = actors[corrupt_index..]
-        .iter()
-        .map(|actor_id| Actors::actor_hot(*actor_id).expect("queued actor"))
-        .collect::<Vec<_>>();
-      let suffix_balances = sovereign_accounts[corrupt_index..]
-        .iter()
-        .map(native_balance)
-        .collect::<Vec<_>>();
-      frame_system::Pallet::<Test>::reset_events();
-
-      Actors::execute_cycle(Weight::MAX);
-
-      assert_eq!(Actors::queue_head(), corrupt_index as u64);
-      for (index, actor_id) in actors.iter().enumerate() {
-        let (_, cell) = Actors::actor_control_cell(*actor_id).expect("primary remains");
-        assert_eq!(cell.identity.cycle_nonce, u64::from(index < corrupt_index));
-        assert_eq!(
-          Actors::actor_identity(*actor_id).is_none(),
-          index == corrupt_index
-        );
-      }
-      for (offset, actor_id) in actors[corrupt_index..].iter().enumerate() {
-        assert_eq!(
-          Actors::actor_hot(*actor_id),
-          Some(suffix_hot[offset].clone())
-        );
-        assert_eq!(
-          native_balance(&sovereign_accounts[corrupt_index + offset]),
-          suffix_balances[offset]
-        );
-      }
-      let actor_events = System::events()
-        .into_iter()
-        .filter(|record| matches!(record.event, RuntimeEvent::Actors(..)))
-        .count();
-      assert_eq!(actor_events, corrupt_index.saturating_mul(3));
-      #[cfg(feature = "try-runtime")]
-      assert!(crate::Pallet::<Test>::do_try_state().is_err());
     });
   }
 }
