@@ -958,6 +958,15 @@ fn run_idle(weight: Weight) {
   }
 }
 
+/// Drives exactly one Actors Drain pass at the current block without running the mandatory prepass
+/// or the multi-block continuation loop. Starvation telemetry is owned by the Drain pass (the
+/// prepass normally resolves eligible weight before Drain), so a weight-blocked live head must be
+/// observed here rather than through the pre-service helper.
+fn run_drain_only(weight: Weight) {
+  let now = frame_system::Pallet::<Test>::block_number();
+  Actors::on_idle(now, weight);
+}
+
 fn starvation_observation_weight() -> Weight {
   <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
 }

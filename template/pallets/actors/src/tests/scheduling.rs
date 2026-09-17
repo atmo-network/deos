@@ -4957,7 +4957,10 @@ fn starvation_emits_observability_event_once_without_control_effects() {
       .expect("queued actor")
       .queue_ticket;
     assert!(!GlobalCircuitBreaker::<Test>::get());
-    run_idle(starvation_blocked_budget(actor_id));
+    // The canonical occurrence published by `manual_trigger` is eligible at B+1, so the first
+    // weight-blocked Drain observation is the next block.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Starving {
@@ -4968,9 +4971,9 @@ fn starvation_emits_observability_event_once_without_control_effects() {
       event,
       Event::IdleStarvationDetected { .. } | Event::IdleStarvationRecovered { .. }
     )));
-    for block in 2..=(threshold + 2) {
+    for block in 3..=(threshold + 3) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     let detections = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -5015,9 +5018,9 @@ fn proof_size_exhaustion_counts_as_idle_starvation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    for block in 1..=threshold {
+    for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(u64::from(block));
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     assert_eq!(
       IdleStarvationState::<Test>::get(),
@@ -5070,7 +5073,7 @@ fn starvation_recovery_is_observable_once_and_healthy_idle_stays_sparse() {
     ));
     for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     assert_eq!(
       IdleStarvationState::<Test>::get(),
@@ -5122,13 +5125,13 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    for block in 1..=threshold {
+    for block in 2..=(threshold + 1) {
       frame_system::Pallet::<Test>::set_block_number(block as u64);
-      run_idle(starvation_blocked_budget(actor_id));
+      run_drain_only(starvation_blocked_budget(actor_id));
     }
     GlobalCircuitBreaker::<Test>::put(true);
     frame_system::Pallet::<Test>::set_block_number(threshold.saturating_add(1) as u64);
-    run_idle(starvation_blocked_budget(actor_id));
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Alerted {
@@ -5145,7 +5148,7 @@ fn breaker_freezes_starvation_count_without_recovery_event() {
       })
       .count();
     frame_system::Pallet::<Test>::set_block_number(threshold.saturating_add(2) as u64);
-    run_idle(starvation_blocked_budget(actor_id));
+    run_drain_only(starvation_blocked_budget(actor_id));
     assert_eq!(
       IdleStarvationState::<Test>::get(),
       IdleStarvationPhase::Alerted {
@@ -6685,3 +6688,11 @@ fn canonical_in_place_hot_mutation_requires_no_legacy_primary() {
     assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
   });
 }
+
+
+
+
+
+
+
+
