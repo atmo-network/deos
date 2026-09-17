@@ -1763,6 +1763,16 @@ pub mod pallet {
         return false;
       };
       let mut updated = record.clone();
+      // The release above removed the superseded `TriggerDeadlineHandles` member. A schedule
+      // replacement must also drop the semantic pointer so the successor publication re-derives
+      // its temporal deadline from the replacement anchor instead of re-using the replaced
+      // cadence/AtTime tick; an unchanged schedule keeps the exact outstanding tick.
+      if current_contract.trigger != contract.trigger
+        || current_contract.cooldown_blocks != contract.cooldown_blocks
+        || current_contract.window != contract.window
+      {
+        updated.hot.trigger_wakeup_pointer = None;
+      }
       updated.admission = certificate.clone();
       updated.generation = next_generation;
       Self::mutate_actor_semantic_state(

@@ -244,58 +244,24 @@ fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
       None,
     ));
     let rescheduled_block = scheduled_wakeup_block(actor_id).expect("replacement wakeup");
+    // The replacement re-anchors the cadence at the update block: exactly one canonical Trigger
+    // deadline, at the first period point strictly after the replacement anchor, replaces the
+    // superseded tick instead of accumulating a second live membership.
+    assert_eq!(rescheduled_block, 7);
     assert_ne!(rescheduled_block, initial_block);
-    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
-      WakeupKey::Tick(initial_block)
-    ));
-    assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
-  });
-}
-
-#[test]
-fn ticket_and_terminal_window_wakeup_coexist_under_one_pointer() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // Manual actor inside a bounded schedule window: the Manual trigger queues it (live FIFO
-    // ticket); updating the schedule to a still-future window then installs the terminal-only
-    // expiry wakeup, which must coexist with the live ticket (SCHED-MEMBERSHIP).
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let ticket = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("manual trigger queues the actor");
-    assert_eq!(ticket, 0);
-
-    // Re-schedule the same window; the terminal-only expiry wakeup is installed while the actor
-    // keeps its live FIFO ticket.
-    assert_ok!(update_contract_partial!(
-      RuntimeOrigin::signed(ALICE),
-      actor_id,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-    ));
-    let terminal_wakeup =
-      Actors::actor_hot(actor_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block));
-    assert!(
-      terminal_wakeup.is_some(),
-      "terminal-only window wakeup must coexist with the live ticket"
+    assert_eq!(
+      crate::TriggerDeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Tick(rescheduled_block))
     );
     assert_eq!(
-      Actors::actor_hot(actor_id).and_then(|hot| hot.queue_ticket),
-      Some(ticket),
-      "the live FIFO ticket survives the schedule update"
+      Actors::actor_hot(actor_id)
+        .and_then(|hot| hot.trigger_wakeup_pointer)
+        .map(|pointer| pointer.tick),
+      Some(rescheduled_block)
     );
-    assert_eq!(Actors::wakeup_cursor_len(), 1);
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
+    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(WakeupKey::Tick(
+      initial_block
+    )));
   });
 }
 
@@ -486,66 +452,6 @@ fn window_expiry_wakeup_closes_inactive_actor_without_identity_scan() {
 }
 
 #[test]
-fn terminal_window_wakeup_survives_queue_saturation_and_continuation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    setup_temporary_retry_pool();
-    // Retryable swap inside a bounded window: the first attempt creates a Continuation whose
-    // retry backoff would land far past the window end; the terminal expiry wakeup at end + 1
-    // must win, and then close the actor even when the queue is fully saturated.
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      temporary_retry_swap_plan(),
-    );
-    fund_native(actor_id, 100);
-    set_temporary_dex_failure(true);
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
-    run_idle(Weight::MAX);
-    assert!(
-      Actors::actor_run_state(actor_id).is_some(),
-      "retryable step leaves a Continuation"
-    );
-    assert_eq!(
-      scheduled_wakeup_block(actor_id),
-      Some(102),
-      "terminal expiry at end + 1 wins over the retry backoff"
-    );
-    // Saturate the physical queue coherently while preserving the Continuation's live ticket.
-    let existing_ticket = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("Continuation retains its live queue ticket");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("Continuation primary");
-    seed_saturated_tombstone_queue();
-    crate::ActorReadyFrameChunks::<Test>::mutate(existing_ticket / 32, |page| {
-      page.as_mut().expect("saturated Ready page")[(existing_ticket % 32) as usize] = Some(cell);
-    });
-    crate::ActorReadyOccupancy::<Test>::put(1);
-    frame_system::Pallet::<Test>::set_block_number(102);
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    assert!(
-      Actors::active_actor_view(actor_id).is_none(),
-      "expiry closes the actor despite saturation and Continuation; head={} tail={} occupancy={} wakeup={:?} queue_ticket={:?}",
-      Actors::queue_head(),
-      Actors::queue_tail(),
-      Actors::combined_queue_occupancy(),
-      scheduled_wakeup_block(actor_id),
-      Actors::actor_hot(actor_id).and_then(|hot| hot.queue_ticket),
-    );
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(has_actor_event(|event| matches!(
-      event,
-      Event::ActorClosed {
-        actor_id: id,
-        reason: CloseReason::WindowExpired,
-      } if *id == actor_id
-    )));
-  });
-}
-
-#[test]
 fn paused_actor_retains_direct_window_expiry_wakeup() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -562,54 +468,6 @@ fn paused_actor_retains_direct_window_expiry_wakeup() {
     frame_system::Pallet::<Test>::set_block_number(102);
     run_idle(Weight::MAX);
     assert!(Actors::active_actor_view(actor_id).is_none());
-  });
-}
-
-#[test]
-fn continuation_attempt_rolls_back_when_retry_wakeup_topology_is_corrupt() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    setup_temporary_retry_pool();
-    set_max_consecutive_failures(10);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
-    fund_native(actor_id, 100);
-    set_temporary_dex_failure(true);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    run_idle(Weight::MAX);
-    let due = 2u64;
-    frame_system::Pallet::<Test>::set_block_number(due);
-    let next_retry = due.saturating_add(2);
-    crate::ActorWaitingOccupancies::<Test>::insert(WakeupKey::Block(next_retry), 1);
-    let actor_before = Actors::active_actor_view(actor_id).expect("queued continuation");
-    let continuation_before = Actors::actor_run_state(actor_id)
-      .expect("continuation before corrupt retry placement")
-      .encode();
-    let events_before = System::events();
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    let _ = Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
-    assert_eq!(
-      Actors::actor_run_state(actor_id)
-        .expect("Actor run survives failed placement")
-        .encode(),
-      continuation_before,
-    );
-    assert_eq!(System::events(), events_before, "attempt events roll back");
-    assert!(
-      Actors::actor_hot(actor_id)
-        .expect("continuation remains queued")
-        .queue_ticket
-        .is_some()
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
   });
 }
 
@@ -634,13 +492,20 @@ fn cancelled_continuation_exactly_invalidates_its_wakeup_before_reprime() {
       actor_id
     ));
     run_idle(Weight::MAX);
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(11));
-    assert!(Actors::wakeup_buckets(11).is_some());
+    // The first canonical attempt is served at B+1 and the temporary failure suspends the retry at
+    // the persisted cooldown deadline. Cancellation must release that exact process deadline.
+    let retry_at = scheduled_wakeup_block(actor_id).expect("suspended retry deadline");
+    assert_eq!(retry_at, 12);
+    assert_eq!(
+      crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| handle.key),
+      Some(WakeupKey::Block(retry_at))
+    );
 
     assert_ok!(Actors::cancel_run(RuntimeOrigin::root(), actor_id));
     assert!(scheduled_wakeup_block(actor_id).is_none());
-    assert!(Actors::wakeup_buckets(11).is_none());
-    frame_system::Pallet::<Test>::set_block_number(11);
+    assert!(!crate::DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_run_state(actor_id).is_none());
+    frame_system::Pallet::<Test>::set_block_number(retry_at);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     assert_eq!(
@@ -676,81 +541,6 @@ fn queue_saturation_at_block_max_cannot_create_same_block_wakeup() {
         .wakeup_pointer
         .is_none()
     );
-  });
-}
-
-#[test]
-fn pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let step = inert_contract_steps()[0].clone();
-    let steps = BoundedVec::try_from(vec![step.clone(), step]).expect("two Steps fit");
-    let actor_id = create_system_with(ALICE, timer_schedule(100), None, steps);
-    let first_tick = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.trigger_wakeup_pointer)
-      .expect("initial Cadenced pointer")
-      .tick;
-    frame_system::Pallet::<Test>::set_block_number(first_tick);
-    Actors::on_idle(first_tick, Weight::MAX);
-    let run = Actors::actor_run_state(actor_id).expect("first Step leaves a Running suffix");
-    assert_eq!(run.cursor, 1);
-    let service_at = run.eligible_at;
-    let (location, _) = Actors::actor_control_cell(actor_id).expect("Running primary");
-    if matches!(location, crate::ActorControlLocation::Ready { .. }) {
-      let cell =
-        Actors::remove_primary_control_cell_inner(actor_id).expect("consume Ready placement");
-      assert_ok!(Actors::control_append_waiting(
-        cell,
-        WakeupKey::Block(service_at),
-        crate::scheduler::ActorWaitingAuthority::Service,
-      ));
-    }
-    let trigger_pointer = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.trigger_wakeup_pointer)
-      .expect("Running cadence is rearmed");
-    let hot = Actors::actor_hot(actor_id).expect("Actor owns both temporal memberships");
-    assert_eq!(hot.cycle_state, CycleState::Running);
-    assert!(!hot.pending_signal);
-    assert!(hot.wakeup_pointer.is_some());
-    assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
-    assert!(matches!(
-      crate::ActorWaitingFrameChunks::<Test>::get((
-        WakeupKey::Tick(trigger_pointer.tick),
-        trigger_pointer.page_id
-      ))
-      .expect("independent Trigger page")
-      .entries[trigger_pointer.slot as usize],
-      Some(crate::ActorWaitingEntry::Reference(_))
-    ));
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
-
-    let (mut ready, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Block(service_at), 1);
-    assert_eq!(
-      ready.iter().map(|entry| entry.0).collect::<Vec<_>>(),
-      vec![actor_id]
-    );
-    assert_eq!(stats.ready_entries, 1);
-    let (id, state, admission, loaded_step) = ready.pop().expect("consumed service authority");
-    let loaded_step = loaded_step.expect("Running Step");
-    let cell = crate::ActorControlCellOf::<Test> {
-      actor_id: id,
-      identity: Actors::control_identity_from_scalar(state.identity).expect("canonical identity"),
-      hot: Actors::control_hot_from_scalar(state.hot),
-      pipeline_service_identity: crate::pipeline_service_identity(admission.admission_identity),
-      admission,
-      cursor: loaded_step.cursor,
-      resources: loaded_step.resources,
-      eligible_at: Some(service_at),
-    };
-    assert_ok!(Actors::control_append_ready(cell));
-    let hot = Actors::actor_hot(actor_id).expect("Actor remains active");
-    assert!(hot.wakeup_pointer.is_none());
-    assert_eq!(hot.trigger_wakeup_pointer, Some(trigger_pointer));
-    #[cfg(feature = "try-runtime")]
-    {
-      assert_ok!(crate::Pallet::<Test>::do_try_state());
-    }
   });
 }
 

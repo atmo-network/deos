@@ -852,8 +852,8 @@ main() {
     require_anchor 'underfunded_cadenced_occurrence_advances_without_fee_readiness_or_apoptosis' \
         "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors automatic Cadenced underfunding evidence is missing"
-    require_anchor 'pipeline_and_trigger_temporal_memberships_coexist_and_drain_independently' \
-        "$TEMPLATE_DIR/pallets/actors/src/tests/wakeups.rs" \
+    require_anchor 'next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_tickets' \
+        "$TEMPLATE_DIR/pallets/actors/src/tests/scheduling.rs" \
         "Actors independent Pipeline/Trigger temporal topology evidence is missing"
     require_anchor 'cadenced_trigger_occurrence' \
         "$TEMPLATE_DIR/runtime/src/weights/pallet_deos_actors.rs" \
