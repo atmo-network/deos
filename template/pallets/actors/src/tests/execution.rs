@@ -410,26 +410,26 @@ fn loaded_step_returns_exact_persisted_successor_run() {
 fn loaded_cancellation_missing_run_is_idle_only_and_never_resurrects_backing() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
-    let mut state = Actors::active_actor_state(actor_id).expect("real suspended authority");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+    let (mut state, admission, _) = Actors::load_frame_actor_service_state(actor_id)
+      .expect("canonical suspended authority");
     let identity = state.identity.clone();
     let orphan_run = state.run_state.take().expect("Run remains persisted");
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(Actors::cancel_run_internal_loaded(actor_id, &identity, CancellationReason::Explicit, None,
-      crate::execution::LoadedCancellationContext::RetainedFrame { admission: cell.admission, state }), Err(Error::<Test>::ActorRunInvariant.into()));
+      crate::execution::LoadedCancellationContext::RetainedFrame { admission, state }), Err(Error::<Test>::ActorRunInvariant.into()));
     assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
 
     let idle_id = create_system_with(ALICE, manual_schedule(), None, BoundedVec::default());
-    let idle = Actors::active_actor_state(idle_id).expect("real Idle authority");
-    let (_, idle_cell) = Actors::actor_control_cell(idle_id).expect("Idle primary");
+    let (idle, idle_admission, _) = Actors::load_frame_actor_service_state(idle_id)
+      .expect("canonical Idle authority");
     assert!(idle.run_state.is_none());
     crate::ActorRunStateStore::<Test>::insert(idle_id, orphan_run);
     System::reset_events();
     let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
     assert_eq!(Actors::cancel_run_internal_loaded(idle_id, &idle.identity, CancellationReason::Explicit, None,
-      crate::execution::LoadedCancellationContext::RetainedFrame { admission: idle_cell.admission.clone(), state: idle.clone() }), Ok(false));
+      crate::execution::LoadedCancellationContext::RetainedFrame { admission: idle_admission.clone(), state: idle.clone() }), Ok(false));
     assert_eq!(polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1), before);
-    assert_ok!(Actors::finalize_actor_from_retained_state(idle_id, idle, &idle_cell.admission, CloseReason::OwnerInitiated));
+    assert_ok!(Actors::finalize_actor_from_retained_state(idle_id, idle, &idle_admission, CloseReason::OwnerInitiated));
     assert!(!crate::ActorRunStateStore::<Test>::contains_key(idle_id));
     assert!(!has_actor_event(|event| matches!(event, Event::CycleCancelled { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. } if *id == idle_id)));
     #[cfg(feature = "try-runtime")]
@@ -450,15 +450,12 @@ fn loaded_cancellation_uses_supplied_run_despite_missing_or_stale_backing() {
           run_prepass();
           Actors::on_idle(eligible_at, Weight::MAX);
         }
-        let state = Actors::active_actor_state(actor_id).expect("real suspended authority");
-        let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
+        let (state, admission, _) = Actors::load_frame_actor_service_state(actor_id)
+          .expect("canonical suspended authority");
         let identity = state.identity.clone();
         let supplied_run = state.run_state.clone().expect("supplied Run");
         assert_eq!(state.hot.cycle_state, CycleState::Suspended);
-        assert_eq!(state.hot.wakeup_pointer.is_some(), waiting);
-        if consumed {
-          assert_ok!(Actors::remove_primary_control_cell_inner(actor_id));
-        }
+        assert!(crate::ActorProcesses::<Test>::contains_key(actor_id));
         if missing {
           crate::ActorRunStateStore::<Test>::remove(actor_id);
         } else {
@@ -467,11 +464,14 @@ fn loaded_cancellation_uses_supplied_run_despite_missing_or_stale_backing() {
           crate::ActorRunStateStore::<Test>::insert(actor_id, stale);
         }
         let context = if consumed {
-          crate::execution::LoadedCancellationContext::ConsumedFrame { admission: cell.admission, state }
+          crate::execution::LoadedCancellationContext::ConsumedFrame { admission, state }
         } else {
-          crate::execution::LoadedCancellationContext::RetainedFrame { admission: cell.admission, state }
+          crate::execution::LoadedCancellationContext::RetainedFrame { admission, state }
         };
         System::reset_events();
+        // A canonically published Actor owns one Run authority: the supplied semantic Run wins and
+        // the persisted store is reconciled to it, so a missing or diverging stored Run backing
+        // never resurrects stale backing or blocks the cancellation.
         assert_eq!(Actors::cancel_run_internal_loaded(actor_id, &identity, CancellationReason::Explicit, None, context), Ok(true));
         assert!(Actors::actor_run_state(actor_id).is_none());
         let successor = Actors::active_actor_state(actor_id).expect("Idle successor is canonical");
@@ -886,18 +886,20 @@ fn run_attempt_missing_state_fails_without_panicking_or_mutating() {
       .expect("coherent Actor run exists")
       .eligible_at;
     frame_system::Pallet::<Test>::set_block_number(due);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(due, &mut meter);
-    assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(actor_id)
+    Actors::on_initialize(due);
+    assert!(
+      crate::ActorProcesses::<Test>::contains_key(actor_id),
+      "the suspended retry owns a canonical process residence"
     );
     ActorRunStateStore::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id).expect("hot state remains");
     System::reset_events();
     let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
 
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
+    // The canonical Service round must fail closed when the persisted Run backing is missing
+    // instead of panicking or partially mutating the ring, semantic owner, or cycle meter.
+    let mut meter = WeightMeter::with_limit(Weight::MAX);
+    assert!(Actors::service_canonical_round_head(&mut meter, due).is_err());
 
     assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
     assert!(System::events().is_empty());
@@ -3868,12 +3870,11 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    let admission = Actors::actor_control_cell(actor_id)
-      .expect("creation admits the Contract")
-      .1
-      .admission;
-    let state = Actors::active_actor_state(actor_id)
-      .expect("capture state while primary remains authoritative");
+    let (state, admission, _) = Actors::load_frame_actor_service_state(actor_id)
+      .expect("creation admits the Contract");
+    // Canonical creation publishes no legacy primary, so stage one to exercise the consumed-frame
+    // finalizer's fail-closed guard against a retained pre-cutover control cell.
+    crate::ActorControlLocators::<Test>::insert(actor_id, crate::ActorControlLocation::Unsignaled);
 
     assert_noop!(
       Actors::finalize_actor_from_consumed_state(
@@ -3884,8 +3885,9 @@ fn consumed_frame_finalizer_rejects_a_retained_primary() {
       ),
       Error::<Test>::ActorInvariant
     );
-    assert!(Actors::active_actor_exists(actor_id));
     assert!(crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    crate::ActorControlLocators::<Test>::remove(actor_id);
+    assert!(Actors::active_actor_exists(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
