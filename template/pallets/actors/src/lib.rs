@@ -11318,16 +11318,20 @@ pub mod pallet {
             Error::<T>::ActorInvariant
           );
 
-          let admission =
-            Self::build_admission_certificate(&state.contract).ok_or(Error::<T>::ActorInvariant)?;
-          let expected_semantic = ActorSemanticState::Active(ActorSemanticRecord {
-            generation: actor.generation,
-            identity: state.identity.clone(),
-            hot: state.hot.clone(),
-            admission,
-          });
+          // The caller may hold only the bounded current-Step service envelope, whose
+          // reconstructed Contract cannot reproduce the full body commitment. The stored semantic
+          // record is the authority: require the caller's generation, identity, Hot state, Run
+          // store, and Contract trigger authorization to agree before latching it.
+          let Some(ActorSemanticState::Active(stored)) =
+            ActorSemanticStates::<T>::get(actor.actor_id)
+          else {
+            return Err(Error::<T>::ActorInvariant.into());
+          };
           ensure!(
-            ActorSemanticStates::<T>::get(actor.actor_id) == Some(expected_semantic.clone())
+            stored.generation == actor.generation
+              && stored.identity == state.identity
+              && stored.hot == state.hot
+              && Self::admission_authorizes_contract_wake(&stored.admission, &state.contract)
               && ActorRunStateStore::<T>::get(actor.actor_id)
                 .as_ref()
                 .map(|run| run.encode())
@@ -11336,6 +11340,7 @@ pub mod pallet {
               && !ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id),
             Error::<T>::ActorInvariant
           );
+          let expected_semantic = ActorSemanticState::Active(stored);
           let process = ActorProcesses::<T>::get(actor.actor_id)
             .filter(|process| process.generation == actor.generation)
             .ok_or(Error::<T>::ActorInvariant)?;

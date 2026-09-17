@@ -1492,6 +1492,7 @@ impl<T: Config> Pallet<T> {
       || instance.steps.is_empty()
       || instance.steps.len() != step_count as usize
       || plan.run.is_some()
+      || ActorRunStateStore::<T>::contains_key(actor_id)
       || ActorRunHeads::<T>::contains_key(actor_id)
       || ActorRunPayloads::<T>::contains_key(actor_id)
       || !plan.hot.pending_signal

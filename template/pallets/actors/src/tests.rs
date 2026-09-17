@@ -226,6 +226,57 @@ fn enqueue_latched_actor(actor_id: ActorId) -> bool {
   result.is_ok()
 }
 
+/// Canonical equivalent of the legacy `enqueue_latched_actor` fixture for triggers whose manual
+/// source is disabled (`AtTime` and observation schedules). Fresh-genesis publication owns no
+/// legacy paged-FIFO entry, so a witness that needs a real production Service head must latch
+/// through the canonical Trigger owner instead, which publishes one `Service(Pending)` occurrence
+/// eligible at the following block.
+fn latch_canonical_occurrence(actor_id: ActorId, family: TriggerFamily) -> bool {
+  let Some(crate::ActorSemanticState::Active(record)) =
+    crate::ActorSemanticStates::<Test>::get(actor_id)
+  else {
+    return false;
+  };
+  let actor = crate::ActorRef {
+    actor_id,
+    generation: record.generation,
+  };
+  let actor_type = record.identity.actor_class.actor_type();
+  let breakdown = Actors::trigger_fee_for_weight(
+    actor_type,
+    family,
+    <TestWeightInfo as crate::WeightInfo>::manual_trigger(),
+  );
+  polkadot_sdk::frame_support::storage::with_transaction(|| {
+    let Some((state, _, _)) = Actors::load_frame_actor_service_state(actor_id) else {
+      return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+        bool,
+        DispatchError,
+      >(false));
+    };
+    let sovereign = state.identity.sovereign_account;
+    let result = Actors::commit_canonical_trigger_occurrence_with_authority(
+      actor,
+      actor_type,
+      &sovereign,
+      breakdown,
+      state,
+      frame_system::Pallet::<Test>::block_number(),
+    );
+    match result {
+      Ok(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok::<
+        bool,
+        DispatchError,
+      >(true)),
+      Err(_) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+        bool,
+        DispatchError,
+      >(false)),
+    }
+  })
+  .unwrap_or(false)
+}
+
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
   let hot = Actors::actor_hot(actor_id).and_then(|hot| {
     hot

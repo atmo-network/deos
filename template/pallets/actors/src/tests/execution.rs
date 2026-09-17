@@ -260,9 +260,9 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         actor_id
       ));
       if advance {
-        Actors::on_initialize(1);
-        run_prepass();
-        Actors::on_idle(1, Weight::MAX);
+        // Canonical publication serves the Trigger occurrence at B+1, so the first ordinary
+        // attempt runs one block later than the manual trigger.
+        run_next_idle(Weight::MAX);
         let run = Actors::actor_run_state(actor_id).expect("first ordinary attempt retains Run");
         System::set_block_number(run.eligible_at);
       }
@@ -280,39 +280,27 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         state.hot.clone(),
         state.contract.clone(),
       );
-      let ticket = Actors::build_actor_step_ticket(
-        actor_id,
-        state.hot.queue_ticket.expect("ordinary successor is Ready"),
-        now,
-        &state.identity,
-        &state.hot,
-        state.run_state.as_ref(),
-        &admission,
-      )
-      .expect("real source ticket");
       let fee = Actors::maximum_current_action_fee(
         ActorType::System,
         &loaded_step.step,
         loaded_step.resources,
       )
       .expect("System fee envelope");
-      let plan = Actors::build_current_step_plan(
+      let plan = Actors::build_canonical_current_step_plan(
         actor_id,
         state.identity,
         state.hot,
         state.run_state,
         admission,
-        ticket,
         loaded_step,
         fee,
       )
       .expect("source plan is coherent");
       let corruption_plan = plan.clone();
-      let mut successor_parts = None;
+      let mut successor_run = None;
       let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
       assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
         || {
-          assert_ok!(Actors::paged_consume_head_at(ticket.ticket));
           let (returned, _, disposition, _, _) =
             Actors::execute_loaded_single_step_core(actor_id, &instance, plan, now, count as u32)
               .unwrap_or_else(|error| panic!("{name}: core failed: {error:?}"));
@@ -330,10 +318,10 @@ fn loaded_step_returns_exact_persisted_successor_run() {
             "{name}: returned authority must be the persisted successor, including terminal None",
           );
           if name == "opening progress" {
-            successor_parts = Some((
-              crate::ActorRunHeads::<Test>::get(actor_id).expect("real successor head"),
-              crate::ActorRunPayloads::<Test>::get(actor_id).expect("real successor payload"),
-            ));
+            successor_run = Some(
+              crate::ActorRunStateStore::<Test>::get(actor_id)
+                .expect("real successor run lives in the canonical store"),
+            );
           }
           polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(
             Ok::<(), DispatchError>(()),
@@ -344,65 +332,60 @@ fn loaded_step_returns_exact_persisted_successor_run() {
         polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
         before
       );
-      if let Some((head, payload)) = successor_parts {
-        for head_only in [true, false] {
-          if head_only {
-            crate::ActorRunHeads::<Test>::insert(actor_id, head.clone());
-          } else {
-            crate::ActorRunPayloads::<Test>::insert(actor_id, &payload);
+      if let Some(run) = successor_run {
+        crate::ActorRunStateStore::<Test>::insert(actor_id, run);
+        assert!(
+          Actors::actor_run_state(actor_id).is_some(),
+          "canonical orphan Run is readable through the semantic accessor"
+        );
+        let corrupt_root =
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+        let custody = (
+          asset_balance(&sovereign, TestAsset::Local(1)),
+          asset_balance(&BOB, TestAsset::Local(1)),
+        );
+        assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
+          || {
+            let events = System::events();
+            let before_core =
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
+            let result = Actors::execute_loaded_single_step_core(
+              actor_id,
+              &instance,
+              corruption_plan.clone(),
+              now,
+              count as u32,
+            );
+            assert!(
+              matches!(
+                result,
+                Err(crate::scheduler::AttemptTransactionError::Invariant)
+              ),
+              "Idle orphan partition must reject before effects"
+            );
+            assert_eq!(
+              polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+              before_core
+            );
+            assert_eq!(System::events(), events);
+            assert_eq!(
+              (
+                asset_balance(&sovereign, TestAsset::Local(1)),
+                asset_balance(&BOB, TestAsset::Local(1))
+              ),
+              custody
+            );
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
+              (),
+              DispatchError,
+            >(()))
           }
-          assert!(Actors::actor_run_state(actor_id).is_none());
-          let corrupt_root =
-            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-          let custody = (
-            asset_balance(&sovereign, TestAsset::Local(1)),
-            asset_balance(&BOB, TestAsset::Local(1)),
-          );
-          assert_ok!(polkadot_sdk::frame_support::storage::with_transaction(
-            || {
-              assert_ok!(Actors::paged_consume_head_at(ticket.ticket));
-              let events = System::events();
-              let before_core =
-                polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-              let result = Actors::execute_loaded_single_step_core(
-                actor_id,
-                &instance,
-                corruption_plan.clone(),
-                now,
-                count as u32,
-              );
-              assert!(
-                matches!(
-                  result,
-                  Err(crate::scheduler::AttemptTransactionError::Invariant)
-                ),
-                "Idle orphan partition must reject before effects; head_only={head_only}"
-              );
-              assert_eq!(
-                polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-                before_core
-              );
-              assert_eq!(System::events(), events);
-              assert_eq!(
-                (
-                  asset_balance(&sovereign, TestAsset::Local(1)),
-                  asset_balance(&BOB, TestAsset::Local(1))
-                ),
-                custody
-              );
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok::<
-                (),
-                DispatchError,
-              >(()))
-            }
-          ));
-          assert_eq!(
-            polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-            corrupt_root
-          );
-          crate::ActorRunHeads::<Test>::remove(actor_id);
-          crate::ActorRunPayloads::<Test>::remove(actor_id);
-        }
+        ));
+        assert_eq!(
+          polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
+          corrupt_root
+        );
+        crate::ActorRunStateStore::<Test>::remove(actor_id);
       }
       #[cfg(feature = "try-runtime")]
       assert_ok!(Actors::do_try_state());
@@ -5499,11 +5482,23 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
             100
           },
         );
+        let mut occurrence_block = frame_system::Pallet::<Test>::block_number()
+          .checked_add(1)
+          .expect("matrix occurrence block");
         if case.actor_type == ActorType::System && case.mutability == Mutability::Immutable {
-          frame_system::Pallet::<Test>::set_block_number(11);
-          assert!(enqueue_latched_actor(actor_id));
+          // A Cadenced Actor arms its trigger deadline at creation. Servicing the due frontier
+          // publishes the canonical Pending occurrence for the following block instead of
+          // injecting a legacy paged entry.
+          let due = scheduled_wakeup_block(actor_id).expect("cadence armed at creation");
+          frame_system::Pallet::<Test>::set_block_number(due);
+          service_canonical_temporal_frontiers(due);
+          occurrence_block = due.checked_add(1).expect("cadence occurrence block");
         } else if case.stimulus == StepParityStimulus::PredicateError {
-          assert!(enqueue_latched_actor(actor_id));
+          assert!(
+            latch_canonical_occurrence(actor_id, TriggerFamily::ObservationChange),
+            "{} observation latch publishes a canonical occurrence",
+            case.name
+          );
         } else {
           assert_ok!(Actors::manual_trigger(
             RuntimeOrigin::signed(ALICE),
@@ -5512,7 +5507,8 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
         }
         if current_run {
           // Commit the real prefix before comparing one target Step, never a whole-cycle runner.
-          Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
+          // Canonical publication serves the occurrence one block after the latch.
+          run_canonical_round_at(occurrence_block, Weight::MAX);
           let prefix_run = Actors::actor_run_state(actor_id).expect("matrix prefix opens a Run");
           assert_eq!(prefix_run.cursor, 1, "{} prefix cursor", case.name);
           frame_system::Pallet::<Test>::set_block_number(prefix_run.eligible_at);
@@ -5530,19 +5526,19 @@ fn canonical_step_transition_matrix_has_production_simulation_parity() {
               .expect("matrix suspension persists")
               .eligible_at;
             frame_system::Pallet::<Test>::set_block_number(eligible_at);
-            let mut meter = WeightMeter::with_limit(Weight::MAX);
-            Actors::drain_overdue_wakeups_cursor(eligible_at, &mut meter);
+            service_canonical_temporal_frontiers(eligible_at);
           }
+        } else {
+          frame_system::Pallet::<Test>::set_block_number(occurrence_block);
         }
         let mode = if current_run {
           SimulationMode::CurrentRun
         } else {
           SimulationMode::FreshCurrentPlan
         };
-        assert_eq!(
-          Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-          Some(actor_id),
-          "{} target is the real production FIFO head",
+        assert!(
+          crate::ServiceNodes::<Test>::contains_key(actor_id),
+          "{} target is the real production Service head",
           case.name
         );
         System::reset_events();
