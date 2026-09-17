@@ -2954,6 +2954,29 @@ pub mod pallet {
       Ok(())
     }
 
+    /// Advances one eligible member that holds no admitted work for this round without executing a
+    /// Step or recording an attempt. The completed/aborted Idle resident stays in the ring; only the
+    /// bounded cursor advances so a subsequently inserted independent member becomes serviceable.
+    pub(crate) fn advance_idle_service_head(
+      actor: ActorRef,
+      now: BlockNumberFor<T>,
+    ) -> Result<(), ServiceRoundError> {
+      if Self::consider_service_head(now)? != ServiceRoundEncounter::Eligible(actor) {
+        return Err(ServiceRoundError::CorruptRing);
+      }
+      let mut node =
+        ServiceNodes::<T>::get(actor.actor_id).ok_or(ServiceRoundError::CorruptRing)?;
+      if node.generation != actor.generation {
+        return Err(ServiceRoundError::StaleGeneration);
+      }
+      let mut header = ServiceHeader::<T>::get();
+      node.last_considered = now;
+      header.cursor = Some(node.next);
+      ServiceNodes::<T>::insert(actor.actor_id, node);
+      ServiceHeader::<T>::put(header);
+      Ok(())
+    }
+
     /// Resolves one typed Oracle feed to a collision-free retained scalar source identity.
     pub(crate) fn resolve_observation_dependency_source(
       feed: T::ObservationFeedId,
@@ -6250,7 +6273,7 @@ pub mod pallet {
       let result = polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
         let result = (|| {
           Self::begin_service_round(now)?;
-          let encounter = Self::consider_service_head(now)?;
+          let mut encounter = Self::consider_service_head(now)?;
           let mut execution_weight = Weight::zero();
           let mut attempt = None;
           if let ServiceRoundEncounter::Eligible(actor) = encounter {
@@ -6263,7 +6286,39 @@ pub mod pallet {
               semantic.admission,
             )
             .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
-            if let Some(loaded_step) = loaded_step {
+            let idle_no_work = state.hot.cycle_state == CycleState::Idle
+              && !state.hot.pending_signal
+              && state.run_state.is_none();
+            if idle_no_work {
+              // A completed or aborted member is retained in the ring as an Idle resident. A later
+              // round revisits it with no admitted work; it must advance the bounded cursor without
+              // opening a pipeline, executing a Step, or recording an attempt.
+              let mut reservation =
+                if let Some((resource_state, limits)) = resource_authority.as_mut() {
+                  Some(
+                    resource_state
+                      .reserve(
+                        *limits,
+                        BlockResourceDomain::ActorControl,
+                        selector_envelope,
+                      )
+                      .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                  )
+                } else {
+                  None
+                };
+              Self::advance_idle_service_head(actor, now)
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              if let (Some((resource_state, _)), Some(reservation)) =
+                (resource_authority.as_mut(), reservation.as_mut())
+              {
+                resource_state
+                  .settle(reservation, selector_envelope)
+                  .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+              }
+              execution_weight = Weight::zero();
+              encounter = ServiceRoundEncounter::NoWork(actor);
+            } else if let Some(loaded_step) = loaded_step {
               let resources = loaded_step.resources;
               let effectful_envelope = resources
                 .control

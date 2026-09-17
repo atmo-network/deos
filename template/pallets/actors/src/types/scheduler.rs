@@ -84,6 +84,9 @@ pub enum ServiceRoundEncounter {
   Closed,
   AlreadyAttempted(ActorRef),
   Eligible(ActorRef),
+  /// The eligible head holds no admitted work this round; its Idle residence was retained and the
+  /// bounded cursor advanced without executing a Step or recording an attempt.
+  NoWork(ActorRef),
 }
 
 /// Rejected transaction-local operations on the inert service-ring round frontier.

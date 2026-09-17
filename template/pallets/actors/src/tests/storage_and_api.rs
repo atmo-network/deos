@@ -5906,6 +5906,56 @@ fn canonical_service_round_preserves_markers_cursor_and_blocked_head() {
 }
 
 #[test]
+fn canonical_service_idle_no_work_head_advances_without_an_attempt() {
+  new_test_ext().execute_with(|| {
+    let members = [actor_ref(130, 1), actor_ref(131, 1)];
+    for actor in members {
+      ActorProcesses::<Test>::insert(
+        actor.actor_id,
+        serving_process(actor, ServiceResidenceKind::Live),
+      );
+      polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+        Actors::insert_service_member(actor, ServiceResidenceKind::Live, 4)
+          .expect("same-block admission succeeds");
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+      });
+    }
+
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      Actors::begin_service_round(5).expect("next round begins");
+      assert_eq!(
+        Actors::consider_service_head(5),
+        Ok(ServiceRoundEncounter::Eligible(members[0]))
+      );
+      Actors::advance_idle_service_head(members[0], 5)
+        .expect("an Idle retained resident advances without executing a Step");
+      let node = ServiceNodes::<Test>::get(members[0].actor_id).expect("retained member");
+      assert_eq!(node.last_considered, 5);
+      assert_eq!(
+        ActorProcesses::<Test>::get(members[0].actor_id)
+          .unwrap()
+          .last_attempted,
+        None,
+        "a no-work encounter records no attempt"
+      );
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[1]));
+      assert_eq!(
+        Actors::consider_service_head(5),
+        Ok(ServiceRoundEncounter::Eligible(members[1]))
+      );
+      Actors::advance_idle_service_head(members[1], 5).expect("second no-work resident advances");
+      assert_eq!(ServiceHeader::<Test>::get().cursor, Some(members[0]));
+      assert_eq!(
+        Actors::consider_service_head(5),
+        Ok(ServiceRoundEncounter::Closed),
+        "the round closes once every resident has been considered exactly once"
+      );
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(())
+    });
+  });
+}
+
+#[test]
 fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);

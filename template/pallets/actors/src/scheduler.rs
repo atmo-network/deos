@@ -589,6 +589,10 @@ impl<T: Config> Pallet<T> {
               executed = executed.saturating_add(1);
               continue;
             }
+            Ok(ServiceRoundEncounter::NoWork(_)) => {
+              scanned = scanned.saturating_add(1);
+              continue;
+            }
             Ok(ServiceRoundEncounter::Empty | ServiceRoundEncounter::Closed) => break,
             Ok(ServiceRoundEncounter::AlreadyAttempted(_)) => break,
             Err(_) => {
@@ -706,6 +710,7 @@ impl<T: Config> Pallet<T> {
         ServiceHeadDiscovery::Closed
       }
       Ok(ServiceRoundEncounter::Closed) => ServiceHeadDiscovery::Closed,
+      Ok(ServiceRoundEncounter::NoWork(_)) => ServiceHeadDiscovery::InvariantStall,
       _ => ServiceHeadDiscovery::InvariantStall,
     }
   }
