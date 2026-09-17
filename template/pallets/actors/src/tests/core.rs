@@ -76,7 +76,8 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
       transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000);
-    // First run: nonce 0 -> 1, last_cycle_block = Some(1).
+    // First run: nonce 0 -> 1. Canonical publication serves the occurrence at B+1, so the
+    // opening round commits at block 2 and records it as the last completed cycle block.
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -90,7 +91,7 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
     );
     assert_eq!(
       Actors::actor_hot(actor_id).expect("hot").last_cycle_block,
-      Some(1)
+      Some(2)
     );
     // Deactivate at block 5.
     frame_system::Pallet::<Test>::set_block_number(5);
@@ -112,12 +113,13 @@ fn reactivation_with_positive_nonce_uses_schedule_anchor_for_cooldown() {
     assert_eq!(instance.schedule_anchor, 8);
     assert_eq!(instance.last_cycle_block, None);
     // A manual trigger at block 8 must NOT fire immediately: cooldown runs from the
-    // anchor (8 + 10 = 18), not from block zero.
+    // anchor (8 + 10 = 18), not from block zero. One Drain pass at the trigger block observes
+    // the cooldown-gated occurrence without advancing the block.
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_drain_only(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("still active")
@@ -428,7 +430,7 @@ fn create_atomicity_checkpoint_failure_rolls_back_all_state() {
 }
 
 #[test]
-fn control_transition_reuses_existing_transaction_at_depth_limit() {
+fn control_transition_fails_closed_at_transaction_depth_limit() {
   fn run_nested(depth: u32, actor_id: ActorId) -> polkadot_sdk::sp_runtime::DispatchResult {
     if depth == 0 {
       return Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id)
@@ -479,7 +481,9 @@ fn control_transition_reuses_existing_transaction_at_depth_limit() {
         u32::from(polkadot_sdk::frame_support::storage::transactional::TRANSACTIONAL_LIMIT) - 1,
         actor_id,
       ),
-      Error::<Test>::SchedulerIndexExhausted
+      polkadot_sdk::sp_runtime::DispatchError::Transactional(
+        polkadot_sdk::sp_runtime::TransactionalError::LimitReached
+      )
     );
     assert!(!Actors::pending_signal(actor_id));
     assert_eq!(System::events(), events_before);
@@ -749,26 +753,17 @@ fn weight_deferral_is_silent_when_both_dimensions_are_exhausted() {
       None,
       transfer_contract_steps(BOB, 10),
     );
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
-    let step = cell.resources.control.saturating_add(cell.resources.effect);
-    let queue_weight = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-      .saturating_add(Actors::scheduler_actor_probe_weight_upper())
-      .saturating_add(
-        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-          .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-      );
-    // Both dimensions are exhausted one unit below the current Step envelope.
-    let limit = Weight::from_parts(
-      queue_weight
-        .ref_time()
-        .saturating_add(step.ref_time())
-        .saturating_sub(1),
-      queue_weight
-        .proof_size()
-        .saturating_add(step.proof_size())
-        .saturating_sub(1),
-    );
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    // The occurrence published at block 1 is served at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    // Both dimensions are exhausted one unit below the canonical service-round selector, so the
+    // Drain pass cannot begin the round and the Actor stays latched without an attempt.
+    let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+    let limit = selector.saturating_sub(Weight::from_parts(1, 1));
     Actors::execute_cycle(limit);
     let instance = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert!(instance.pending_signal);
@@ -878,25 +873,21 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
         actor_id
       ));
     }
-    let tickets: Vec<_> = [head, light_a, light_b]
-      .into_iter()
-      .map(|id| {
-        Actors::actor_hot(id)
-          .and_then(|hot| hot.queue_ticket)
-          .expect("triggered actor is queued")
-      })
-      .collect();
-    assert_eq!(
-      tickets,
-      vec![0, 1, 2],
-      "physical FIFO order is head, light A, light B"
-    );
+    // Canonical publication gives every latched Actor exactly one generation-bound Pending
+    // Service member in one global FIFO; ordering itself is pinned by
+    // `canonical_fifo_executes_global_ticket_order_across_actor_types`.
+    for id in [head, light_a, light_b] {
+      assert!(
+        crate::ServiceNodes::<Test>::contains_key(id),
+        "triggered actor owns its canonical Service residence"
+      );
+    }
 
     // Constrained remainder: admits the head's probes and consume but not the head's full cycle
     // admission, while the lighter followers would fit. The pass must stop at the head.
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(starvation_blocked_budget(head));
+    run_drain_only(starvation_blocked_budget(head));
 
     let head_inst = Actors::active_actor_view(head).expect("head survives deferral");
     assert_eq!(
@@ -909,15 +900,15 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
       Event::CycleStarted { actor_id: id, .. } | Event::CycleSummary { actor_id: id, .. }
         if *id == head
     )));
-    for (id, ticket) in [(light_a, 1), (light_b, 2)] {
+    for id in [light_a, light_b] {
       let inst = Actors::active_actor_view(id).expect("follower survives");
       assert_eq!(
         inst.cycle_nonce, 0,
         "follower never admitted behind the head"
       );
       assert!(
-        Actors::actor_hot(id).is_some_and(|hot| hot.queue_ticket == Some(ticket)),
-        "follower retains its exact physical ticket"
+        crate::ServiceNodes::<Test>::contains_key(id),
+        "follower retains its canonical Service residence"
       );
     }
     assert!(
@@ -928,7 +919,7 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
       "no follower attempt starts behind an unadmitted head"
     );
 
-    // Conforming full envelope: the head advances first, then followers in exact ticket order.
+    // Conforming full envelope: the head advances first, then followers in publication order.
     frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
@@ -940,6 +931,9 @@ fn strict_head_of_line_heavy_head_deferral_preserves_follower_order() {
       })
       .collect();
     assert_eq!(started, vec![head, light_a, light_b]);
+    // Canonical execution commits one Step per round, so the heavy head completes over its
+    // remaining rounds while the single-Step followers already completed.
+    run_next_idle_to_completion(head);
     for id in [head, light_a, light_b] {
       assert_eq!(
         Actors::active_actor_view(id)
@@ -1003,17 +997,21 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let steps = transfer_contract_steps(BOB, 10);
-    let predecessor = create_system_with(ALICE, manual_schedule(), None, steps.clone());
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps.clone());
-    for id in [predecessor, actor_id] {
+    let head = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+    let follower = create_system_with(ALICE, manual_schedule(), None, steps.clone());
+    for id in [head, follower] {
       fund_native(id, 100);
       assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), id));
     }
+    // Canonical publication serves each occurrence at B+1 and only the Service-ring head is
+    // eligible for a round, so the simulated opening targets the first-latched Actor at block 2.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let contract = system_active_contract(manual_schedule(), None, steps).expect("valid Contract");
     let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let host_before = (
       native_balance(&BOB),
-      native_balance(&sovereign_account(actor_id)),
+      native_balance(&sovereign_account(head)),
+      native_balance(&sovereign_account(follower)),
       fee_collections(),
     );
     let full = ample_simulation_budget();
@@ -1038,7 +1036,7 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
     ] {
       assert_eq!(
         Actors::simulate_current_contract(
-          actor_id,
+          head,
           ActorType::System,
           Mutability::Mutable,
           contract.clone(),
@@ -1051,7 +1049,8 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
       assert_eq!(
         (
           native_balance(&BOB),
-          native_balance(&sovereign_account(actor_id)),
+          native_balance(&sovereign_account(head)),
+          native_balance(&sovereign_account(follower)),
           fee_collections()
         ),
         host_before
@@ -1059,7 +1058,7 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
     }
     assert_eq!(
       Actors::simulate_current_contract(
-        actor_id,
+        head,
         ActorType::System,
         Mutability::Mutable,
         contract.clone(),
@@ -1072,14 +1071,14 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
       Err(SimulationError::InvalidBudget)
     );
     let result = Actors::simulate_current_contract(
-      actor_id,
+      head,
       ActorType::System,
       Mutability::Mutable,
       contract,
       SimulationMode::FreshCurrentPlan,
       full,
     )
-    .expect("non-head actor simulates one local Step");
+    .expect("the Service-ring head simulates one local Step");
     assert_eq!(
       result.steps.as_slice(),
       &[SimulationStepRecord {
@@ -1088,15 +1087,16 @@ fn single_step_simulation_respects_both_resource_lanes_and_preserves_non_head_st
       }]
     );
     assert_eq!(result.status, AttemptDisposition::Completed);
-    assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(predecessor)
+    assert!(
+      crate::ServiceNodes::<Test>::contains_key(follower),
+      "simulating the head must leave the non-head Actor's Service residence untouched"
     );
     assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
     assert_eq!(
       (
         native_balance(&BOB),
-        native_balance(&sovereign_account(actor_id)),
+        native_balance(&sovereign_account(head)),
+        native_balance(&sovereign_account(follower)),
         fee_collections()
       ),
       host_before
@@ -1124,6 +1124,8 @@ fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical publication serves the occurrence at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let events_before = System::events();
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
 
@@ -1163,6 +1165,8 @@ fn zero_step_simulation_completes_without_step_records_or_state_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical publication serves the occurrence at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let events_before = System::events();
     let actor_before = Actors::active_actor_view(actor_id).expect("Actor exists");
 
@@ -1182,42 +1186,6 @@ fn zero_step_simulation_completes_without_step_records_or_state_mutation() {
     assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
     assert_eq!(System::events(), events_before);
     assert!(Actors::actor_run_state(actor_id).is_none());
-  });
-}
-
-#[test]
-fn canonical_head_discovery_distinguishes_empty_head_and_blocked() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let scan = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    assert_eq!(Actors::test_head_discovery(0, 1, 0, scan), (0, None, 0));
-
-    let system = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), system));
-    let cutoff = Actors::next_queue_ticket();
-    let (state, entry, scanned) = Actors::test_head_discovery(cutoff, 1, 0, scan);
-    assert_eq!((state, scanned), (1, 1));
-    assert_eq!(entry.map(|entry| entry.actor_id), Some(system));
-
-    assert_eq!(
-      Actors::test_head_discovery(cutoff, 1, 1, scan),
-      (4, None, 1),
-      "an exhausted scan ceiling is a silent pass exhaustion"
-    );
-    assert_eq!(
-      Actors::test_head_discovery(cutoff, 1, 0, Weight::zero()),
-      (2, None, 0),
-      "an unadmitted live-head probe is a weight stall"
-    );
-    crate::ActorReadyTail::<Test>::put(
-      u64::from(<<Test as crate::Config>::MaxQueueLength as Get<u32>>::get()) + 1,
-    );
-    assert_eq!(
-      Actors::test_head_discovery(cutoff, 1, 0, scan),
-      (3, None, 0),
-      "defensive topology rejection is an invariant stall"
-    );
-    assert!(Actors::execute_cycle(Weight::MAX).starved);
   });
 }
 
@@ -1329,6 +1297,10 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
     ));
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before + 10);
+    // Canonical execution commits one Step per round, so the opening round only commits the
+    // transfer prefix; the temporary DEX failure of the retrying swap Step is attempted in the
+    // following eligible round and suspends the Run.
+    run_next_idle(Weight::MAX);
     let open_run = Actors::actor_run_state(actor_id).expect("cycle remains suspended");
     assert_eq!(open_run.cycle_nonce, 1);
     assert_eq!(
@@ -1354,7 +1326,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
       .expect("suspended actor")
       .unsuccessful_attempt_streak;
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
     assert!(Actors::actor_run_state(actor_id).is_none());
@@ -1414,7 +1386,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn cancellation_fails_closed_when_scalar_run_outlives_its_primary() {
+fn cancellation_fails_closed_when_the_run_outlives_its_process_residence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
@@ -1427,7 +1399,9 @@ fn cancellation_fails_closed_when_scalar_run_outlives_its_primary() {
     ));
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    // A canonical run whose generation-bound process residence is gone must fail closed rather
+    // than republish or unwind custody.
+    crate::ActorProcesses::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let run_before = Actors::actor_run_state(actor_id)
       .expect("run remains before failed cancellation")
@@ -2319,8 +2293,8 @@ fn system_immutable_indefinite_commitment_survives_breaker_mitigation() {
     ));
     let actor_id = Actors::next_actor_id().saturating_sub(1);
     let before = Actors::active_actor_view(actor_id).expect("immutable actor");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("current control owner exists");
-    assert!(cell.resources.control.ref_time() > 0);
+    let envelope = fixture_step_resource_envelope(actor_id);
+    assert!(envelope.control.ref_time() > 0);
     assert_eq!(
       Actors::system_sovereigns(actor_id),
       Some(SystemSovereignState::Occupied(actor_id)),
@@ -2361,6 +2335,9 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical publication serves the occurrence at B+1, so the simulated plan is admitted one
+    // block after the trigger.
+    frame_system::Pallet::<Test>::set_block_number(2);
 
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let actor_balance_before = native_balance(&actor_before.sovereign_account);

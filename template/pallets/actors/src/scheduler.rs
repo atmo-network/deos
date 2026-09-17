@@ -799,25 +799,6 @@ impl<T: Config> Pallet<T> {
     HeadDiscovery::PassExhausted
   }
 
-  #[cfg(test)]
-  pub(crate) fn test_head_discovery(
-    cutoff: QueueTicket,
-    scan_limit: u32,
-    scanned_start: u32,
-    weight: Weight,
-  ) -> (u8, Option<QueueEntry<BlockNumberFor<T>>>, u32) {
-    let mut meter = WeightMeter::with_limit(weight);
-    let mut scanned = scanned_start;
-    let discovery = Self::live_queue_head(cutoff, &mut meter, None, &mut scanned, scan_limit);
-    match discovery {
-      HeadDiscovery::Empty => (0, None, scanned),
-      HeadDiscovery::Head(_, entry, _) => (1, Some(entry), scanned),
-      HeadDiscovery::WeightStall => (2, None, scanned),
-      HeadDiscovery::InvariantStall => (3, None, scanned),
-      HeadDiscovery::PassExhausted => (4, None, scanned),
-    }
-  }
-
   pub(crate) fn charge_pipeline_opening(
     actor_id: ActorId,
     instance: &ActiveActorViewOf<T>,
@@ -8930,6 +8911,18 @@ impl<T: Config> Pallet<T> {
   ) -> Result<(), EnqueueOutcome> {
     with_transaction_opaque_err(|| {
       let result = (|| -> Result<(), EnqueueOutcome> {
+        // The control loader deliberately reconstructs a bounded current-Step Contract whose body
+        // commitment differs from the stored full body for a multi-Step Actor. Cancellation
+        // republishes from the durable admitted geometry, so read the stored full Contract and use
+        // it as the publication authority for the pre-cancel source and the Idle successor.
+        let full_contract =
+          Self::load_actor_contract(actor.actor_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
+        let mut source = source.clone();
+        source.contract = full_contract.clone();
+        let mut successor = successor.clone();
+        successor.contract = full_contract;
+        let source = &source;
+        let successor = &successor;
         if ActorControlLocators::<T>::contains_key(actor.actor_id)
           || ActorUnsignaledControlCells::<T>::contains_key(actor.actor_id)
           || successor.contract != source.contract
