@@ -826,15 +826,13 @@ fn running_state_rechecks_current_predicates_after_progress() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("Running state persists");
     assert_eq!(run.cursor, 1);
     #[cfg(feature = "try-runtime")]
     assert_ok!(Actors::do_try_state());
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(asset_balance(&BOB, TestAsset::Native), before + 5);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(
@@ -857,7 +855,7 @@ fn manual_signal_during_running_is_ignored_without_a_future_cycle() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let run_before = Actors::actor_run_state(actor_id).expect("Cycle is Running");
 
     assert_ok!(Actors::manual_trigger(
@@ -872,9 +870,7 @@ fn manual_signal_during_running_is_ignored_without_a_future_cycle() {
       run_before.encode()
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
-    Actors::on_idle(2, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let completed = Actors::active_actor_view(actor_id).expect("Actor remains active");
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.cycle_state, CycleState::Idle);
@@ -2514,7 +2510,7 @@ fn frame_only_effectful_auto_close_uses_terminal_nonce_without_scalar_hot() {
     assert_ok!(replace_auto_close(RuntimeOrigin::root(), actor_id, Some(1),));
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2603,8 +2599,13 @@ fn close_after_productive_cycle_waits_for_retry_completion() {
     )));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    let eligible_at = Actors::actor_run_state(actor_id)
+      .expect("retry suspension")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(eligible_at);
+    Actors::on_initialize(eligible_at);
+    run_prepass();
+    Actors::on_idle(eligible_at, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(Actors::active_actor_view(actor_id).is_none());
@@ -2653,8 +2654,13 @@ fn close_after_productive_cycle_keeps_retry_exhaustion_as_failure_terminal() {
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    let eligible_at = Actors::actor_run_state(actor_id)
+      .expect("retry suspension")
+      .eligible_at;
+    frame_system::Pallet::<Test>::set_block_number(eligible_at);
+    Actors::on_initialize(eligible_at);
+    run_prepass();
+    Actors::on_idle(eligible_at, Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert_eq!(native_balance(&actor), balance_before);
@@ -2767,35 +2773,31 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
     fund_native(actor_id, 100);
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
-    set_temporary_dex_failure(true);
 
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
-      Actors::actor_run_state(actor_id).expect("suspended").cursor,
+      Actors::actor_run_state(actor_id).expect("committed prefix").cursor,
       1
     );
     assert_eq!(native_balance(&BOB), bob_before + 10);
 
+    set_temporary_dex_failure(true);
+    run_next_idle(Weight::MAX);
+    let suspended = Actors::actor_run_state(actor_id).expect("suspended");
+    assert_eq!(suspended.cursor, 1);
+    assert_eq!(suspended.unsuccessful_attempts_at_cursor, 1);
+
     set_temporary_dex_failure(false);
-    let eligible_at = Actors::actor_run_state(actor_id)
-      .expect("suspension remains")
-      .eligible_at;
+    let eligible_at = suspended.eligible_at;
     frame_system::Pallet::<Test>::set_block_number(eligible_at);
     Actors::on_initialize(eligible_at);
     run_prepass();
     Actors::on_idle(eligible_at, Weight::MAX);
-    #[cfg(not(feature = "runtime-benchmarks"))]
-    {
-      let locator = crate::ActorControlLocators::<Test>::get(actor_id);
-      assert!(
-        matches!(locator, Some(crate::ActorControlLocation::Ready { .. })),
-        "successor locator: {locator:?}"
-      );
-    }
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     run_next_idle(Weight::MAX);
 
     let crate::LoadedActorStateOf::Active(state) =

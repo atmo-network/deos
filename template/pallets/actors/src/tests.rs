@@ -166,10 +166,12 @@ type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFo
 type TestWeightInfo = crate::weights::TestWeightInfo;
 
 fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
-  let admission = Actors::actor_control_cell(actor_id)
-    .expect("Actor admission certificate exists")
-    .1
-    .admission;
+  let admission = Actors::load_control_authority_with_authority(actor_id)
+    .map(|(_, _, admission)| admission)
+    .or_else(|| {
+      Actors::actor_control_cell(actor_id).map(|(_, cell)| cell.admission)
+    })
+    .expect("Actor admission certificate exists");
   ActorRunAuthority {
     semantic_contract_id: admission.semantic_contract_id,
     body_commitment: admission.body_commitment,
