@@ -1569,8 +1569,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     fund_native(actor_id, 100);
     let charlie_before = native_balance(&CHARLIE);
     for cycle in 1..=threshold {
-      frame_system::Pallet::<Test>::set_block_number(u64::from(cycle) + 1);
-      run_idle(Weight::MAX);
+      run_scheduled_cadence_occurrence(actor_id);
       if cycle < threshold {
         assert_eq!(
           Actors::active_actor_view(actor_id)
@@ -2408,8 +2407,7 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
     fund_native(actor_id, 50);
     let bob_before = native_balance(&BOB);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_scheduled_cadence_occurrence(actor_id);
 
     let retained = Actors::active_actor_view(actor_id).expect("false cycle remains active");
     assert_eq!(retained.cycle_nonce, 1);
@@ -2425,9 +2423,8 @@ fn close_after_productive_cycle_ignores_false_cycles_then_closes_immutable_actor
     )));
 
     fund_native(actor_id, 100);
-    frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    run_scheduled_cadence_occurrence(actor_id);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert_eq!(native_balance(&BOB), bob_before + 10);

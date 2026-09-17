@@ -1056,6 +1056,17 @@ fn run_next_idle_to_completion(actor_id: u64) {
   panic!("canonical cycle did not complete within the bounded contract step budget");
 }
 
+/// Drives one canonical Cadenced occurrence: advance to the Actor's scheduled deadline block,
+/// service the canonical temporal frontier to publish the Pending Service, then run the next
+/// canonical round. Canonical cadence publishes for the following block and re-arms strictly after
+/// the opening, so consecutive occurrences are not adjacent blocks.
+fn run_scheduled_cadence_occurrence(actor_id: crate::ActorId) {
+  let block = scheduled_wakeup_block(actor_id).expect("Cadenced Actor owns a scheduled deadline");
+  frame_system::Pallet::<Test>::set_block_number(block);
+  service_canonical_temporal_frontiers(block);
+  run_next_idle(Weight::MAX);
+}
+
 fn actor_event_count(predicate: impl Fn(&Event<Test>) -> bool) -> usize {
   frame_system::Pallet::<Test>::events()
     .into_iter()

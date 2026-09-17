@@ -13054,27 +13054,41 @@ pub mod pallet {
               (state, admission)
             }
           };
-          let pointers = [
-            close_state.hot.wakeup_pointer,
-            close_state
-              .hot
-              .trigger_wakeup_pointer
-              .map(|pointer| WakeupPointer {
+          // A canonically published Actor owns its temporal Trigger residence in the
+          // generation-bound `TriggerDeadlineHandles` carrier; only a pre-cutover Actor keeps the
+          // legacy waiting-page reference that `invalidate_wakeup_reference` can release.
+          if TriggerDeadlineHandles::<T>::contains_key(actor_id) {
+            let generation = ActorSemanticStates::<T>::get(actor_id)
+              .and_then(|state| match state {
+                ActorSemanticState::Active(record) => Some(record.generation),
+                ActorSemanticState::Dormant(_) => None,
+              })
+              .ok_or(Error::<T>::ActorInvariant)?;
+            Self::remove_trigger_deadline_member(ActorRef { actor_id, generation })
+              .map_err(|_| Error::<T>::ActorInvariant)?;
+            close_state.hot.trigger_wakeup_pointer = None;
+          } else if let Some(pointer) = close_state.hot.trigger_wakeup_pointer {
+            Self::invalidate_wakeup_reference(
+              actor_id,
+              WakeupPointer {
                 block: WakeupKey::Tick(pointer.tick),
                 page_id: pointer.page_id,
                 slot: pointer.slot,
-              }),
-          ];
-          for pointer in pointers.into_iter().flatten() {
+              },
+              close_admission.admission_identity,
+            )
+            .map_err(|_| Error::<T>::ActorInvariant)?;
+            close_state.hot.trigger_wakeup_pointer = None;
+          }
+          if let Some(pointer) = close_state.hot.wakeup_pointer {
             Self::invalidate_wakeup_reference(
               actor_id,
               pointer,
               close_admission.admission_identity,
             )
             .map_err(|_| Error::<T>::ActorInvariant)?;
+            close_state.hot.wakeup_pointer = None;
           }
-          close_state.hot.wakeup_pointer = None;
-          close_state.hot.trigger_wakeup_pointer = None;
           Self::cancel_run_internal_loaded(
             actor_id,
             &identity,
