@@ -1,6 +1,4 @@
 use super::*;
-#[cfg(not(feature = "runtime-benchmarks"))]
-use crate::scheduler::ActivationOutcome;
 use crate::{
   ActorHotStateOf, ActorProcesses, ActorSemanticState, ActorSemanticStates, ProcessResidence,
   ProcessStatus, ServiceHeader, ServiceResidenceKind,
@@ -70,19 +68,10 @@ fn observation_activation_uses_primary_pending_authority() {
       inert_contract_steps(),
     );
     let loaded = Actors::load_observation_activation_state(actor_id, 55)
-      .expect("frame-owned observation state loads");
+      .expect("canonical observation state loads");
     assert!(!loaded.hot.pending_signal);
-    assert_eq!(
-      Actors::request_observation_activation_compact(actor_id, 55),
-      Ok(ActivationOutcome::Latched)
-    );
-    let (_, _, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
-    assert!(frame_hot.pending_signal);
-    assert_eq!(
-      Actors::actor_hot(actor_id).expect("canonical primary remains live"),
-      frame_hot
-    );
+    latch_canonical_observation_change(55);
+    assert_canonical_pending_member(actor_id);
   });
 }
 
@@ -150,13 +139,10 @@ fn observation_change_activation_requires_its_certified_feed_selector() {
         .expect("Observation activation authority exists")
         .admission_identity = replacement_identity;
     });
+    // Canonical publication owns the observation activation authority, so the certified-selector
+    // mismatch makes the canonical loader reject the Actor before any fanout placement.
+    assert!(Actors::load_observation_activation_state(actor_id, feed).is_none());
     let events_before = System::events();
-
-    assert!(matches!(
-      Actors::request_observation_activation_compact(actor_id, feed),
-      Err(crate::scheduler::ActivationFailure::Permanent(error))
-        if error == Error::<Test>::ActorInvariant.into()
-    ));
     assert_eq!(native_balance(&sovereign), sovereign_before);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
     assert_eq!(System::events(), events_before);

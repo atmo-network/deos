@@ -466,9 +466,9 @@ impl<T: Config> Pallet<T> {
   fn process_observation_change_occurrence(
     actor_id: ActorId,
     feed: T::ObservationFeedId,
-    execute_terminal: bool,
-    cause_provenance: crate::TriggerCauseProvenance,
-    cause_block: u64,
+    _execute_terminal: bool,
+    _cause_provenance: crate::TriggerCauseProvenance,
+    _cause_block: u64,
   ) -> Result<ObservationActivationOutcome, ActivationFailure> {
     if IndexedTriggerDetectionDisabled::<T>::contains_key(actor_id) {
       return Ok(ObservationActivationOutcome::Ordinary(
@@ -476,21 +476,17 @@ impl<T: Config> Pallet<T> {
       ));
     }
     let Some(state) = Self::load_observation_activation_state(actor_id, feed) else {
-      return if execute_terminal {
-        Self::request_observation_activation_compact_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
-        .map(ObservationActivationOutcome::Ordinary)
+      // A canonically published Actor with absent or incoherent observation authority fails
+      // closed; a pre-cutover identity that owns no canonical Hot state is simply stale. There is
+      // no legacy compact activation producer.
+      return if Self::control_hot_exists(actor_id) {
+        Err(ActivationFailure::Permanent(
+          Error::<T>::ActorInvariant.into(),
+        ))
       } else {
-        Self::request_observation_activation_ordinary_with_cause(
-          actor_id,
-          feed,
-          cause_provenance,
-          cause_block,
-        )
+        Ok(ObservationActivationOutcome::Ordinary(
+          ActivationOutcome::IgnoredStale,
+        ))
       };
     };
     if state.hot.cycle_state != crate::CycleState::Idle || state.hot.pending_signal {
@@ -569,7 +565,6 @@ impl<T: Config> Pallet<T> {
         | ActivationOutcome::Latched
         | ActivationOutcome::Closed,
       )) => Ok(true),
-      Ok(ObservationActivationOutcome::TerminalDeferred) => Err(Error::<T>::ActorInvariant.into()),
       Err(ActivationFailure::Temporary(_)) => Ok(false),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
@@ -594,7 +589,6 @@ impl<T: Config> Pallet<T> {
         | ActivationOutcome::Latched
         | ActivationOutcome::Closed,
       )) => Ok(Some(true)),
-      Ok(ObservationActivationOutcome::TerminalDeferred) => Ok(None),
       Err(ActivationFailure::Temporary(_)) => Ok(Some(false)),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
