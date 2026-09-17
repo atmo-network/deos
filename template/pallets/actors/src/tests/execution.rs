@@ -1269,7 +1269,7 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -1277,19 +1277,18 @@ fn frame_only_running_abort_cycle_failure_never_materializes_scalar_hot() {
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    let authority = Actors::load_frame_control_authority(actor_id).expect("Idle authority");
-    assert_eq!(authority.2.cycle_state, CycleState::Idle);
-    assert_eq!(authority.2.unsuccessful_attempt_streak, 1);
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    let authority =
+      Actors::active_actor_state(actor_id).expect("canonical Idle authority remains");
+    assert_eq!(authority.hot.cycle_state, CycleState::Idle);
+    assert_eq!(authority.hot.unsuccessful_attempt_streak, 1);
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1849,22 +1848,20 @@ fn frame_only_opening_continue_next_step_failure_never_materializes_scalar_hot()
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 1);
     assert!(continuation.suspension.is_none());
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
@@ -1906,19 +1903,21 @@ fn frame_only_stake_continue_next_step_rolls_back_without_scalar_hot() {
     ));
     set_fail_staking_after_burn(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 1);
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
     assert_eq!(native_balance(&actor), 120);
     assert_eq!(staked_balance(actor, asset), 0);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -1960,14 +1959,15 @@ fn frame_only_stake_retry_later_permanent_failure_terminates_without_scalar_hot(
     ));
     set_fail_staking_after_burn(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert_eq!(native_balance(&actor), 120);
     assert_eq!(staked_balance(actor, asset), 0);
-    let authority = Actors::load_frame_control_authority(actor_id).expect("Idle authority");
-    assert_eq!(authority.2.cycle_state, CycleState::Idle);
-    assert_eq!(authority.2.unsuccessful_attempt_streak, 1);
+    let authority =
+      Actors::active_actor_state(actor_id).expect("canonical Idle authority remains");
+    assert_eq!(authority.hot.cycle_state, CycleState::Idle);
+    assert_eq!(authority.hot.unsuccessful_attempt_streak, 1);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleSummary {
@@ -2065,7 +2065,7 @@ fn frame_only_running_continue_next_step_failure_never_materializes_scalar_hot()
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::actor_run_state(actor_id)
         .expect("Running prefix")
@@ -2073,25 +2073,23 @@ fn frame_only_running_continue_next_step_failure_never_materializes_scalar_hot()
       1
     );
     set_temporary_dex_failure(true);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    Actors::on_initialize(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::on_initialize(3);
     run_prepass();
-    Actors::on_idle(2, Weight::MAX);
+    Actors::on_idle(3, Weight::MAX);
     let continuation = Actors::actor_run_state(actor_id).expect("failure advances cursor");
     assert_eq!(continuation.cursor, 2);
     assert!(continuation.suspension.is_none());
     assert_eq!(continuation.cumulative_outcomes.failed_steps, 1);
 
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_initialize(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
+    Actors::on_initialize(4);
     run_prepass();
-    Actors::on_idle(3, Weight::MAX);
+    Actors::on_idle(4, Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
