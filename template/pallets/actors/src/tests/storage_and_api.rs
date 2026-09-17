@@ -5958,8 +5958,12 @@ fn canonical_service_idle_no_work_head_advances_without_an_attempt() {
 #[test]
 fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, Default::default());
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
     let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
     else {
       panic!("created Actor is active");
@@ -5967,7 +5971,7 @@ fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
     let actor = actor_ref(actor_id, record.generation);
     ActorControlLocators::<Test>::remove(actor_id);
     ActorUnsignaledControlCells::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Pending, 4).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(5);
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
@@ -6012,7 +6016,7 @@ fn mandatory_service_frontier_dispatches_the_selected_zero_step_kind() {
 #[test]
 fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     let step = make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Local(1),
@@ -6040,7 +6044,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(5);
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     let recipient_before = asset_balance(&BOB, TestAsset::Local(1));
@@ -6124,9 +6128,9 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
 }
 
 #[test]
-fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
+fn mandatory_service_commits_abort_cycle_failure_and_retains_service_residence() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     let step = make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Local(1),
@@ -6153,7 +6157,7 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(5);
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
@@ -6189,8 +6193,8 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
     assert_eq!(asset_balance(&BOB, TestAsset::Local(1)), 0);
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
-    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
-      .expect("aborted cycle remains a live Service resident");
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Pending)
+      .expect("aborted cycle remains a retained Service resident");
     assert_eq!(stored.hot.cycle_state, CycleState::Idle);
     assert_eq!(stored.hot.unsuccessful_attempt_streak, 0);
     assert_eq!(stored.hot.last_cycle_block, Some(5));
@@ -6206,7 +6210,7 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_live_residence() {
 #[test]
 fn mandatory_service_commits_permanent_retry_failure_without_parking() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     let asset_out = TestAsset::Local(91);
     setup_pool(TestAsset::Native, asset_out, 1_000_000, 1);
     set_asset_balance(&u64::MAX, asset_out, 1);
@@ -6238,7 +6242,7 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(5);
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
     let suffix = <Test as crate::Config>::WeightInfo::service_round_admit_eligible().max(
@@ -6275,8 +6279,8 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
     assert!(!DeadlineHandles::<Test>::contains_key(actor_id));
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
-    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
-      .expect("permanent retry failure remains a live Service resident");
+    let stored = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Pending)
+      .expect("permanent retry failure remains a retained Service resident");
     assert_eq!(stored.hot.cycle_state, CycleState::Idle);
     assert_eq!(stored.hot.unsuccessful_attempt_streak, 1);
     assert_eq!(stored.hot.last_cycle_block, Some(5));
@@ -6643,7 +6647,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
 #[test]
 fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(5);
+    frame_system::Pallet::<Test>::set_block_number(4);
     setup_temporary_retry_pool();
     set_temporary_dex_failure(true);
     let failed = StepOf::<Test> {
@@ -6684,7 +6688,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 4).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(5);
     let budget = <Test as crate::Config>::BlockResourceBudget::get();
     let selector = <Test as crate::Config>::WeightInfo::service_round_begin_populated()
       .saturating_add(<Test as crate::Config>::WeightInfo::service_round_probe_eligible());
@@ -6721,7 +6725,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
     assert!(ServiceNodes::<Test>::contains_key(actor_id));
 
     frame_system::Pallet::<Test>::set_block_number(6);
-    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Live)
+    let semantic = Actors::load_service_actor_semantic_state(actor, ServiceResidenceKind::Pending)
       .expect("continued Actor remains in canonical Service");
     let second_resources = Actors::load_actor_service_state_with_control(
       actor_id,
@@ -6767,7 +6771,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
 #[test]
 fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(1);
     let mut step = make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Local(1),
@@ -6797,7 +6801,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
       .2
       .resources;
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(2);
     let before_header = ServiceHeader::<Test>::get();
     let before_process = ActorProcesses::<Test>::get(actor_id).unwrap();
     assert!(!ActorRunStateStore::<Test>::contains_key(actor_id));
@@ -6878,7 +6882,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
 #[test]
 fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(1);
     let mut step = make_step(Task::Transfer {
       to: BOB,
       asset: TestAsset::Local(1),
@@ -6898,16 +6902,13 @@ fn on_idle_recovers_later_retry_and_completes_once_in_fresh_drain() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let ActorSemanticState::Active(record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
+    let ActorSemanticState::Active(_record) = ActorSemanticStates::<Test>::get(actor_id).unwrap()
     else {
       panic!("created Actor is active");
     };
-    let actor = actor_ref(actor_id, record.generation);
     let sovereign = Actors::actor_identity(actor_id).unwrap().sovereign_account;
-    let legacy_ticket = Actors::actor_hot(actor_id).unwrap().queue_ticket.unwrap();
-    assert_ok!(Actors::paged_consume_head_at(legacy_ticket));
     ActorControlLocators::<Test>::remove(actor_id);
-    publish_test_service_member(actor, ServiceResidenceKind::Live, 1).unwrap();
+    frame_system::Pallet::<Test>::set_block_number(2);
 
     let open_resource_block = |now| {
       let mut state = crate::BlockResourceState::new(now);
