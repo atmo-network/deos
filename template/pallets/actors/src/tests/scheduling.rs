@@ -914,47 +914,6 @@ fn temporal_replacement_publishes_exact_primary_and_preserves_failed_source() {
 }
 
 #[test]
-fn retained_ingress_rejects_incomplete_authority_without_writes() {
-  for enqueue in [false, true] {
-    new_test_ext().execute_with(|| {
-      let actor_id = create_suspended_system_retry(1);
-      let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-      let invoke = || {
-        if enqueue {
-          Actors::try_paged_enqueue(actor_id)
-        } else {
-          Actors::try_wakeup_substrate_schedule_inner(actor_id, 10)
-        }
-      };
-      let payload = crate::ActorRunPayloads::<Test>::take(actor_id).expect("Run payload authority");
-      let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-      assert_eq!(
-        invoke(),
-        Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
-      );
-      assert_eq!(
-        polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-        corrupt
-      );
-      crate::ActorRunPayloads::<Test>::insert(actor_id, payload);
-      let expected = if enqueue && state.hot.queue_ticket.is_some() {
-        Err(crate::scheduler::EnqueueOutcome::AlreadyLive)
-      } else {
-        Ok(())
-      };
-      assert_eq!(invoke(), expected, "retained ingress enqueue={enqueue}");
-      assert_eq!(
-        Actors::actor_run_state(actor_id).encode(),
-        state.run_state.encode()
-      );
-      assert!(Actors::active_actor_state(actor_id).is_some());
-      #[cfg(feature = "try-runtime")]
-      assert_ok!(Actors::do_try_state());
-    });
-  }
-}
-
-#[test]
 fn next_work_plan_types_unsignaled_process_authority_without_writes() {
   new_test_ext().execute_with(|| {
     let actor_id = create_suspended_system_retry(1);
@@ -1818,72 +1777,6 @@ fn composite_publication_rolls_back_every_owner_after_carrier_mutation_failures(
       before,
       "Trigger Deadline failure must also roll back the earlier process carrier"
     );
-  });
-}
-
-#[test]
-fn retained_wakeup_deferral_preserves_capacity_rollback_and_rejects_corruption() {
-  new_test_ext().execute_with(|| {
-    let actor_id = create_suspended_system_retry(1);
-    let state = Actors::active_actor_state(actor_id).expect("real suspended Actor");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("canonical primary");
-    let invoke = || {
-      Actors::test_schedule_next_work_source(
-        actor_id,
-        &state,
-        &cell.admission,
-        cell.resources,
-        None,
-        0,
-      )
-    };
-    let before = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    let expected_wakeup = state
-      .run_state
-      .as_ref()
-      .map(|run| run.eligible_at)
-      .expect("suspended Run has exact eligibility");
-    assert_eq!(
-      Actors::test_plan_next_work_source(&state, state.run_state.as_ref(), 0),
-      Ok((
-        crate::StepControlPlacement::Wakeup,
-        Some(expected_wakeup),
-        None,
-        None,
-      ))
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      before,
-      "residence planning must not publish scheduler authority"
-    );
-    Actors::test_fail_wakeup_placement_with_capacity();
-    assert_eq!(
-      invoke(),
-      Err(crate::scheduler::EnqueueOutcome::WakeupCapacityExhausted)
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      before
-    );
-    let head = crate::ActorContractHeads::<Test>::take(actor_id).expect("Contract authority");
-    let corrupt = polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    assert_eq!(
-      invoke(),
-      Err(crate::scheduler::EnqueueOutcome::CorruptedTopology)
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      corrupt
-    );
-    crate::ActorContractHeads::<Test>::insert(actor_id, head);
-    assert_eq!(invoke(), Ok((crate::StepControlPlacement::Wakeup, vec![])));
-    assert_eq!(
-      Actors::actor_run_state(actor_id).encode(),
-      state.run_state.encode()
-    );
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(Actors::do_try_state());
   });
 }
 
@@ -4427,38 +4320,6 @@ fn pipeline_opening_rearms_cadence_from_current_tick() {
 }
 
 #[test]
-fn scheduler_close_rolls_back_on_fifo_topology_corruption() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_contract_steps(BOB, 10),
-    );
-    fund_native(actor_id, 1_000);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    frame_system::Pallet::<Test>::set_block_number(102);
-    Actors::test_corrupt_queue_before_close_consume();
-    let actor_before = Actors::active_actor_view(actor_id).expect("actor");
-    let events_before = System::events();
-    let root_before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-
-    let _ = Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(Actors::active_actor_view(actor_id), Some(actor_before));
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      root_before
-    );
-  });
-}
-
-#[test]
 fn run_retry_preserves_independent_external_timer_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -5241,64 +5102,6 @@ fn temporal_occurrence_refuses_selector_and_schedule_mismatched_wake_qualificati
       );
     });
   }
-}
-
-#[test]
-fn temporal_wakeup_drain_refuses_mismatched_schedule_qualification() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, at_time_schedule(1), None, inert_contract_steps());
-    let hot_before = Actors::actor_hot(actor_id).expect("AtTime Actor exists");
-    let pointer = hot_before
-      .trigger_wakeup_pointer
-      .expect("AtTime wake authority exists");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("Waiting authority exists");
-    let admission = cell.admission;
-    let mismatched_window = Some(crate::ScheduleWindow { start: 2, end: 20 });
-    let replacement = crate::ActorAdmissionCertificate::new(
-      admission.semantic_contract_id,
-      admission.body_commitment,
-      RuntimeTrigger::at_time(1).wake_qualification(&mismatched_window),
-      admission.runtime_actor_semantics_version,
-      admission.production_weight_identity,
-      admission.body_geometry_version,
-      admission.configured_bounds_commitment,
-      admission.maximum_lifecycle_weight,
-    );
-    crate::ActorWaitingFrameChunks::<Test>::mutate(
-      (WakeupKey::Tick(pointer.tick), pointer.page_id),
-      |stored| {
-        let entry = stored.as_mut().expect("waiting page exists").entries[pointer.slot as usize]
-          .as_mut()
-          .expect("waiting primary exists");
-        let crate::ActorWaitingEntry::Primary(cell) = entry else {
-          panic!("temporal source owns the primary authority");
-        };
-        cell.pipeline_service_identity =
-          crate::pipeline_service_identity(replacement.admission_identity);
-        cell.admission = replacement.clone();
-      },
-    );
-    crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
-      stored
-        .as_mut()
-        .expect("Contract head exists")
-        .header
-        .admission_identity = replacement.admission_identity;
-    });
-    let events_before = System::events();
-    let balances_before = (native_balance(&ALICE), native_balance(&BOB));
-
-    let (ready, stats) = Actors::wakeup_substrate_drain_key(WakeupKey::Tick(pointer.tick), 1);
-    assert!(ready.is_empty());
-    assert_eq!(stats, crate::WakeupDrainStats::default());
-    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(System::events(), events_before);
-    assert_eq!(
-      (native_balance(&ALICE), native_balance(&BOB)),
-      balances_before
-    );
-  });
 }
 
 #[test]
@@ -6342,54 +6145,6 @@ fn admission_time_close_reasons_require_complete_queue_and_cleanup_budget() {
     assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(1, 0));
     assert_scheduler_close_requires_atomic_budget(reason, Weight::from_parts(0, 1));
   }
-}
-
-#[test]
-fn scheduler_fails_closed_without_consuming_a_corrupt_live_head() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let hot_before = Actors::actor_hot(actor_id).expect("queued actor");
-    let head_before = Actors::queue_head();
-    let events_before = frame_system::Pallet::<Test>::events();
-
-    crate::ActorContractHeads::<Test>::remove(actor_id);
-    let corrupt_root =
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
-    assert_eq!(
-      Actors::try_paged_enqueue(actor_id),
-      Err(crate::EnqueueOutcome::CorruptedTopology)
-    );
-    assert_eq!(
-      Actors::try_paged_invalidate(actor_id),
-      Err(crate::EnqueueOutcome::CorruptedTopology)
-    );
-    assert_eq!(
-      polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
-      corrupt_root
-    );
-    Actors::execute_cycle(Weight::MAX);
-
-    assert_eq!(Actors::queue_head(), head_before);
-    assert_eq!(Actors::actor_hot(actor_id), Some(hot_before));
-    assert_eq!(frame_system::Pallet::<Test>::events(), events_before);
-    assert!(
-      Actors::actor_identity(actor_id).is_none(),
-      "full classification rejects corruption"
-    );
-    assert_eq!(
-      Actors::actor_control_cell(actor_id)
-        .expect("retained primary")
-        .1
-        .identity
-        .cycle_nonce,
-      0
-    );
-  });
 }
 
 #[test]

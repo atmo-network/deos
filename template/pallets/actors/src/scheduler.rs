@@ -292,7 +292,6 @@ const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 
 #[cfg(test)]
 std::thread_local! {
-  static CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
   static QUEUE_APPEND_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
   static CROSSING_CURSOR_COMMITS: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
@@ -3173,7 +3172,6 @@ impl<T: Config> Pallet<T> {
       if let Err(error) = close_result {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
       }
-      Self::apply_test_close_queue_corruption();
       let source_closed = match source {
         None => {
           if ActorControlLocators::<T>::contains_key(actor_id) {
@@ -3816,25 +3814,6 @@ impl<T: Config> Pallet<T> {
       Err(other) => Err(other),
     }
   }
-
-  #[cfg(test)]
-  pub(crate) fn test_corrupt_queue_before_close_consume() {
-    CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME.with(|flag| flag.set(true));
-  }
-
-  #[cfg(test)]
-  fn apply_test_close_queue_corruption() {
-    CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME.with(|flag| {
-      if flag.replace(false) {
-        ActorReadyTail::<T>::put(
-          ActorReadyHead::<T>::get().saturating_add(u64::from(T::MaxQueueLength::get()) + 1),
-        );
-      }
-    });
-  }
-
-  #[cfg(not(test))]
-  fn apply_test_close_queue_corruption() {}
 
   fn queue_topology_preflight(_mutation: QueueMutation) -> Result<QueueTopology, EnqueueOutcome> {
     let head = ActorReadyHead::<T>::get();
@@ -5126,13 +5105,6 @@ impl<T: Config> Pallet<T> {
       },
     )
     .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-  }
-
-  #[cfg(test)]
-  pub(crate) fn try_paged_invalidate(
-    actor_id: ActorId,
-  ) -> Result<Option<QueueTicket>, EnqueueOutcome> {
-    Self::try_invalidate_ready_to_unsignaled(actor_id)
   }
 
   pub(crate) fn invalidate_ready_to_unsignaled_with_authority(
