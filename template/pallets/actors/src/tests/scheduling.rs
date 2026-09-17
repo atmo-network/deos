@@ -2659,7 +2659,10 @@ fn zero_step_opening_completes_without_step_or_run_state() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(Actors::queue_occupancy(), 1);
+    // Canonical publication gives the latched zero-Step Actor one generation-bound
+    // `Service(Pending)` membership for the next block instead of a legacy ready ticket.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
     let (state, _, loaded_step) =
       Actors::load_frame_actor_service_state(actor_id).expect("zero-Step service state loads");
     assert!(loaded_step.is_none());
@@ -2672,8 +2675,10 @@ fn zero_step_opening_completes_without_step_or_run_state() {
     );
     System::reset_events();
 
+    // The canonical occurrence is ineligible in its own block, so the service pass runs at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
@@ -4032,8 +4037,9 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
       transfer_contract_steps(BOB, 10),
     );
     fund_native(actor_id, 1_000_000_000_000_000);
-    // Two manual triggers in the same block latch one pending_signal and one FIFO ticket;
-    // the post-worker cutoff enforces executions(A, B) <= 1.
+    // Two manual triggers in the same block coalesce into one latched pending signal and one
+    // generation-bound `Service(Pending)` membership in the single service ring; the post-worker
+    // cutoff enforces executions(A, B) <= 1 per block.
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       actor_id
@@ -4042,15 +4048,17 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    assert_eq!(
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
+    assert!(
       Actors::actor_hot(actor_id)
-        .and_then(|hot| hot.queue_ticket)
-        .expect("one live ticket"),
-      0
+        .expect("latched actor")
+        .queue_ticket
+        .is_none()
     );
     frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     let started = frame_system::Pallet::<Test>::events()
       .into_iter()
       .filter(|record| {
@@ -4067,11 +4075,9 @@ fn repeated_trigger_same_block_yields_one_ticket_and_one_execution() {
         .cycle_nonce,
       1
     );
-    assert_eq!(
-      Actors::queue_head(),
-      Actors::queue_tail(),
-      "FIFO fully consumed"
-    );
+    // The committed prefix publishes exactly one successor `Service(Pending)` for the next block.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
+    assert_eq!(Actors::service_header().count, 1);
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -4099,15 +4105,15 @@ fn repeated_scheduler_pass_same_block_preserves_one_committed_step_turn() {
     frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle(Weight::MAX);
     let first_run = Actors::actor_run_state(actor_id).expect("successor remains live");
-    let successor_ticket = Actors::actor_hot(actor_id)
-      .and_then(|hot| hot.queue_ticket)
-      .expect("successor owns one Ready ticket");
     assert_eq!(first_run.cursor, 1);
     assert_eq!(first_run.last_committed_step_block, Some(2));
     assert_eq!(
       MockAssetOps::balance(&BOB, TestAsset::Native),
       recipient_before + 10
     );
+
+    // The committed prefix publishes exactly one successor `Service(Pending)` for the next block.
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
 
     Actors::execute_cycle(Weight::MAX);
     let same_block_run = Actors::actor_run_state(actor_id).expect("successor remains live");
@@ -4116,9 +4122,8 @@ fn repeated_scheduler_pass_same_block_preserves_one_committed_step_turn() {
       same_block_run.last_committed_step_block,
       first_run.last_committed_step_block
     );
-    assert_eq!(
-      Actors::actor_hot(actor_id).and_then(|hot| hot.queue_ticket),
-      Some(successor_ticket),
+    assert!(
+      crate::ServiceNodes::<Test>::contains_key(actor_id),
       "same-block refusal preserves exact successor authority"
     );
     assert_eq!(
@@ -4279,8 +4284,12 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
         actor_id
       ));
     }
+    // Canonical publication makes every latched Actor ineligible in its own block, so the first
+    // service pass runs at B+1. One pass is bounded by `MaxExecutionsPerBlock` and preserves the
+    // single global publication order across User and System Actor types.
+    frame_system::Pallet::<Test>::set_block_number(2);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
 
     let started: Vec<_> = frame_system::Pallet::<Test>::events()
       .into_iter()
@@ -4297,9 +4306,9 @@ fn canonical_fifo_executes_global_ticket_order_across_actor_types() {
       0
     );
 
-    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::set_block_number(3);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    Actors::execute_cycle(Weight::MAX);
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id, .. } if *actor_id == system_b
