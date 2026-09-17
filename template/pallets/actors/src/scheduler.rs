@@ -2942,6 +2942,7 @@ impl<T: Config> Pallet<T> {
         ServiceRoundError::InsufficientWeight | ServiceRoundError::ResourceUnavailable => {
           SimulationError::ResourceDeferred
         }
+        ServiceRoundError::FeeCollection => SimulationError::FeeCollectionFailed,
         _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
       })?;
       return match encounter {

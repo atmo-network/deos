@@ -6721,7 +6721,12 @@ pub mod pallet {
                 now,
                 retry_deadline,
               )
-              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              .map_err(|error| match error {
+                crate::scheduler::AttemptTransactionError::FeeCollection => {
+                  ServiceRoundError::FeeCollection
+                }
+                _ => ServiceRoundError::ProcessResidenceMismatch,
+              })?;
               attempt = Some(evidence.attempt);
               let actual_control = if control_owned_by_caller {
                 Weight::zero()
@@ -6768,7 +6773,12 @@ pub mod pallet {
                   now,
                   None,
                 )
-                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?,
+                .map_err(|error| match error {
+                  crate::scheduler::AttemptTransactionError::FeeCollection => {
+                    ServiceRoundError::FeeCollection
+                  }
+                  _ => ServiceRoundError::ProcessResidenceMismatch,
+                })?,
               );
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())

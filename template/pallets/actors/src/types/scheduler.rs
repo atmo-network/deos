@@ -109,6 +109,7 @@ pub enum ServiceRoundError {
   ProcessResidenceMismatch,
   FutureMemberUnmarked,
   AttemptFromFuture,
+  FeeCollection,
 }
 
 pub type DependencySourceId = u64;

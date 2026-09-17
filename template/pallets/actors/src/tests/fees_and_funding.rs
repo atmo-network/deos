@@ -242,7 +242,7 @@ fn frame_only_cancellation_preserves_active_user_state_hold() {
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some());
     let hold_before = Actors::actor_state_hold(actor_id).expect("active User hold exists");
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::load_control_authority_with_authority(actor_id).is_some());
     frame_system::Pallet::<Test>::set_block_number(4);
 
     assert_ok!(Actors::cancel_run(RuntimeOrigin::signed(ALICE), actor_id));
@@ -255,7 +255,7 @@ fn frame_only_cancellation_preserves_active_user_state_hold() {
     );
     assert!(ActorIdentities::<Test>::get(actor_id).is_none());
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::load_control_authority_with_authority(actor_id).is_some());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -528,8 +528,8 @@ fn manual_trigger_uses_canonical_pending_authority() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    let (_, _, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
+    let (_, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("frame authority remains live");
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical projection remains live");
     assert!(frame_hot.pending_signal);
     assert_eq!(projected_hot, frame_hot);
@@ -550,13 +550,13 @@ fn manual_trigger_uses_canonical_pending_authority() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn manual_trigger_fails_closed_without_primary_before_fee_or_event() {
+fn manual_trigger_fails_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
     fund_native(actor_id, 100);
     let sovereign = sovereign_account(actor_id);
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let sink_before = native_balance(&TestFeeSink::get());
     let hot_before = Actors::actor_hot(actor_id);
@@ -780,7 +780,9 @@ fn busy_manual_occurrence_creates_no_future_cycle_latch_or_trigger_fee() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::on_idle(2, Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     assert_eq!(run_before.cursor, 1);
     clear_fee_collections();
@@ -803,12 +805,8 @@ fn busy_manual_occurrence_creates_no_future_cycle_latch_or_trigger_fee() {
     assert!(!hot.pending_signal);
     #[cfg(not(feature = "runtime-benchmarks"))]
     {
-      let (location, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
-        .expect("busy Trigger keeps one frame-owned primary");
-      assert!(matches!(
-        location,
-        crate::ActorControlLocation::Ready { .. }
-      ));
+      let (_, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+        .expect("busy Trigger keeps one canonical frame authority");
       assert_eq!(
         frame_hot, hot,
         "ignored busy Trigger leaves the current primary unchanged"
@@ -899,7 +897,7 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
       transfer_contract_steps(BOB, 1),
     );
     let mut state = Actors::active_actor_state(actor_id).expect("unlatched active Actor");
-    let (_, cell) = Actors::actor_control_cell(actor_id).expect("legacy resource authority");
+    let resources = fixture_step_resource_envelope(actor_id);
     let actor = Actors::load_actor_ref(actor_id).expect("generation-bound Actor reference");
     let sovereign = sovereign_account(actor_id);
     clear_fee_collections();
@@ -908,13 +906,15 @@ fn canonical_fee_bearing_activation_is_atomic_with_publication() {
       trigger_fee: manual_trigger_fee(),
     };
 
-    crate::ActorControlLocators::<Test>::remove(actor_id);
-    crate::ActorUnsignaledControlCells::<Test>::remove(actor_id);
+    crate::ActorProcesses::<Test>::remove(actor_id);
+    crate::ServiceNodes::<Test>::remove(actor_id);
+    crate::DeadlineHandles::<Test>::remove(actor_id);
+    crate::TriggerDeadlineHandles::<Test>::remove(actor_id);
     Actors::test_publish_actor_publication(
       actor,
       &state,
       state.run_state.as_ref(),
-      cell.resources,
+      resources,
       1,
     )
     .expect("unlatched canonical publication commits as Disabled");
@@ -1079,8 +1079,8 @@ fn address_event_uses_canonical_pending_authority() {
       1,
       &ALICE,
     ));
-    let (_, _, frame_hot, _) =
-      Actors::load_frame_control_authority(actor_id).expect("frame authority remains live");
+    let (_, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
+      .expect("frame authority remains live");
     let projected_hot = Actors::actor_hot(actor_id).expect("canonical projection remains live");
     assert!(frame_hot.pending_signal);
     assert_eq!(projected_hot, frame_hot);
@@ -1115,9 +1115,14 @@ fn address_event_ingress_requires_its_certified_selector() {
     let sovereign = sovereign_account(actor_id);
     let sovereign_before = native_balance(&sovereign);
     let sink_before = native_balance(&TestFeeSink::get());
-    crate::ActorUnsignaledControlCells::<Test>::mutate(actor_id, |stored| {
-      let cell = stored.as_mut().expect("Unsignaled authority exists");
-      let old = &cell.admission;
+    // Canonical publication keeps the admission certificate in the semantic owner, so the
+    // certified-selector mismatch is staged there instead of the retired legacy control cell.
+    let replacement_identity = crate::ActorSemanticStates::<Test>::mutate(actor_id, |stored| {
+      let record = match stored.as_mut().expect("AddressEvent semantic owner exists") {
+        ActorSemanticState::Active(record) => record,
+        ActorSemanticState::Dormant(_) => panic!("AddressEvent semantic owner is active"),
+      };
+      let old = &record.admission;
       let replacement = crate::ActorAdmissionCertificate::new(
         old.semantic_contract_id,
         old.body_commitment,
@@ -1130,14 +1135,10 @@ fn address_event_ingress_requires_its_certified_selector() {
         old.configured_bounds_commitment,
         old.maximum_lifecycle_weight,
       );
-      cell.pipeline_service_identity =
-        crate::pipeline_service_identity(replacement.admission_identity);
-      cell.admission = replacement;
+      let identity = replacement.admission_identity;
+      record.admission = replacement;
+      identity
     });
-    let replacement_identity = crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
-      .expect("mutated authority exists")
-      .admission
-      .admission_identity;
     crate::ActorContractHeads::<Test>::mutate(actor_id, |stored| {
       stored
         .as_mut()
@@ -1165,9 +1166,8 @@ fn address_event_ingress_requires_its_certified_selector() {
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
     assert_eq!(System::events(), events_before);
     assert!(
-      !crate::ActorUnsignaledControlCells::<Test>::get(actor_id)
+      !Actors::actor_hot(actor_id)
         .expect("authority remains fail-closed")
-        .hot
         .pending_signal
     );
   });
@@ -1180,7 +1180,7 @@ fn address_event_execution_preserves_canonical_control() {
     new_test_ext().execute_with(|| {
       frame_system::Pallet::<Test>::set_block_number(1);
       let actor_id = create_system_with(ALICE, percentage_trigger_schedule(), None, steps);
-      assert!(Actors::actor_control_cell(actor_id).is_some());
+      assert!(Actors::load_control_authority_with_authority(actor_id).is_some());
 
       assert_ok!(Actors::notify_address_event(
         actor_id,
@@ -1196,7 +1196,7 @@ fn address_event_execution_preserves_canonical_control() {
       )));
       assert!(!ActorIdentities::<Test>::contains_key(actor_id));
       assert!(Actors::actor_hot(actor_id).is_some());
-      assert!(Actors::actor_control_cell(actor_id).is_some());
+      assert!(Actors::load_control_authority_with_authority(actor_id).is_some());
       #[cfg(feature = "try-runtime")]
       assert_ok!(crate::Pallet::<Test>::do_try_state());
     });
@@ -1205,7 +1205,7 @@ fn address_event_execution_preserves_canonical_control() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn address_event_preflight_and_commit_fail_closed_without_primary_authority() {
+fn address_event_preflight_and_commit_fail_closed_without_canonical_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -1214,7 +1214,7 @@ fn address_event_preflight_and_commit_fail_closed_without_primary_authority() {
       None,
       transfer_contract_steps(BOB, 1),
     );
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     let hot_before = Actors::actor_hot(actor_id);
     let events_before = System::events();
 
@@ -2000,18 +2000,20 @@ fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
     );
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let resources = Actors::load_current_step_from_storage(actor_id, 0)
       .expect("current Step resources exist")
       .resources;
     assert_ne!(resources.effect, Weight::zero());
-    let scan = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    let probe = Actors::scheduler_actor_probe_weight_upper();
-    let consume = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-      .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
+    // Canonical Service admission owns the selector envelope; a non-invoked Step consumes no
+    // step control or effect and releases the reserved effect envelope.
+    let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
 
     let bob_before = native_balance(&BOB);
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
@@ -2024,14 +2026,7 @@ fn non_invoked_task_releases_effect_weight_after_maximum_admission() {
       budget.limits().actor_control(),
     );
 
-    assert_eq!(
-      pass.consumed,
-      scan
-        .saturating_mul(2)
-        .saturating_add(probe)
-        .saturating_add(consume)
-        .saturating_add(resources.control),
-    );
+    assert_eq!(pass.consumed, selector);
     assert_eq!(
       pass.reconciled_domains(),
       Some((pass.consumed, Weight::zero()))
@@ -2075,9 +2070,11 @@ fn successful_actor_pass_separates_actual_effect_from_control() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
 
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
@@ -2126,6 +2123,8 @@ fn valid_actual_control_replaces_the_maximum_in_pass_consumption() {
       }),
     );
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::signed(ALICE), actor_id));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let resources = Actors::load_current_step_from_storage(actor_id, 0)
       .expect("current Step resources exist")
       .resources;
@@ -2134,20 +2133,26 @@ fn valid_actual_control_replaces_the_maximum_in_pass_consumption() {
       .checked_sub(&Weight::from_parts(1, 1))
       .expect("mock control maximum is nonzero");
     set_step_control_actual_weight_override(Some(actual_control));
-    let scan = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
-    let probe = Actors::scheduler_actor_probe_weight_upper();
-    let consume = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-      .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
+    let selector = <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+      .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+    let suffix = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::service_round_admit_eligible()
+      .max(
+        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::service_member_retire_interior()
+          .max(
+            <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor(),
+          )
+          .max(
+            <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::service_member_retire_singleton(),
+          ),
+      );
 
     let pass = Actors::execute_cycle(Weight::MAX);
 
     assert_eq!(
       pass.consumed,
-      scan
-        .saturating_mul(2)
-        .saturating_add(probe)
-        .saturating_add(consume)
-        .saturating_add(actual_control),
+      selector
+        .saturating_add(actual_control)
+        .saturating_add(suffix),
     );
   });
 }
@@ -2176,6 +2181,8 @@ fn valid_zero_actual_control_charges_pipeline_but_no_action_fee() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     set_step_control_actual_weight_override(Some(Weight::zero()));
     clear_fee_collections();
     let actor_before = native_balance(&sovereign_account(actor_id));
@@ -2236,6 +2243,8 @@ fn valid_zero_actual_effect_releases_effect_fee_after_invocation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
     set_task_effect_actual_weight_override(Some(Weight::zero()));
     clear_fee_collections();
     let bob_before = native_balance(&BOB);
@@ -2279,6 +2288,11 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical occurrence publication admits the Pending Service at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
+    // rollback from the per-block round-bookkeeping mutation.
+    let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
     if missing_control {
       set_missing_step_control_actual_weight(true);
     } else {
@@ -2291,7 +2305,7 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1);
 
     let budget = TestBlockResourceBudget::get();
-    let mut resource_state = crate::BlockResourceState::new(1);
+    let mut resource_state = crate::BlockResourceState::new(2);
     assert_eq!(resource_state.begin_prepass(), Ok(()));
     assert_eq!(resource_state.open_external_phase(), Ok(()));
     assert_eq!(resource_state.begin_drain(), Ok(()));
@@ -2305,8 +2319,10 @@ fn assert_missing_actual_weight_rolls_back_without_fee_collection(missing_contro
     );
 
     assert!(pass.starved);
-    assert_eq!(pass.reconciled_domains(), None);
-    assert!(resource_state.optional_actor_work_halted());
+    assert_eq!(
+      pass.reconciled_domains(),
+      Some((Weight::zero(), Weight::zero()))
+    );
     assert_eq!(resource_state.outstanding_reservations(), 0);
     assert_eq!(
       polkadot_sdk::sp_io::storage::root(polkadot_sdk::sp_runtime::StateVersion::V1),
@@ -2353,6 +2369,11 @@ fn greater_than_reserved_actual_effect_weight_rolls_back_the_complete_attempt() 
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
+      // Canonical occurrence publication admits the Pending Service at B+1.
+      frame_system::Pallet::<Test>::set_block_number(2);
+      // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
+      // rollback from the per-block round-bookkeeping mutation.
+      let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
       set_task_effect_actual_weight_override(Some(reserved.saturating_add(excess)));
       frame_system::Pallet::<Test>::reset_events();
       let bob_before = native_balance(&BOB);
@@ -2368,7 +2389,15 @@ fn greater_than_reserved_actual_effect_weight_rolls_back_the_complete_attempt() 
       );
       assert_eq!(native_balance(&BOB), bob_before);
       assert!(frame_system::Pallet::<Test>::events().is_empty());
-      assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+      assert!(matches!(
+        crate::ActorProcesses::<Test>::get(actor_id),
+        Some(crate::ActorProcess {
+          residence: Some(crate::ProcessResidence::Service(
+            crate::ServiceResidenceKind::Pending
+          )),
+          ..
+        })
+      ));
     });
   }
 }
@@ -2389,6 +2418,11 @@ fn greater_than_reserved_actual_control_weight_rolls_back_the_complete_attempt()
         RuntimeOrigin::signed(ALICE),
         actor_id
       ));
+      // Canonical occurrence publication admits the Pending Service at B+1.
+      frame_system::Pallet::<Test>::set_block_number(2);
+      // Warm the canonical `round_block` advance so the atomicity assertion isolates the attempt
+      // rollback from the per-block round-bookkeeping mutation.
+      let _ = Actors::execute_cycle(Weight::from_parts(1, 1));
       let reserved = Actors::load_current_step_from_storage(actor_id, 0)
         .expect("current Step resources exist")
         .resources
@@ -2408,7 +2442,15 @@ fn greater_than_reserved_actual_control_weight_rolls_back_the_complete_attempt()
       );
       assert_eq!(native_balance(&BOB), bob_before);
       assert!(frame_system::Pallet::<Test>::events().is_empty());
-      assert!(Actors::actor_hot(actor_id).is_some_and(|hot| hot.queue_ticket.is_some()));
+      assert!(matches!(
+        crate::ActorProcesses::<Test>::get(actor_id),
+        Some(crate::ActorProcess {
+          residence: Some(crate::ProcessResidence::Service(
+            crate::ServiceResidenceKind::Pending
+          )),
+          ..
+        })
+      ));
     });
   }
 }
@@ -2450,7 +2492,10 @@ fn condition_skip_pipeline_fee_failure_aborts_before_skip_event() {
     );
     clear_fee_collections();
     set_fail_fee_sink_transfer(true);
-    run_idle(Weight::MAX);
+    // One canonical Service round at the B+1 admission block: the fee-sink refusal then aborts
+    // exactly this opening attempt instead of the double-service `on_idle` hook re-attempting it.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     set_fail_fee_sink_transfer(false);
     assert_eq!(native_balance(&BOB), bob_before);
     assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
@@ -2500,7 +2545,10 @@ fn pipeline_fee_route_failure_aborts_before_task_execution() {
     );
     clear_fee_collections();
     set_fail_fee_sink_transfer(true);
-    run_idle(Weight::MAX);
+    // One canonical Service round at the B+1 admission block: the fee-sink refusal then aborts
+    // exactly this opening attempt instead of the double-service `on_idle` hook re-attempting it.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     set_fail_fee_sink_transfer(false);
     assert_eq!(native_balance(&BOB), bob_before);
     assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
@@ -2651,7 +2699,7 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
     );
     #[cfg(not(feature = "runtime-benchmarks"))]
     {
-      let (_, _, frame_hot, _) = Actors::load_frame_control_authority(actor_id)
+      let (_, frame_hot, _) = Actors::load_control_authority_with_authority(actor_id)
         .expect("windowed Actor frame authority exists");
       assert_eq!(
         frame_hot.wakeup_pointer,
@@ -2659,7 +2707,7 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
           .expect("canonical projection exists")
           .wakeup_pointer
       );
-      assert!(frame_hot.wakeup_pointer.is_some());
+      assert_eq!(scheduled_wakeup_block(actor_id), Some(102));
     }
     frame_system::Pallet::<Test>::set_block_number(102);
     assert_ok!(Actors::permissionless_sweep(
@@ -2769,6 +2817,9 @@ fn simulation_projects_fee_collection_failure_as_interface_error_and_rolls_back(
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // Canonical occurrence publication admits the Pending Service at B+1; simulation projects the
+    // admitted round at that block.
+    frame_system::Pallet::<Test>::set_block_number(2);
     let actor_before = Actors::active_actor_view(actor_id).expect("actor before simulation");
     let events_before = System::events();
     let sink_before = native_balance(&TestFeeSink::get());
@@ -2819,8 +2870,7 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
     );
 
     fund_native_raw(&actor, 51);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(suspended.eligible_at, Weight::MAX);
     let completed = Actors::active_actor_view(actor_id).expect("actor completes");
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.cycle_state, CycleState::Idle);
@@ -2953,10 +3003,11 @@ fn suspended_cycle_reloads_current_available_on_each_retry() {
     run_idle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_some(), "suspended");
 
+    let first_retry = Actors::actor_run_state(actor_id).expect("first retry");
     set_asset_balance(&actor, asset_in, 200);
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(first_retry.eligible_at, Weight::MAX);
+    let second_retry = Actors::actor_run_state(actor_id).expect("still suspended");
     assert!(
       Actors::actor_run_state(actor_id).is_some(),
       "still suspended"
@@ -2964,8 +3015,7 @@ fn suspended_cycle_reloads_current_available_on_each_retry() {
 
     set_asset_balance(&actor, asset_in, 300);
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(4);
-    run_idle(Weight::MAX);
+    run_canonical_round_at(second_retry.eligible_at, Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(
       asset_balance(&actor, asset_in) < 250,
@@ -3440,7 +3490,7 @@ fn percentage_of_current_reloads_after_prior_step_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    run_idle_until_cycle_nonce(actor_id, 1);
+    run_next_idle_to_completion(actor_id);
 
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(49));
     assert_eq!(native_balance(&CHARLIE), charlie_before.saturating_add(25));
@@ -3634,7 +3684,16 @@ fn one_ingress_matching_the_single_source_latches_one_ticket() {
 
     let hot = Actors::actor_hot(actor_id).expect("actor hot state");
     assert!(hot.pending_signal);
-    assert!(hot.queue_ticket.is_some());
+    assert!(matches!(
+      crate::ActorProcesses::<Test>::get(actor_id),
+      Some(crate::ActorProcess {
+        residence: Some(crate::ProcessResidence::Service(
+          crate::ServiceResidenceKind::Pending
+        )),
+        ..
+      })
+    ));
+    assert!(crate::ServiceNodes::<Test>::contains_key(actor_id));
   });
 }
 
@@ -3659,10 +3718,8 @@ fn identical_authoritative_transfers_retain_one_latched_ticket() {
       100,
       &ALICE
     ));
-    let first_ticket = Actors::actor_hot(actor_id)
-      .expect("actor hot state")
-      .queue_ticket;
-    assert!(first_ticket.is_some());
+    let first_member = crate::ServiceNodes::<Test>::get(actor_id).map(|node| node.generation);
+    assert!(first_member.is_some());
     assert_ok!(Actors::notify_address_event(
       actor_id,
       TestAsset::Native,
@@ -3670,11 +3727,9 @@ fn identical_authoritative_transfers_retain_one_latched_ticket() {
       &ALICE
     ));
     assert_eq!(
-      Actors::actor_hot(actor_id)
-        .expect("actor hot state")
-        .queue_ticket,
-      first_ticket,
-      "an already-pending signal must retain one live FIFO ticket"
+      crate::ServiceNodes::<Test>::get(actor_id).map(|node| node.generation),
+      first_member,
+      "an already-pending signal must retain one canonical Pending Service member"
     );
   });
 }
@@ -3852,7 +3907,7 @@ fn funding_unavailable_releases_action_fee_reservation_for_later_step_spend() {
       actor_id
     ));
     clear_fee_collections();
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert!(has_actor_event(|event| {
       matches!(
         event,
@@ -4074,7 +4129,7 @@ fn preserve_spend_keeps_native_minimum_across_fixed_percentage_and_split_tasks()
     let actor = sovereign_account(actor_id);
     let bob_before = native_balance(&BOB);
     signal_percentage_trigger(actor_id, TestAsset::Native);
-    run_idle(Weight::MAX);
+    run_next_idle_to_completion(actor_id);
     assert_eq!(native_balance(&actor), 1);
     assert_eq!(native_balance(&BOB), bob_before + 99);
     let funding_skips = frame_system::Pallet::<Test>::events()
@@ -4917,12 +4972,8 @@ fn user_portfolio_rebalancer_both_directions() {
     // First evaluation: native high → step 0 fires, step 1 skipped
     fund_native(actor_id, 10000);
     set_asset_balance(&actor, foreign, 2000);
-    frame_system::Pallet::<Test>::set_block_number(6);
-    Actors::on_initialize(6);
-    Actors::on_idle(6, Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(7);
-    Actors::on_initialize(7);
-    Actors::on_idle(7, Weight::MAX);
+    run_scheduled_cadence_occurrence(actor_id);
+    run_next_idle_to_completion(actor_id);
     assert!(
       has_actor_event(|e| matches!(
         e,
@@ -4931,18 +4982,14 @@ fn user_portfolio_rebalancer_both_directions() {
       )),
       "Step 0 should execute when spendable native > 5000"
     );
-    frame_system::Pallet::<Test>::set_block_number(7);
-    Actors::on_idle(7, Weight::MAX);
     // Second evaluation: slash native so spendable < 500 while preserving Pipeline admission.
     // Raw 600 pays the complete Pipeline at Opening; the current Action reserve leaves < 500.
     let actor_native = native_balance(&actor);
     let _ = <Balances as Currency<AccountId>>::slash(&actor, actor_native.saturating_sub(600));
     let charlie_before = asset_balance(&CHARLIE, foreign);
-    frame_system::Pallet::<Test>::set_block_number(11);
-    Actors::on_initialize(11);
-    Actors::on_idle(11, Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(12);
-    Actors::on_idle(12, Weight::MAX);
+    frame_system::Pallet::<Test>::reset_events();
+    run_scheduled_cadence_occurrence(actor_id);
+    run_next_idle_to_completion(actor_id);
     assert!(
       asset_balance(&CHARLIE, foreign) > charlie_before,
       "Step 1 should execute when spendable native < 500 AND foreign > 500"
