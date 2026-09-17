@@ -3483,15 +3483,18 @@ fn manual_middle_step_preserves_canonical_control() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
-    Actors::on_idle(1, Weight::MAX);
+    // Canonical publication makes the occurrence ineligible in its own block, so the first Step
+    // executes at B+1.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     let run = Actors::actor_run_state(actor_id).expect("middle-Step Run survives");
     assert_eq!(run.cursor, 1);
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
 
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(3);
+    Actors::execute_cycle(Weight::MAX);
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(has_actor_event(|event| matches!(
       event,
@@ -3499,7 +3502,7 @@ fn manual_middle_step_preserves_canonical_control() {
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
     assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -6428,7 +6431,7 @@ fn mixed_fifo_stops_at_corrupt_actor_without_touching_valid_suffix() {
 
 #[cfg(not(feature = "runtime-benchmarks"))]
 #[test]
-fn eligibility_projection_uses_primary_authority_and_rejects_missing_primary() {
+fn eligibility_projection_rejects_missing_canonical_contract_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
@@ -6437,7 +6440,7 @@ fn eligibility_projection_uses_primary_authority_and_rejects_missing_primary() {
       ActorExecutionPhase::WaitingSignal
     );
 
-    Actors::remove_primary_control_cell_inner(actor_id).expect("primary removal succeeds");
+    crate::ActorContractHeads::<Test>::remove(actor_id);
     assert_eq!(
       Actors::actor_eligibility(actor_id),
       Err(crate::ActorClassificationError::ActorInvariant)
@@ -6460,13 +6463,12 @@ fn eligibility_projection_reports_exact_at_time_gate_and_consumption() {
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::WaitingCadenceTick(21)
     );
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(21, &mut meter);
+    service_canonical_temporal_frontiers(21);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::Ready
     );
-    Actors::execute_cycle(Weight::MAX);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       active_eligibility(actor_id).execution_phase,
       ActorExecutionPhase::WaitingSignal
