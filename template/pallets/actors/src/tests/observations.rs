@@ -14,6 +14,16 @@ fn observation_semantic_hot(actor_id: ActorId) -> ActorHotStateOf<Test> {
     .expect("ObservationChange semantic Hot state")
 }
 
+/// Drive one canonical ObservationChange occurrence through the real Oracle fanout entrypoint so a
+/// subscriber becomes a `Service(Pending)` member at B+1 without exercising the legacy ready frame.
+fn latch_canonical_observation_change(feed: u32) {
+  assert_ok!(Actors::note_observation_changed(feed, 1));
+  let base = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_base();
+  let unit = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_page();
+  let fault = <TestWeightInfo as crate::WeightInfo>::record_observation_fanout_worker_fault();
+  let _ = Actors::fanout_dirty_observations(base.saturating_add(unit).saturating_add(fault));
+}
+
 /// Canonical ObservationChange fanout publishes one `Service(Pending)` ring member per subscriber
 /// at B+1 with no legacy ready-frame ticket, so membership assertions read the canonical owner.
 fn assert_canonical_pending_member(actor_id: ActorId) {
@@ -25,50 +35,6 @@ fn assert_canonical_pending_member(actor_id: ActorId) {
     ActorProcesses::<Test>::get(actor_id).and_then(|process| process.residence),
     Some(ProcessResidence::Service(ServiceResidenceKind::Pending))
   );
-}
-
-fn observation_activation_placement_snapshot(
-  compact: bool,
-  window: Option<crate::ScheduleWindow<u64>>,
-  activation_block: u64,
-  repeat: bool,
-) -> (ActivationOutcome, Vec<u8>) {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      Schedule {
-        trigger: RuntimeTrigger::observation_change(55),
-        cooldown_blocks: 0,
-      },
-      window,
-      inert_contract_steps(),
-    );
-    frame_system::Pallet::<Test>::set_block_number(activation_block);
-    let activate = || {
-      if compact {
-        Actors::request_observation_activation_compact(actor_id, 55)
-      } else {
-        Actors::request_activation(actor_id)
-      }
-    };
-    let mut outcome = activate().unwrap_or_else(|error| {
-      panic!(
-        "activation placement succeeds: compact={compact}, window={window:?}, block={activation_block}, error={error:?}"
-      )
-    });
-    if repeat {
-      outcome = activate().unwrap_or_else(|error| {
-        panic!(
-          "repeated activation placement succeeds: compact={compact}, window={window:?}, block={activation_block}, error={error:?}"
-        )
-      });
-    }
-    (
-      outcome,
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-    )
-  })
 }
 
 fn assert_compact_observation_classification_parity(
@@ -301,32 +267,6 @@ fn observation_only_sources_admit_non_trigger_amount_resolutions() {
 }
 
 #[test]
-fn compact_observation_placement_matches_generic_ready_future_coalesced_and_terminal_state() {
-  for (window, activation_block, repeat) in [
-    (None, 1, false),
-    (
-      Some(crate::ScheduleWindow {
-        start: 10,
-        end: 200,
-      }),
-      1,
-      false,
-    ),
-    (None, 1, true),
-    (
-      Some(crate::ScheduleWindow { start: 1, end: 101 }),
-      102,
-      false,
-    ),
-  ] {
-    assert_eq!(
-      observation_activation_placement_snapshot(true, window, activation_block, repeat),
-      observation_activation_placement_snapshot(false, window, activation_block, repeat),
-    );
-  }
-}
-
-#[test]
 fn compact_observation_classification_matches_idle_and_running_authority() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -343,9 +283,9 @@ fn compact_observation_classification_matches_idle_and_running_authority() {
       steps,
     );
     assert_compact_observation_classification_parity(actor_id, 6);
-    Actors::request_activation(actor_id).expect("ObservationChange activation places");
-    Actors::execute_cycle(Weight::MAX);
+    latch_canonical_observation_change(6);
     frame_system::Pallet::<Test>::set_block_number(2);
+    Actors::execute_cycle(Weight::MAX);
     assert_compact_observation_classification_parity(actor_id, 6);
   });
 }
@@ -432,7 +372,7 @@ fn compact_observation_classification_matches_suspension_and_retry_exhaustion() 
     );
     fund_native(actor_id, 100);
     set_temporary_dex_failure(true);
-    Actors::request_activation(actor_id).expect("ObservationChange activation places");
+    latch_canonical_observation_change(11);
     run_idle(Weight::MAX);
 
     let suspended = Actors::actor_run_state(actor_id).expect("temporary failure suspends");
@@ -489,11 +429,10 @@ fn compact_observation_classification_matches_failure_auto_close_pause_and_break
       None,
       inert_contract_steps(),
     );
-    Actors::request_activation(auto_close_actor).expect("ObservationChange activation places");
-    run_idle(Weight::MAX);
     let mut contract = Actors::load_actor_contract(auto_close_actor).expect("Contract loads");
     contract.auto_close_at_cycle_nonce = Some(1);
     assert_ok!(Actors::store_actor_contract(auto_close_actor, contract));
+    set_actor_cycle_nonce_coherent(auto_close_actor, 1);
     assert_eq!(
       assert_compact_observation_classification_parity(auto_close_actor, 13).terminal_reason,
       Some(CloseReason::AutoCloseNonceReached)
@@ -553,7 +492,8 @@ fn compact_observation_activation_loads_only_current_authority_tiers() {
       None,
       steps,
     );
-    Actors::request_activation(actor_id).expect("ObservationChange activation places");
+    latch_canonical_observation_change(7);
+    frame_system::Pallet::<Test>::set_block_number(2);
     Actors::execute_cycle(Weight::MAX);
     assert_eq!(
       crate::ActorRunHeads::<Test>::get(actor_id).map(|head| head.cursor),
