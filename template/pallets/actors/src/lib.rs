@@ -6464,10 +6464,65 @@ pub mod pallet {
               semantic.admission,
             )
             .ok_or(ServiceRoundError::ProcessResidenceMismatch)?;
+            let instance = Self::derive_active_actor_view(
+              state.identity.clone(),
+              state.hot.clone(),
+              state.contract.clone(),
+            );
+            // A due schedule window or an exhausted cycle nonce is terminal before any Step
+            // attempt. The canonical service round must own that decision: an Idle resident has
+            // no Step to attempt, so without this branch a window-expiry deadline returned to
+            // Service would only advance the ring cursor and leave the Actor active past its
+            // window. Close through the same atomic owner used by authored entry points.
+            let terminal_reason = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
+              .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?
+              .terminal_reason;
             let idle_no_work = state.hot.cycle_state == CycleState::Idle
               && !state.hot.pending_signal
               && state.run_state.is_none();
-            if idle_no_work {
+            if let Some(reason) = terminal_reason {
+              let close_envelope = selector_envelope
+                .saturating_add(Self::close_dispatch_weight_upper());
+              let mut reservation =
+                if let Some((resource_state, limits)) = resource_authority.as_mut() {
+                  Some(
+                    resource_state
+                      .reserve(
+                        *limits,
+                        BlockResourceDomain::ActorControl,
+                        if control_owned_by_caller {
+                          Weight::zero()
+                        } else {
+                          close_envelope
+                        },
+                      )
+                      .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
+                  )
+                } else {
+                  None
+                };
+              if !meter.can_consume(selector_envelope.saturating_add(close_envelope)) {
+                return Err(ServiceRoundError::InsufficientWeight);
+              }
+              Self::finalize_actor(actor.actor_id, &instance, reason)
+                .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
+              if let (Some((resource_state, _)), Some(reservation)) =
+                (resource_authority.as_mut(), reservation.as_mut())
+              {
+                resource_state
+                  .settle(
+                    reservation,
+                    if control_owned_by_caller {
+                      Weight::zero()
+                    } else {
+                      close_envelope
+                    },
+                  )
+                  .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
+              }
+              execution_weight = close_envelope;
+              encounter = ServiceRoundEncounter::Closed;
+            } else if idle_no_work {
               // A completed or aborted member is retained in the ring as an Idle resident. A later
               // round revisits it with no admitted work; it must advance the bounded cursor without
               // opening a pipeline, executing a Step, or recording an attempt.

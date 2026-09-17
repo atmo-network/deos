@@ -239,7 +239,7 @@ fn enqueue_latched_actor(actor_id: ActorId) -> bool {
 }
 
 fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
-  Actors::actor_hot(actor_id).and_then(|hot| {
+  let hot = Actors::actor_hot(actor_id).and_then(|hot| {
     hot
       .wakeup_pointer
       .map(|pointer| match pointer.block {
@@ -247,6 +247,15 @@ fn scheduled_wakeup_block(actor_id: crate::ActorId) -> Option<MockBlockNumber> {
         WakeupKey::Tick(tick) => tick,
       })
       .or_else(|| hot.trigger_wakeup_pointer.map(|pointer| pointer.tick))
+  });
+  // A canonically published Actor owns its block deadline in the generation-bound process
+  // residence and `DeadlineHandles`, not in the legacy `hot.wakeup_pointer` projection, so the
+  // query must consult the canonical carrier too.
+  hot.or_else(|| {
+    crate::DeadlineHandles::<Test>::get(actor_id).map(|handle| match handle.key {
+      WakeupKey::Block(block) => block,
+      WakeupKey::Tick(tick) => tick,
+    })
   })
 }
 
