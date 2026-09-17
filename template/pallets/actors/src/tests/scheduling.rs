@@ -6532,32 +6532,34 @@ fn cadenced_rearm_uses_frozen_opening_authority() {
 fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-    ])
-    .expect("two-Step Contract fits");
+    let steps = BoundedVec::try_from(
+      (0..6)
+        .map(|_| {
+          make_step(Task::Transfer {
+            to: BOB,
+            asset: TestAsset::Native,
+            amount: AmountResolution::Fixed(1),
+          })
+        })
+        .collect::<Vec<_>>(),
+    )
+    .expect("six-Step Contract fits");
     let actor_id = create_user_with(ALICE, Mutability::Mutable, timer_schedule(1), None, steps);
     fund_native(actor_id, 1_000_000);
+    // The occurrence at tick 2 publishes one Pending Service for B+1. Opening it on the next block
+    // executes the head plus one bounded drain cohort, re-arms the next cadence deadline, and
+    // leaves the Pipeline Running with a positive cursor.
     frame_system::Pallet::<Test>::set_block_number(2);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(2, &mut meter);
-    Actors::execute_cycle(Weight::MAX);
+    service_canonical_temporal_frontiers(2);
+    run_next_idle(Weight::MAX);
     let run_before = ActorRunStateStore::<Test>::get(actor_id).expect("Pipeline is Running");
     clear_fee_collections();
     System::reset_events();
 
-    frame_system::Pallet::<Test>::set_block_number(3);
-    let mut meter = WeightMeter::with_limit(Weight::MAX);
-    Actors::drain_overdue_wakeups_cursor(3, &mut meter);
+    // The next cadence occurrence fires while the Pipeline is still busy. It only advances the
+    // deadline and must not charge a Trigger fee or publish a future cycle.
+    frame_system::Pallet::<Test>::set_block_number(4);
+    service_canonical_temporal_frontiers(4);
 
     assert!(fee_collections().is_empty());
     let hot = Actors::actor_hot(actor_id).expect("busy Cadenced Actor remains active");
@@ -6565,7 +6567,7 @@ fn busy_cadenced_occurrence_advances_deadline_without_future_cycle() {
     assert!(!hot.pending_signal);
     assert_eq!(
       hot.trigger_wakeup_pointer.map(|pointer| pointer.tick),
-      Some(4)
+      Some(5)
     );
     assert!(!has_actor_event(|event| matches!(
       event,
@@ -6656,25 +6658,30 @@ fn next_block_cadence_rearms_after_each_deferred_opening_without_late_fifo_ticke
         .cycle_nonce,
       0
     );
-    frame_system::Pallet::<Test>::set_block_number(3);
-    Actors::on_idle(3, Weight::MAX);
+
+    // Each cadence occurrence publishes one Pending Service for B+1. The deferred opening executes
+    // the cycle, re-arms the next deadline, and never materializes a legacy FIFO queue ticket.
+    frame_system::Pallet::<Test>::set_block_number(2);
+    service_canonical_temporal_frontiers(2);
+    let latched = Actors::actor_hot(actor_id).expect("Actors exists");
+    assert!(latched.pending_signal);
+    assert!(latched.queue_ticket.is_none());
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+
+    run_next_idle(Weight::MAX);
     let after_first = Actors::active_actor_view(actor_id).expect("Actors exists");
     assert_eq!(after_first.cycle_nonce, 1);
     assert!(after_first.queue_ticket.is_none());
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(3));
-    for block in 3..=6 {
+    assert!(!Actors::pending_signal(actor_id));
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(4));
+
+    for block in [4, 6] {
       frame_system::Pallet::<Test>::set_block_number(block);
-      Actors::on_initialize(block);
-      run_prepass();
-      Actors::on_idle(block, Weight::MAX);
+      service_canonical_temporal_frontiers(block);
+      run_next_idle(Weight::MAX);
       let actor = Actors::active_actor_view(actor_id).expect("Actors exists");
-      if block % 2 == 1 {
-        assert!(actor.pending_signal);
-        assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 0);
-      } else {
-        assert!(!actor.pending_signal);
-        assert_eq!(crate::WakeupCursorLen::<Test>::get(WakeupClock::Tick), 1);
-      }
+      assert!(actor.queue_ticket.is_none());
+      assert!(!actor.pending_signal);
     }
     assert_eq!(
       Actors::active_actor_view(actor_id)
@@ -6697,6 +6704,13 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
     run_idle(Weight::MAX);
     assert_eq!(scheduled_wakeup_block(actor_id), Some(2));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::root(), actor_id));
+
+    // Pause releases the canonical Trigger deadline and leaves no queue ticket or Service
+    // residence behind, so time passing while paused performs no cycle work.
+    assert_eq!(scheduled_wakeup_block(actor_id), None);
+    let paused = Actors::actor_hot(actor_id).expect("paused actor");
+    assert!(paused.lifecycle.is_paused());
+    assert!(paused.queue_ticket.is_none());
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -6706,26 +6720,19 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
       0
     );
     assert_eq!(scheduled_wakeup_block(actor_id), None);
-    let paused = Actors::actor_hot(actor_id).expect("paused actor");
-    assert!(paused.pending_signal);
-    assert!(paused.queue_ticket.is_none());
+
+    // Resume re-arms the cadence from the current tick, so the deferred opening still occurs.
     frame_system::Pallet::<Test>::set_block_number(7);
     assert_ok!(Actors::resume_actor(RuntimeOrigin::root(), actor_id));
-    run_idle(Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(actor_id), Some(8));
+    frame_system::Pallet::<Test>::set_block_number(8);
+    service_canonical_temporal_frontiers(8);
+    run_next_idle(Weight::MAX);
     assert_eq!(
       Actors::active_actor_view(actor_id)
         .expect("Actors exists")
         .cycle_nonce,
       1
-    );
-    assert_eq!(scheduled_wakeup_block(actor_id), Some(8));
-    frame_system::Pallet::<Test>::set_block_number(8);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      Actors::active_actor_view(actor_id)
-        .expect("Actors exists")
-        .cycle_nonce,
-      2
     );
   });
 }
