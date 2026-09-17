@@ -1184,7 +1184,9 @@ fn frame_only_abort_cycle_removes_transaction_local_scalar_bridges() {
       } if *id == actor_id
     )));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::load_frame_control_authority(actor_id).is_some());
+    // The retained Idle resident is canonical; no legacy scalar frame authority is recreated.
+    assert!(Actors::active_actor_state(actor_id).is_some());
+    assert!(Actors::load_frame_control_authority(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -1218,7 +1220,7 @@ fn frame_only_abort_cycle_closes_at_failure_threshold_without_scalar_hot() {
     ));
     set_temporary_dex_failure(true);
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::actor_run_state(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
@@ -2448,7 +2450,7 @@ fn frame_only_productive_completion_closes_without_scalar_hot() {
     fund_native(actor_id, 100);
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), actor_id));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     assert!(Actors::active_actor_view(actor_id).is_none());
     assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));

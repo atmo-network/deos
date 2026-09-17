@@ -2842,7 +2842,7 @@ fn frame_only_manual_zero_step_uses_only_canonical_control() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("frame successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -2854,13 +2854,13 @@ fn frame_only_manual_zero_step_uses_only_canonical_control() {
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
     );
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    // Public creation already publishes canonical semantic/process authority, so no legacy control
+    // locator or scalar hot cell survives the completed zero-Step cycle.
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
+    assert!(crate::ActorSemanticStates::<Test>::contains_key(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
       Event::CycleSummary {
@@ -2895,7 +2895,7 @@ fn frame_only_opening_stop_cycle_uses_only_canonical_control() {
       actor_id
     ));
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("StopCycle successor remains active");
     assert_eq!(state.identity.cycle_nonce, 1);
@@ -2914,13 +2914,10 @@ fn frame_only_opening_stop_cycle_uses_only_canonical_control() {
         step_index: 0,
       } if *id == actor_id
     )));
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -3620,12 +3617,11 @@ fn frame_only_paused_ready_pop_uses_only_canonical_control() {
     ));
     assert_ok!(Actors::pause_actor(RuntimeOrigin::signed(ALICE), actor_id));
     let paused_before =
-      Actors::actor_control_cell(actor_id).expect("pause atom retains canonical authority");
-    assert_eq!(paused_before.0, crate::ActorControlLocation::Unsignaled);
-    assert!(paused_before.1.hot.lifecycle.is_paused());
+      Actors::active_actor_state(actor_id).expect("pause atom retains canonical authority");
+    assert!(paused_before.hot.lifecycle.is_paused());
     System::reset_events();
 
-    Actors::on_idle(1, Weight::MAX);
+    run_next_idle(Weight::MAX);
 
     let state = Actors::active_actor_state(actor_id).expect("paused authority remains active");
     assert!(state.hot.lifecycle.is_paused());
@@ -3635,13 +3631,10 @@ fn frame_only_paused_ready_pop_uses_only_canonical_control() {
       crate::ActorStateHolds::<Test>::get(actor_id),
       Some(installed_hold)
     );
-    assert!(matches!(
-      crate::ActorControlLocators::<Test>::get(actor_id),
-      Some(crate::ActorControlLocation::Unsignaled)
-    ));
+    assert!(!crate::ActorControlLocators::<Test>::contains_key(actor_id));
     assert!(!ActorIdentities::<Test>::contains_key(actor_id));
-    assert!(Actors::actor_hot(actor_id).is_some());
-    assert!(Actors::actor_control_cell(actor_id).is_some());
+    assert!(Actors::actor_hot(actor_id).is_none());
+    assert!(Actors::actor_control_cell(actor_id).is_none());
     assert!(!has_actor_event(|event| matches!(
       event,
       Event::CycleStarted { actor_id: id, .. } if *id == actor_id
