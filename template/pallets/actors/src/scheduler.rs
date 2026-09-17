@@ -556,14 +556,15 @@ impl<T: Config> Pallet<T> {
         ServiceHeadDiscovery::Empty => {}
         ServiceHeadDiscovery::Eligible(_actor, _kind) => {
           let result = match resources.as_mut() {
-            Some((state, limits, _, _)) => {
+            Some((state, limits, domain, _)) => {
               let control_before = state.usage().actor_control_used();
               let effect_before = state.usage().actor_effect_used();
-              let result = Self::service_canonical_round_head_with_resources(
+              let result = Self::service_canonical_round_head_with_reserved_control(
                 &mut cycle_meter,
                 now,
                 &mut **state,
                 *limits,
+                *domain,
               );
               if result.is_ok() {
                 let control = state
@@ -2849,15 +2850,19 @@ impl<T: Config> Pallet<T> {
       {
         return Err(SimulationError::NotReady);
       }
-      let (encounter, attempt) =
-        Self::service_canonical_round_head_inner(&mut cycle_meter, now, None).map_err(|error| {
-          match error {
-            ServiceRoundError::InsufficientWeight | ServiceRoundError::ResourceUnavailable => {
-              SimulationError::ResourceDeferred
-            }
-            _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
-          }
-        })?;
+      let (encounter, attempt) = Self::service_canonical_round_head_inner(
+        &mut cycle_meter,
+        now,
+        None,
+        BlockResourceDomain::ActorDrainEffect,
+        false,
+      )
+      .map_err(|error| match error {
+        ServiceRoundError::InsufficientWeight | ServiceRoundError::ResourceUnavailable => {
+          SimulationError::ResourceDeferred
+        }
+        _ => SimulationError::Classification(ActorClassificationError::ActorInvariant),
+      })?;
       if encounter != ServiceRoundEncounter::Eligible(actor) {
         return Err(SimulationError::NotReady);
       }

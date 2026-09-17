@@ -6371,7 +6371,14 @@ pub mod pallet {
       meter: &mut WeightMeter,
       now: BlockNumberFor<T>,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
-      Self::service_canonical_round_head_inner(meter, now, None).map(|(encounter, _)| encounter)
+      Self::service_canonical_round_head_inner(
+        meter,
+        now,
+        None,
+        BlockResourceDomain::ActorDrainEffect,
+        false,
+      )
+      .map(|(encounter, _)| encounter)
     }
 
     pub(crate) fn service_canonical_round_head_with_resources(
@@ -6379,9 +6386,36 @@ pub mod pallet {
       now: BlockNumberFor<T>,
       state: &mut BlockResourceState<BlockNumberFor<T>>,
       limits: BlockResourceLimits,
+      effect_domain: BlockResourceDomain,
     ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
-      Self::service_canonical_round_head_inner(meter, now, Some((state, limits)))
-        .map(|(encounter, _)| encounter)
+      Self::service_canonical_round_head_inner(
+        meter,
+        now,
+        Some((state, limits)),
+        effect_domain,
+        false,
+      )
+      .map(|(encounter, _)| encounter)
+    }
+
+    /// Variant for callers already holding the pass-wide `ActorControl` reservation. Nested step
+    /// control is accounted by that outer reservation, so this seam reserves only effect capacity
+    /// and leaves control settlement to the enclosing `CyclePass` reconciliation.
+    pub(crate) fn service_canonical_round_head_with_reserved_control(
+      meter: &mut WeightMeter,
+      now: BlockNumberFor<T>,
+      state: &mut BlockResourceState<BlockNumberFor<T>>,
+      limits: BlockResourceLimits,
+      effect_domain: BlockResourceDomain,
+    ) -> Result<ServiceRoundEncounter, ServiceRoundError> {
+      Self::service_canonical_round_head_inner(
+        meter,
+        now,
+        Some((state, limits)),
+        effect_domain,
+        true,
+      )
+      .map(|(encounter, _)| encounter)
     }
 
     pub(crate) fn service_canonical_round_head_inner(
@@ -6391,6 +6425,8 @@ pub mod pallet {
         &mut BlockResourceState<BlockNumberFor<T>>,
         BlockResourceLimits,
       )>,
+      effect_domain: BlockResourceDomain,
+      control_owned_by_caller: bool,
     ) -> Result<
       (
         ServiceRoundEncounter,
@@ -6442,7 +6478,11 @@ pub mod pallet {
                       .reserve(
                         *limits,
                         BlockResourceDomain::ActorControl,
-                        selector_envelope,
+                        if control_owned_by_caller {
+                          Weight::zero()
+                        } else {
+                          selector_envelope
+                        },
                       )
                       .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
                   )
@@ -6455,7 +6495,14 @@ pub mod pallet {
                 (resource_authority.as_mut(), reservation.as_mut())
               {
                 resource_state
-                  .settle(reservation, selector_envelope)
+                  .settle(
+                    reservation,
+                    if control_owned_by_caller {
+                      Weight::zero()
+                    } else {
+                      selector_envelope
+                    },
+                  )
                   .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
               execution_weight = Weight::zero();
@@ -6523,10 +6570,14 @@ pub mod pallet {
                     resource_state
                       .reserve_actor_step(
                         *limits,
-                        BlockResourceDomain::ActorDrainEffect,
-                        selector_envelope
-                          .saturating_add(resources.control)
-                          .saturating_add(suffix),
+                        effect_domain,
+                        if control_owned_by_caller {
+                          Weight::zero()
+                        } else {
+                          selector_envelope
+                            .saturating_add(resources.control)
+                            .saturating_add(suffix)
+                        },
                         resources.effect,
                       )
                       .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
@@ -6545,9 +6596,13 @@ pub mod pallet {
               )
               .map_err(|_| ServiceRoundError::ProcessResidenceMismatch)?;
               attempt = Some(evidence.attempt);
-              let actual_control = selector_envelope
-                .saturating_add(evidence.actual_control_weight)
-                .saturating_add(suffix);
+              let actual_control = if control_owned_by_caller {
+                Weight::zero()
+              } else {
+                selector_envelope
+                  .saturating_add(evidence.actual_control_weight)
+                  .saturating_add(suffix)
+              };
               if let (Some((resource_state, _)), Some(reservation)) =
                 (resource_authority.as_mut(), reservation.as_mut())
               {
@@ -6566,7 +6621,11 @@ pub mod pallet {
                       .reserve(
                         *limits,
                         BlockResourceDomain::ActorControl,
-                        selector_envelope.saturating_add(zero_step_envelope),
+                        if control_owned_by_caller {
+                          Weight::zero()
+                        } else {
+                          selector_envelope.saturating_add(zero_step_envelope)
+                        },
                       )
                       .map_err(|_| ServiceRoundError::ResourceUnavailable)?,
                   )
@@ -6590,7 +6649,11 @@ pub mod pallet {
                 resource_state
                   .settle(
                     reservation,
-                    selector_envelope.saturating_add(zero_step_envelope),
+                    if control_owned_by_caller {
+                      Weight::zero()
+                    } else {
+                      selector_envelope.saturating_add(zero_step_envelope)
+                    },
                   )
                   .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
               }
@@ -6601,11 +6664,22 @@ pub mod pallet {
               .reserve(
                 *limits,
                 BlockResourceDomain::ActorControl,
-                selector_envelope,
+                if control_owned_by_caller {
+                  Weight::zero()
+                } else {
+                  selector_envelope
+                },
               )
               .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
             resource_state
-              .settle(&mut reservation, selector_envelope)
+              .settle(
+                &mut reservation,
+                if control_owned_by_caller {
+                  Weight::zero()
+                } else {
+                  selector_envelope
+                },
+              )
               .map_err(|_| ServiceRoundError::ResourceUnavailable)?;
           }
           Ok((encounter, execution_weight, attempt))
@@ -9379,6 +9453,7 @@ pub mod pallet {
             now,
             &mut state,
             budget.limits(),
+            BlockResourceDomain::ActorDrainEffect,
           );
           let service_weight = service_meter.consumed();
           let control_maximum = budget

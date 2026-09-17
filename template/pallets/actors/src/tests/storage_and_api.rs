@@ -6092,6 +6092,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
         5,
         &mut resource_refused,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Err(ServiceRoundError::ResourceUnavailable)
     );
@@ -6108,6 +6109,7 @@ fn mandatory_service_frontier_pre_admits_and_executes_one_effectful_head() {
         5,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6183,6 +6185,7 @@ fn mandatory_service_commits_abort_cycle_failure_and_retains_service_residence()
         5,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6268,6 +6271,7 @@ fn mandatory_service_commits_permanent_retry_failure_without_parking() {
         5,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6363,6 +6367,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
         5,
         &mut first_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6407,6 +6412,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
         6,
         &mut resource_refused,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Err(ServiceRoundError::ResourceUnavailable)
     );
@@ -6442,6 +6448,7 @@ fn mandatory_service_closes_locally_exhausted_retry_and_removes_residence() {
         6,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6534,6 +6541,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
         5,
         &mut first_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6580,6 +6588,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
         6,
         &mut resource_refused,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Err(ServiceRoundError::ResourceUnavailable)
     );
@@ -6615,6 +6624,7 @@ fn mandatory_service_closes_at_global_failure_limit_and_rolls_back_refusal() {
         6,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6713,6 +6723,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
         5,
         &mut first_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6752,6 +6763,7 @@ fn mandatory_service_continues_after_failed_step_without_repeating_the_prefix() 
         6,
         &mut second_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );
@@ -6840,6 +6852,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
         2,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Err(ServiceRoundError::ProcessResidenceMismatch)
     );
@@ -6857,6 +6870,7 @@ fn mandatory_service_routes_later_retry_through_preplanned_block_deadline() {
         2,
         &mut resource_state,
         budget.limits(),
+        crate::BlockResourceDomain::ActorDrainEffect,
       ),
       Ok(ServiceRoundEncounter::Eligible(actor))
     );

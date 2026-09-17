@@ -3751,6 +3751,45 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
 }
 
 #[test]
+fn mandatory_prepass_pass_admits_effectful_service_without_double_reserving_control() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_contract_steps(BOB, 1),
+    );
+    fund_native(actor_id, 1_000);
+    assert_ok!(Actors::manual_trigger(
+      RuntimeOrigin::signed(ALICE),
+      actor_id
+    ));
+    assert!(crate::ActorControlLocators::<Test>::get(actor_id).is_none());
+    frame_system::Pallet::<Test>::set_block_number(2);
+    let budget = TestBlockResourceBudget::get();
+    let mut resource_state = crate::BlockResourceState::new(2);
+    assert_eq!(resource_state.begin_prepass(), Ok(()));
+    // The enclosing pass owns the ActorControl envelope; the canonical Service round must admit
+    // the effectful head without reserving that control a second time.
+    Actors::execute_cycle_to_cutoff_with_resources(
+      Weight::MAX,
+      Actors::next_queue_ticket(),
+      &mut resource_state,
+      budget.limits(),
+      crate::BlockResourceDomain::ActorBaseEffect,
+      budget.limits().actor_control(),
+    );
+    let executed = Actors::active_actor_view(actor_id).expect("Actors exists");
+    assert_eq!(executed.cycle_nonce, 1);
+    assert!(!executed.pending_signal);
+    assert_eq!(resource_state.outstanding_reservations(), 0);
+    assert!(resource_state.usage().actor_effect_used() != Weight::zero());
+    assert!(crate::ActorControlLocators::<Test>::get(actor_id).is_none());
+  });
+}
+
+#[test]
 fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
