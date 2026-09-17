@@ -2852,13 +2852,6 @@ impl<T: Config> Pallet<T> {
     resources
       .begin_drain()
       .map_err(|_| SimulationError::InvalidBudget)?;
-    let mut reservation = resources
-      .reserve(
-        limits,
-        BlockResourceDomain::ActorControl,
-        budget.actor_control,
-      )
-      .map_err(|_| SimulationError::ResourceDeferred)?;
     let mut control_meter = WeightMeter::with_limit(budget.actor_control);
     let mut cycle_meter = WeightMeter::with_limit(
       budget
@@ -2904,7 +2897,7 @@ impl<T: Config> Pallet<T> {
       let (encounter, attempt) = Self::service_canonical_round_head_inner(
         &mut cycle_meter,
         now,
-        None,
+        Some((&mut resources, limits)),
         BlockResourceDomain::ActorDrainEffect,
         false,
       )
@@ -2931,6 +2924,13 @@ impl<T: Config> Pallet<T> {
         _ => Err(SimulationError::NotReady),
       };
     }
+    let mut reservation = resources
+      .reserve(
+        limits,
+        BlockResourceDomain::ActorControl,
+        budget.actor_control,
+      )
+      .map_err(|_| SimulationError::ResourceDeferred)?;
     let (location, cell) = Self::load_primary_control_cell(actor_id)
       .map_err(|_| SimulationError::Classification(ActorClassificationError::ActorInvariant))?;
     let (terminal_state, terminal_admission, _) = Self::load_frame_actor_service_state(actor_id)

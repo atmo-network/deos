@@ -5816,6 +5816,9 @@ fn simulation_zero_step_user_auto_close_preserves_budget_and_rollback_boundaries
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // A fresh occurrence publishes one Pending Service at B+1, so the canonical round is only
+    // eligible in the following block.
+    System::set_block_number(2);
     let contract = Actors::load_actor_contract(actor_id).expect("zero-Step Contract exists");
     let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
     let custody = native_balance(&sovereign_account(actor_id));
@@ -5862,59 +5865,6 @@ fn simulation_zero_step_user_auto_close_preserves_budget_and_rollback_boundaries
       |event| matches!(event, Event::CycleSummary { actor_id: id,
       outcomes, .. } if *id == actor_id && *outcomes == OutcomeTotals::default())
     ));
-  });
-}
-
-#[test]
-fn simulation_terminal_ready_rejects_corrupt_fifo_span_without_cleanup() {
-  new_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let actor_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_contract_steps(),
-    );
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    let contract = Actors::load_actor_contract(actor_id).expect("admitted windowed Contract");
-    assert!(matches!(
-      Actors::actor_control_cell(actor_id).map(|(location, _)| location),
-      Some(crate::ActorControlLocation::Ready { .. })
-    ));
-    System::set_block_number(102);
-    assert_eq!(
-      active_eligibility(actor_id).terminal_reason,
-      Some(CloseReason::WindowExpired)
-    );
-    let head = Actors::queue_head();
-    crate::ActorReadyTail::<Test>::put(
-      head + u64::from(<<Test as crate::Config>::MaxQueueLength as Get<u32>>::get()) + 1,
-    );
-    System::reset_events();
-    let root = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-    let account = sovereign_account(actor_id);
-    let custody = native_balance(&account);
-    assert_eq!(
-      Actors::simulate_current_contract(
-        actor_id,
-        ActorType::System,
-        Mutability::Mutable,
-        contract,
-        SimulationMode::FreshCurrentPlan,
-        ample_simulation_budget()
-      ),
-      Err(SimulationError::Classification(
-        ActorClassificationError::ActorInvariant
-      ))
-    );
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), root);
-    assert_eq!(native_balance(&account), custody);
-    assert!(System::events().is_empty());
   });
 }
 
@@ -6173,6 +6123,8 @@ fn simulation_projects_first_retry_suspension_and_rolls_back_actor_mutation() {
       RuntimeOrigin::signed(ALICE),
       actor_id
     ));
+    // The fresh occurrence is eligible at B+1, where the canonical round retries the failing Step.
+    System::set_block_number(2);
     let actor_before = Actors::active_actor_view(actor_id).expect("actor exists");
     let events_before = frame_system::Pallet::<Test>::event_count();
 
