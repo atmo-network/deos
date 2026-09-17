@@ -674,21 +674,9 @@ fn mutate_actor_hot_coherent(
   actor_id: ActorId,
   mutate: impl FnOnce(&mut crate::ActorHotStateOf<Test>),
 ) {
-  // Public creation publishes canonical semantic/process authority and no legacy control cell, so
-  // route through the semantic owner when the actor has crossed over and keep the legacy physical
-  // primary for fixtures that still publish it directly.
-  if ActorControlLocators::<Test>::contains_key(actor_id) {
-    assert_ok!(Actors::try_mutate_control_hot(
-      actor_id,
-      Error::<Test>::ActorNotFound,
-      |hot| {
-        mutate(hot);
-        Ok(())
-      }
-    ));
-    return;
-  }
-  assert_ok!(Actors::try_mutate_actor_hot_semantic(
+  // `try_mutate_control_hot` follows the semantic owner for a canonically published actor and the
+  // mirrored primary for a pre-cutover fixture that still stages one, so both builds share it.
+  assert_ok!(Actors::try_mutate_control_hot(
     actor_id,
     Error::<Test>::ActorNotFound,
     |hot| {

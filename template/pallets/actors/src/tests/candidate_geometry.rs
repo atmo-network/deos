@@ -262,7 +262,7 @@ fn frame_install_direct_ready(step: StepOf<Test>, count: u32) -> Vec<ActorId> {
       Some(cell)
     );
   }
-  assert_eq!(ActorReadyOccupancy::<Test>::get(), count);
+  assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), count);
   actor_ids
 }
 
@@ -327,7 +327,7 @@ fn frame_install_direct_zero_step_ready(
     Actors::actor_control_cell(actor_id).map(|(_, stored)| stored),
     Some(cell)
   );
-  assert_eq!(ActorReadyOccupancy::<Test>::get(), 1);
+  assert_eq!(crate::ActorReadyOccupancy::<Test>::get(), 1);
   (actor_id, queue_ticket)
 }
 

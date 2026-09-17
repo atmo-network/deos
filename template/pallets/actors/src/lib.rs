@@ -7202,30 +7202,6 @@ pub mod pallet {
       Self::try_mutate_control_hot(actor_id, missing, mutate)
     }
 
-    /// Test-only hot mutation for a canonically published actor that owns no legacy control cell.
-    /// Updates the semantic owner through the same compare-and-replace seam production uses.
-    #[cfg(all(test, not(feature = "runtime-benchmarks")))]
-    pub(crate) fn try_mutate_actor_hot_semantic<R>(
-      actor_id: ActorId,
-      missing: Error<T>,
-      mutate: impl FnOnce(&mut ActorHotStateOf<T>) -> Result<R, DispatchError>,
-    ) -> Result<R, DispatchError> {
-      let current = ActorSemanticStates::<T>::get(actor_id).ok_or(missing)?;
-      let ActorSemanticState::Active(mut record) = current.clone() else {
-        return Err(Error::<T>::ActorInvariant.into());
-      };
-      let output = mutate(&mut record.hot)?;
-      Self::mutate_actor_semantic_state(
-        actor_id,
-        ActorSemanticMutation::Replace {
-          expected: current,
-          replacement: ActorSemanticState::Active(record),
-        },
-      )
-      .map_err(|_| Error::<T>::ActorInvariant)?;
-      Ok(output)
-    }
-
     /// Identity mutation follows its active-primary or dormant-registry owner.
     #[cfg(test)]
     pub(crate) fn try_mutate_control_identity<R>(
