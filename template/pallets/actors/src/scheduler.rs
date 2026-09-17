@@ -6640,14 +6640,6 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  #[cfg(test)]
-  pub(crate) fn try_wakeup_substrate_schedule_inner(
-    actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    Self::try_wakeup_substrate_schedule_key_inner(actor_id, WakeupKey::Block(wakeup_block))
-  }
-
   #[cfg(any(test, feature = "runtime-benchmarks"))]
   fn try_wakeup_substrate_schedule_key_inner(
     actor_id: ActorId,

@@ -180,26 +180,6 @@ fn run_contract_authority(actor_id: ActorId) -> ActorRunAuthority<[u8; 32]> {
   }
 }
 
-fn schedule_latched_service_wakeup(actor_id: ActorId, wakeup_block: MockBlockNumber) -> bool {
-  let Some((location, cell)) = Actors::actor_control_cell(actor_id) else {
-    return false;
-  };
-  let Some((identity, mut hot, admission)) = Actors::project_control_cell(&cell, location) else {
-    return false;
-  };
-  hot.pending_signal = true;
-  Actors::try_wakeup_substrate_schedule_transition_with_authority(
-    actor_id,
-    WakeupKey::Block(wakeup_block),
-    hot,
-    &identity,
-    cell.cursor,
-    &admission,
-    cell.resources,
-  )
-  .is_ok()
-}
-
 fn enqueue_latched_actor(actor_id: ActorId) -> bool {
   let Some(mut hot) = Actors::actor_hot(actor_id) else {
     return false;
@@ -1109,10 +1089,10 @@ mod proptest_actor {
     run_prepass, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
   };
   use crate::{
-    ActorControlLocators, ActorIdentities, ActorReadyOccupancy, ActorRunStateStore,
-    AmountResolution, AssetFilter, CrossingDirection, CrossingPhase, CrossingTransition,
-    CycleState, Event, FundingSourcePolicy, Mutability, ObservationCrossing, SourceFilter,
-    StepErrorPolicy, StepOf, SystemSovereignState, SystemSovereigns, Task, Trigger, mock::*,
+    ActorControlLocators, ActorIdentities, ActorRunStateStore, AmountResolution, AssetFilter,
+    CrossingDirection, CrossingPhase, CrossingTransition, CycleState, Event, FundingSourcePolicy,
+    Mutability, ObservationCrossing, SourceFilter, StepErrorPolicy, StepOf, SystemSovereignState,
+    SystemSovereigns, Task, Trigger, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -1121,7 +1101,7 @@ mod proptest_actor {
   };
   use polkadot_sdk::{
     frame_system,
-    sp_runtime::{Perbill, StateVersion, Weight},
+    sp_runtime::{Perbill, Weight},
   };
   use proptest::prelude::*;
 
@@ -1492,58 +1472,71 @@ mod proptest_actor {
     tracked_accounts: &std::collections::BTreeSet<AccountId>,
     conserved_total: Balance,
   ) {
-    let hot_ids: std::collections::BTreeSet<_> =
-      ActorControlLocators::<Test>::iter_keys().collect();
+    let semantic_records: std::collections::BTreeMap<_, _> =
+      crate::ActorSemanticStates::<Test>::iter().collect();
+    let active_ids: std::collections::BTreeSet<_> = semantic_records
+      .iter()
+      .filter_map(|(actor_id, state)| {
+        matches!(state, crate::ActorSemanticState::Active(_)).then_some(*actor_id)
+      })
+      .collect();
+    let semantic_dormant_ids: std::collections::BTreeSet<_> = semantic_records
+      .iter()
+      .filter_map(|(actor_id, state)| {
+        matches!(state, crate::ActorSemanticState::Dormant(_)).then_some(*actor_id)
+      })
+      .collect();
+    let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
+    assert_eq!(
+      semantic_dormant_ids, dormant_ids,
+      "dormant identity registry agrees with the semantic dormant partition"
+    );
+    let identity_ids: std::collections::BTreeSet<_> =
+      active_ids.union(&dormant_ids).copied().collect();
     let contract_ids: std::collections::BTreeSet<_> =
       crate::ActorContractHeads::<Test>::iter_keys().collect();
-    let dormant_ids: std::collections::BTreeSet<_> = ActorIdentities::<Test>::iter_keys().collect();
-    assert!(hot_ids.is_disjoint(&dormant_ids));
-    let identity_ids: std::collections::BTreeSet<_> =
-      hot_ids.union(&dormant_ids).copied().collect();
+    let process_ids: std::collections::BTreeSet<_> =
+      crate::ActorProcesses::<Test>::iter_keys().collect();
     let run_ids: std::collections::BTreeSet<_> = ActorRunStateStore::<Test>::iter_keys().collect();
-    assert_eq!(hot_ids, contract_ids);
-    assert!(run_ids.is_subset(&hot_ids));
-    assert!(hot_ids.is_subset(&identity_ids));
-    assert_eq!(Actors::active_actor_count() as usize, hot_ids.len());
-    assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
-    let primary_ids: Vec<_> = crate::ActorUnsignaledControlCells::<Test>::iter_values()
-      .map(|cell| cell.actor_id)
-      .chain(
-        crate::ActorReadyFrameChunks::<Test>::iter_values()
-          .flat_map(|page| page.into_iter().flatten().map(|cell| cell.actor_id)),
-      )
-      .chain(
-        crate::ActorWaitingFrameChunks::<Test>::iter_values().flat_map(|page| {
-          page
-            .entries
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.into_primary().map(|cell| cell.actor_id))
-        }),
-      )
-      .collect();
     assert_eq!(
-      primary_ids.len(),
-      hot_ids.len(),
-      "each active Actor has exactly one primary"
+      active_ids, contract_ids,
+      "every active Actor owns admitted Contract geometry"
     );
     assert_eq!(
-      primary_ids
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>(),
-      hot_ids
+      active_ids, process_ids,
+      "every active Actor owns one generation-bound process"
+    );
+    assert!(run_ids.is_subset(&active_ids));
+    assert_eq!(Actors::active_actor_count() as usize, active_ids.len());
+    assert_eq!(Actors::actor_identity_count() as usize, identity_ids.len());
+    assert!(
+      ActorControlLocators::<Test>::iter_keys().next().is_none(),
+      "canonical publication never recreates a legacy control locator"
     );
     let run_payload_ids: std::collections::BTreeSet<_> =
       crate::ActorRunPayloads::<Test>::iter_keys().collect();
     assert_eq!(
       run_ids, run_payload_ids,
-      "Run head and payload inventories agree"
+      "canonical Run head and payload tiers agree"
     );
 
-    let mut live_tickets = std::collections::BTreeSet::new();
-    let mut live_wakeups = std::collections::BTreeSet::new();
-    for actor_id in &hot_ids {
-      let hot = Actors::actor_hot(*actor_id).expect("primary hot state resolves");
+    for actor_id in &active_ids {
+      let crate::ActorSemanticState::Active(record) = semantic_records
+        .get(actor_id)
+        .expect("active semantic record")
+      else {
+        unreachable!("active partition")
+      };
+      assert!(
+        Actors::load_canonical_actor_semantic_state(crate::ActorRef {
+          actor_id: *actor_id,
+          generation: record.generation,
+        })
+        .is_ok(),
+        "active Actor {actor_id} owns coherent canonical process/residence authority"
+      );
+      let hot = Actors::actor_hot(*actor_id).expect("active hot state resolves");
+      assert_eq!(hot, record.hot, "Hot projection matches its semantic owner");
       let identity = Actors::actor_identity(*actor_id).expect("primary identity resolves");
       assert_eq!(
         Actors::sovereign_index(&identity.sovereign_account),
@@ -1571,75 +1564,7 @@ mod proptest_actor {
           CycleState::Idle => panic!("Idle Actor cannot retain run state"),
         }
       }
-      if let Some(ticket) = hot.queue_ticket {
-        assert!(
-          live_tickets.insert(ticket),
-          "duplicate live queue ticket {ticket}"
-        );
-        let resolves = crate::ActorReadyFrameChunks::<Test>::get(ticket / 32)
-          .and_then(|page| page.get((ticket % 32) as usize).cloned().flatten())
-          .is_some_and(|cell| cell.actor_id == *actor_id);
-        assert!(resolves, "live ticket resolves inside the canonical FIFO");
-      }
-      if let Some(pointer) = hot.wakeup_pointer {
-        assert!(
-          live_wakeups.insert((pointer.block, pointer.page_id, pointer.slot)),
-          "duplicate live wakeup pointer"
-        );
-        let page = crate::ActorWaitingFrameChunks::<Test>::get((pointer.block, pointer.page_id))
-          .expect("live wakeup page exists");
-        assert_eq!(
-          page
-            .entries
-            .get(pointer.slot as usize)
-            .and_then(Option::as_ref)
-            .map(|entry| match entry {
-              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
-              crate::ActorWaitingEntry::Reference(reference) => {
-                assert_eq!(
-                  reference.admission_identity,
-                  Actors::actor_control_cell(*actor_id)
-                    .expect("primary admission")
-                    .1
-                    .admission
-                    .admission_identity
-                );
-                reference.actor_id
-              }
-            }),
-          Some(*actor_id)
-        );
-      }
-      if let Some(pointer) = hot.trigger_wakeup_pointer {
-        let key = crate::WakeupKey::Tick(pointer.tick);
-        assert!(
-          live_wakeups.insert((key, pointer.page_id, pointer.slot)),
-          "duplicate live Trigger wakeup pointer"
-        );
-        let page = crate::ActorWaitingFrameChunks::<Test>::get((key, pointer.page_id))
-          .expect("live Trigger wakeup page exists");
-        assert_eq!(
-          page
-            .entries
-            .get(pointer.slot as usize)
-            .and_then(Option::as_ref)
-            .map(|entry| match entry {
-              crate::ActorWaitingEntry::Primary(cell) => cell.actor_id,
-              crate::ActorWaitingEntry::Reference(reference) => {
-                assert_eq!(
-                  reference.admission_identity,
-                  Actors::actor_control_cell(*actor_id)
-                    .expect("primary admission")
-                    .1
-                    .admission
-                    .admission_identity
-                );
-                reference.actor_id
-              }
-            }),
-          Some(*actor_id)
-        );
-      }
+      assert!(hot.queue_ticket.is_none() && hot.wakeup_pointer.is_none());
     }
     for actor_id in &dormant_ids {
       let identity = ActorIdentities::<Test>::get(actor_id).expect("dormant key resolves");
@@ -1662,7 +1587,7 @@ mod proptest_actor {
           assert_eq!(Actors::sovereign_index(sovereign), None);
         }
       } else {
-        assert!(hot_ids.contains(&actor_id) || dormant_ids.contains(&actor_id));
+        assert!(active_ids.contains(&actor_id) || dormant_ids.contains(&actor_id));
       }
     }
     assert_eq!(Actors::owner_slot_bitmap(ALICE), [0; 32]);
@@ -1819,13 +1744,13 @@ mod proptest_actor {
             );
             actor_ids.push((actor_id, owner));
           }
-          let after_create = ActorControlLocators::<Test>::iter_keys().count();
+          let after_create = Actors::active_actor_count() as usize;
           let close_count = closes.min(creates);
           for i in 0..close_count {
             let (actor_id, owner) = actor_ids[i as usize];
             assert_ok!(Actors::close_actor(RuntimeOrigin::signed(owner), actor_id));
           }
-          let after_close = ActorControlLocators::<Test>::iter_keys().count();
+          let after_close = Actors::active_actor_count() as usize;
           (after_create, after_close, (creates - close_count) as usize)
         });
       prop_assert_eq!(active_after_create, creates as usize);
@@ -1836,73 +1761,6 @@ mod proptest_actor {
         expected_after_close,
         active_after_close
       );
-    }
-  }
-
-  proptest! {
-    #![proptest_config(ProptestConfig {
-      cases: 32,
-      rng_seed: proptest::test_runner::RngSeed::Fixed(0xDE05_0731),
-      ..ProptestConfig::default()
-    })]
-
-    #[test]
-    fn seeded_scheduler_corruption_transitions_preserve_exact_pre_state(
-      corruption in 0u8..5,
-    ) {
-      new_test_ext().execute_with(|| {
-        frame_system::Pallet::<Test>::set_block_number(1);
-        let actor_id = create_system_with(ALICE, manual_schedule(), None, inert_contract_steps());
-        let rejected = match corruption {
-          0 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            crate::ActorWaitingCursorIndices::<Test>::remove(crate::WakeupKey::Block(10));
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          1 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            super::mutate_primary_control_cell(actor_id, |cell| {
-              cell.hot.wakeup_pointer
-                .as_mut().expect("pointer").slot = 7;
-            });
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          2 => {
-            assert!(super::schedule_latched_service_wakeup(actor_id, 10));
-            crate::ActorWaitingOccupancies::<Test>::insert(crate::WakeupKey::Block(10), 0);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::try_wakeup_substrate_schedule_inner(actor_id, 20).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          3 => {
-            assert!(super::enqueue_latched_actor(actor_id));
-            assert!(Actors::paged_invalidate(actor_id).is_some());
-            ActorReadyOccupancy::<Test>::put(2);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-          _ => {
-            assert!(super::enqueue_latched_actor(actor_id));
-            assert!(Actors::paged_invalidate(actor_id).is_some());
-            crate::ActorReadyFrameChunks::<Test>::remove(0);
-            let before = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
-            let rejected = Actors::paged_drain_tombstones(Actors::next_queue_ticket(), 1).is_err();
-            prop_assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-            rejected
-          }
-        };
-        prop_assert!(rejected);
-        Ok(())
-      })?;
     }
   }
 
@@ -1965,11 +1823,26 @@ mod proptest_actor {
         for (index, operation) in operations.iter().enumerate() {
           let block = (index as u64).saturating_add(2);
           frame_system::Pallet::<Test>::set_block_number(block);
-          let before_hot: std::collections::BTreeMap<_, _> = ActorControlLocators::<Test>::iter_keys()
-            .map(|id| (id, Actors::actor_hot(id).expect("active primary"))).collect();
+          let is_active = || {
+            matches!(
+              crate::ActorSemanticStates::<Test>::get(system_id),
+              Some(crate::ActorSemanticState::Active(_))
+            )
+          };
+          let before_hot: std::collections::BTreeMap<_, _> =
+            crate::ActorSemanticStates::<Test>::iter()
+              .filter_map(|(actor_id, state)| {
+                matches!(state, crate::ActorSemanticState::Active(_)).then_some(actor_id)
+              })
+              .map(|id| (id, Actors::actor_hot(id).expect("active hot state")))
+              .collect();
           let before_identities: std::collections::BTreeMap<_, _> =
-            ActorIdentities::<Test>::iter().chain(ActorControlLocators::<Test>::iter_keys()
-              .map(|id| (id, Actors::actor_identity(id).expect("active identity")))).collect();
+            crate::ActorSemanticStates::<Test>::iter()
+              .filter_map(|(actor_id, state)| {
+                matches!(state, crate::ActorSemanticState::Active(_)).then_some(actor_id)
+              })
+              .map(|id| (id, Actors::actor_identity(id).expect("active identity")))
+              .collect();
           let before_continuation = ActorRunStateStore::<Test>::get(system_id);
           let before_system_balance = Balances::free_balance(system_sovereign);
           let before_bob_balance = Balances::free_balance(BOB);
@@ -1978,23 +1851,21 @@ mod proptest_actor {
           match operation {
             ModelOp::Create => {}
             ModelOp::Activate
-              if !closed
-                && ActorIdentities::<Test>::contains_key(system_id)
-                && !ActorControlLocators::<Test>::contains_key(system_id) => {
+              if !closed && ActorIdentities::<Test>::contains_key(system_id) && !is_active() => {
               let _ = Actors::activate_actor(
                 RuntimeOrigin::root(),
                 system_id,
                 system_contract(Trigger::manual()).expect("direct Actor Contract"),
               );
             }
-            ModelOp::Deactivate if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Deactivate if !closed && is_active() => {
               let _ = Actors::deactivate_actor(RuntimeOrigin::root(), system_id);
             }
             ModelOp::Fund if !closed => {
               let recipient = Actors::actor_identity(system_id)
                 .map(|identity| identity.sovereign_account);
               if let Some(recipient) = recipient {
-                if ActorControlLocators::<Test>::contains_key(system_id) {
+                if is_active() {
                   let provenance = crate::FundingProvenance::Signed;
                   if Actors::preflight_funding_event(
                     system_id,
@@ -2028,7 +1899,7 @@ mod proptest_actor {
                 }
               }
             }
-            ModelOp::Signal if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Signal if !closed && is_active() => {
               let schedule = Schedule {
                 trigger: Trigger::address_event(
                   SourceFilter::Any,
@@ -2064,17 +1935,17 @@ mod proptest_actor {
               }
             }
             ModelOp::ManualTrigger | ModelOp::Enqueue
-              if !closed && ActorControlLocators::<Test>::contains_key(system_id) =>
+              if !closed && is_active() =>
             {
               let _ = Actors::manual_trigger(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Pause if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Pause if !closed && is_active() => {
               let _ = Actors::pause_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::Resume if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Resume if !closed && is_active() => {
               let _ = Actors::resume_actor(RuntimeOrigin::root(), system_id);
             }
-            ModelOp::UpdateContract if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateContract if !closed && is_active() => {
               let _ = update_contract_partial!(
                 RuntimeOrigin::root(),
                 system_id,
@@ -2082,11 +1953,11 @@ mod proptest_actor {
                 crate::CompletionPolicy::Persistent,
               );
             }
-            ModelOp::Wakeup if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::Wakeup if !closed && is_active() => {
               let schedule = timer_schedule_pt(2);
               let _ = update_contract_partial!(RuntimeOrigin::root(), system_id, schedule, None);
             }
-            ModelOp::UpdateCrossing if !closed && ActorControlLocators::<Test>::contains_key(system_id) => {
+            ModelOp::UpdateCrossing if !closed && is_active() => {
               let schedule = Schedule {
                 trigger: Trigger::observation_crossing(
                   9,
@@ -2237,7 +2108,7 @@ mod proptest_actor {
             }), "unexpected control-event delta: {actor_event_delta:?}");
           }
           if !closed
-            && !ActorControlLocators::<Test>::contains_key(system_id)
+            && !is_active()
             && !ActorIdentities::<Test>::contains_key(system_id)
             && SystemSovereigns::<Test>::get(system_id) == Some(SystemSovereignState::Vacant)
           {
@@ -2259,7 +2130,7 @@ mod proptest_actor {
           }
           if matches!(operation, ModelOp::Pause | ModelOp::Resume)
             && before_continuation.is_some()
-            && ActorControlLocators::<Test>::contains_key(system_id)
+            && is_active()
           {
             assert_eq!(
               after_continuation.as_ref().map(Encode::encode),
@@ -2812,7 +2683,13 @@ mod waiting_integrity;
 mod wakeups;
 
 /// Change only the already-located canonical primary, including deliberate corruption.
-/// This fixture helper neither repairs topology nor relocates authority.
+/// This fixture helper neither repairs topology nor relocates authority. It remains reachable
+/// only from `try-runtime` and `runtime-benchmarks` witnesses, so the default test build keeps it
+/// alive with an explicit reason rather than a silent allowance.
+#[allow(
+  dead_code,
+  reason = "fixture helper consumed only by try-runtime and runtime-benchmarks witnesses"
+)]
 fn mutate_primary_control_cell(
   actor_id: ActorId,
   mutate: impl FnOnce(&mut crate::ActorControlCellOf<Test>),
