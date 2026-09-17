@@ -144,10 +144,10 @@ fn user_pipeline_insolvency_closes_before_effect_capacity_deferral() {
 }
 
 #[test]
-fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
+fn canonical_weight_refusal_reads_no_actor_cold_state() {
   for actor_type in [ActorType::System, ActorType::User] {
     let mut ext = new_test_ext();
-    let (actor_id, cutoff, minimum_probe, header_key, native_key, payload_keys) =
+    let (actor_id, process_key, service_key, contract_key, payload_key, envelope) =
       ext.execute_with(|| {
         System::set_block_number(1);
         let actor_id = match actor_type {
@@ -170,116 +170,82 @@ fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
           RuntimeOrigin::signed(ALICE),
           actor_id
         ));
-        let minimum_probe =
-          <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-            .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
-            .saturating_add(
-              <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-                .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-            );
+        // The occurrence published at block 1 is served at B+1.
+        System::set_block_number(2);
+        let selector =
+          <TestWeightInfo as crate::WeightInfo>::service_round_begin_populated()
+            .saturating_add(<TestWeightInfo as crate::WeightInfo>::service_round_probe_eligible());
+        let complete = selector.saturating_add(
+          <TestWeightInfo as crate::WeightInfo>::scheduler_inner_zero_step_complete().saturating_add(
+            <TestWeightInfo as crate::WeightInfo>::service_round_admit_eligible().max(
+              <TestWeightInfo as crate::WeightInfo>::service_member_retire_interior().max(
+                <TestWeightInfo as crate::WeightInfo>::service_member_retire_pair_cursor().max(
+                  <TestWeightInfo as crate::WeightInfo>::service_member_retire_singleton(),
+                ),
+              ),
+            ),
+          ),
+        );
         (
           actor_id,
-          Actors::queue_tail(),
-          minimum_probe,
+          crate::ActorProcesses::<Test>::hashed_key_for(actor_id),
+          crate::ServiceNodes::<Test>::hashed_key_for(actor_id),
           crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
-          polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(actor_id)),
-          [
-            crate::ActorRunHeads::<Test>::hashed_key_for(actor_id),
-            crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-          ],
+          crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
+          (selector, complete),
         )
       });
     ext.commit_all().expect("commit fixture before recording");
     let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
     ext.commit_all().expect("commit root calculation");
+    let (selector, complete) = envelope;
     for scarce in [
-      Weight::from_parts(minimum_probe.ref_time(), u64::MAX),
-      Weight::from_parts(u64::MAX, minimum_probe.proof_size()),
+      complete.saturating_sub(Weight::from_parts(1, 0)),
+      selector.saturating_sub(Weight::from_parts(1, 0)),
     ] {
-      for domain in [
-        None,
-        Some(crate::BlockResourceDomain::ActorControl),
-        Some(crate::BlockResourceDomain::ActorDrainEffect),
-      ] {
-        let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
-          polkadot_sdk::sp_core::Blake2Hasher,
-        >::default();
-        ext.execute_with_recorder(recorder.clone(), || {
-          if let Some(domain) = domain {
-            let ample = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
-            let shared_economic = if domain == crate::BlockResourceDomain::ActorDrainEffect {
-              if scarce.ref_time() == u64::MAX {
-                Weight::from_parts(ample.ref_time(), 0)
-              } else {
-                Weight::from_parts(0, ample.proof_size())
-              }
-            } else {
-              ample
-            };
-            let limits = crate::SimulationBudget {
-              actor_control: ample,
-              shared_economic,
-            }
-            .checked_limits()
-            .expect("independent resource lanes fit");
-            let mut resources = crate::BlockResourceState::new(1);
-            assert_ok!(resources.begin_prepass());
-            assert_ok!(resources.open_external_phase());
-            assert_ok!(resources.begin_drain());
-            let pass = Actors::execute_cycle_to_cutoff_with_resources(
-              Weight::MAX,
-              cutoff,
-              &mut resources,
-              limits,
-              crate::BlockResourceDomain::ActorDrainEffect,
-              if domain == crate::BlockResourceDomain::ActorControl {
-                scarce.min(ample)
-              } else {
-                ample
-              },
-            );
-            assert_eq!(resources.outstanding_reservations(), 0);
-            assert_eq!(resources.usage().actor_effect_used(), Weight::zero());
-            assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-          } else {
-            Actors::execute_cycle_to_cutoff(scarce, cutoff);
-          }
-        });
-        let recorded = recorder.recorded_keys();
-        let was_read = |key: &[u8]| {
-          recorded
-            .values()
-            .any(|keys| keys.keys().any(|read| read.as_ref() == key))
-        };
-        assert!(
-          was_read(&header_key),
-          "terminal policy requires the Contract header"
-        );
+      let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
+        polkadot_sdk::sp_core::Blake2Hasher,
+      >::default();
+      ext.execute_with_recorder(recorder.clone(), || {
+        let mut refused = WeightMeter::with_limit(scarce);
         assert_eq!(
-          was_read(&native_key),
-          actor_type == ActorType::User,
-          "only User admission requires a native-fee balance read"
+          Actors::service_canonical_round_head(&mut refused, 2),
+          Err(crate::ServiceRoundError::InsufficientWeight)
         );
-        for key in &payload_keys {
-          assert!(
-            !was_read(key),
-            "Weight-rejected Idle {actor_type:?} read payload {key:?}"
-          );
-        }
-        ext.execute_with(|| {
-          assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
-        });
-        ext.commit_all().expect("commit unchanged rejection state");
+        assert_eq!(refused.consumed(), Weight::zero());
+      });
+      let recorded = recorder.recorded_keys();
+      for key in [&process_key, &service_key, &contract_key, &payload_key] {
+        assert!(
+          !recorded
+            .values()
+            .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
+          "sub-envelope Weight refusal read cold key {key:?}"
+        );
       }
+      ext.execute_with(|| {
+        assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
+      });
+      ext.commit_all().expect("commit unchanged refusal");
+    }
+    // Positive control: an admitted round does read the ring and process authority.
+    let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
+      polkadot_sdk::sp_core::Blake2Hasher,
+    >::default();
+    ext.execute_with_recorder(recorder.clone(), || {
+      let mut admitted = WeightMeter::with_limit(Weight::MAX);
+      assert!(Actors::service_canonical_round_head(&mut admitted, 2).is_ok());
+    });
+    let recorded = recorder.recorded_keys();
+    for key in [&process_key, &service_key] {
+      assert!(
+        recorded
+          .values()
+          .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
+        "admitted round did not read {key:?}"
+      );
     }
     ext.execute_with(|| {
-      let recipient = native_balance(&BOB);
-      Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-      assert_eq!(native_balance(&BOB), recipient + 10);
       assert_eq!(
         Actors::active_actor_view(actor_id).map(|actor| actor.cycle_nonce),
         Some(1)
@@ -287,182 +253,6 @@ fn idle_weight_refusal_reads_only_header_and_user_fee_prerequisite() {
       #[cfg(feature = "try-runtime")]
       assert_ok!(Actors::do_try_state());
     });
-  }
-}
-
-#[test]
-fn suspended_weight_refusal_avoids_run_payload_and_funding_reads() {
-  for funding_unavailable in [false, true] {
-    for cursor in [0, 1] {
-      for actor_type in [ActorType::System, ActorType::User] {
-        let mut ext = new_test_ext();
-        let (actor_id, cutoff, probe, native_key, cold_keys) = ext.execute_with(|| {
-          System::set_block_number(1);
-          setup_temporary_retry_pool();
-          let mut steps = if cursor == 0 {
-            Vec::new()
-          } else {
-            transfer_contract_steps(BOB, 1).into_inner()
-          };
-          let mut retry = temporary_retry_swap_plan().into_inner();
-          retry[0].on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
-          if funding_unavailable {
-            retry[0].task = Task::SwapIn {
-              asset_in: TestAsset::Local(77),
-              asset_out: TestAsset::Native,
-              amount_in: AmountResolution::Fixed(10),
-              slippage_tolerance: Perbill::one(),
-            };
-          }
-          steps.extend(retry);
-          let steps = BoundedVec::try_from(steps).expect("head or tail retry fits");
-          let actor_id = match actor_type {
-            ActorType::System => create_system_with(ALICE, manual_schedule(), None, steps),
-            ActorType::User => {
-              create_user_with(ALICE, Mutability::Mutable, manual_schedule(), None, steps)
-            }
-          };
-          fund_native(actor_id, 1_000_000_000_000_000);
-          set_temporary_dex_failure(!funding_unavailable);
-          assert_ok!(Actors::manual_trigger(
-            RuntimeOrigin::signed(ALICE),
-            actor_id
-          ));
-          run_idle(Weight::MAX);
-          let run =
-            Actors::actor_run_state(actor_id).expect("recoverable failure suspends the cycle");
-          assert_eq!(
-            run.suspension,
-            Some(if funding_unavailable {
-              crate::SuspensionReason::FundingUnavailable
-            } else {
-              crate::SuspensionReason::Temporary
-            })
-          );
-          assert_eq!(run.cursor, cursor);
-          let due = run.eligible_at;
-          System::set_block_number(due);
-          Actors::on_initialize(due);
-          Actors::on_idle(due, starvation_blocked_budget(actor_id));
-          assert_eq!(
-            Actors::actor_run_state(actor_id)
-              .expect("retry retained")
-              .encode(),
-            run.encode()
-          );
-          assert_eq!(
-            Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-            Some(actor_id)
-          );
-          let probe = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-            .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
-            .saturating_add(
-              <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-                .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-            );
-          (
-            actor_id,
-            Actors::queue_tail(),
-            probe,
-            polkadot_sdk::frame_system::Account::<Test>::hashed_key_for(sovereign_account(
-              actor_id,
-            )),
-            [crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id)],
-          )
-        });
-        ext.commit_all().expect("commit retry fixture");
-        let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
-        ext.commit_all().expect("commit root calculation");
-        for scarce in [
-          Weight::from_parts(probe.ref_time(), u64::MAX),
-          Weight::from_parts(u64::MAX, probe.proof_size()),
-        ] {
-          for domain in [
-            None,
-            Some(crate::BlockResourceDomain::ActorControl),
-            Some(crate::BlockResourceDomain::ActorDrainEffect),
-          ] {
-            let recorder = polkadot_sdk::sp_trie::recorder::Recorder::<
-              polkadot_sdk::sp_core::Blake2Hasher,
-            >::default();
-            ext.execute_with_recorder(recorder.clone(), || {
-              if let Some(domain) = domain {
-                let ample = Weight::from_parts(u64::MAX / 2, u64::MAX / 2);
-                let limits = crate::SimulationBudget {
-                  actor_control: ample,
-                  shared_economic: if domain == crate::BlockResourceDomain::ActorDrainEffect {
-                    if scarce.ref_time() == u64::MAX {
-                      Weight::from_parts(ample.ref_time(), 0)
-                    } else {
-                      Weight::from_parts(0, ample.proof_size())
-                    }
-                  } else {
-                    ample
-                  },
-                }
-                .checked_limits()
-                .expect("independent resource lanes fit");
-                let mut resources = crate::BlockResourceState::new(System::block_number());
-                assert_ok!(resources.begin_prepass());
-                assert_ok!(resources.open_external_phase());
-                assert_ok!(resources.begin_drain());
-                let pass = Actors::execute_cycle_to_cutoff_with_resources(
-                  Weight::MAX,
-                  cutoff,
-                  &mut resources,
-                  limits,
-                  crate::BlockResourceDomain::ActorDrainEffect,
-                  if domain == crate::BlockResourceDomain::ActorControl {
-                    scarce.min(ample)
-                  } else {
-                    ample
-                  },
-                );
-                assert_eq!(resources.outstanding_reservations(), 0);
-                assert_eq!(resources.usage().actor_effect_used(), Weight::zero());
-                assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-              } else {
-                Actors::execute_cycle_to_cutoff(scarce, cutoff);
-              }
-            });
-            let recorded = recorder.recorded_keys();
-            assert_eq!(
-              recorded.values().any(|keys| keys
-                .keys()
-                .any(|read| read.as_ref() == native_key.as_slice())),
-              actor_type == ActorType::User,
-              "User retry liability requires its native balance"
-            );
-            for key in &cold_keys {
-              assert!(
-                !recorded
-                  .values()
-                  .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-                "Weight-rejected Suspended {actor_type:?} read cold payload {key:?}"
-              );
-            }
-            ext.execute_with(|| {
-              assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-              assert_eq!(
-                Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-                Some(actor_id)
-              );
-            });
-            ext.commit_all().expect("commit unchanged refusal");
-          }
-        }
-        ext.execute_with(|| {
-          set_temporary_dex_failure(false);
-          if funding_unavailable {
-            set_asset_balance(&sovereign_account(actor_id), TestAsset::Local(77), 100);
-          }
-          Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-          assert!(Actors::actor_run_state(actor_id).is_none());
-          #[cfg(feature = "try-runtime")]
-          assert_ok!(Actors::do_try_state());
-        });
-      }
-    }
   }
 }
 
@@ -540,242 +330,6 @@ fn suspended_expiry_and_breaker_precede_liability_and_effect_deferral() {
       }
     }
   }
-}
-
-#[test]
-fn running_fifo_head_avoids_cold_reads_before_eligibility_and_weight_admission() {
-  let mut ext = new_test_ext();
-  let (actor_id, due, cutoff, cold_keys) = ext.execute_with(|| {
-    System::set_block_number(1);
-    let steps = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(1),
-      }),
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(2),
-      }),
-    ])
-    .expect("two Steps fit");
-    let actor_id = create_system_with(ALICE, manual_schedule(), None, steps);
-    fund_native(actor_id, 100);
-    assert_ok!(Actors::manual_trigger(
-      RuntimeOrigin::signed(ALICE),
-      actor_id
-    ));
-    Actors::execute_cycle_to_cutoff(Weight::MAX, Actors::queue_tail());
-    let run = Actors::actor_run_state(actor_id).expect("real Opening persists its successor");
-    assert_eq!(run.cursor, 1);
-    assert!(run.eligible_at > System::block_number());
-    assert_eq!(
-      Actors::paged_head_entry().map(|(_, entry)| entry.actor_id),
-      Some(actor_id)
-    );
-    let cold_keys = [
-      crate::ActorContractHeads::<Test>::hashed_key_for(actor_id),
-      crate::ActorContractTailChunks::<Test>::hashed_key_for(actor_id, 0),
-      crate::ActorRunPayloads::<Test>::hashed_key_for(actor_id),
-    ];
-    (actor_id, run.eligible_at, Actors::queue_tail(), cold_keys)
-  });
-  ext
-    .commit_all()
-    .expect("fixture overlay commits before read recording");
-  let before = ext.execute_with(|| polkadot_sdk::sp_io::storage::root(StateVersion::V1));
-  ext
-    .commit_all()
-    .expect("root calculation leaves no overlay authority");
-  let recorder =
-    polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-  ext.execute_with_recorder(recorder.clone(), || {
-    Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-  });
-  let recorded = recorder.recorded_keys();
-  for key in &cold_keys {
-    assert!(
-      !recorded
-        .values()
-        .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-      "future head read cold key {key:?}"
-    );
-  }
-  ext.execute_with(|| {
-    assert_eq!(polkadot_sdk::sp_io::storage::root(StateVersion::V1), before);
-    assert_eq!(
-      Actors::actor_run_state(actor_id).map(|run| run.cursor),
-      Some(1)
-    );
-    System::set_block_number(due);
-  });
-  ext
-    .commit_all()
-    .expect("eligible fixture overlay commits before positive control");
-  let (minimum_probe, eligible_root, step_resources) = ext.execute_with(|| {
-    let probe = <TestWeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
-      .saturating_add(Actors::scheduler_actor_state_probe_weight_upper())
-      .saturating_add(
-        <TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
-          .max(<TestWeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
-      );
-    let resources = Actors::actor_control_cell(actor_id)
-      .expect("canonical Running primary")
-      .1
-      .resources;
-    (
-      probe,
-      polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-      resources,
-    )
-  });
-  ext
-    .commit_all()
-    .expect("eligible root commits before recording");
-  for scarce in [
-    Weight::from_parts(minimum_probe.ref_time(), u64::MAX),
-    Weight::from_parts(u64::MAX, minimum_probe.proof_size()),
-  ] {
-    for (domain, cleanup_only) in [
-      (None, false),
-      (Some(crate::BlockResourceDomain::ActorControl), false),
-      (Some(crate::BlockResourceDomain::ActorBaseEffect), false),
-      (Some(crate::BlockResourceDomain::ActorDrainEffect), false),
-      (None, true),
-      (Some(crate::BlockResourceDomain::ActorControl), true),
-    ] {
-      let scarce = if cleanup_only {
-        let step = if domain.is_none() {
-          step_resources.control.saturating_add(step_resources.effect)
-        } else {
-          step_resources.control
-        };
-        if scarce.ref_time() == u64::MAX {
-          Weight::from_parts(
-            u64::MAX,
-            scarce.proof_size().saturating_add(step.proof_size()),
-          )
-        } else {
-          Weight::from_parts(scarce.ref_time().saturating_add(step.ref_time()), u64::MAX)
-        }
-      } else {
-        scarce
-      };
-      let recorder =
-        polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-      ext.execute_with_recorder(recorder.clone(), || {
-        if let Some(domain) = domain {
-          let limits = crate::SimulationBudget {
-            actor_control: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
-            shared_economic: Weight::from_parts(u64::MAX / 2, u64::MAX / 2),
-          }
-          .checked_limits()
-          .expect("two ample lanes fit");
-          let mut resources = crate::BlockResourceState::new(due);
-          assert_ok!(resources.begin_prepass());
-          let effect_domain = if domain == crate::BlockResourceDomain::ActorBaseEffect {
-            let saturated = if scarce.ref_time() == u64::MAX {
-              Weight::from_parts(0, limits.actor_base_turn().proof_size())
-            } else {
-              Weight::from_parts(limits.actor_base_turn().ref_time(), 0)
-            };
-            assert!(
-              saturated
-                .saturating_add(step_resources.effect)
-                .all_lte(limits.shared_economic())
-            );
-            let mut prior = resources
-              .reserve(limits, domain, saturated)
-              .expect("prior Actor work fits its base turn exactly");
-            assert_ok!(resources.settle(&mut prior, saturated));
-            domain
-          } else {
-            assert_ok!(resources.open_external_phase());
-            crate::BlockResourceDomain::ActorDrainEffect
-          };
-          if domain == crate::BlockResourceDomain::ActorDrainEffect {
-            let saturated = if scarce.ref_time() == u64::MAX {
-              Weight::from_parts(0, limits.shared_economic().proof_size())
-            } else {
-              Weight::from_parts(limits.shared_economic().ref_time(), 0)
-            };
-            let mut user = resources
-              .reserve(limits, crate::BlockResourceDomain::UserDispatch, saturated)
-              .expect("prior user work fits exactly");
-            assert_ok!(resources.settle(&mut user, saturated));
-          }
-          if effect_domain == crate::BlockResourceDomain::ActorDrainEffect {
-            assert_ok!(resources.begin_drain());
-          }
-          let prior_usage = resources.usage();
-          let pass = Actors::execute_cycle_to_cutoff_with_resources(
-            Weight::MAX,
-            cutoff,
-            &mut resources,
-            limits,
-            effect_domain,
-            if domain == crate::BlockResourceDomain::ActorControl {
-              scarce.min(limits.actor_control())
-            } else {
-              limits.actor_control()
-            },
-          );
-          assert_eq!(resources.outstanding_reservations(), 0);
-          assert_eq!(
-            resources.usage().actor_effect_used(),
-            prior_usage.actor_effect_used()
-          );
-          assert_eq!(resources.usage().actor_control_used(), pass.consumed);
-          assert_eq!(
-            resources.usage().user_dispatch_used(),
-            prior_usage.user_dispatch_used()
-          );
-        } else {
-          Actors::execute_cycle_to_cutoff(scarce, cutoff);
-        }
-      });
-      let recorded = recorder.recorded_keys();
-      for key in &cold_keys {
-        assert!(
-          !recorded
-            .values()
-            .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-          "Weight-rejected Running head read cold key {key:?}"
-        );
-      }
-      ext.execute_with(|| {
-        assert_eq!(
-          polkadot_sdk::sp_io::storage::root(StateVersion::V1),
-          eligible_root
-        );
-      });
-      ext
-        .commit_all()
-        .expect("refusal assertions stay outside the next recording");
-    }
-  }
-  let recorder =
-    polkadot_sdk::sp_trie::recorder::Recorder::<polkadot_sdk::sp_core::Blake2Hasher>::default();
-  ext.execute_with_recorder(recorder.clone(), || {
-    Actors::execute_cycle_to_cutoff(Weight::MAX, cutoff);
-  });
-  let recorded = recorder.recorded_keys();
-  for key in &cold_keys {
-    assert!(
-      recorded
-        .values()
-        .any(|keys| keys.keys().any(|read| read.as_ref() == key.as_slice())),
-      "eligible positive control did not record cold key {key:?}"
-    );
-  }
-  ext.execute_with(|| {
-    assert!(Actors::actor_run_state(actor_id).is_none());
-    assert_eq!(
-      Actors::actor_identity(actor_id).map(|identity| identity.cycle_nonce),
-      Some(1)
-    );
-  });
 }
 
 #[test]
