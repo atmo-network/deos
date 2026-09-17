@@ -560,12 +560,8 @@ impl<T: Config> Pallet<T> {
       cause_block,
     ) {
       Ok(ObservationActivationOutcome::Ordinary(
-        ActivationOutcome::IgnoredStale
-        | ActivationOutcome::Coalesced
-        | ActivationOutcome::Latched
-        | ActivationOutcome::Closed,
+        ActivationOutcome::IgnoredStale | ActivationOutcome::Latched,
       )) => Ok(true),
-      Err(ActivationFailure::Temporary(_)) => Ok(false),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
   }
@@ -584,12 +580,8 @@ impl<T: Config> Pallet<T> {
       cause_block,
     ) {
       Ok(ObservationActivationOutcome::Ordinary(
-        ActivationOutcome::IgnoredStale
-        | ActivationOutcome::Coalesced
-        | ActivationOutcome::Latched
-        | ActivationOutcome::Closed,
+        ActivationOutcome::IgnoredStale | ActivationOutcome::Latched,
       )) => Ok(Some(true)),
-      Err(ActivationFailure::Temporary(_)) => Ok(Some(false)),
       Err(error @ ActivationFailure::Permanent(_)) => Err(Self::activation_failure_error(error)),
     }
   }

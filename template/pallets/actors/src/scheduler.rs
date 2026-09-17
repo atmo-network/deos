@@ -219,9 +219,7 @@ pub enum EnqueueOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationOutcome {
   IgnoredStale,
-  Coalesced,
   Latched,
-  Closed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,11 +227,9 @@ pub(crate) enum ObservationActivationOutcome {
   Ordinary(ActivationOutcome),
 }
 
-/// Typed activation failure. Temporary pressure preserves the producer's
-/// retryable work; permanent corruption fails the enclosing transition closed.
+/// Typed activation failure. Permanent corruption fails the enclosing transition closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivationFailure {
-  Temporary(DispatchError),
   Permanent(DispatchError),
 }
 
@@ -241,33 +237,6 @@ impl From<DispatchError> for ActivationFailure {
   fn from(error: DispatchError) -> Self {
     Self::Permanent(error)
   }
-}
-
-pub(crate) enum PrimeSchedulePlan<BlockNumber> {
-  None,
-  Enqueue,
-  BlockWakeup(BlockNumber),
-}
-
-pub(crate) enum ActivationAction<T: Config> {
-  Close(CloseReason),
-  CoalesceLive,
-  EnqueueReady(Result<QueueAppendPlan<T>, EnqueueOutcome>),
-  EnqueueTemporal(Result<QueueAppendPlan<T>, EnqueueOutcome>),
-  PrimeSchedule(Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome>),
-}
-
-/// Synchronous transition authority: commit before any intervening Actor mutation.
-pub(crate) struct ActivationPlan<T: Config> {
-  pub actor_id: ActorId,
-
-  pub frame_admission: ActorAdmissionCertificateOf<T>,
-  pub frame_source_state: ActiveActorStateOf<T>,
-  pub already_pending: bool,
-  pub prospective_hot: ActorHotStateOf<T>,
-  pub instance: ActiveActorViewOf<T>,
-  pub terminal_reason: Option<CloseReason>,
-  pub action: ActivationAction<T>,
 }
 
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
@@ -4187,14 +4156,6 @@ impl<T: Config> Pallet<T> {
     Self::store_primary_control_cell(location, cell).map_err(|_| EnqueueOutcome::CorruptedTopology)
   }
 
-  fn commit_paged_enqueue_transactional(plan: QueueAppendPlan<T>) -> Result<(), EnqueueOutcome> {
-    with_transaction_opaque_err(|| match Self::commit_paged_enqueue(plan) {
-      Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-  }
-
   pub(crate) fn commit_paged_enqueue(plan: QueueAppendPlan<T>) -> Result<(), EnqueueOutcome> {
     #[cfg(test)]
     QUEUE_APPEND_COMMITS.with(|count| count.set(count.get().saturating_add(1)));
@@ -4263,240 +4224,9 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  fn preflight_activation_enqueue(
-    actor_id: ActorId,
-    state: &ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-  ) -> Result<QueueAppendPlan<T>, EnqueueOutcome> {
-    let cursor = state.run_state.as_ref().map_or(0, |run| run.cursor);
-    let loaded_step = if state.contract.steps.is_empty() {
-      None
-    } else {
-      Some(
-        Self::load_current_step_with_admission(actor_id, cursor, admission)
-          .ok_or(EnqueueOutcome::CorruptedTopology)?,
-      )
-    };
-    Self::preflight_paged_enqueue_actor_state(actor_id, state, admission, loaded_step.as_ref())
-  }
-
-  fn preflight_activation_from_authority(
-    actor_id: ActorId,
-    state: ActiveActorStateOf<T>,
-    frame_admission: ActorAdmissionCertificateOf<T>,
-  ) -> Result<ActivationPlan<T>, ActivationFailure> {
-    let frame_source_state = state.clone();
-    let already_pending = state.hot.pending_signal;
-    let mut queue_state = state;
-    let run_state = queue_state.run_state.clone();
-    let mut hot = queue_state.hot.clone();
-    hot.pending_signal = true;
-    queue_state.hot = hot.clone();
-    let instance = Self::derive_active_actor_view(
-      queue_state.identity.clone(),
-      hot.clone(),
-      queue_state.contract.clone(),
-    );
-    let classification =
-      Self::classify_actor_loaded(&instance, run_state.as_ref()).map_err(|error| {
-        ActivationFailure::Permanent(Self::classification_dispatch_error(error).into())
-      })?;
-    let action = if matches!(
-      classification.terminal_reason,
-      Some(CloseReason::WindowExpired | CloseReason::CycleNonceExhausted)
-    ) {
-      ActivationAction::Close(classification.terminal_reason.ok_or(
-        ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()),
-      )?)
-    } else if instance.queue_ticket.is_some()
-      || (ActorControlLocators::<T>::contains_key(actor_id)
-        && matches!(
-          instance.cycle_state,
-          CycleState::Running | CycleState::Suspended
-        ))
-    {
-      ActivationAction::CoalesceLive
-    } else if matches!(
-      instance.trigger,
-      Trigger::AtTime { .. } | Trigger::Cadenced { .. }
-    ) {
-      ActivationAction::EnqueueTemporal(Self::preflight_activation_enqueue(
-        actor_id,
-        &queue_state,
-        &frame_admission,
-      ))
-    } else {
-      match Self::preflight_prime_schedule_loaded(&instance, run_state.as_ref()) {
-        Ok(PrimeSchedulePlan::Enqueue) => ActivationAction::EnqueueReady(
-          Self::preflight_activation_enqueue(actor_id, &queue_state, &frame_admission),
-        ),
-        other => ActivationAction::PrimeSchedule(other),
-      }
-    };
-    Ok(ActivationPlan {
-      actor_id,
-
-      frame_admission,
-      frame_source_state,
-      already_pending,
-      prospective_hot: hot,
-      instance,
-      terminal_reason: classification.terminal_reason,
-      action,
-    })
-  }
-
-  pub(crate) fn commit_activation_plan(
-    plan: ActivationPlan<T>,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
-      return Self::commit_activation_plan_inner(plan);
-    }
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
-      match Self::commit_activation_plan_inner(plan) {
-        Ok(outcome) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(outcome))
-        }
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-  }
-
-  fn commit_activation_plan_inner(
-    plan: ActivationPlan<T>,
-  ) -> Result<ActivationOutcome, ActivationFailure> {
-    let ActivationPlan {
-      actor_id,
-
-      frame_admission,
-      frame_source_state,
-      already_pending,
-      prospective_hot,
-      instance,
-      terminal_reason: _,
-      action,
-    } = plan;
-    let placement_hot = prospective_hot.clone();
-    if !already_pending {
-      // A live process latches the deferred occurrence by mutating its canonical primary in place.
-      // Placement-changing activations instead publish prospective authority in the destination
-      // cell; writing it into Unsignaled first would create a forbidden transient owner state.
-      if matches!(
-        &action,
-        ActivationAction::CoalesceLive
-          | ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None))
-      ) {
-        Self::try_store_control_hot_with_authority(actor_id, prospective_hot)
-          .map_err(|_| ActivationFailure::Permanent(Error::<T>::ActorInvariant.into()))?;
-      }
-    }
-    match action {
-      ActivationAction::Close(reason) => {
-        {
-          Self::finalize_actor_from_retained_state(
-            actor_id,
-            frame_source_state,
-            &frame_admission,
-            reason,
-          )
-          .map_err(ActivationFailure::Permanent)?;
-        }
-        return Ok(ActivationOutcome::Closed);
-      }
-      ActivationAction::CoalesceLive => {
-        return Ok(if already_pending {
-          ActivationOutcome::Coalesced
-        } else {
-          ActivationOutcome::Latched
-        });
-      }
-      ActivationAction::EnqueueReady(_)
-      | ActivationAction::EnqueueTemporal(_)
-      | ActivationAction::PrimeSchedule(_) => {}
-    }
-
-    let placement = match action {
-      ActivationAction::EnqueueReady(Ok(queue_plan))
-      | ActivationAction::EnqueueTemporal(Ok(queue_plan)) => {
-        Self::commit_paged_enqueue_transactional(queue_plan)
-      }
-      ActivationAction::EnqueueReady(Err(EnqueueOutcome::CapacityUnavailable))
-      | ActivationAction::EnqueueTemporal(Err(EnqueueOutcome::CapacityUnavailable)) => {
-        match frame_system::Pallet::<T>::block_number().checked_add(&One::one()) {
-          Some(next_block) => Self::defer_activation_wakeup(
-            actor_id,
-            next_block,
-            &instance,
-            placement_hot.clone(),
-            &frame_source_state,
-            &frame_admission,
-          ),
-          None => Err(EnqueueOutcome::SchedulerIndexExhausted),
-        }
-      }
-      ActivationAction::EnqueueReady(Err(error))
-      | ActivationAction::EnqueueTemporal(Err(error)) => Err(error),
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::None)) => {
-        if Self::load_frame_control_authority(actor_id).is_some() {
-          Ok(())
-        } else {
-          Err(EnqueueOutcome::CorruptedTopology)
-        }
-      }
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::Enqueue)) => {
-        Err(EnqueueOutcome::CorruptedTopology)
-      }
-      ActivationAction::PrimeSchedule(Ok(PrimeSchedulePlan::BlockWakeup(block))) => {
-        Self::defer_activation_wakeup(
-          actor_id,
-          block,
-          &instance,
-          placement_hot,
-          &frame_source_state,
-          &frame_admission,
-        )
-      }
-      ActivationAction::PrimeSchedule(Err(error)) => Err(error),
-      ActivationAction::Close(_) | ActivationAction::CoalesceLive => {
-        return Err(ActivationFailure::Permanent(
-          Error::<T>::ActorInvariant.into(),
-        ));
-      }
-    };
-    match placement {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(if already_pending {
-        ActivationOutcome::Coalesced
-      } else {
-        ActivationOutcome::Latched
-      }),
-      Err(EnqueueOutcome::CapacityUnavailable | EnqueueOutcome::WakeupCapacityExhausted) => Err(
-        ActivationFailure::Temporary(Error::<T>::QueueCapacityUnavailable.into()),
-      ),
-      Err(
-        EnqueueOutcome::TicketExhausted
-        | EnqueueOutcome::SchedulerIndexExhausted
-        | EnqueueOutcome::WakeupIndexExhausted,
-      ) => {
-        Self::finalize_actor_from_retained_state(
-          actor_id,
-          frame_source_state,
-          &frame_admission,
-          CloseReason::SchedulerIndexExhausted,
-        )
-        .map_err(ActivationFailure::Permanent)?;
-        Ok(ActivationOutcome::Closed)
-      }
-      Err(EnqueueOutcome::CorruptedTopology) => Err(ActivationFailure::Permanent(
-        Error::<T>::SchedulerIndexExhausted.into(),
-      )),
-    }
-  }
-
   pub(crate) fn activation_failure_error(error: ActivationFailure) -> DispatchError {
     match error {
-      ActivationFailure::Temporary(error) | ActivationFailure::Permanent(error) => error,
+      ActivationFailure::Permanent(error) => error,
     }
   }
 
@@ -6805,43 +6535,6 @@ impl<T: Config> Pallet<T> {
     result.ok()
   }
 
-  fn preflight_prime_schedule_loaded(
-    instance: &ActiveActorViewOf<T>,
-    run_state: Option<&ActorRunStateOf<T>>,
-  ) -> Result<PrimeSchedulePlan<BlockNumberFor<T>>, EnqueueOutcome> {
-    if instance.lifecycle.is_paused() {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
-      );
-    }
-    let now = frame_system::Pallet::<T>::block_number();
-    let eligible_at = if instance.cycle_state == CycleState::Suspended {
-      Self::retry_eligible_at_loaded(
-        instance,
-        run_state.ok_or(EnqueueOutcome::CorruptedTopology)?,
-      )?
-    } else if instance.pending_signal {
-      Self::next_eligible_at(instance, now)?
-    } else {
-      return Ok(
-        Self::window_expiry_wakeup(instance)
-          .map_or(PrimeSchedulePlan::None, PrimeSchedulePlan::BlockWakeup),
-      );
-    };
-    let wakeup_at = instance.window.map_or(eligible_at, |window| {
-      eligible_at.min(Self::window_terminal_at(&window))
-    });
-    let exact_next_block = now
-      .checked_add(&One::one())
-      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    Ok(if wakeup_at < exact_next_block {
-      PrimeSchedulePlan::Enqueue
-    } else {
-      PrimeSchedulePlan::BlockWakeup(wakeup_at)
-    })
-  }
-
   fn initial_trigger_wakeup_tick(
     instance: &ActiveActorViewOf<T>,
   ) -> Result<Option<SchedulerTick>, EnqueueOutcome> {
@@ -6938,58 +6631,6 @@ impl<T: Config> Pallet<T> {
         admission,
         resources,
       ) {
-        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      }
-    })
-    .map_err(|_| EnqueueOutcome::CorruptedTopology)?
-    {
-      Ok(()) | Err(EnqueueOutcome::AlreadyLive) => Ok(()),
-      Err(other) => Err(other),
-    }
-  }
-
-  fn defer_activation_wakeup(
-    actor_id: ActorId,
-    wakeup_block: BlockNumberFor<T>,
-    instance: &ActiveActorViewOf<T>,
-    hot: ActorHotStateOf<T>,
-    source: &ActiveActorStateOf<T>,
-    admission: &ActorAdmissionCertificateOf<T>,
-  ) -> Result<(), EnqueueOutcome> {
-    #[cfg(test)]
-    if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
-      return Err(EnqueueOutcome::WakeupCapacityExhausted);
-    }
-    let target = Self::window_expiry_wakeup(instance)
-      .map(|expiry| wakeup_block.min(expiry))
-      .unwrap_or(wakeup_block);
-    match with_transaction_opaque_err(|| {
-      let transition = || {
-        let cursor = source.run_state.as_ref().map_or(0, |run| run.cursor);
-        let resources = if source.contract.steps.is_empty() {
-          ActorStepResourceEnvelope {
-            control: T::WeightInfo::scheduler_inner_zero_step_complete(),
-            effect: Weight::zero(),
-          }
-        } else {
-          Self::load_current_step_with_admission(actor_id, cursor, admission)
-            .ok_or(EnqueueOutcome::CorruptedTopology)?
-            .resources
-        };
-        Self::try_wakeup_substrate_schedule_transition_with_authority(
-          actor_id,
-          WakeupKey::Block(target),
-          hot,
-          &source.identity,
-          cursor,
-          admission,
-          resources,
-        )
-      };
-      match transition() {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
         Err(error) => {
           polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
@@ -7305,84 +6946,72 @@ impl<T: Config> Pallet<T> {
     ) {
       return Ok(false);
     }
-    let activation =
-      Self::preflight_activation_from_authority(actor_id, state.clone(), admission.clone())
-        .map_err(|_| DispatchError::Other("temporal activation preflight failed"))?;
-    let closes_without_occurrence = activation.terminal_reason.is_some()
-      || matches!(
-        activation.action,
-        ActivationAction::Close(_)
-          | ActivationAction::EnqueueTemporal(Err(
-            EnqueueOutcome::TicketExhausted
-              | EnqueueOutcome::SchedulerIndexExhausted
-              | EnqueueOutcome::WakeupIndexExhausted
-          ))
-      );
-    if closes_without_occurrence {
-      let activation = Self::commit_activation_plan(activation);
-      return match activation {
-        Ok(ActivationOutcome::Closed) => Ok(true),
-        Ok(ActivationOutcome::Latched | ActivationOutcome::Coalesced) => Ok(false),
-        _ => Err(DispatchError::Other(
-          "temporal terminal substitution failed",
-        )),
-      };
-    }
-    let actor_type = state.identity.actor_class.actor_type();
-    let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
     let canonical = !ActorControlLocators::<T>::contains_key(actor_id)
       && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
       && ActorProcesses::<T>::contains_key(actor_id);
-    if trigger_family == TriggerFamily::AtTime || canonical {
-      if trigger_family == TriggerFamily::AtTime {
-        let temporal_capacity = Self::trigger_occurrence_capacity_sufficient(
-          actor_type,
-          &state.identity.sovereign_account,
-          breakdown,
-        )
-        .map_err(|_| DispatchError::Other("temporal capacity calculation failed"))?;
-        if !temporal_capacity {
-          let close_result = Self::finalize_actor_from_retained_state(
-            actor_id,
-            state,
-            &admission,
-            CloseReason::TriggerAdmissionInsufficient,
-          );
-          close_result
-            .map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
-          return Ok(true);
-        }
-      }
-      let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
-        "temporal generation authority is missing",
-      ))?;
-      let sovereign_account = state.identity.sovereign_account.clone();
-      return match Self::commit_canonical_trigger_occurrence_with_authority(
-        actor,
-        actor_type,
-        &sovereign_account,
-        breakdown,
-        state,
-        frame_system::Pallet::<T>::block_number(),
-      ) {
-        Ok(_) => Ok(false),
-        Err(error)
-          if trigger_family == TriggerFamily::Cadenced
-            && error == Error::<T>::InsufficientFee.into() =>
-        {
-          Ok(false)
-        }
-        Err(_) => Err(DispatchError::Other(
-          "temporal canonical publication failed",
-        )),
-      };
-    }
     // Fresh genesis publishes canonical Actors only, so a temporal occurrence that is not
     // canonically owned is an incoherent pre-cutover carrier state rather than a supported
     // legacy activation path. Canonical publication remains the sole temporal placement owner.
-    Err(DispatchError::Other(
-      "temporal owner is not canonically published",
-    ))
+    if !canonical {
+      return Err(DispatchError::Other(
+        "temporal owner is not canonically published",
+      ));
+    }
+    let instance = Self::derive_active_actor_view(
+      state.identity.clone(),
+      state.hot.clone(),
+      state.contract.clone(),
+    );
+    let classification = Self::classify_actor_loaded(&instance, state.run_state.as_ref())
+      .map_err(|error| Self::classification_dispatch_error(error))?;
+    if let Some(reason) = classification.terminal_reason {
+      Self::finalize_actor_from_retained_state(actor_id, state, &admission, reason)
+        .map_err(|_| DispatchError::Other("temporal terminal substitution failed"))?;
+      return Ok(true);
+    }
+    let actor_type = state.identity.actor_class.actor_type();
+    let breakdown = Self::trigger_fee_for_weight(actor_type, trigger_family, occurrence_weight);
+    if trigger_family == TriggerFamily::AtTime {
+      let temporal_capacity = Self::trigger_occurrence_capacity_sufficient(
+        actor_type,
+        &state.identity.sovereign_account,
+        breakdown,
+      )
+      .map_err(|_| DispatchError::Other("temporal capacity calculation failed"))?;
+      if !temporal_capacity {
+        Self::finalize_actor_from_retained_state(
+          actor_id,
+          state,
+          &admission,
+          CloseReason::TriggerAdmissionInsufficient,
+        )
+        .map_err(|_| DispatchError::Other("underfunded temporal apoptosis failed"))?;
+        return Ok(true);
+      }
+    }
+    let actor = Self::load_actor_ref(actor_id).ok_or(DispatchError::Other(
+      "temporal generation authority is missing",
+    ))?;
+    let sovereign_account = state.identity.sovereign_account.clone();
+    match Self::commit_canonical_trigger_occurrence_with_authority(
+      actor,
+      actor_type,
+      &sovereign_account,
+      breakdown,
+      state,
+      frame_system::Pallet::<T>::block_number(),
+    ) {
+      Ok(_) => Ok(false),
+      Err(error)
+        if trigger_family == TriggerFamily::Cadenced
+          && error == Error::<T>::InsufficientFee.into() =>
+      {
+        Ok(false)
+      }
+      Err(_) => Err(DispatchError::Other(
+        "temporal canonical publication failed",
+      )),
+    }
   }
 
   pub fn drain_overdue_wakeups_cursor(

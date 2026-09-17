@@ -194,7 +194,7 @@ fn creation_and_activation_before_cutoff_use_exact_next_block_wakeup() {
 }
 
 #[test]
-fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
+fn canonical_temporal_occurrence_ignores_the_legacy_ticket_namespace() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let actor_id = create_system_with(
@@ -205,6 +205,9 @@ fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
     );
     fund_native(actor_id, 100);
     frame_system::Pallet::<Test>::set_block_number(2);
+    // A canonically published Actor owns its temporal residence in the generation-bound
+    // `TriggerDeadlineHandles`/Service ring carriers, so a saturated pre-cutover paged ticket
+    // namespace cannot block or close its occurrence.
     crate::ActorReadyHead::<Test>::put(u64::MAX);
     crate::ActorReadyTail::<Test>::put(u64::MAX);
     let bob_before = native_balance(&BOB);
@@ -212,19 +215,18 @@ fn wakeup_materialization_index_exhaustion_closes_without_an_attempt() {
 
     run_idle(Weight::MAX);
 
-    assert_eq!(native_balance(&BOB), bob_before);
-    assert!(Actors::actor_identity(actor_id).is_none());
-    assert!(Actors::actor_hot(actor_id).is_none());
-    assert_eq!(Actors::combined_queue_occupancy(), 0);
-    assert!(!crate::ActorWaitingOccupancies::<Test>::contains_key(
-      WakeupKey::Block(2)
-    ));
+    assert_eq!(native_balance(&BOB), bob_before + 10);
+    assert!(Actors::active_actor_exists(actor_id));
     assert!(has_actor_event(|event| matches!(
       event,
-      Event::ActorClosed {
+      Event::CycleStarted {
         actor_id: id,
-        reason: CloseReason::SchedulerIndexExhausted,
+        ..
       } if *id == actor_id
+    )));
+    assert!(!has_actor_event(|event| matches!(
+      event,
+      Event::ActorClosed { actor_id: id, .. } if *id == actor_id
     )));
   });
 }
