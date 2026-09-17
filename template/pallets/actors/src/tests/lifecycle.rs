@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
   ActorContractHeads, ActorContractTailChunks, ActorControlLocation, ActorControlLocators,
-  ActorRunHeads, ActorRunPayloads, ActorSemanticState, ActorSemanticStates,
-  ActorUnsignaledControlCells,
+  ActorProcesses, ActorRunHeads, ActorRunPayloads, ActorSemanticState, ActorSemanticStates,
+  ActorUnsignaledControlCells, DeadlineHandles,
 };
 
 #[test]
@@ -4178,5 +4178,34 @@ fn eligibility_projection_reports_failure_limit_auto_close_and_nonce_exhaustion(
       active_eligibility(actor_id).terminal_reason,
       Some(CloseReason::CycleNonceExhausted)
     );
+  });
+}
+
+#[test]
+fn canonical_owner_close_releases_process_and_deadline_residence() {
+  new_test_ext().execute_with(|| {
+    let actor_id = create_canonical_suspended_system_retry(9);
+    let process = ActorProcesses::<Test>::get(actor_id).expect("canonical process published");
+    assert!(
+      process.residence.is_some(),
+      "the suspended Actor owns a canonical residence"
+    );
+    assert!(DeadlineHandles::<Test>::contains_key(actor_id));
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+
+    assert_ok!(Actors::close_actor(RuntimeOrigin::root(), actor_id));
+
+    assert!(ActorSemanticStates::<Test>::get(actor_id).is_none());
+    assert!(ActorIdentities::<Test>::get(actor_id).is_none());
+    assert!(
+      ActorProcesses::<Test>::get(actor_id).is_none(),
+      "a closed canonical Actor must not retain its process publication"
+    );
+    assert!(
+      !DeadlineHandles::<Test>::contains_key(actor_id),
+      "a closed canonical Actor must release its deadline residence"
+    );
+    assert!(!ActorControlLocators::<Test>::contains_key(actor_id));
+    assert!(!ActorUnsignaledControlCells::<Test>::contains_key(actor_id));
   });
 }

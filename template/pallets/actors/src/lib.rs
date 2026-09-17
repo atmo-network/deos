@@ -12723,6 +12723,27 @@ pub mod pallet {
         state.contract.clone(),
       );
       ensure!(current == *instance, Error::<T>::ActorNotFound);
+      // A canonically published Actor owns its terminal residence in the generation-bound process
+      // carrier instead of a legacy primary cell. Route it through the atomic canonical removal so
+      // close releases the Service/Deadline residence and the process publication exactly once.
+      if !ActorControlLocators::<T>::contains_key(actor_id)
+        && !ActorUnsignaledControlCells::<T>::contains_key(actor_id)
+      {
+        let Some(ActorSemanticState::Active(record)) = ActorSemanticStates::<T>::get(actor_id)
+        else {
+          return Err(Error::<T>::ActorNotFound.into());
+        };
+        let supplied_run = state.run_state.clone();
+        return Self::remove_actor_publication_and_finalize(
+          ActorRef {
+            actor_id,
+            generation: record.generation,
+          },
+          state,
+          supplied_run.as_ref(),
+          reason,
+        );
+      }
       let (_, _, admission) =
         Self::load_control_authority_with_authority(actor_id).ok_or(Error::<T>::ActorNotFound)?;
       Self::finalize_actor_from_retained_state(actor_id, state, &admission, reason)

@@ -8815,11 +8815,7 @@ impl<T: Config> Pallet<T> {
   /// Atomically removes one exact canonical active publication and converges on the existing
   /// custody-neutral terminal finalizer. Trigger and process residence are independent; a refusal
   /// after either removal restores the complete storage root.
-  #[allow(
-    dead_code,
-    reason = "canonical terminal removal remains inert until all production paths cut over"
-  )]
-  fn remove_actor_publication_and_finalize(
+  pub(crate) fn remove_actor_publication_and_finalize(
     actor: ActorRef,
     state: ActiveActorStateOf<T>,
     supplied_run: Option<&ActorRunStateOf<T>>,
